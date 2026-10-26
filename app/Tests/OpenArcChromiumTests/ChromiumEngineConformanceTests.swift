@@ -83,6 +83,19 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         try await waitForState(tab) { $0.audio.isMuted }
         await tab.setMuted(false)
 
+        // C14 / [06 §18.1] observed: Arc sends Chromium's own reduced UA and brands, with no
+        // product token and no "Google Chrome" brand; Open Arc must send the same.
+        let identityServer = try ProfileIsolationServer()
+        try await identityServer.start()
+        defer { identityServer.stop() }
+        try await tab.load(identityServer.url(path: "/ua"))
+        try await waitForState(tab) { $0.title.hasPrefix("ID:") }
+        let identity = String(await tab.currentState().title.dropFirst(3)).components(separatedBy: "|")
+        XCTAssertEqual(identity.count, 3)
+        XCTAssertEqual(identity.first, BrowserIdentity.expectedUserAgent)
+        XCTAssertEqual(identity.dropFirst().first, "Google Inc.")
+        XCTAssertEqual(identity.last.map { Set($0.split(separator: "+").map(String.init)) }, BrowserIdentity.expectedBrands)
+
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
         let crashEvents = tab.events()
@@ -140,4 +153,14 @@ func withTimeout<T: Sendable>(
         group.cancelAll()
         return result
     }
+}
+
+/// What Arc 1.170.0 sends ([06 §18.1] observed), for the Chromium version of this build: Chromium's
+/// reduced user agent (frozen macOS 10_15_7, major version only) and the brands Not:A-Brand and
+/// Chromium, nothing else.
+enum BrowserIdentity {
+    static let majorVersion = "156"
+    static let expectedUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        + "(KHTML, like Gecko) Chrome/\(majorVersion).0.0.0 Safari/537.36"
+    static let expectedBrands: Set<String> = ["Not:A-Brand", "Chromium"]
 }

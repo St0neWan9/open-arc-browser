@@ -58,6 +58,16 @@ enum ProfileIsolationSite {
 
     static let serviceWorkerJS = "self.addEventListener('fetch', () => {});\n"
 
+    /// C14: reports the browser's identity in its title, `ID:<userAgent>|<vendor>|<brand>+<brand>…`
+    /// (`navigator.userAgentData` exists only in secure contexts such as 127.0.0.1).
+    static let identityHTML = """
+    <!doctype html><meta charset="utf-8"><title>id</title>
+    <script>
+    document.title = 'ID:' + [navigator.userAgent, navigator.vendor,
+      navigator.userAgentData ? navigator.userAgentData.brands.map(b => b.brand).join('+') : ''].join('|');
+    </script>
+    """
+
     /// The title a read reports when it sees `tag` in every store (and one service worker).
     static func sawEverything(_ tag: String) -> String { "read:c=\(tag);l=\(tag);i=\(tag);sw=1" }
     /// The title a read reports in a context that has none of the site's data.
@@ -107,6 +117,11 @@ final class ProfileIsolationServer: @unchecked Sendable {
         URL(string: "http://127.0.0.1:\(port)/?\(query)")!
     }
 
+    /// A page of the site by path.
+    func url(path: String) -> URL {
+        URL(string: "http://127.0.0.1:\(port)\(path)")!
+    }
+
     private static func serve(_ connection: NWConnection, received: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, isComplete, error in
             var buffer = received
@@ -121,6 +136,7 @@ final class ProfileIsolationServer: @unchecked Sendable {
             switch path {
             case "/": (status, type, body) = ("200 OK", "text/html; charset=utf-8", ProfileIsolationSite.indexHTML)
             case "/sw.js": (status, type, body) = ("200 OK", "text/javascript", ProfileIsolationSite.serviceWorkerJS)
+            case "/ua": (status, type, body) = ("200 OK", "text/html; charset=utf-8", ProfileIsolationSite.identityHTML)
             default: (status, type, body) = ("404 Not Found", "text/plain", "not found")
             }
             let payload = Data(body.utf8)
