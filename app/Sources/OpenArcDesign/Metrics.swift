@@ -469,11 +469,4 @@ public enum Metrics {
     }
 }
 
-/// Timing tokens, in seconds. Animation curves are not measured yet (unknown, [07 §11]); icons and
-/// animations may differ from the original by design.
-public enum Motion {
-    /// Hover delay before a tab hover card appears. [06 §12] observed (≈ 0.5 s).
-    public static let hoverCardDelay: Double = 0.5
-    /// Sidebar cross-fade after creating a space. [06 §1] observed (≈ 0.3 s).
-    public static let spaceCreateFade: Double = 0.3
-}
+// Timing and animation tokens live in Motion.swift ([07 §11 动效(E7)]).

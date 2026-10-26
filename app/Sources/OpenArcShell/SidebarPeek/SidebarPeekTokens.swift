@@ -3,8 +3,8 @@ import OpenArcModel
 import OpenArcDesign
 
 // Local tokens of the hidden-sidebar peek (B34). Source: docs/arc-spec/06-flows.md §14, captured
-// with real mouse events. Values the spec does not pin down are labeled unknown / inferred and
-// should move to OpenArcDesign once measured (plan E10).
+// with real mouse events. Timing comes from `OpenArcDesign.Motion` ([07 §11], E7). Values the
+// spec does not pin down are labeled unknown / inferred.
 
 enum SidebarPeekTokens {
     /// Width of the invisible hot zone along the window's left edge. [06 §14] observed (x ≈ 0–2 pt).
@@ -36,17 +36,17 @@ enum SidebarPeekTokens {
     static let fillShade: Double = 0.96
     static let fillSaturationBoost: Double = 1.3
 
-    /// Time the pointer rests at the edge before the panel slides out. [06 §14] observed
-    /// "after a moment"; the value is unknown.
-    static let openDelay: TimeInterval = 0.05
+    /// Time the pointer rests at the edge before the panel slides out. `Motion.sidebarPeekOpenDwell`:
+    /// [07 §11] observed ≈ 0.11 s (≤ 100 ms never opens, ≥ 115 ms always does).
+    static var openDelay: TimeInterval { Motion.sidebarPeekOpenDwell }
 
-    /// Time after the pointer left the panel before it collapses. [06 §14] observed: collapsed
-    /// within ≈ 0.2 s including the slide, so delay + slide stays under that. inferred.
-    static let closeDelay: TimeInterval = 0.05
+    /// Time after the pointer left the panel before it collapses. `Motion.sidebarPeekCloseDelay`:
+    /// [07 §11] observed none (back at the collapsed position within one frame).
+    static var closeDelay: TimeInterval { Motion.sidebarPeekCloseDelay }
 
-    /// Slide in / out of the floating panel. [06 §14]: curve and duration unknown.
-    static let slideDuration: Double = 0.15
-    static var slideAnimation: Animation { .easeOut(duration: slideDuration) }
+    /// Slide in / out of the floating panel: `ShellMotion.sidebarPeekSlide` ([07 §11] unknown curve,
+    /// ≤ `Motion.sidebarPeekSlideMax`).
+    static var slideDuration: Double { Motion.sidebarPeekSlide.curve.nominalDuration }
 
     /// The panel fill for a pinned-sidebar color: shaded and pushed away from its gray.
     static func panelFill(for windowBackground: RGBAColor) -> RGBAColor {

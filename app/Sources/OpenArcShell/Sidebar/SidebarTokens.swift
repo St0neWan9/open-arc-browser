@@ -197,10 +197,6 @@ enum SidebarLocalTokens {
     /// Space's theme color. [06 §15.4] observed.
     static let spaceNameDropRGB: UInt32 = 0x242CAA
 
-    /// Favorites making room for a dragged tab. [06 §15.5] observed (an intermediate frame was
-    /// seen when leaving); the duration is unknown.
-    static let favoriteMakeRoomDuration: Double = 0.15
-
     /// Drag image: the spec sees no row snapshot following the pointer inside the window
     /// [06 §15.1] observed; outside the window its look is unknown. The image is transparent.
     static let dragImageSize: CGFloat = 1

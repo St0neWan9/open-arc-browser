@@ -43,7 +43,7 @@ struct SidebarPeekOverlay: View {
     }
 
     /// Slides in from beyond the window's left edge (shadow included) and back out. Curve and
-    /// duration: `SidebarPeekTokens.slideAnimation` (unknown).
+    /// duration: `ShellMotion.sidebarPeekSlide` ([07 §11] unknown).
     static func transition(windowSize: CGSize) -> AnyTransition {
         let panel = SidebarPeekLayout(windowSize: windowSize).panelFrame
         return .offset(x: -(panel.maxX + SidebarPeekTokens.shadowRadius * 2))

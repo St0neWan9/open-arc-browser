@@ -135,10 +135,57 @@ final class SidebarPeekTests: XCTestCase {
         XCTAssertEqual(c.presentation, .hidden)
     }
 
-    func testLocalTimingCollapsesWithinMeasuredBound() {
-        // [06 §14] observed: collapsed within ≈ 0.2 s of leaving.
+    func testTimingCollapsesWithinMeasuredBound() {
+        // [06 §14] observed: collapsed within ≈ 0.2 s of leaving; [07 §11] observed: the panel
+        // leaves the tree ≈ 0.3 s after the collapse starts.
         XCTAssertLessThanOrEqual(SidebarPeekTokens.closeDelay + SidebarPeekTokens.slideDuration, 0.2)
-        XCTAssertGreaterThanOrEqual(SidebarPeekTokens.openDelay, 0)
+        XCTAssertLessThanOrEqual(SidebarPeekTokens.slideDuration, Motion.sidebarPeekSlideMax)
+        XCTAssertEqual(ShellMotion.sidebarPeekSlide, Animation.easeOut(duration: 0.15))
+        XCTAssertEqual(Motion.sidebarPeekSlide.evidence, .unknown)
+    }
+
+    /// [07 §11] observed: a dwell of ≤ 100 ms at the edge never opens, ≥ 115 ms always does.
+    func testStandardTimingOpensAfterMeasuredDwell() {
+        XCTAssertEqual(SidebarPeekTiming.standard.openDelay, 0.11, accuracy: 0.0001)
+        var m = SidebarPeekMachine(isPinned: false)
+        m.pointer(.edge, now: t0)
+        XCTAssertFalse(m.tick(now: t0.addingTimeInterval(0.100)))
+        XCTAssertEqual(m.presentation, .hidden)
+        XCTAssertTrue(m.tick(now: t0.addingTimeInterval(0.115)))
+        XCTAssertEqual(m.presentation, .peeking)
+
+        // A 0.1 s brush past the edge does not open it.
+        var brush = SidebarPeekMachine(isPinned: false)
+        brush.pointer(.edge, now: t0)
+        brush.pointer(.outside, now: t0.addingTimeInterval(0.1))
+        XCTAssertFalse(brush.tick(now: t0.addingTimeInterval(1)))
+        XCTAssertEqual(brush.presentation, .hidden)
+    }
+
+    /// [07 §11] observed: leaving the panel starts the collapse at once (≤ 1 frame), no delay.
+    func testStandardTimingCollapsesImmediatelyOnLeave() {
+        XCTAssertEqual(SidebarPeekTiming.standard.closeDelay, 0)
+        var m = SidebarPeekMachine(isPinned: false)
+        m.pointer(.edge, now: t0)
+        m.tick(now: t0.addingTimeInterval(0.2))
+        XCTAssertEqual(m.presentation, .peeking)
+        m.pointer(.outside, now: t0.addingTimeInterval(1))
+        XCTAssertEqual(m.presentation, .hidden, "collapses in the same event")
+        XCTAssertNil(m.deadline)
+
+        // The controller schedules the open after the dwell and nothing on leave.
+        var clock = t0
+        var pending: [(TimeInterval, @MainActor () -> Void)] = []
+        let c = SidebarPeekController(isPinned: false, now: { clock }, schedule: { pending.append(($0, $1)) })
+        c.pointerMoved(to: CGPoint(x: 1, y: 500), windowSize: reference)
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending[0].0, 0.11, accuracy: 0.0001)
+        clock = clock.addingTimeInterval(0.11)
+        pending.removeFirst().1()
+        XCTAssertEqual(c.presentation, .peeking)
+        c.pointerMoved(to: CGPoint(x: 900, y: 500), windowSize: reference)
+        XCTAssertTrue(pending.isEmpty, "no close timer")
+        XCTAssertEqual(c.presentation, .hidden)
     }
 
     // MARK: Layout at 1920 × 985

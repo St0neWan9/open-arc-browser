@@ -145,6 +145,8 @@ struct NewSpaceView: View {
             // The bubble opens to the right of the row. [06 §2] observed. Edits go to the draft and
             // become the new Space's theme on "Create Space".
             ThemeEditorView(theme: $flow.draftTheme, systemAppearance: flow.systemAppearance)
+                // Grows from the side of the row it opens next to. [07 §11] observed (spring). B40.
+                .themeBubbleMotion(anchor: .leading)
         }
     }
 }

@@ -106,9 +106,10 @@ final class SidebarVisibilityTests: XCTestCase {
         XCTAssertFalse(model.isSidebarVisible)
     }
 
-    func testToggleAnimationIsShort() {
-        XCTAssertLessThanOrEqual(ShellLocalTokens.sidebarToggleDuration, 0.3)
-        XCTAssertGreaterThan(ShellLocalTokens.sidebarToggleDuration, 0)
+    /// [07 §11] observed: the web content settles in 4 frames (≈ 67 ms) with a strong ease-out.
+    func testToggleAnimationIsTheMeasuredFastEaseOut() {
+        XCTAssertEqual(Motion.sidebarToggle.curve.nominalDuration, 0.067, accuracy: 0.001)
+        XCTAssertEqual(ShellMotion.sidebarToggle, Animation.timingCurve(0.03, 0.62, 0.54, 0.95, duration: 0.067))
     }
 
     /// Smoke test: the window content builds and lays out with the sidebar hidden, also with a split.

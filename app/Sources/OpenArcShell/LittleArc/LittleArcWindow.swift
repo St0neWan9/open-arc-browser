@@ -21,6 +21,10 @@ public enum LittleArcScene {
 /// window as an empty compact command bar.
 struct LittleArcWindowView: View {
     @StateObject private var model: LittleArcModel
+    /// Content scale: 98 % before it appears and while it closes, 100 % otherwise. [07 §11]
+    /// observed on the window frame (480×323 ↔ 490×329); ours scales the content (inferred
+    /// equivalent: the window frame of the compact bar is fixed by its content).
+    @State private var isPresented = false
 
     /// The window SwiftUI opened with `windowID` (the scene's value). Its model is made once; a
     /// window this run did not open starts closed (see `LittleArcModel.window(_:on:)`).
@@ -43,8 +47,22 @@ struct LittleArcWindowView: View {
                 minWidth: minimum.width, idealWidth: size.width, maxWidth: expanded ? .infinity : size.width,
                 minHeight: minimum.height, idealHeight: size.height, maxHeight: expanded ? .infinity : size.height
             )
-            .background(LittleArcWindowConfigurator(phase: model.phase, size: size, onClose: { model.windowDidClose() }))
+            .scaleEffect(isPresented && model.phase != .closed ? 1 : Motion.littleArcScale)
+            .background(LittleArcWindowConfigurator(
+                phase: model.phase, size: size, closeMotion: Self.closeMotion(model.closeStyle),
+                onClose: { model.windowDidClose() }
+            ))
             .ignoresSafeArea()
+            // Open: no fade, 98 % → 100 % in ≈ 80 ms. [07 §11] observed. B40.
+            .onAppear { withAnimation(ShellMotion.littleArcOpen) { isPresented = true } }
+            // Close: shrinks back to 98 % while the configurator fades the window. [07 §11] observed.
+            .animation(model.closeStyle == .adopt ? ShellMotion.littleArcExpandToMain : ShellMotion.littleArcClose,
+                       value: model.phase == .closed)
+    }
+
+    /// Window fade of a closing Little Arc. [07 §11] observed.
+    static func closeMotion(_ style: LittleArcModel.CloseStyle) -> MotionToken {
+        style == .adopt ? Motion.littleArcExpandToMain : Motion.littleArcClose
     }
 
     @ViewBuilder
@@ -160,6 +178,8 @@ struct LittleArcTopBar: View {
 struct LittleArcWindowConfigurator: NSViewRepresentable {
     let phase: LittleArcModel.Phase
     let size: CGSize
+    /// Fade of the window once the model closed. [07 §11] observed.
+    var closeMotion: MotionToken = Motion.littleArcClose
     let onClose: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -170,12 +190,12 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
         coordinator.view = view
         // The view is usually not in its window yet: ask again once it is.
         view.onMoveToWindow = { [weak coordinator] in coordinator?.requestAgain() }
-        coordinator.request(phase: phase, size: size, onClose: onClose)
+        coordinator.request(phase: phase, size: size, closeMotion: closeMotion, onClose: onClose)
         return view
     }
 
     func updateNSView(_ nsView: WindowProbeView, context: Context) {
-        context.coordinator.request(phase: phase, size: size, onClose: onClose)
+        context.coordinator.request(phase: phase, size: size, closeMotion: closeMotion, onClose: onClose)
     }
 
     @MainActor
@@ -184,6 +204,7 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
         /// The phase whose size and position were applied last; nil before the first pass.
         private(set) var appliedPhase: LittleArcModel.Phase?
         private var wanted: (phase: LittleArcModel.Phase, size: CGSize)?
+        private var closeMotion: MotionToken = Motion.littleArcClose
         private var isPassScheduled = false
         private var didCloseWindow = false
         private var onClose: (() -> Void)?
@@ -191,8 +212,9 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
 
         /// Records the wanted state and schedules one pass for the next run-loop turn. Calls made
         /// before that turn share the pass.
-        func request(phase: LittleArcModel.Phase, size: CGSize, onClose: @escaping () -> Void) {
+        func request(phase: LittleArcModel.Phase, size: CGSize, closeMotion: MotionToken, onClose: @escaping () -> Void) {
             wanted = (phase, size)
+            self.closeMotion = closeMotion
             if self.onClose == nil, window == nil { self.onClose = onClose }
             schedulePass()
         }
@@ -222,7 +244,7 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
                 guard !didCloseWindow else { return }
                 didCloseWindow = true
                 LittleArcWindowConfigurator.diagnostics.closeCount += 1
-                window.close()
+                fadeOutAndClose(window)
                 return
             }
             let isFirstPass = appliedPhase == nil
@@ -230,6 +252,24 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
                 LittleArcWindowConfigurator.diagnostics.writeCount += 1
             }
             if isFirstPass { show(window, focusingField: wanted.phase == .compact) }
+        }
+
+        /// Fades the window out on `closeMotion`, then closes it. [07 §11] observed: alpha 1 → 0
+        /// over ≈ 0.2 s (Escape) or ≈ 0.19 s ("Open in <Space>"). A window not on screen yet (a
+        /// restored one, B30) closes at once.
+        private func fadeOutAndClose(_ window: NSWindow) {
+            let curve = closeMotion.curve
+            guard window.isVisible, curve.nominalDuration > 0 else {
+                window.close()
+                return
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = curve.nominalDuration
+                context.timingFunction = curve.mediaTimingFunction
+                window.animator().alphaValue = 0
+            } completionHandler: {
+                MainActor.assumeIsolated { window.close() }
+            }
         }
 
         /// Once, when the window is first configured: make it key (keys typed right after ⌥⌘N
@@ -261,6 +301,9 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
             // A Little Arc page lives in an engine tab only, which does not survive a relaunch:
             // the window is never brought back by AppKit's window restoration. inferred (B30).
             window.isRestorable = false
+            // No system open/close animation: Little Arc appears without a fade and closes with
+            // its own fade ([07 §11] observed). B40.
+            window.animationBehavior = .none
             // Closing the window by any means closes the engine tab. inferred. Selector-based
             // observers are removed automatically when the coordinator goes away.
             NotificationCenter.default.addObserver(

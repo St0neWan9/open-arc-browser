@@ -76,7 +76,8 @@ final class LittleArcAdoptionCloseTests: XCTestCase {
 
         // "Open in Open Arc".
         let adopted = try XCTUnwrap(model.adopt())
-        try await spin(0.3)
+        // Fades out over ≈ 0.19 s before it closes. [07 §11] observed.
+        try await spin(0.45)
         XCTAssertEqual(model.phase, .closed)
         XCTAssertFalse(window.isVisible, "no Little Arc window is left on screen after adoption")
         XCTAssertNotEqual(window.contentRect(forFrameRect: window.frame).width, Metrics.LittleArc.initialSize.width,
@@ -94,7 +95,8 @@ final class LittleArcAdoptionCloseTests: XCTestCase {
         let window = host(model)
         try await spin(0.2)
         XCTAssertEqual(model.commandBar.handle(.escape), .dismiss)
-        try await spin(0.2)
+        // The window fades out first (≈ 0.2 s, [07 §11] observed; Arc removes it after ≈ 0.39 s).
+        try await spin(0.45)
         XCTAssertFalse(window.isVisible)
     }
 

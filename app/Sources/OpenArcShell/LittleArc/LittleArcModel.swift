@@ -54,6 +54,13 @@ public final class LittleArcModel: ObservableObject {
     }
 
     @Published public private(set) var phase: Phase = .compact
+    /// How the window goes away once closed. [07 §11] observed: Escape / ✕ fade over ≈ 0.2 s,
+    /// "Open in <Space>" fades over ≈ 0.19 s on a slightly different curve.
+    enum CloseStyle: Equatable, Sendable {
+        case dismiss
+        case adopt
+    }
+    private(set) var closeStyle: CloseStyle = .dismiss
     /// The phase the window was in when it closed. A closing window keeps that phase's size, so it
     /// never shrinks back to the empty command bar on its way out (B30).
     private var phaseBeforeClose: Phase = .compact
@@ -243,6 +250,7 @@ public final class LittleArcModel: ObservableObject {
         guard phase == .expanded, let url = currentURL else { return nil }
         let title = page.title.isEmpty ? (url.host ?? url.absoluteString) : page.title
         let id = shell.adoptLittleArcTab(url: url, title: title)
+        closeStyle = .adopt
         close()
         return id
     }
