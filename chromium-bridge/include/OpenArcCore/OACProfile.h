@@ -51,7 +51,7 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// NO once Chromium has destroyed the profile.
 @property (nonatomic, readonly, getter=isValid) BOOL valid;
 
-/// `<userDataDirectory>/Profiles/<identifier>`; nil for an off-the-record profile.
+/// `<userDataDirectory>/<identifier>` (Chrome's profile directory); nil for an off-the-record profile.
 @property (nonatomic, readonly, copy, nullable) NSURL *dataDirectory;
 
 /// For an off-the-record profile, the profile it derives from; nil otherwise.

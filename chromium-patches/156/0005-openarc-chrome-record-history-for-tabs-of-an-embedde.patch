@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 18:09:42 -0700
+Subject: [PATCH] openarc: chrome: record history for tabs of an embedder-owned
+ UI
+
+HistoryTabHelper::IsEligibleTab() only records navigations of a
+WebContents that sits in a Browser's tab strip. When an embedding app
+owns the UI (chrome::EmbedderOwnsUI(), Mac), its tabs are shown in its
+own views and are never in a Browser, so nothing reached history. In
+that mode every WebContents that has the tab helpers is a tab.
+
+Needed by plan task C6b. Upstream behaviour without it: history stays
+empty for embedder tabs.
+---
+ chrome/browser/history/BUILD.gn              |  5 +++++
+ chrome/browser/history/history_tab_helper.cc | 11 +++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/chrome/browser/history/BUILD.gn b/chrome/browser/history/BUILD.gn
+index a2d825a7ee9a..77ddd48718cd 100644
+--- a/chrome/browser/history/BUILD.gn
++++ b/chrome/browser/history/BUILD.gn
+@@ -103,6 +103,11 @@ source_set("impl") {
+       "//components/webapps/isolated_web_apps:scheme",
+     ]
+   }
++
++  if (is_mac) {
++    # Open Arc: see chrome/browser/embedder_owned_ui_mac.h.
++    deps += [ "//chrome/browser:embedder_owned_ui_mac" ]
++  }
+ }
+ 
+ if (is_android) {
+diff --git a/chrome/browser/history/history_tab_helper.cc b/chrome/browser/history/history_tab_helper.cc
+index cff7c3955c8a..08fe29a98fe1 100644
+--- a/chrome/browser/history/history_tab_helper.cc
++++ b/chrome/browser/history/history_tab_helper.cc
+@@ -55,6 +55,10 @@
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++#include "chrome/browser/embedder_owned_ui_mac.h"
++#endif
++
+ namespace {
+ 
+ using content::NavigationEntry;
+@@ -696,6 +700,13 @@ bool HistoryTabHelper::IsEligibleTab(
+   }
+   return true;
+ #else
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an embedding app shows its tabs without Chrome's Browser
++  // windows; every WebContents it gives Chrome's tab helpers is a tab.
++  if (chrome::EmbedderOwnsUI()) {
++    return true;
++  }
++#endif
+   // Don't update history if this web contents isn't associated with a tab.
+   return GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+              web_contents()) != nullptr;

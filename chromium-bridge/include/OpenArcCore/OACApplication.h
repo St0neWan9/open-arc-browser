@@ -28,7 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 OAC_EXPORT
 @interface OACApplicationConfiguration : NSObject <NSCopying>
 
-/// Chromium's user data directory. Default profiles live in `<userDataDirectory>/Profiles/<UUID>`.
+/// Chromium's user data directory (Chrome's `Local State`); each profile lives in `<userDataDirectory>/<UUID>`.
 /// The shell passes `<app data dir>/Chromium`, where the app data dir is
 /// `~/Library/Application Support/org.openarc.browser/` or `OPENARC_DATA_DIR` (app/README.md
 /// §Data directory), so a development data dir also isolates engine data.

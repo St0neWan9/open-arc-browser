@@ -1,0 +1,419 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 18:09:39 -0700
+Subject: [PATCH] openarc: chrome: let an embedding app own the Mac UI
+
+Adds chrome::SetEmbedderOwnsUI() / EmbedderOwnsUI() (Mac only,
+chrome/browser/embedder_owned_ui_mac.h). Open Arc runs Chrome's browser
+process inside its own SwiftUI app: the app supplies NSApp (an
+NSApplication subclass implementing CrAppControlProtocol), its delegate,
+the main menu, every window and the main run loop, and creates profiles
+and WebContents itself. Upstream //chrome assumes it owns all of these.
+
+When the mode is on:
+- RegisterBrowserCrApp() accepts the host's NSApp instead of creating
+  BrowserCrApplication.
+- ChromeBrowserMainPartsMac creates no AppController (NSApp's delegate)
+  and no main menu, and does not swizzle the Services menu;
+  +[AppController sharedController] returns nil.
+- ChromeBrowserMainParts loads no initial profile and no last-opened
+  profiles, runs no StartupBrowserCreator (so no first-run tabs, profile
+  picker, session restore or startup browser) and sets no quit closure,
+  so keep-alive changes never start Chrome's own shutdown; the embedder
+  shuts the browser process down. A second launch with the same user
+  data directory is acknowledged and dropped. The updater scheduler and
+  the code-signature clone (an updater protection) are off.
+- GetBrowserWindowCreationStatusForProfile() refuses every Browser, so
+  code paths that would open a Chrome window fall back to doing nothing.
+- BrowserProcessPlatformPart::AttemptExit() asks NSApp to terminate
+  without AppController's quit confirmation.
+
+Normal Chrome never calls SetEmbedderOwnsUI() and is unchanged. Needed
+by plan task C6b (keep //chrome without its UI, decision Q7). There is
+no upstream equivalent; Chrome has no supported embedding mode.
+---
+ chrome/browser/BUILD.gn                       | 14 ++++++
+ chrome/browser/app_controller_mac.mm          |  7 +++
+ .../browser_process_platform_part_mac.mm      |  9 ++++
+ .../browser/chrome_browser_application_mac.mm | 10 +++++
+ chrome/browser/chrome_browser_main.cc         | 43 ++++++++++++++++---
+ chrome/browser/chrome_browser_main_mac.mm     | 15 ++++++-
+ chrome/browser/embedder_owned_ui_mac.cc       | 21 +++++++++
+ chrome/browser/embedder_owned_ui_mac.h        | 28 ++++++++++++
+ .../ui/browser_window/internal/BUILD.gn       |  5 +++
+ .../create_browser_window_non_android.cc      | 14 ++++++
+ 10 files changed, 158 insertions(+), 8 deletions(-)
+ create mode 100644 chrome/browser/embedder_owned_ui_mac.cc
+ create mode 100644 chrome/browser/embedder_owned_ui_mac.h
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 33a6696fd803..e089c81c3556 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -565,6 +565,14 @@ if (is_mac) {
+     ]
+   }
+ 
++  # Open Arc: see embedder_owned_ui_mac.h.
++  source_set("embedder_owned_ui_mac") {
++    sources = [
++      "embedder_owned_ui_mac.cc",
++      "embedder_owned_ui_mac.h",
++    ]
++  }
++
+   source_set("chrome_browser_application_mac") {
+     public = [ "chrome_browser_application_mac.h" ]
+     deps = [
+@@ -1538,6 +1546,7 @@ source_set("core") {
+       ":app_controller_mac",
+       ":chrome_browser_application_mac",
+       ":chrome_browser_main_mac",
++      ":embedder_owned_ui_mac",
+       ":fullscreen",
+       ":global_keyboard_shortcuts_mac",
+       ":shutdown_watchdog_mac",
+@@ -2015,6 +2024,11 @@ source_set("core") {
+       "//chrome/common/request_header_integrity",
+     ]
+   }
++
++  if (is_mac) {
++    # Open Arc: see embedder_owned_ui_mac.h.
++    deps += [ ":embedder_owned_ui_mac" ]
++  }
+ }
+ 
+ # This target no longer has any sources of its own; it only aggregates
+diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
+index ead883ef957d..30e2a5784b9d 100644
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -44,6 +44,7 @@
+ #include "chrome/browser/apps/platform_apps/app_window_registry_util.h"
+ #include "chrome/browser/browser_features.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/embedder_owned_ui_mac.h"
+ #include "chrome/browser/browser_process_platform_part.h"
+ #include "chrome/browser/command_updater_impl.h"
+ #include "chrome/browser/download/download_core_service.h"
+@@ -793,6 +794,12 @@ @implementation AppController {
+ @synthesize startupComplete = _startupComplete;
+ 
+ + (AppController*)sharedController {
++  // Open Arc: an app that embeds the browser process owns NSApp's delegate, so
++  // there is no AppController. Callers message nil, which does nothing.
++  if (chrome::EmbedderOwnsUI()) {
++    return nil;
++  }
++
+   static AppController* sharedController = [] {
+     AppController* sharedController = [[AppController alloc] init];
+     NSApp.delegate = sharedController;
+diff --git a/chrome/browser/browser_process_platform_part_mac.mm b/chrome/browser/browser_process_platform_part_mac.mm
+index 05dd81cbf0b2..3021a02ef6b8 100644
+--- a/chrome/browser/browser_process_platform_part_mac.mm
++++ b/chrome/browser/browser_process_platform_part_mac.mm
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/apps/platform_apps/extension_app_shim_manager_delegate_mac.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/chrome_browser_application_mac.h"
++#include "chrome/browser/embedder_owned_ui_mac.h"
+ #include "chrome/browser/lifetime/application_lifetime_desktop.h"
+ #include "services/device/public/cpp/geolocation/system_geolocation_source_apple.h"
+ 
+@@ -35,6 +36,14 @@
+   // |try_to_quit_application| set to true; keyboard menu invocations have it
+   // set to false.
+ 
++  // Open Arc: the embedding app owns quitting. A Chrome-initiated exit
++  // (chrome://quit, an extension, a policy) asks its NSApplication to
++  // terminate, which runs the app's own quit sequence.
++  if (chrome::EmbedderOwnsUI()) {
++    chrome_browser_application_mac::Terminate();
++    return;
++  }
++
+   if (!try_to_quit_application) {
+     // A keyboard menu invocation.
+     if ([AppController.sharedController confirmQuitIfNeeded] ==
+diff --git a/chrome/browser/chrome_browser_application_mac.mm b/chrome/browser/chrome_browser_application_mac.mm
+index 823b03b27cc3..9618c88d49ba 100644
+--- a/chrome/browser/chrome_browser_application_mac.mm
++++ b/chrome/browser/chrome_browser_application_mac.mm
+@@ -16,6 +16,7 @@
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/trace_event/trace_event.h"
+ #import "chrome/browser/app_controller_mac.h"
++#include "chrome/browser/embedder_owned_ui_mac.h"
+ #import "chrome/browser/mac/exception_processor.h"
+ #include "chrome/browser/ui/cocoa/l10n_util.h"
+ #include "chrome/common/chrome_switches.h"
+@@ -37,6 +38,15 @@
+ namespace chrome_browser_application_mac {
+ 
+ void RegisterBrowserCrApp() {
++  // Open Arc: the embedding app created NSApp already, from its own
++  // NSApplication subclass, which implements CrAppProtocol and
++  // CrAppControlProtocol (the message pump checks that).
++  if (chrome::EmbedderOwnsUI()) {
++    CHECK(NSApp);
++    CHECK([NSApp conformsToProtocol:@protocol(CrAppControlProtocol)]);
++    return;
++  }
++
+   [BrowserCrApplication sharedApplication];
+ 
+   // If there was an invocation to NSApp prior to this method, then the NSApp
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+index b2619baa8f61..a8cb5fb69d1c 100644
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -328,6 +328,7 @@
+ #include "chrome/browser/chrome_browser_main_win.h"
+ #elif BUILDFLAG(IS_MAC)
+ #include "chrome/browser/chrome_browser_main_mac.h"
++#include "chrome/browser/embedder_owned_ui_mac.h"
+ #elif BUILDFLAG(IS_CHROMEOS)
+ #include "chrome/browser/ash/main_parts/chrome_browser_main_parts_ash.h"
+ #elif BUILDFLAG(IS_LINUX)
+@@ -578,6 +579,15 @@ void ProcessSingletonNotificationCallbackImpl(
+ bool ProcessSingletonNotificationCallback(
+     base::CommandLine command_line,
+     const base::FilePath& current_directory) {
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: a second launch with this user data directory is acknowledged
++  // and dropped (that process then exits); the embedding app decides what a
++  // second launch means.
++  if (chrome::EmbedderOwnsUI()) {
++    return true;
++  }
++#endif
++
+   // Drop the request if the browser process is already shutting down.
+   // Note that we're going to post an async task below. Even if the browser
+   // process isn't shutting down right now, it could be by the time the task
+@@ -1102,6 +1112,12 @@ void ChromeBrowserMainParts::PreCreateMainMessageLoop() {
+       command_line->HasSwitch(switches::kEnableBenchmarking)) {
+     return;
+   }
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the embedding app is not updated by Chrome's updater.
++  if (chrome::EmbedderOwnsUI()) {
++    return;
++  }
++#endif
+   updater::SchedulePeriodicTasks(
+ #if BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_UPDATER)
+       base::BindRepeating(&PromptUpdaterPromotion)
+@@ -1914,8 +1930,17 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+ 
+   // This step is costly and is already measured in Startup.CreateFirstProfile
+   // and more directly Profile.CreateAndInitializeProfile.
+-  StartupProfileInfo profile_info = CreateInitialProfile(
+-      user_data_dir_, *base::CommandLine::ForCurrentProcess());
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the embedding app loads the profiles it needs itself, later.
++  const bool embedder_owns_ui = chrome::EmbedderOwnsUI();
++#else
++  const bool embedder_owns_ui = false;
++#endif
++  StartupProfileInfo profile_info =
++      embedder_owns_ui
++          ? StartupProfileInfo{nullptr, StartupProfileMode::kBrowserWindow}
++          : CreateInitialProfile(user_data_dir_,
++                                 *base::CommandLine::ForCurrentProcess());
+ 
+   if (profile_info.mode == StartupProfileMode::kError) {
+     return content::RESULT_CODE_NORMAL_EXIT;
+@@ -2100,7 +2125,8 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+   // them this early as the cryptohome hasn't yet been mounted (which happens
+   // only once we log in). And if we're launching a web app, we don't want to
+   // restore the last opened profiles.
+-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppId)) {
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppId) &&
++      !embedder_owns_ui) {
+     last_opened_profiles =
+         g_browser_process->profile_manager()->GetLastOpenedProfiles();
+   }
+@@ -2121,9 +2147,14 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+ #endif
+ 
+   // This step is costly.
+-  if (browser_creator_->Start(*base::CommandLine::ForCurrentProcess(),
+-                              base::FilePath(), profile_info,
+-                              last_opened_profiles)) {
++  if (embedder_owns_ui) {
++    // Open Arc: no startup, first-run or session-restore browser, and no quit
++    // closure: the embedding app owns the run loop and shuts the browser
++    // process down itself, so keep-alive changes never start a shutdown (see
++    // BrowserProcessImpl::Unpin()).
++  } else if (browser_creator_->Start(*base::CommandLine::ForCurrentProcess(),
++                                     base::FilePath(), profile_info,
++                                     last_opened_profiles)) {
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+     // Initialize autoupdate timer. Timer callback costs basically nothing
+     // when browser is not in persistent mode, so it's OK to let it ride on
+diff --git a/chrome/browser/chrome_browser_main_mac.mm b/chrome/browser/chrome_browser_main_mac.mm
+index b269f1610a55..77cbdfb611e5 100644
+--- a/chrome/browser/chrome_browser_main_mac.mm
++++ b/chrome/browser/chrome_browser_main_mac.mm
+@@ -27,6 +27,7 @@
+ #include "chrome/browser/browser_process_platform_part.h"
+ #include "chrome/browser/buildflags.h"
+ #import "chrome/browser/chrome_browser_application_mac.h"
++#include "chrome/browser/embedder_owned_ui_mac.h"
+ #include "chrome/browser/first_run/first_run.h"
+ #include "chrome/browser/mac/install_from_dmg.h"
+ #include "chrome/browser/mac/metrics.h"
+@@ -55,7 +56,9 @@
+ namespace {
+ 
+ base::FilePath GetBundlePath() {
+-  if (!base::apple::AmIBundled()) {
++  // Open Arc: an embedding app is not updated in place by Chrome's updater, so
++  // it needs no code-signature clone (an empty path turns the clone off).
++  if (!base::apple::AmIBundled() || chrome::EmbedderOwnsUI()) {
+     return base::FilePath();
+   }
+   return base::apple::OuterBundlePath();
+@@ -90,7 +93,10 @@
+     singleton_command_line->AppendSwitch(switches::kNoStartupWindow);
+   }
+ 
+-  [ChromeSwizzleServicesMenuUpdater install];
++  // Open Arc: the embedding app owns its menus, including the Services menu.
++  if (!chrome::EmbedderOwnsUI()) {
++    [ChromeSwizzleServicesMenuUpdater install];
++  }
+ 
+   return ChromeBrowserMainPartsPosix::PreEarlyInitialization();
+ }
+@@ -154,6 +160,11 @@
+     return ret;
+   }
+ 
++  // Open Arc: the embedding app owns NSApp's delegate and the main menu.
++  if (chrome::EmbedderOwnsUI()) {
++    return content::RESULT_CODE_NORMAL_EXIT;
++  }
++
+   // Create the app delegate by requesting the shared AppController.
+   CHECK_EQ(nil, NSApp.delegate);
+   AppController* app_controller = AppController.sharedController;
+diff --git a/chrome/browser/embedder_owned_ui_mac.cc b/chrome/browser/embedder_owned_ui_mac.cc
+new file mode 100644
+index 000000000000..b68aaa12b16f
+--- /dev/null
++++ b/chrome/browser/embedder_owned_ui_mac.cc
+@@ -0,0 +1,21 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/embedder_owned_ui_mac.h"
++
++namespace chrome {
++
++namespace {
++bool g_embedder_owns_ui = false;
++}  // namespace
++
++void SetEmbedderOwnsUI() {
++  g_embedder_owns_ui = true;
++}
++
++bool EmbedderOwnsUI() {
++  return g_embedder_owns_ui;
++}
++
++}  // namespace chrome
+diff --git a/chrome/browser/embedder_owned_ui_mac.h b/chrome/browser/embedder_owned_ui_mac.h
+new file mode 100644
+index 000000000000..bed56afc7d6e
+--- /dev/null
++++ b/chrome/browser/embedder_owned_ui_mac.h
+@@ -0,0 +1,28 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_EMBEDDER_OWNED_UI_MAC_H_
++#define CHROME_BROWSER_EMBEDDER_OWNED_UI_MAC_H_
++
++// Open Arc: lets an app that embeds Chrome's browser process own the user
++// interface. The embedding app supplies the NSApplication (which implements
++// CrAppProtocol and CrAppControlProtocol), its delegate, the main menu, every
++// window, and the main run loop; it creates profiles and WebContents itself.
++// In that mode Chrome creates no AppController, no main menu, no initial
++// profile, no startup or session-restore browser, and no Browser windows.
++//
++// Not part of upstream Chromium; see chromium-patches/README.md in the Open
++// Arc repository.
++namespace chrome {
++
++// Turns the mode on. Must be called in the browser process before content
++// starts (before ChromeMainDelegate::PreBrowserMain), at most once.
++void SetEmbedderOwnsUI();
++
++// Whether the embedding app owns the UI. False in normal Chrome.
++bool EmbedderOwnsUI();
++
++}  // namespace chrome
++
++#endif  // CHROME_BROWSER_EMBEDDER_OWNED_UI_MAC_H_
+diff --git a/chrome/browser/ui/browser_window/internal/BUILD.gn b/chrome/browser/ui/browser_window/internal/BUILD.gn
+index 0aef559d48ee..4c44e5692c7f 100644
+--- a/chrome/browser/ui/browser_window/internal/BUILD.gn
++++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
+@@ -179,6 +179,11 @@ source_set("internal") {
+       "//components/search",
+     ]
+ 
++    if (is_mac) {
++      # Open Arc: see chrome/browser/embedder_owned_ui_mac.h.
++      deps += [ "//chrome/browser:embedder_owned_ui_mac" ]
++    }
++
+     if (is_win || is_mac) {
+       deps += [
+         "//chrome/browser/ui/pdf/infobar",
+diff --git a/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc b/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc
+index 3b394efe9f13..b1fc7cddb1a7 100644
+--- a/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc
++++ b/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc
+@@ -6,6 +6,7 @@
+ #include "base/functional/callback.h"
+ #include "base/location.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/prefs/incognito_mode_prefs.h"
+@@ -14,6 +15,10 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+ 
++#if BUILDFLAG(IS_MAC)
++#include "chrome/browser/embedder_owned_ui_mac.h"
++#endif
++
+ #if BUILDFLAG(IS_CHROMEOS)
+ #include "components/session_manager/core/session_manager.h"
+ #include "components/user_manager/user_manager.h"
+@@ -170,6 +175,15 @@ BrowserWindowInterface::CreationStatus GetBrowserWindowCreationStatusForProfile(
+     return BrowserWindowInterface::CreationStatus::kErrorShuttingDown;
+   }
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the embedding app shows every web page itself; Chrome's own
++  // browser windows are never created. Callers that check this status
++  // (navigation, DevTools, app launches) fall back to doing nothing.
++  if (chrome::EmbedderOwnsUI()) {
++    return BrowserWindowInterface::CreationStatus::kErrorProfileUnsuitable;
++  }
++#endif
++
+   if (!IncognitoModePrefs::CanOpenBrowser(&profile) ||
+       !profile.AllowsBrowserWindows() ||
+       IsProfileDirectoryMarkedForDeletion(profile.GetPath())) {
