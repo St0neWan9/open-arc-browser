@@ -61,12 +61,25 @@ extension OpenArcApp {
         // `<app data dir>/Crash Reports`, for the app process and every Chromium helper.
         return { directory in
             MainActor.assumeIsolated {
-                ChromiumEngine(userDataDirectory: directory, crashReportsDirectory: CrashReportLocation.directory())
+                ChromiumEngine(
+                    userDataDirectory: directory,
+                    crashReportsDirectory: CrashReportLocation.directory(),
+                    additionalSwitches: developmentSwitches(bundleIdentifier: AppIdentity.bundleIdentifier)
+                )
             }
         }
         #else
         return nil
         #endif
+    }
+
+    /// Chromium switches for the development build ("Open Arc Dev", user decision 2026-10-25): it
+    /// is ad-hoc signed and rebuilt often, and the login keychain trusts one exact signature, so
+    /// every rebuild asked for keychain access again. The dev build uses Chromium's mock keychain
+    /// instead; its cookies and passwords are encrypted with a fixed test key. The release build
+    /// keeps the real keychain item.
+    static func developmentSwitches(bundleIdentifier: String) -> [String] {
+        bundleIdentifier == AppIdentity.releaseBundleIdentifier ? [] : ["--use-mock-keychain"]
     }
 }
 
