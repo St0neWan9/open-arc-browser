@@ -1,0 +1,2334 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 19:32:36 -0700
+Subject: [PATCH] openarc: embedder: keep //chrome without its UI
+
+Plan C6b (decision Q7): the embedder moves from content level to
+//chrome.
+
+- OpenArcMainDelegate derives from ChromeMainDelegate (compiled into
+  //openarc:embedder with Chrome's crash reporter client, as
+  //chrome:chrome_dll does for Chrome's framework); the hang watcher is
+  off because the browser's main thread is the shell app's.
+- OpenArcContentBrowserClient derives from ChromeContentBrowserClient
+  and keeps Chrome's dialogs out: no Chrome context menu view delegate,
+  no client-certificate picker, no login prompt, no external-protocol
+  dialog (default answers until C12), and the shell's per-tab color
+  scheme wins over Chrome's.
+- OpenArcBrowserMainExtraParts: our keychain item name ("Open Arc Safe
+  Storage"), default prefs (Safe Browsing off, sign-in off, background
+  mode off) and closing every tab before Chrome destroys profiles.
+- OACApplication puts Chrome in its embedder-owned-UI mode (no Chrome
+  window, menu, status item or startup browser), passes
+  --user-data-dir and Open Arc's default switches (no first run,
+  default-browser check, sync, component updates), and loads profiles
+  through ProfileManager at <userDataDirectory>/<UUID>.
+- OACProfile wraps a Chrome Profile (with a profile keep-alive) and its
+  primary off-the-record profile.
+- OACTab attaches //chrome's tab helpers (openarc::TabHelpersAccess) and
+  reports favicons from ContentFaviconDriver; the favicon change is now
+  detected (C9 request 1) and cleared on cross-document navigations.
+  Permission prompts are dismissed until C12.
+- The framework bundles Chrome's resource packs and the crashpad
+  handler instead of openarc.pak.
+- openarc_shell_test logs NSApp, its delegate, windows and menu, the
+  title and favicon before --quit-after-load quits.
+---
+ openarc/BUILD.gn                              | 145 ++++++++-------
+ openarc/app/openarc_main_delegate.h           |  38 ++--
+ openarc/app/openarc_main_delegate.mm          |  79 +++++---
+ openarc/bridge/oac_application.mm             | 134 +++++++++++---
+ openarc/bridge/oac_profile.mm                 |  69 ++++---
+ openarc/bridge/oac_profile_internal.h         |  15 +-
+ openarc/bridge/oac_requests.mm                |   8 +-
+ openarc/bridge/oac_tab.mm                     | 141 +++++++--------
+ .../public/OpenArcCore/OACApplication.h       |   2 +-
+ .../bridge/public/OpenArcCore/OACProfile.h    |   2 +-
+ openarc/browser/openarc_browser_context.h     |  66 -------
+ openarc/browser/openarc_browser_context.mm    | 138 --------------
+ .../openarc_browser_main_extra_parts.h        |  49 +++++
+ .../openarc_browser_main_extra_parts.mm       |  77 ++++++++
+ openarc/browser/openarc_browser_main_parts.h  |  63 -------
+ openarc/browser/openarc_browser_main_parts.mm |  84 ---------
+ .../browser/openarc_content_browser_client.h  |  75 +++++---
+ .../browser/openarc_content_browser_client.mm | 169 ++++++++++++------
+ openarc/browser/openarc_tab_helpers.h         |  31 ++++
+ openarc/browser/openarc_tab_helpers.mm        |  88 +++++++++
+ openarc/common/openarc_content_client.h       |  36 ----
+ openarc/common/openarc_content_client.mm      |  43 -----
+ openarc/common/openarc_paths.h                |   5 +-
+ openarc/common/openarc_paths.mm               |   5 -
+ openarc/shell_test/openarc_shell_test_main.mm |  30 ++++
+ 25 files changed, 819 insertions(+), 773 deletions(-)
+ delete mode 100644 openarc/browser/openarc_browser_context.h
+ delete mode 100644 openarc/browser/openarc_browser_context.mm
+ create mode 100644 openarc/browser/openarc_browser_main_extra_parts.h
+ create mode 100644 openarc/browser/openarc_browser_main_extra_parts.mm
+ delete mode 100644 openarc/browser/openarc_browser_main_parts.h
+ delete mode 100644 openarc/browser/openarc_browser_main_parts.mm
+ create mode 100644 openarc/browser/openarc_tab_helpers.h
+ create mode 100644 openarc/browser/openarc_tab_helpers.mm
+ delete mode 100644 openarc/common/openarc_content_client.h
+ delete mode 100644 openarc/common/openarc_content_client.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index c13fb61a428b..ba3ef2451264 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -14,7 +14,6 @@
+ #   :openarc_helper      The child-process executable (renderer, GPU, utility).
+ #                        Unbundled for now; helper apps and sandbox packaging are
+ #                        plan task C10.
+-#   :openarc_pak         Resource pack the engine loads at startup.
+ #
+ # Build: ninja -C out/Release openarc_framework openarc_shell_test
+ # (chromium-bridge/build-framework.sh in the Open Arc repository wraps this).
+@@ -22,7 +21,6 @@
+ import("//build/config/mac/rules.gni")
+ import("//chrome/version.gni")
+ import("//third_party/icu/config.gni")
+-import("//tools/grit/repack.gni")
+ import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
+ import("//ui/gl/features.gni")
+ import("//v8/gni/v8.gni")
+@@ -51,41 +49,76 @@ config("openarc_public_config") {
+   include_dirs = [ "bridge/public" ]
+ }
+ 
+-# The content-level embedder: main delegate, content clients, browser main
+-# parts and the browser context. TODO(C6b): derive from //chrome's
+-# ChromeMainDelegate / ChromeContentBrowserClient instead (decision Q7); see
+-# chromium-patches/README.md and docs/implementation-plan.md row C6b.
++# The embedder on top of //chrome (decision Q7, plan C6b): main delegate
++# derived from ChromeMainDelegate, browser client derived from
++# ChromeContentBrowserClient, browser main extra parts, Chrome tab helpers.
++# Chrome runs in its embedder-owned-UI mode (an Open Arc patch to //chrome):
++# no Chrome windows, menus or startup browser.
+ source_set("embedder") {
+   visibility = [ ":*" ]
+   sources = [
++    # Chrome's main delegate and crash reporter client, compiled here as
++    # //chrome:chrome_dll does for Chrome's framework (that target is only
++    # visible to Chrome's own framework). chrome_main.cc, Chrome's executable
++    # entry point, is not used: the app's main() and OACApplication start the
++    # browser process.
++    "//chrome/app/chrome_crash_reporter_client.cc",
++    "//chrome/app/chrome_crash_reporter_client.h",
++    "//chrome/app/chrome_crash_reporter_client_mac.mm",
++    "//chrome/app/chrome_main_delegate.cc",
++    "//chrome/app/chrome_main_delegate.h",
++    "//chrome/app/startup_timestamps.h",
+     "app/openarc_main_delegate.h",
+     "app/openarc_main_delegate.mm",
+-    "browser/openarc_browser_context.h",
+-    "browser/openarc_browser_context.mm",
+-    "browser/openarc_browser_main_parts.h",
+-    "browser/openarc_browser_main_parts.mm",
++    "browser/openarc_browser_main_extra_parts.h",
++    "browser/openarc_browser_main_extra_parts.mm",
+     "browser/openarc_content_browser_client.h",
+     "browser/openarc_content_browser_client.mm",
++    "browser/openarc_tab_helpers.h",
++    "browser/openarc_tab_helpers.mm",
+     "browser/openarc_tab_preferences.h",
+     "browser/openarc_tab_preferences.mm",
+-    "common/openarc_content_client.h",
+-    "common/openarc_content_client.mm",
+     "common/openarc_paths.h",
+     "common/openarc_paths.mm",
+   ]
+   public_configs = [ ":openarc_public_config" ]
++  public_deps = [
++    # What ChromeMainDelegate and its process types need (the same set as
++    # //chrome:chrome_dll, which is only visible to Chrome's framework).
++    "//chrome:dependencies",
++    "//chrome/app:command_ids",
++    "//chrome/browser:chrome_browser_application_mac",
++    "//chrome/browser:chrome_content_browser_client",
++    "//chrome/browser:chrome_process_singleton",
++    "//chrome/browser:embedder_owned_ui_mac",
++    "//chrome/browser:process_singleton",
++    "//chrome/browser:startup_data",
++    "//chrome/browser/lifetime",
++    "//chrome/browser/mac",
++    "//chrome/common:buildflags",
++    "//chrome/common:version_header",
++    "//chrome/common/profiler",
++    "//components/crash/core/app",
++    "//components/memory_system",
++    "//components/policy:generated",
++    "//components/webapps/isolated_web_apps:scheme",
++    "//content/public/app",
++    "//third_party/cld_3/src/src:cld_3",
++  ]
+   deps = [
+     "//base",
+-    "//components/embedder_support:user_agent",
+-    "//content/public/app",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui:tab_helpers",
++    "//chrome/browser/ui:tab_helpers_impl",
++    "//components/os_crypt/common:keychain_password_mac",
++    "//components/permissions",
++    "//components/prefs",
++    "//components/safe_browsing/core/common:safe_browsing_prefs",
++    "//components/signin/public/base",
+     "//content/public/browser",
+     "//content/public/common",
+-    "//net",
+-    "//services/network/public/mojom",
+     "//third_party/blink/public/common",
+-    "//ui/base",
+-    "//ui/display",
+-    "//url",
++    "//ui/gfx",
+   ]
+   frameworks = [
+     "AppKit.framework",
+@@ -112,6 +145,9 @@ source_set("bridge") {
+   deps = [
+     ":embedder",
+     "//base",
++    "//chrome/browser/profiles:profile",
++    "//components/favicon/content",
++    "//components/favicon/core",
+     "//components/input",
+     "//components/viz/common",
+     "//content/public/app",
+@@ -140,7 +176,8 @@ source_set("bridge") {
+ #   Versions/A/OpenArcCore            the library; install name
+ #                                     @rpath/OpenArcCore.framework/Versions/A/OpenArcCore
+ #   Versions/A/Headers, Modules/      public API and module map (Swift `import OpenArcCore`)
+-#   Versions/A/Resources/             Info.plist, openarc.pak, icudtl.dat, V8 snapshot,
++#   Versions/A/Resources/             Info.plist, Chrome's resources.pak and locale paks,
++#                                     icudtl.dat, V8 snapshot,
+ #                                     ANGLE Metal shader cache
+ #   Versions/A/Helpers/openarc_helper the child-process executable (unbundled until the
+ #                                     helper apps of plan C10)
+@@ -161,11 +198,11 @@ bundle_data("openarc_framework_module_map") {
+ }
+ 
+ bundle_data("openarc_framework_resources") {
+-  sources = [
+-    "$root_out_dir/openarc.pak",
+-    "//ui/gl/resources/angle-metal/gpu_shader_cache.bin",
+-  ]
+-  public_deps = [ ":openarc_pak" ]
++  sources = [ "//ui/gl/resources/angle-metal/gpu_shader_cache.bin" ]
++  # Chrome's resource packs (resources.pak, chrome_{100,200}_percent.pak and
++  # one <locale>.lproj/locale.pak per locale) bundle themselves into
++  # Resources/ (chrome_paks with copy_data_to_bundle).
++  public_deps = [ "//chrome:packed_resources" ]
+   if (icu_use_data_file) {
+     sources += [ "$root_out_dir/icudtl.dat" ]
+     public_deps += [ "//third_party/icu:icudata" ]
+@@ -184,9 +221,17 @@ bundle_data("openarc_framework_resources") {
+ }
+ 
+ bundle_data("openarc_framework_helpers") {
+-  sources = [ "$root_out_dir/openarc_helper" ]
++  sources = [
++    # Crashpad's handler (local crash reports, plan D8); Chrome's crash
++    # reporter starts it from the framework's Helpers/.
++    "$root_out_dir/chrome_crashpad_handler",
++    "$root_out_dir/openarc_helper",
++  ]
+   outputs = [ "{{bundle_contents_dir}}/Helpers/{{source_file_part}}" ]
+-  public_deps = [ ":openarc_helper" ]
++  public_deps = [
++    ":openarc_helper",
++    "//components/crash/core/app:chrome_crashpad_handler",
++  ]
+ }
+ 
+ bundle_data("openarc_framework_swiftshader") {
+@@ -268,49 +313,3 @@ executable("openarc_shell_test") {
+   ]
+   ldflags = [ "-Wl,-rpath,@executable_path" ]
+ }
+-
+-repack("openarc_pak") {
+-  sources = [
+-    "$root_gen_dir/content/browser/devtools/devtools_resources.pak",
+-    "$root_gen_dir/content/browser/tracing/tracing_resources.pak",
+-    "$root_gen_dir/content/content_resources.pak",
+-    "$root_gen_dir/content/gpu_resources.pak",
+-    "$root_gen_dir/content/histograms_resources.pak",
+-    "$root_gen_dir/content/process_resources.pak",
+-    "$root_gen_dir/content/quota_internals_resources.pak",
+-    "$root_gen_dir/content/service_worker_resources.pak",
+-    "$root_gen_dir/content/traces_internals_resources.pak",
+-    "$root_gen_dir/mojo/public/js/mojo_bindings_resources.pak",
+-    "$root_gen_dir/net/net_resources.pak",
+-    "$root_gen_dir/third_party/blink/public/resources/blink_resources.pak",
+-    "$root_gen_dir/third_party/blink/public/resources/blink_scaled_resources_100_percent.pak",
+-    "$root_gen_dir/third_party/blink/public/resources/inspector_overlay_resources.pak",
+-    "$root_gen_dir/third_party/blink/public/strings/blink_strings_en-US.pak",
+-    "$root_gen_dir/third_party/blink/public/strings/permission_element_generated_strings.pak",
+-    "$root_gen_dir/third_party/blink/public/strings/permission_element_strings_en-US.pak",
+-    "$root_gen_dir/ui/resources/ui_resources_100_percent.pak",
+-    "$root_gen_dir/ui/strings/app_locale_settings_en-US.pak",
+-    "$root_gen_dir/ui/strings/auto_image_annotation_strings_en-US.pak",
+-    "$root_gen_dir/ui/strings/ax_strings_en-US.pak",
+-    "$root_gen_dir/ui/strings/ui_strings_en-US.pak",
+-    "$root_gen_dir/ui/webui/resources/webui_resources.pak",
+-  ]
+-  deps = [
+-    "//content:content_resources",
+-    "//content/browser/devtools:devtools_resources",
+-    "//content/browser/resources",
+-    "//content/browser/tracing:resources",
+-    "//mojo/public/js:resources",
+-    "//net:net_resources",
+-    "//third_party/blink/public:devtools_inspector_resources",
+-    "//third_party/blink/public:resources",
+-    "//third_party/blink/public:scaled_resources_100_percent",
+-    "//third_party/blink/public/strings",
+-    "//third_party/blink/public/strings:permission_element_generated_strings",
+-    "//third_party/blink/public/strings:permission_element_strings",
+-    "//ui/resources",
+-    "//ui/strings",
+-    "//ui/webui/resources",
+-  ]
+-  output = "$root_out_dir/openarc.pak"
+-}
+diff --git a/openarc/app/openarc_main_delegate.h b/openarc/app/openarc_main_delegate.h
+index 04a48c15b443..99eb61cd6ef2 100644
+--- a/openarc/app/openarc_main_delegate.h
++++ b/openarc/app/openarc_main_delegate.h
+@@ -11,7 +11,7 @@
+ #include <variant>
+ 
+ #include "base/files/file_path.h"
+-#include "content/public/app/content_main_delegate.h"
++#include "chrome/app/chrome_main_delegate.h"
+ 
+ namespace content {
+ class BrowserMainRunner;
+@@ -19,43 +19,43 @@ class BrowserMainRunner;
+ 
+ namespace openarc {
+ 
+-class OpenArcContentBrowserClient;
+-class OpenArcContentClient;
+-
+-// Content main delegate for every Open Arc process. In the browser process it
+-// starts Chromium inside the app's running NSApplication instead of running a
+-// loop of its own (chromium-bridge/README.md, Startup sequence):
+-// BrowserMainRunner::Initialize() runs the startup tasks, then the UI thread's
+-// message pump is attached to the app's main CFRunLoop. Shutdown happens in
+-// ShutdownBrowser(), called by OACApplication.
++// Main delegate for every Open Arc process, derived from //chrome's
++// ChromeMainDelegate (decision Q7): Chrome's content clients, keyed services,
++// profiles and tab helpers, without Chrome's UI.
+ //
+-// TODO(C6b): derive from //chrome's ChromeMainDelegate (decision Q7).
+-class OpenArcMainDelegate : public content::ContentMainDelegate {
++// In the browser process it starts Chromium inside the app's running
++// NSApplication instead of running a loop of its own (chromium-bridge/README.md,
++// Startup sequence): BrowserMainRunner::Initialize() runs the startup tasks,
++// then the UI thread's message pump is attached to the app's main CFRunLoop
++// (patch 0001). Chrome is put in its embedder-owned-UI mode
++// (chrome::SetEmbedderOwnsUI(), an Open Arc patch to //chrome), so it creates
++// no app controller, menu, startup browser or Browser window. Shutdown happens
++// in ShutdownBrowser(), called by OACApplication.
++class OpenArcMainDelegate : public ChromeMainDelegate {
+  public:
+   // |user_data_directory|: Chromium's user data directory in the browser
+-  // process (OACApplicationConfiguration); empty in child processes.
++  // process (OACApplicationConfiguration); empty in child processes, which get
++  // it from the command line.
+   explicit OpenArcMainDelegate(const base::FilePath& user_data_directory = {});
+   OpenArcMainDelegate(const OpenArcMainDelegate&) = delete;
+   OpenArcMainDelegate& operator=(const OpenArcMainDelegate&) = delete;
+   ~OpenArcMainDelegate() override;
+ 
+-  // Stops the browser process: browser main parts' teardown, then the
+-  // browser threads. Only for the browser process, once.
++  // Stops the browser process: Chrome's shutdown sequence (profiles flushed,
++  // services torn down), then the browser threads. Only for the browser
++  // process, once.
+   void ShutdownBrowser();
+ 
+-  // content::ContentMainDelegate:
++  // ChromeMainDelegate:
+   std::optional<int> BasicStartupComplete() override;
+   void PreSandboxStartup() override;
+   std::variant<int, content::MainFunctionParams> RunProcess(
+       const std::string& process_type,
+       content::MainFunctionParams main_function_params) override;
+-  content::ContentClient* CreateContentClient() override;
+   content::ContentBrowserClient* CreateContentBrowserClient() override;
+ 
+  private:
+   const base::FilePath user_data_directory_;
+-  std::unique_ptr<OpenArcContentClient> content_client_;
+-  std::unique_ptr<OpenArcContentBrowserClient> browser_client_;
+   std::unique_ptr<content::BrowserMainRunner> browser_main_runner_;
+ };
+ 
+diff --git a/openarc/app/openarc_main_delegate.mm b/openarc/app/openarc_main_delegate.mm
+index 6a361f26cde7..83ac7ffc63ac 100644
+--- a/openarc/app/openarc_main_delegate.mm
++++ b/openarc/app/openarc_main_delegate.mm
+@@ -7,41 +7,64 @@
+ #include "base/check.h"
+ #include "base/command_line.h"
+ #include "base/logging.h"
+-#include "base/logging/logging_settings.h"
++#include "base/path_service.h"
++#include "base/base_switches.h"
+ #include "base/process/current_process.h"
+ #include "base/task/current_thread.h"
++#include "chrome/browser/chrome_content_browser_client.h"
++#include "chrome/common/chrome_paths.h"
++#include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
++#include "components/crash/core/common/objc_zombie.h"
+ #include "content/public/browser/browser_main_runner.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/main_function_params.h"
+ #include "openarc/browser/openarc_content_browser_client.h"
+-#include "openarc/common/openarc_content_client.h"
+-#include "openarc/common/openarc_paths.h"
+-#include "ui/base/resource/resource_bundle.h"
+ 
+ namespace openarc {
+ 
+ OpenArcMainDelegate::OpenArcMainDelegate(
+     const base::FilePath& user_data_directory)
+-    : user_data_directory_(user_data_directory) {}
++    : ChromeMainDelegate(
++          {.exe_entry_point_ticks = base::TimeTicks::Now()}),
++      user_data_directory_(user_data_directory) {}
++
+ OpenArcMainDelegate::~OpenArcMainDelegate() = default;
+ 
+ std::optional<int> OpenArcMainDelegate::BasicStartupComplete() {
+-  const base::CommandLine& command_line =
+-      *base::CommandLine::ForCurrentProcess();
+-  logging::LoggingSettings settings;
+-  // stderr by default during bring-up; --enable-logging=... still overrides.
+-  settings.logging_dest =
+-      command_line.HasSwitch(switches::kEnableLogging)
+-          ? logging::LOG_DEFAULT
+-          : (logging::LOG_TO_SYSTEM_DEBUG_LOG | logging::LOG_TO_STDERR);
+-  logging::InitLogging(settings);
+-  logging::SetLogItems(/*enable_process_id=*/true, /*enable_thread_id=*/true,
+-                       /*enable_timestamp=*/true, /*enable_tickcount=*/false);
+-  return std::nullopt;
++  // Chrome's hang watcher treats a long task on the browser's main thread as a
++  // hang worth a crash report. Here that thread is the shell app's main thread
++  // and runs the app's own work too, and the UI pump is attached to the app's
++  // run loop (patch 0001), not run by Chrome. Off in every process, before
++  // ChromeMainDelegate reads the feature list.
++  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  std::string disabled =
++      command_line->GetSwitchValueASCII(switches::kDisableFeatures);
++  if (disabled.find("EnableHangWatcher") == std::string::npos) {
++    disabled += disabled.empty() ? "EnableHangWatcher" : ",EnableHangWatcher";
++    command_line->AppendSwitchASCII(switches::kDisableFeatures, disabled);
++  }
++
++  std::optional<int> exit_code = ChromeMainDelegate::BasicStartupComplete();
++  // Chrome keeps freed Objective-C objects as zombies to diagnose crashes.
++  // Here the browser process is the shell app; its own objects are none of
++  // Chromium's business.
++  ObjcEvilDoers::ZombieDisable();
++  return exit_code;
+ }
+ 
+ void OpenArcMainDelegate::PreSandboxStartup() {
+-  ui::ResourceBundle::InitSharedInstanceWithPakPath(GetResourcesPakPath());
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  if (!command_line.HasSwitch(switches::kProcessType) &&
++      !user_data_directory_.empty()) {
++    // Crash reports go below our user data directory (plan D8), not to
++    // Chromium's default ~/Library/Application Support/Chromium/Crashpad.
++    // Chrome's crash reporter starts in ChromeMainDelegate::PreSandboxStartup.
++    base::PathService::OverrideAndCreateIfNeeded(
++        chrome::DIR_CRASH_DUMPS, user_data_directory_.Append("Crashpad"),
++        /*is_absolute=*/true, /*create=*/true);
++  }
++  ChromeMainDelegate::PreSandboxStartup();
+ }
+ 
+ std::variant<int, content::MainFunctionParams> OpenArcMainDelegate::RunProcess(
+@@ -49,7 +72,8 @@
+     content::MainFunctionParams main_function_params) {
+   // Child processes run their usual main function.
+   if (!process_type.empty()) {
+-    return std::move(main_function_params);
++    return ChromeMainDelegate::RunProcess(process_type,
++                                          std::move(main_function_params));
+   }
+ 
+   base::CurrentProcess::GetInstance().SetProcessType(
+@@ -81,16 +105,17 @@
+   browser_main_runner_.reset();
+ }
+ 
+-content::ContentClient* OpenArcMainDelegate::CreateContentClient() {
+-  content_client_ = std::make_unique<OpenArcContentClient>();
+-  return content_client_.get();
+-}
+-
+ content::ContentBrowserClient*
+ OpenArcMainDelegate::CreateContentBrowserClient() {
+-  browser_client_ =
+-      std::make_unique<OpenArcContentBrowserClient>(user_data_directory_);
+-  return browser_client_.get();
++  // As ChromeMainDelegate::CreateContentBrowserClient(), with our subclass.
++  // The base class keeps using |chrome_content_browser_client_| (startup data,
++  // feature list), so the client must live there.
++  chrome_content_browser_client_ =
++      std::make_unique<OpenArcContentBrowserClient>();
++  CHECK(sampling_profiler_);
++  chrome_content_browser_client_->SetSamplingProfiler(
++      std::move(sampling_profiler_));
++  return chrome_content_browser_client_.get();
+ }
+ 
+ }  // namespace openarc
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 8dc30f9357f1..008c7f7dd9f2 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -12,14 +12,20 @@
+ 
+ #include "base/apple/foundation_util.h"
+ #include "base/check.h"
++#include "base/files/file_path.h"
+ #include "base/logging.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/version_info/version_info.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/embedder_owned_ui_mac.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/common/chrome_switches.h"
+ #include "components/embedder_support/user_agent_utils.h"
+ #include "content/public/app/content_main.h"
+ #include "content/public/app/content_main_runner.h"
+ #include "openarc/app/openarc_main_delegate.h"
+-#include "openarc/browser/openarc_browser_main_parts.h"
++#include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/common/openarc_paths.h"
+ 
+ #import <OpenArcCore/OACBrowserApplication.h>
+@@ -42,6 +48,22 @@
+ 
+ EngineState* g_engine = nullptr;
+ 
++// Chrome switches every Open Arc browser process starts with (after the
++// host's own switches, so a development switch can still override them).
++// The app owns first run, default-browser prompts, updates and sync (our sync
++// is CloudKit, for the workspace only); Chrome sign-in and Google services
++// need API keys we do not have.
++constexpr const char* kDefaultSwitches[] = {
++    "--no-first-run",
++    "--no-default-browser-check",
++    "--disable-sync",
++    "--disable-component-update",
++    "--disable-background-networking",
++    "--disable-domain-reliability",
++    "--disable-updater-scheduler",
++    "--metrics-recording-only",
++};
++
+ }  // namespace
+ 
+ @implementation OACApplicationConfiguration {
+@@ -125,6 +147,8 @@ @implementation OACApplication {
+   __weak id<OACApplicationDelegate> _delegate;
+   OACApplicationConfiguration* _configuration;
+   NSMutableDictionary<NSUUID*, OACProfile*>* _profiles;
++  // Completion handlers of profiles ProfileManager is still loading.
++  NSMutableDictionary<NSUUID*, NSMutableArray*>* _pendingProfileLoads;
+   NSHashTable<OACTab*>* _tabs;
+ }
+ 
+@@ -136,6 +160,7 @@ + (OACApplication*)sharedApplication {
+ - (instancetype)initPrivate {
+   if ((self = [super init])) {
+     _profiles = [NSMutableDictionary dictionary];
++    _pendingProfileLoads = [NSMutableDictionary dictionary];
+     _tabs = [NSHashTable weakObjectsHashTable];
+   }
+   return self;
+@@ -193,6 +218,13 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+       g_engine->arguments.push_back(base::SysNSStringToUTF8(arguments[i]));
+     }
+   }
++  for (const char* default_switch : kDefaultSwitches) {
++    g_engine->arguments.push_back(default_switch);
++  }
++  // Chrome's user data directory: Local State, the profiles, crash reports.
++  g_engine->arguments.push_back(
++      "--user-data-dir=" +
++      base::apple::NSURLToFilePath(_configuration.userDataDirectory).value());
+   for (NSString* extra in _configuration.additionalSwitches) {
+     g_engine->arguments.push_back(base::SysNSStringToUTF8(extra));
+   }
+@@ -210,6 +242,10 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   }
+ 
+   openarc::ConfigureBundleOverrides();
++  // No Chrome window, menu, startup browser or initial profile: the shell
++  // owns the UI and loads profiles itself (README, Keeping //chrome without
++  // its UI).
++  chrome::SetEmbedderOwnsUI();
+ 
+   g_engine->main_delegate = std::make_unique<openarc::OpenArcMainDelegate>(
+       base::apple::NSURLToFilePath(_configuration.userDataDirectory));
+@@ -220,7 +256,8 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   params.host_runs_main_loop = true;
+   const int exit_code =
+       content::RunContentProcess(std::move(params), g_engine->main_runner.get());
+-  if (exit_code != 0 || !openarc::OpenArcBrowserMainParts::Get()) {
++  if (exit_code != 0 || !openarc::OpenArcBrowserMainExtraParts::Get() ||
++      !g_browser_process || !g_browser_process->profile_manager()) {
+     LOG(ERROR) << "OpenArc: engine start failed: " << exit_code;
+     // Chromium cannot be restarted in this process.
+     _state = OACApplicationStateTerminated;
+@@ -232,9 +269,9 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   }
+ 
+   __weak OACApplication* weakSelf = self;
+-  openarc::OpenArcBrowserMainParts::Get()->SetWillDestroyBrowserContextsCallback(
++  openarc::OpenArcBrowserMainExtraParts::Get()->SetWillDestroyProfilesCallback(
+       base::BindOnce(^{
+-        [weakSelf closeAllTabs];
++        [weakSelf closeAllTabsAndProfiles];
+       }));
+   _state = OACApplicationStateRunning;
+   return YES;
+@@ -246,6 +283,17 @@ - (void)closeAllTabs {
+   }
+ }
+ 
++// Before Chrome destroys its profiles: every WebContents and every profile
++// keep-alive goes first.
++- (void)closeAllTabsAndProfiles {
++  [self closeAllTabs];
++  for (OACProfile* profile in _profiles.allValues) {
++    [profile invalidate];
++  }
++  [_profiles removeAllObjects];
++  [_pendingProfileLoads removeAllObjects];
++}
++
+ - (void)shutdownWithCompletionHandler:(void (^)(void))completionHandler {
+   CHECK(NSThread.isMainThread);
+   if (_state != OACApplicationStateRunning) {
+@@ -255,11 +303,7 @@ - (void)shutdownWithCompletionHandler:(void (^)(void))completionHandler {
+   _state = OACApplicationStateShuttingDown;
+   // Run outside whatever Chromium task or AppKit callback asked for it.
+   OACPostToMainThread(^{
+-    [self closeAllTabs];
+-    for (OACProfile* profile in self->_profiles.allValues) {
+-      [profile invalidate];
+-    }
+-    [self->_profiles removeAllObjects];
++    [self closeAllTabsAndProfiles];
+     g_engine->main_delegate->ShutdownBrowser();
+     g_engine->main_runner->Shutdown();
+     delete g_engine;
+@@ -280,13 +324,6 @@ - (NSString*)userAgent {
+ 
+ // MARK: Profiles
+ 
+-- (NSURL*)dataDirectoryForProfile:(NSUUID*)identifier {
+-  return [[_configuration.userDataDirectory URLByAppendingPathComponent:@"Profiles"
+-                                                            isDirectory:YES]
+-      URLByAppendingPathComponent:identifier.UUIDString
+-                      isDirectory:YES];
+-}
+-
+ - (void)loadProfileWithIdentifier:(NSUUID*)identifier
+                 completionHandler:(void (^)(OACProfile*, NSError*))
+                                       completionHandler {
+@@ -299,21 +336,64 @@ - (void)loadProfileWithIdentifier:(NSUUID*)identifier
+     return;
+   }
+   OACProfile* profile = _profiles[identifier];
+-  if (!profile) {
+-    NSURL* directory = [self dataDirectoryForProfile:identifier];
+-    // TODO(C11): create the directory on a background thread.
+-    [NSFileManager.defaultManager createDirectoryAtURL:directory
+-                           withIntermediateDirectories:YES
+-                                            attributes:nil
+-                                                 error:nil];
++  if (profile) {
++    OACPostToMainThread(^{
++      completionHandler(profile, nil);
++    });
++    return;
++  }
++  NSMutableArray* pending = _pendingProfileLoads[identifier];
++  if (pending) {
++    [pending addObject:completionHandler];
++    return;
++  }
++  _pendingProfileLoads[identifier] =
++      [NSMutableArray arrayWithObject:completionHandler];
++
++  // ProfileManager creates (or opens) the profile on its background
++  // sequences and finishes on the UI thread, in
++  // <userDataDirectory>/<UUID> (it only accepts profiles directly below its
++  // user data directory, next to Local State).
++  // ProfileManager's own (resolved) user data directory: it compares paths
++  // literally, and /tmp is /private/tmp.
++  ProfileManager* profile_manager = g_browser_process->profile_manager();
++  const base::FilePath path = profile_manager->user_data_dir().Append(
++      base::SysNSStringToUTF8(identifier.UUIDString));
++  NSURL* directory = base::apple::FilePathToNSURL(path);
++  __weak OACApplication* weakSelf = self;
++  profile_manager->CreateProfileAsync(
++      path,
++      base::BindOnce(^(Profile* chrome_profile) {
++        [weakSelf didLoadProfile:chrome_profile
++                      identifier:identifier
++                       directory:directory];
++      }));
++}
++
++- (void)didLoadProfile:(Profile*)chromeProfile
++            identifier:(NSUUID*)identifier
++             directory:(NSURL*)directory {
++  NSArray* handlers = _pendingProfileLoads[identifier];
++  [_pendingProfileLoads removeObjectForKey:identifier];
++  if (!handlers) {
++    return;  // Shut down while loading.
++  }
++  OACProfile* profile = nil;
++  NSError* error = nil;
++  if (chromeProfile && _state == OACApplicationStateRunning) {
+     profile = [[OACProfile alloc] initWithIdentifier:identifier
+                                        dataDirectory:directory
+-                                     originalProfile:nil];
++                                             profile:chromeProfile];
+     _profiles[identifier] = profile;
++  } else {
++    error = OACMakeError(OACErrorProfileUnavailable,
++                         @"Chromium could not create the profile.");
++  }
++  for (void (^handler)(OACProfile*, NSError*) in handlers) {
++    OACPostToMainThread(^{
++      handler(profile, error);
++    });
+   }
+-  OACPostToMainThread(^{
+-    completionHandler(profile, nil);
+-  });
+ }
+ 
+ - (OACProfile*)loadedProfileWithIdentifier:(NSUUID*)identifier {
+diff --git a/openarc/bridge/oac_profile.mm b/openarc/bridge/oac_profile.mm
+index 9df803ff7aba..38ce96b41f21 100644
+--- a/openarc/bridge/oac_profile.mm
++++ b/openarc/bridge/oac_profile.mm
+@@ -4,63 +4,75 @@
+ 
+ #import <OpenArcCore/OACProfile.h>
+ 
+-#include <string>
++#include <memory>
+ 
+-#include "base/apple/foundation_util.h"
+ #include "base/check.h"
+-#include "base/strings/sys_string_conversions.h"
+-#include "openarc/browser/openarc_browser_context.h"
+-#include "openarc/browser/openarc_browser_main_parts.h"
++#include "base/memory/weak_ptr.h"
++#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
++#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
++#include "chrome/browser/profiles/profile.h"
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ 
+-// Plan C11 owns real per-profile storage and //chrome's Profile (C6b); this is
+-// the bring-up subset: one content browser context per profile identifier,
+-// plus an off-the-record variant. Site settings, downloads and extensions come
+-// with C12 and C14.
++// One //chrome Profile per model Profile (plan C11, decision Q7), created by
++// ProfileManager in <userDataDirectory>/Profiles/<UUID>. Its off-the-record
++// variant is Chrome's primary OTR profile of that Profile. Site settings,
++// downloads and extensions surfaces come with C12 and C14.
+ @implementation OACProfile {
+   NSUUID* _identifier;
+   NSURL* _dataDirectory;
+   __weak OACProfile* _originalProfile;
+   OACProfile* _offTheRecordProfile;
++  base::WeakPtr<Profile> _profile;
++  // Keeps an on-disk profile loaded while the shell may use it (Chrome
++  // otherwise unloads a profile that has no browser window).
++  std::unique_ptr<ScopedProfileKeepAlive> _keepAlive;
+   BOOL _valid;
+ }
+ 
+ - (instancetype)initWithIdentifier:(NSUUID*)identifier
+                      dataDirectory:(NSURL*)dataDirectory
+-                   originalProfile:(OACProfile*)originalProfile {
++                           profile:(Profile*)profile {
+   if ((self = [super init])) {
++    CHECK(profile);
+     _identifier = [identifier copy];
+     _dataDirectory = [dataDirectory copy];
+-    _originalProfile = originalProfile;
++    _profile = profile->GetWeakPtr();
++    _keepAlive = std::make_unique<ScopedProfileKeepAlive>(
++        profile, ProfileKeepAliveOrigin::kAppWindow);
+     _valid = YES;
+   }
+   return self;
+ }
+ 
+-- (std::string)contextKey {
+-  return base::SysNSStringToUTF8(_identifier.UUIDString) +
+-         (_originalProfile ? ":otr" : "");
++- (instancetype)initOffTheRecordWithOriginal:(OACProfile*)original {
++  if ((self = [super init])) {
++    _identifier = [original.identifier copy];
++    _originalProfile = original;
++    _valid = YES;
++  }
++  return self;
+ }
+ 
+-- (content::BrowserContext*)browserContext {
+-  auto* parts = openarc::OpenArcBrowserMainParts::Get();
+-  if (!_valid || !parts) {
++- (Profile*)chromeProfile {
++  if (!_valid) {
+     return nullptr;
+   }
+   OACProfile* original = _originalProfile;
+-  base::FilePath path =
+-      original ? base::apple::NSURLToFilePath(original.dataDirectory)
+-               : base::apple::NSURLToFilePath(_dataDirectory);
+-  return parts->GetOrCreateBrowserContext([self contextKey], path,
+-                                          /*off_the_record=*/original != nil);
++  if (original) {
++    Profile* profile = original.chromeProfile;
++    return profile ? profile->GetPrimaryOTRProfile(/*create_if_needed=*/true)
++                   : nullptr;
++  }
++  return _profile.get();
+ }
+ 
+ - (void)invalidate {
+   _valid = NO;
+   [_offTheRecordProfile invalidate];
+   _offTheRecordProfile = nil;
++  _keepAlive.reset();
+ }
+ 
+ - (NSUUID*)identifier {
+@@ -72,7 +84,11 @@ - (BOOL)isOffTheRecord {
+ }
+ 
+ - (BOOL)isValid {
+-  return _valid;
++  if (!_valid) {
++    return NO;
++  }
++  OACProfile* original = _originalProfile;
++  return original ? original.valid : _profile.get() != nullptr;
+ }
+ 
+ - (NSURL*)dataDirectory {
+@@ -88,9 +104,8 @@ - (OACProfile*)offTheRecordProfile {
+     return self;
+   }
+   if (!_offTheRecordProfile) {
+-    _offTheRecordProfile = [[OACProfile alloc] initWithIdentifier:_identifier
+-                                                    dataDirectory:nil
+-                                                  originalProfile:self];
++    _offTheRecordProfile =
++        [[OACProfile alloc] initOffTheRecordWithOriginal:self];
+   }
+   return _offTheRecordProfile;
+ }
+@@ -119,7 +134,7 @@ - (OACExtensions*)extensions {
+ - (void)clearBrowsingDataOfTypes:(OACBrowsingDataTypes)types
+                            since:(NSDate*)since
+                completionHandler:(void (^)(void))completionHandler {
+-  // TODO(C11): BrowsingDataRemover.
++  // TODO(C11): BrowsingDataRemover with Chrome's remover delegate.
+   OACPostToMainThread(completionHandler);
+ }
+ 
+diff --git a/openarc/bridge/oac_profile_internal.h b/openarc/bridge/oac_profile_internal.h
+index 508394813be2..cc2a833c18ea 100644
+--- a/openarc/bridge/oac_profile_internal.h
++++ b/openarc/bridge/oac_profile_internal.h
+@@ -7,16 +7,19 @@
+ 
+ #import <OpenArcCore/OACProfile.h>
+ 
+-namespace content {
+-class BrowserContext;
+-}
++class Profile;
+ 
+ @interface OACProfile ()
++// An on-disk profile: a handle on the Chrome Profile that ProfileManager
++// created at |dataDirectory|. It keeps the profile loaded (a profile
++// keep-alive) until -invalidate.
+ - (instancetype)initWithIdentifier:(NSUUID*)identifier
+                      dataDirectory:(NSURL*)dataDirectory
+-                   originalProfile:(OACProfile*)originalProfile;
+-// The content browser context, or nullptr once destroyed.
+-@property(nonatomic, readonly) content::BrowserContext* browserContext;
++                           profile:(Profile*)profile;
++// The Chrome Profile (the original one, or its primary off-the-record
++// profile), or nullptr once destroyed. Creates the off-the-record profile on
++// first use.
++@property(nonatomic, readonly) Profile* chromeProfile;
+ // Called when the engine shuts down; the profile turns invalid.
+ - (void)invalidate;
+ @end
+diff --git a/openarc/bridge/oac_requests.mm b/openarc/bridge/oac_requests.mm
+index 1257f023557a..8a594608bfd5 100644
+--- a/openarc/bridge/oac_requests.mm
++++ b/openarc/bridge/oac_requests.mm
+@@ -4,10 +4,10 @@
+ 
+ // OACNewTabRequest (OACTabDelegate.h) and the JavaScript dialog part of
+ // OACDialogDelegate.h. The other dialog kinds (HTTP auth, permissions, file
+-// chooser, external protocol) get their default answer from content itself
+-// until plan C12: this content-level embedder installs no login delegate,
+-// permission controller delegate or file chooser, so content cancels or denies
+-// them.
++// chooser, external protocol) get default answers until plan C12 routes them
++// to the shell: OpenArcContentBrowserClient installs no login delegate and
++// launches no external app, and the tab's permission prompt dismisses every
++// request (openarc_tab_helpers.mm).
+ 
+ #import "openarc/bridge/oac_requests_internal.h"
+ 
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index a4e60c3382dc..95059438721b 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -15,6 +15,9 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/time/time.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/favicon/content/content_favicon_driver.h"
++#include "components/favicon/core/favicon_driver_observer.h"
+ #include "components/input/native_web_keyboard_event.h"
+ #include "components/viz/common/frame_sinks/copy_output_result.h"
+ #include "content/public/browser/browser_context.h"
+@@ -45,6 +48,7 @@
+ #include "ui/gfx/geometry/size.h"
+ #include "ui/gfx/image/image.h"
+ #include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/image/image_skia_rep.h"
+ #include "ui/gfx/image/image_skia_operations.h"
+ #include "url/gurl.h"
+ #include "url/url_constants.h"
+@@ -56,6 +60,7 @@
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
++#include "openarc/browser/openarc_tab_helpers.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ 
+ @class OACTab;
+@@ -101,8 +106,9 @@ CGRect RequestedFrame(const blink::mojom::WindowFeatures& features) {
+              : blink::mojom::PreferredColorScheme::kLight;
+ }
+ 
+-// The favicon size the bridge decodes (OACTabState.faviconPNGData).
+-constexpr int kFaviconPixelSize = 32;
++// The favicon representation the bridge reports (OACTabState.faviconPNGData):
++// 2x of Chrome's 16 DIP tab favicon, i.e. 32 px.
++constexpr float kFaviconScale = 2.0f;
+ 
+ }  // namespace
+ 
+@@ -111,8 +117,8 @@ - (void)webContentsDidChangeState;
+ - (void)webContentsDidFinishNavigation:(content::NavigationHandle*)handle;
+ - (void)webContentsRenderProcessGone:(base::TerminationStatus)status;
+ - (void)webContentsDidRequestClose;
+-- (void)webContentsDidUpdateFaviconURLs:
+-    (const std::vector<blink::mojom::FaviconURLPtr>&)candidates;
++- (void)faviconDriverDidUpdateIcon:(const GURL&)iconURL
++                             image:(const gfx::Image&)image;
+ - (void)webContentsDidChangeThemeColor;
+ - (void)webContentsDidToggleFullscreen:(BOOL)isFullscreen;
+ - (void)webContentsDidHoverURL:(const GURL&)url;
+@@ -132,20 +138,42 @@ - (void)webContentsDidRequestNewTab:(OACNewTabRequest*)request;
+ // Forwards WebContents events to its OACTab. Owned by the tab; never outlives
+ // the WebContents.
+ class TabWebContentsBridge : public content::WebContentsObserver,
+-                             public content::WebContentsDelegate {
++                             public content::WebContentsDelegate,
++                             public favicon::FaviconDriverObserver {
+  public:
+   TabWebContentsBridge(OACTab* tab, content::WebContents* web_contents)
+       : content::WebContentsObserver(web_contents), tab_(tab) {
+     web_contents->SetDelegate(this);
++    favicon_driver_ =
++        favicon::ContentFaviconDriver::FromWebContents(web_contents);
++    if (favicon_driver_) {
++      favicon_driver_->AddObserver(this);
++    }
+   }
+   TabWebContentsBridge(const TabWebContentsBridge&) = delete;
+   TabWebContentsBridge& operator=(const TabWebContentsBridge&) = delete;
+   ~TabWebContentsBridge() override {
++    if (favicon_driver_) {
++      favicon_driver_->RemoveObserver(this);
++    }
+     if (web_contents()) {
+       web_contents()->SetDelegate(nullptr);
+     }
+   }
+ 
++  // favicon::FaviconDriverObserver: //chrome's favicon driver found (in
++  // history or by download) the best icon for the page. The 16 DIP
++  // multi-resolution favicon is what a tab row shows.
++  void OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
++                        NotificationIconType notification_icon_type,
++                        const GURL& icon_url,
++                        bool icon_url_changed,
++                        const gfx::Image& image) override {
++    if (notification_icon_type == NON_TOUCH_16_DIP) {
++      [tab_ faviconDriverDidUpdateIcon:icon_url image:image];
++    }
++  }
++
+   // content::WebContentsObserver:
+   void DidStartLoading() override { [tab_ webContentsDidChangeState]; }
+   void DidStopLoading() override { [tab_ webContentsDidChangeState]; }
+@@ -165,12 +193,6 @@ void PrimaryMainFrameRenderProcessGone(
+       base::TerminationStatus status) override {
+     [tab_ webContentsRenderProcessGone:status];
+   }
+-  void DidUpdateFaviconURL(
+-      content::RenderFrameHost* render_frame_host,
+-      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+-      blink::mojom::FaviconUpdateReason reason) override {
+-    [tab_ webContentsDidUpdateFaviconURLs:candidates];
+-  }
+   void DidChangeThemeColor() override { [tab_ webContentsDidChangeThemeColor]; }
+   void DidToggleFullscreenModeForTab(bool entered_fullscreen,
+                                      bool will_cause_resize) override {
+@@ -283,6 +305,7 @@ void FindReply(content::WebContents* web_contents,
+ 
+  private:
+   __weak OACTab* tab_;
++  raw_ptr<favicon::ContentFaviconDriver> favicon_driver_ = nullptr;
+ };
+ 
+ }  // namespace openarc
+@@ -377,8 +400,10 @@ @implementation OACTab {
+   NSInteger _javaScriptDialogCount;
+   OACColorScheme _preferredColorScheme;
+   NSURL* _hoveredURL;
+-  // Favicon candidate being downloaded; a newer candidate wins.
+-  int _faviconDownloadID;
++  // The page's favicon from //chrome's favicon driver. Kept apart from
++  // _fields so -refreshState can tell a change (C9 request 1).
++  NSURL* _faviconURL;
++  NSData* _faviconPNGData;
+   // Unadopted script-opened windows of this tab, declined when it closes.
+   NSHashTable<OACNewTabRequest*>* _pendingRequests;
+ }
+@@ -394,7 +419,7 @@ + (instancetype)tabWithConfiguration:(OACTabConfiguration*)configuration
+     }
+     return nil;
+   }
+-  content::BrowserContext* context = configuration.profile.browserContext;
++  Profile* context = configuration.profile.chromeProfile;
+   if (!context) {
+     if (error) {
+       *error = OACMakeError(OACErrorProfileUnavailable,
+@@ -430,7 +455,7 @@ + (instancetype)tabWithConfiguration:(OACTabConfiguration*)configuration
+ 
+ - (instancetype)initWithIdentifier:(NSUUID*)identifier
+                            profile:(OACProfile*)profile
+-                           context:(content::BrowserContext*)context
++                           context:(Profile*)context
+                      configuration:(OACTabConfiguration*)configuration
+                         initialURL:(const GURL&)initialURL {
+   if ((self = [super init])) {
+@@ -480,6 +505,10 @@ - (void)setUpWithWebContents:(std::unique_ptr<content::WebContents>)contents
+   _profile = profile;
+   _pendingRequests = [NSHashTable hashTableWithOptions:NSPointerFunctionsStrongMemory];
+   _webContents = std::move(contents);
++  // //chrome's tab helpers (decision Q7): favicon driver, find, zoom, content
++  // settings, permissions, history, password manager and autofill drivers,
++  // extensions tab helper. Before the bridge, so it can observe them.
++  openarc::TabHelpersAccess::AttachTabHelpers(_webContents.get());
+   _dialogManager = std::make_unique<openarc::TabJavaScriptDialogManager>(self);
+   _bridge =
+       std::make_unique<openarc::TabWebContentsBridge>(self, _webContents.get());
+@@ -622,6 +651,8 @@ - (OACTabStateFields)refreshState {
+   _fields.zoomFactor = blink::ZoomLevelToZoomFactor(
+       content::HostZoomMap::GetZoomLevel(contents));
+   _fields.fullscreen = contents->IsFullscreen();
++  _fields.faviconURL = _faviconURL;
++  _fields.faviconPNGData = _faviconPNGData;
+   const std::optional<SkColor> theme = contents->GetThemeColor();
+   _fields.hasThemeColor = theme.has_value();
+   _fields.themeColor =
+@@ -713,66 +744,29 @@ - (void)webContentsDidChangeState {
+ 
+ // MARK: Favicon, theme color, fullscreen, hover, keys, find, new tabs
+ 
+-- (void)webContentsDidUpdateFaviconURLs:
+-    (const std::vector<blink::mojom::FaviconURLPtr>&)candidates {
+-  // TODO(C6b): //chrome's favicon driver (history-backed, best-size picking).
+-  // Until then: the first plain favicon, decoded at 32 px.
+-  GURL icon_url;
+-  for (const auto& candidate : candidates) {
+-    if (candidate->icon_type == blink::mojom::FaviconIconType::kFavicon) {
+-      icon_url = candidate->icon_url;
+-      break;
+-    }
+-  }
+-  if (!icon_url.is_valid() && !candidates.empty()) {
+-    icon_url = candidates.front()->icon_url;
+-  }
+-  if (!icon_url.is_valid() || _closed) {
+-    return;
+-  }
+-  NSURL* url = net::NSURLWithGURL(icon_url);
+-  if (SameURL(url, _fields.faviconURL) && _fields.faviconPNGData) {
+-    return;
+-  }
+-  __weak OACTab* weakSelf = self;
+-  _faviconDownloadID = _webContents->DownloadImage(
+-      icon_url, /*is_favicon=*/true,
+-      gfx::Size(kFaviconPixelSize, kFaviconPixelSize),
+-      /*max_bitmap_size=*/kFaviconPixelSize * 4, /*bypass_cache=*/false,
+-      base::BindOnce(^(int download_id, int http_status_code,
+-                       const GURL& image_url,
+-                       const std::vector<SkBitmap>& bitmaps,
+-                       const std::vector<gfx::Size>& sizes) {
+-        [weakSelf faviconDownload:download_id
+-                              URL:url
+-                          bitmaps:bitmaps];
+-      }));
+-}
+-
+-- (void)faviconDownload:(int)downloadID
+-                    URL:(NSURL*)url
+-                bitmaps:(const std::vector<SkBitmap>&)bitmaps {
+-  if (_closed || downloadID != _faviconDownloadID) {
++- (void)faviconDriverDidUpdateIcon:(const GURL&)iconURL
++                             image:(const gfx::Image&)image {
++  if (_closed) {
+     return;
+   }
+-  // Pick the bitmap closest to 32 px, then encode it as PNG.
+-  const SkBitmap* best = nullptr;
+-  for (const SkBitmap& bitmap : bitmaps) {
+-    if (!best || std::abs(bitmap.width() - kFaviconPixelSize) <
+-                     std::abs(best->width() - kFaviconPixelSize)) {
+-      best = &bitmap;
+-    }
+-  }
+   NSData* png = nil;
+-  if (best && !best->drawsNothing()) {
+-    std::optional<std::vector<uint8_t>> encoded =
+-        gfx::PNGCodec::EncodeBGRASkBitmap(*best, /*discard_transparency=*/false);
+-    if (encoded) {
+-      png = [NSData dataWithBytes:encoded->data() length:encoded->size()];
++  if (!image.IsEmpty()) {
++    // The largest representation the driver has (up to 2x of 16 DIP), as
++    // PNG; the shell scales it down.
++    const gfx::ImageSkia* skia = image.ToImageSkia();
++    const SkBitmap bitmap =
++        skia->GetRepresentation(kFaviconScale).GetBitmap();
++    if (!bitmap.drawsNothing()) {
++      std::optional<std::vector<uint8_t>> encoded =
++          gfx::PNGCodec::EncodeBGRASkBitmap(bitmap,
++                                            /*discard_transparency=*/false);
++      if (encoded) {
++        png = [NSData dataWithBytes:encoded->data() length:encoded->size()];
++      }
+     }
+   }
+-  _fields.faviconURL = url;
+-  _fields.faviconPNGData = png;
++  _faviconURL = iconURL.is_valid() ? net::NSURLWithGURL(iconURL) : nil;
++  _faviconPNGData = png;
+   [self webContentsDidChangeState];
+ }
+ 
+@@ -880,6 +874,13 @@ - (void)webContentsDidRequestNewTab:(OACNewTabRequest*)request {
+ }
+ 
+ - (void)webContentsDidFinishNavigation:(content::NavigationHandle*)handle {
++  if (handle->IsInPrimaryMainFrame() && handle->HasCommitted() &&
++      !handle->IsSameDocument()) {
++    // A new document never inherits the previous page's icon; the favicon
++    // driver reports the new one (from history or by download) shortly.
++    _faviconURL = nil;
++    _faviconPNGData = nil;
++  }
+   [self webContentsDidChangeState];
+   if (!handle->IsInPrimaryMainFrame()) {
+     return;
+diff --git a/openarc/bridge/public/OpenArcCore/OACApplication.h b/openarc/bridge/public/OpenArcCore/OACApplication.h
+index 9180ab7d9ed0..475f7d73396b 100644
+--- a/openarc/bridge/public/OpenArcCore/OACApplication.h
++++ b/openarc/bridge/public/OpenArcCore/OACApplication.h
+@@ -28,7 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
+ OAC_EXPORT
+ @interface OACApplicationConfiguration : NSObject <NSCopying>
+ 
+-/// Chromium's user data directory. Default profiles live in `<userDataDirectory>/Profiles/<UUID>`.
++/// Chromium's user data directory (Chrome's `Local State`); each profile lives in `<userDataDirectory>/<UUID>`.
+ /// The shell passes `<app data dir>/Chromium`, where the app data dir is
+ /// `~/Library/Application Support/org.openarc.browser/` or `OPENARC_DATA_DIR` (app/README.md
+ /// §Data directory), so a development data dir also isolates engine data.
+diff --git a/openarc/bridge/public/OpenArcCore/OACProfile.h b/openarc/bridge/public/OpenArcCore/OACProfile.h
+index 69fedc7829b4..eed7a16b7e99 100644
+--- a/openarc/bridge/public/OpenArcCore/OACProfile.h
++++ b/openarc/bridge/public/OpenArcCore/OACProfile.h
+@@ -51,7 +51,7 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ /// NO once Chromium has destroyed the profile.
+ @property (nonatomic, readonly, getter=isValid) BOOL valid;
+ 
+-/// `<userDataDirectory>/Profiles/<identifier>`; nil for an off-the-record profile.
++/// `<userDataDirectory>/<identifier>` (Chrome's profile directory); nil for an off-the-record profile.
+ @property (nonatomic, readonly, copy, nullable) NSURL *dataDirectory;
+ 
+ /// For an off-the-record profile, the profile it derives from; nil otherwise.
+diff --git a/openarc/browser/openarc_browser_context.h b/openarc/browser/openarc_browser_context.h
+deleted file mode 100644
+index cd6a399fb486..000000000000
+--- a/openarc/browser/openarc_browser_context.h
++++ /dev/null
+@@ -1,66 +0,0 @@
+-// Copyright 2026 The Open Arc Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#ifndef OPENARC_BROWSER_OPENARC_BROWSER_CONTEXT_H_
+-#define OPENARC_BROWSER_OPENARC_BROWSER_CONTEXT_H_
+-
+-#include <memory>
+-
+-#include "base/files/file_path.h"
+-#include "content/public/browser/browser_context.h"
+-
+-namespace content {
+-class BackgroundSyncController;
+-}
+-
+-namespace openarc {
+-
+-// One browsing context per model Profile (plan C11), content-level for now.
+-// TODO(C6b): replace with //chrome's Profile created through ProfileManager
+-// (decision Q7) so keyed services (history, passwords, autofill, extensions,
+-// content settings, downloads) come from //chrome. Until then most delegates
+-// are absent, which content treats as "feature off" (permissions denied, no
+-// downloads UI, no push or notifications).
+-class OpenArcBrowserContext : public content::BrowserContext {
+- public:
+-  // |path| is the profile's data directory; ignored when |off_the_record|.
+-  OpenArcBrowserContext(const base::FilePath& path, bool off_the_record);
+-  OpenArcBrowserContext(const OpenArcBrowserContext&) = delete;
+-  OpenArcBrowserContext& operator=(const OpenArcBrowserContext&) = delete;
+-  ~OpenArcBrowserContext() override;
+-
+-  // content::BrowserContext:
+-  std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
+-      const base::FilePath& partition_path) override;
+-  base::FilePath GetPath() const override;
+-  bool IsOffTheRecord() override;
+-  content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
+-  content::BrowserPluginGuestManager* GetGuestManager() override;
+-  storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
+-  content::PlatformNotificationService* GetPlatformNotificationService()
+-      override;
+-  content::PushMessagingService* GetPushMessagingService() override;
+-  content::StorageNotificationService* GetStorageNotificationService() override;
+-  content::SSLHostStateDelegate* GetSSLHostStateDelegate() override;
+-  content::PermissionControllerDelegate* GetPermissionControllerDelegate()
+-      override;
+-  content::ClientHintsControllerDelegate* GetClientHintsControllerDelegate()
+-      override;
+-  content::BackgroundFetchDelegate* GetBackgroundFetchDelegate() override;
+-  content::BackgroundSyncController* GetBackgroundSyncController() override;
+-  content::BrowsingDataRemoverDelegate* GetBrowsingDataRemoverDelegate()
+-      override;
+-  content::ReduceAcceptLanguageControllerDelegate*
+-  GetReduceAcceptLanguageControllerDelegate() override;
+-
+- private:
+-  const base::FilePath path_;
+-  const bool off_the_record_;
+-  std::unique_ptr<content::BackgroundSyncController>
+-      background_sync_controller_;
+-};
+-
+-}  // namespace openarc
+-
+-#endif  // OPENARC_BROWSER_OPENARC_BROWSER_CONTEXT_H_
+diff --git a/openarc/browser/openarc_browser_context.mm b/openarc/browser/openarc_browser_context.mm
+deleted file mode 100644
+index 8940193a9d53..000000000000
+--- a/openarc/browser/openarc_browser_context.mm
++++ /dev/null
+@@ -1,138 +0,0 @@
+-// Copyright 2026 The Open Arc Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "openarc/browser/openarc_browser_context.h"
+-
+-#include <set>
+-
+-#include "base/time/time.h"
+-#include "content/public/browser/background_sync_controller.h"
+-#include "content/public/browser/zoom_level_delegate.h"
+-#include "url/origin.h"
+-
+-namespace openarc {
+-
+-namespace {
+-
+-// Background Sync is off: content requires a controller once a page registers
+-// a sync, so this one accepts registrations and never schedules a wake-up.
+-class DisabledBackgroundSyncController
+-    : public content::BackgroundSyncController {
+- public:
+-  DisabledBackgroundSyncController() = default;
+-  ~DisabledBackgroundSyncController() override = default;
+-
+-  base::TimeDelta GetNextEventDelay(
+-      const content::BackgroundSyncRegistration& registration,
+-      content::BackgroundSyncParameters* parameters,
+-      base::TimeDelta time_till_soonest_scheduled_event_for_origin) override {
+-    return base::TimeDelta::Max();
+-  }
+-  std::unique_ptr<BackgroundSyncEventKeepAlive>
+-  CreateBackgroundSyncEventKeepAlive() override {
+-    return nullptr;
+-  }
+-  void NoteSuspendedPeriodicSyncOrigins(
+-      std::set<url::Origin> suspended_origins) override {}
+-  void NoteRegisteredPeriodicSyncOrigins(
+-      std::set<url::Origin> registered_origins) override {}
+-  void AddToTrackedOrigins(const url::Origin& origin) override {}
+-  void RemoveFromTrackedOrigins(const url::Origin& origin) override {}
+-};
+-
+-}  // namespace
+-
+-OpenArcBrowserContext::OpenArcBrowserContext(const base::FilePath& path,
+-                                             bool off_the_record)
+-    : path_(path), off_the_record_(off_the_record) {}
+-
+-OpenArcBrowserContext::~OpenArcBrowserContext() {
+-  NotifyWillBeDestroyed();
+-  ShutdownStoragePartitions();
+-}
+-
+-std::unique_ptr<content::ZoomLevelDelegate>
+-OpenArcBrowserContext::CreateZoomLevelDelegate(
+-    const base::FilePath& partition_path) {
+-  // Zoom levels are kept in memory until //chrome's zoom prefs arrive (C6b).
+-  return nullptr;
+-}
+-
+-base::FilePath OpenArcBrowserContext::GetPath() const {
+-  return path_;
+-}
+-
+-bool OpenArcBrowserContext::IsOffTheRecord() {
+-  return off_the_record_;
+-}
+-
+-content::DownloadManagerDelegate*
+-OpenArcBrowserContext::GetDownloadManagerDelegate() {
+-  return nullptr;  // TODO(C12): downloads.
+-}
+-
+-content::BrowserPluginGuestManager* OpenArcBrowserContext::GetGuestManager() {
+-  return nullptr;
+-}
+-
+-storage::SpecialStoragePolicy*
+-OpenArcBrowserContext::GetSpecialStoragePolicy() {
+-  return nullptr;
+-}
+-
+-content::PlatformNotificationService*
+-OpenArcBrowserContext::GetPlatformNotificationService() {
+-  return nullptr;
+-}
+-
+-content::PushMessagingService*
+-OpenArcBrowserContext::GetPushMessagingService() {
+-  return nullptr;
+-}
+-
+-content::StorageNotificationService*
+-OpenArcBrowserContext::GetStorageNotificationService() {
+-  return nullptr;
+-}
+-
+-content::SSLHostStateDelegate*
+-OpenArcBrowserContext::GetSSLHostStateDelegate() {
+-  return nullptr;
+-}
+-
+-content::PermissionControllerDelegate*
+-OpenArcBrowserContext::GetPermissionControllerDelegate() {
+-  return nullptr;  // Every permission is denied until C12.
+-}
+-
+-content::ClientHintsControllerDelegate*
+-OpenArcBrowserContext::GetClientHintsControllerDelegate() {
+-  return nullptr;
+-}
+-
+-content::BackgroundFetchDelegate*
+-OpenArcBrowserContext::GetBackgroundFetchDelegate() {
+-  return nullptr;
+-}
+-
+-content::BackgroundSyncController*
+-OpenArcBrowserContext::GetBackgroundSyncController() {
+-  if (!background_sync_controller_) {
+-    background_sync_controller_ =
+-        std::make_unique<DisabledBackgroundSyncController>();
+-  }
+-  return background_sync_controller_.get();
+-}
+-
+-content::BrowsingDataRemoverDelegate*
+-OpenArcBrowserContext::GetBrowsingDataRemoverDelegate() {
+-  return nullptr;
+-}
+-
+-content::ReduceAcceptLanguageControllerDelegate*
+-OpenArcBrowserContext::GetReduceAcceptLanguageControllerDelegate() {
+-  return nullptr;
+-}
+-
+-}  // namespace openarc
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.h b/openarc/browser/openarc_browser_main_extra_parts.h
+new file mode 100644
+index 000000000000..4f4795e08505
+--- /dev/null
++++ b/openarc/browser/openarc_browser_main_extra_parts.h
+@@ -0,0 +1,49 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_BROWSER_MAIN_EXTRA_PARTS_H_
++#define OPENARC_BROWSER_OPENARC_BROWSER_MAIN_EXTRA_PARTS_H_
++
++#include "base/functional/callback.h"
++#include "chrome/browser/chrome_browser_main_extra_parts.h"
++
++class Profile;
++
++namespace openarc {
++
++// Open Arc's stage hooks inside //chrome's browser main parts:
++// - names the Mac keychain item that protects cookies and passwords, so it is
++//   never Chromium's own "Chromium Safe Storage";
++// - Open Arc's defaults for every profile: Safe Browsing off (no Google API
++//   keys), browser sign-in off (sync is our own CloudKit sync of the
++//   workspace; Chrome sync is never set up), background mode off;
++// - runs the bridge's callback before Chrome tears profiles down, so every
++//   OACTab closes its WebContents while its profile is still alive.
++class OpenArcBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
++ public:
++  OpenArcBrowserMainExtraParts();
++  OpenArcBrowserMainExtraParts(const OpenArcBrowserMainExtraParts&) = delete;
++  OpenArcBrowserMainExtraParts& operator=(const OpenArcBrowserMainExtraParts&) =
++      delete;
++  ~OpenArcBrowserMainExtraParts() override;
++
++  // The instance while the browser process runs, else nullptr.
++  static OpenArcBrowserMainExtraParts* Get();
++
++  // Runs once, at the start of PostMainMessageLoopRun, before Chrome destroys
++  // its profiles.
++  void SetWillDestroyProfilesCallback(base::OnceClosure callback);
++
++  // ChromeBrowserMainExtraParts:
++  void PostEarlyInitialization() override;
++  void PostProfileInit(Profile* profile, bool is_initial_profile) override;
++  void PostMainMessageLoopRun() override;
++
++ private:
++  base::OnceClosure will_destroy_profiles_;
++};
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_BROWSER_MAIN_EXTRA_PARTS_H_
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.mm b/openarc/browser/openarc_browser_main_extra_parts.mm
+new file mode 100644
+index 000000000000..feba18b4de84
+--- /dev/null
++++ b/openarc/browser/openarc_browser_main_extra_parts.mm
+@@ -0,0 +1,77 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_browser_main_extra_parts.h"
++
++#include "base/check.h"
++#include "base/values.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "components/os_crypt/common/keychain_password_mac.h"
++#include "components/prefs/pref_service.h"
++#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
++#include "components/signin/public/base/signin_pref_names.h"
++
++namespace openarc {
++
++namespace {
++
++OpenArcBrowserMainExtraParts* g_extra_parts = nullptr;
++
++// The keychain item holding the os_crypt key (OACApplication.h, decision Q5:
++// placeholder product name). Shared by the release and development apps,
++// which keep their data in different directories anyway.
++constexpr char kKeychainServiceName[] = "Open Arc Safe Storage";
++constexpr char kKeychainAccountName[] = "Open Arc";
++
++}  // namespace
++
++OpenArcBrowserMainExtraParts::OpenArcBrowserMainExtraParts() {
++  CHECK(!g_extra_parts);
++  g_extra_parts = this;
++}
++
++OpenArcBrowserMainExtraParts::~OpenArcBrowserMainExtraParts() {
++  CHECK_EQ(g_extra_parts, this);
++  g_extra_parts = nullptr;
++}
++
++// static
++OpenArcBrowserMainExtraParts* OpenArcBrowserMainExtraParts::Get() {
++  return g_extra_parts;
++}
++
++void OpenArcBrowserMainExtraParts::SetWillDestroyProfilesCallback(
++    base::OnceClosure callback) {
++  will_destroy_profiles_ = std::move(callback);
++}
++
++void OpenArcBrowserMainExtraParts::PostEarlyInitialization() {
++  // Before any profile (and its cookie store) asks for the key.
++  KeychainPassword::GetServiceName() = kKeychainServiceName;
++  KeychainPassword::GetAccountName() = kKeychainAccountName;
++
++  // No Chrome background mode: the app's own lifetime decides.
++  if (PrefService* local_state = g_browser_process->local_state()) {
++    local_state->SetDefaultPrefValue(prefs::kBackgroundModeEnabled,
++                                     base::Value(false));
++  }
++}
++
++void OpenArcBrowserMainExtraParts::PostProfileInit(Profile* profile,
++                                                   bool is_initial_profile) {
++  // Defaults, not user values: a later settings UI (or policy) still wins.
++  PrefService* prefs = profile->GetPrefs();
++  prefs->SetDefaultPrefValue(prefs::kSafeBrowsingEnabled, base::Value(false));
++  prefs->SetDefaultPrefValue(prefs::kSigninAllowed, base::Value(false));
++}
++
++void OpenArcBrowserMainExtraParts::PostMainMessageLoopRun() {
++  if (will_destroy_profiles_) {
++    std::move(will_destroy_profiles_).Run();
++  }
++}
++
++}  // namespace openarc
+diff --git a/openarc/browser/openarc_browser_main_parts.h b/openarc/browser/openarc_browser_main_parts.h
+deleted file mode 100644
+index 646a1febf31d..000000000000
+--- a/openarc/browser/openarc_browser_main_parts.h
++++ /dev/null
+@@ -1,63 +0,0 @@
+-// Copyright 2026 The Open Arc Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#ifndef OPENARC_BROWSER_OPENARC_BROWSER_MAIN_PARTS_H_
+-#define OPENARC_BROWSER_OPENARC_BROWSER_MAIN_PARTS_H_
+-
+-#include <map>
+-#include <memory>
+-#include <string>
+-
+-#include "base/files/file_path.h"
+-#include "base/functional/callback.h"
+-#include "content/public/browser/browser_main_parts.h"
+-
+-namespace display {
+-class ScopedNativeScreen;
+-}
+-
+-namespace openarc {
+-
+-class OpenArcBrowserContext;
+-
+-// Browser-process startup and shutdown hooks. Owns the browsing contexts,
+-// which must be destroyed before content stops its threads.
+-class OpenArcBrowserMainParts : public content::BrowserMainParts {
+- public:
+-  OpenArcBrowserMainParts();
+-  OpenArcBrowserMainParts(const OpenArcBrowserMainParts&) = delete;
+-  OpenArcBrowserMainParts& operator=(const OpenArcBrowserMainParts&) = delete;
+-  ~OpenArcBrowserMainParts() override;
+-
+-  // The single instance while the browser process runs, else nullptr.
+-  static OpenArcBrowserMainParts* Get();
+-
+-  // Returns the context for |key|, creating it on first use. |key| is the
+-  // profile's identifier, with a suffix for the off-the-record variant.
+-  OpenArcBrowserContext* GetOrCreateBrowserContext(const std::string& key,
+-                                                   const base::FilePath& path,
+-                                                   bool off_the_record);
+-  OpenArcBrowserContext* FindBrowserContext(const std::string& key);
+-
+-  // Runs once, in PostMainMessageLoopRun, before the contexts are destroyed,
+-  // so the bridge can close every tab that still uses one.
+-  void SetWillDestroyBrowserContextsCallback(base::OnceClosure callback);
+-
+-  // content::BrowserMainParts:
+-  int PreCreateThreads() override;
+-  int PreMainMessageLoopRun() override;
+-  void PostMainMessageLoopRun() override;
+-
+- private:
+-  base::OnceClosure will_destroy_browser_contexts_;
+-  // The display::Screen every web view's widget observes (content does not
+-  // create one; the embedder must, as content_shell does).
+-  std::unique_ptr<display::ScopedNativeScreen> screen_;
+-  std::map<std::string, std::unique_ptr<OpenArcBrowserContext>>
+-      browser_contexts_;
+-};
+-
+-}  // namespace openarc
+-
+-#endif  // OPENARC_BROWSER_OPENARC_BROWSER_MAIN_PARTS_H_
+diff --git a/openarc/browser/openarc_browser_main_parts.mm b/openarc/browser/openarc_browser_main_parts.mm
+deleted file mode 100644
+index c987a6cd2997..000000000000
+--- a/openarc/browser/openarc_browser_main_parts.mm
++++ /dev/null
+@@ -1,84 +0,0 @@
+-// Copyright 2026 The Open Arc Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "openarc/browser/openarc_browser_main_parts.h"
+-
+-#include "base/check.h"
+-#include "base/logging.h"
+-#include "content/public/common/result_codes.h"
+-#include "openarc/browser/openarc_browser_context.h"
+-#include "ui/display/screen.h"
+-
+-namespace openarc {
+-
+-namespace {
+-OpenArcBrowserMainParts* g_main_parts = nullptr;
+-}  // namespace
+-
+-OpenArcBrowserMainParts::OpenArcBrowserMainParts() {
+-  CHECK(!g_main_parts);
+-  g_main_parts = this;
+-}
+-
+-OpenArcBrowserMainParts::~OpenArcBrowserMainParts() {
+-  CHECK_EQ(g_main_parts, this);
+-  g_main_parts = nullptr;
+-}
+-
+-// static
+-OpenArcBrowserMainParts* OpenArcBrowserMainParts::Get() {
+-  return g_main_parts;
+-}
+-
+-OpenArcBrowserContext* OpenArcBrowserMainParts::GetOrCreateBrowserContext(
+-    const std::string& key,
+-    const base::FilePath& path,
+-    bool off_the_record) {
+-  auto& context = browser_contexts_[key];
+-  if (!context) {
+-    context = std::make_unique<OpenArcBrowserContext>(path, off_the_record);
+-  }
+-  return context.get();
+-}
+-
+-OpenArcBrowserContext* OpenArcBrowserMainParts::FindBrowserContext(
+-    const std::string& key) {
+-  auto it = browser_contexts_.find(key);
+-  return it == browser_contexts_.end() ? nullptr : it->second.get();
+-}
+-
+-void OpenArcBrowserMainParts::SetWillDestroyBrowserContextsCallback(
+-    base::OnceClosure callback) {
+-  will_destroy_browser_contexts_ = std::move(callback);
+-}
+-
+-int OpenArcBrowserMainParts::PreCreateThreads() {
+-  screen_ = std::make_unique<display::ScopedNativeScreen>();
+-  return content::RESULT_CODE_NORMAL_EXIT;
+-}
+-
+-int OpenArcBrowserMainParts::PreMainMessageLoopRun() {
+-  // No window and no tab here: the shell creates profiles and tabs through
+-  // OACApplication once startup returns. Chromium restores nothing itself.
+-  LOG(INFO) << "OpenArc: browser process started";
+-  return content::RESULT_CODE_NORMAL_EXIT;
+-}
+-
+-void OpenArcBrowserMainParts::PostMainMessageLoopRun() {
+-  if (will_destroy_browser_contexts_) {
+-    std::move(will_destroy_browser_contexts_).Run();
+-  }
+-  // Off-the-record contexts go first: they may refer to their originals.
+-  for (auto it = browser_contexts_.begin(); it != browser_contexts_.end();) {
+-    if (it->second->IsOffTheRecord()) {
+-      it = browser_contexts_.erase(it);
+-    } else {
+-      ++it;
+-    }
+-  }
+-  browser_contexts_.clear();
+-  screen_.reset();
+-}
+-
+-}  // namespace openarc
+diff --git a/openarc/browser/openarc_content_browser_client.h b/openarc/browser/openarc_content_browser_client.h
+index 99cb3bc0eb66..3a0580e04bf6 100644
+--- a/openarc/browser/openarc_content_browser_client.h
++++ b/openarc/browser/openarc_content_browser_client.h
+@@ -6,48 +6,75 @@
+ #define OPENARC_BROWSER_OPENARC_CONTENT_BROWSER_CLIENT_H_
+ 
+ #include <memory>
+-#include <string>
++#include <optional>
+ #include <vector>
+ 
+ #include "base/files/file_path.h"
+-#include "content/public/browser/content_browser_client.h"
++#include "chrome/browser/chrome_content_browser_client.h"
+ 
+ namespace openarc {
+ 
+-// Content-level browser client. TODO(C6b): derive from //chrome's
+-// ChromeContentBrowserClient (decision Q7) and redirect its UI hooks to the
+-// bridge instead.
+-class OpenArcContentBrowserClient : public content::ContentBrowserClient {
++// //chrome's browser client (decision Q7) with the hooks that would show
++// Chrome's own UI redirected: no Chrome context menus, no Chrome HTTP-auth,
++// client-certificate or external-protocol dialogs (plan C12 turns those into
++// shell requests through OACDialogDelegate; until then they get default
++// answers), the shell's per-tab color scheme, and our helper executable.
++class OpenArcContentBrowserClient : public ChromeContentBrowserClient {
+  public:
+-  // |user_data_directory| holds every profile; empty in child processes.
+-  explicit OpenArcContentBrowserClient(
+-      const base::FilePath& user_data_directory);
++  OpenArcContentBrowserClient();
+   OpenArcContentBrowserClient(const OpenArcContentBrowserClient&) = delete;
+   OpenArcContentBrowserClient& operator=(const OpenArcContentBrowserClient&) =
+       delete;
+   ~OpenArcContentBrowserClient() override;
+ 
+-  // content::ContentBrowserClient:
++  // ChromeContentBrowserClient:
+   std::unique_ptr<content::BrowserMainParts> CreateBrowserMainParts(
+       bool is_integration_test) override;
+-  std::string GetUserAgent() override;
+-  blink::UserAgentMetadata GetUserAgentMetadata() override;
+   base::FilePath GetChildProcessPath(int flags) override;
+-  std::string GetAcceptLangs(content::BrowserContext* context) override;
+-  void ConfigureNetworkContextParams(
+-      content::BrowserContext* context,
+-      bool in_memory,
+-      const base::FilePath& relative_partition_path,
+-      network::mojom::NetworkContextParams* network_context_params,
+-      cert_verifier::mojom::CertVerifierCreationParams*
+-          cert_verifier_creation_params) override;
+-  std::vector<base::FilePath> GetNetworkContextsParentDirectory() override;
++  std::unique_ptr<content::WebContentsViewDelegate> GetWebContentsViewDelegate(
++      content::WebContents* web_contents) override;
+   void OverrideWebPreferences(content::WebContents* web_contents,
+                               content::SiteInstance& main_frame_site,
+                               blink::web_pref::WebPreferences* prefs) override;
+-
+- private:
+-  const base::FilePath user_data_directory_;
++  bool OverrideWebPreferencesAfterNavigation(
++      content::WebContents* web_contents,
++      content::SiteInstance& main_frame_site,
++      blink::web_pref::WebPreferences* prefs) override;
++  base::OnceClosure SelectClientCertificate(
++      content::BrowserContext* browser_context,
++      int process_id,
++      content::WebContents* web_contents,
++      net::SSLCertRequestInfo* cert_request_info,
++      net::ClientCertIdentityList client_certs,
++      std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
++  std::unique_ptr<content::LoginDelegate> CreateLoginDelegate(
++      const net::AuthChallengeInfo& auth_info,
++      content::WebContents* web_contents,
++      content::BrowserContext* browser_context,
++      const content::GlobalRequestID& request_id,
++      bool is_request_for_primary_main_frame_navigation,
++      bool is_request_for_navigation,
++      const GURL& url,
++      scoped_refptr<net::HttpResponseHeaders> response_headers,
++      bool first_auth_attempt,
++      content::GuestPageHolder* guest,
++      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
++      override;
++  bool HandleExternalProtocol(
++      const GURL& url,
++      content::WebContents::Getter web_contents_getter,
++      content::FrameTreeNodeId frame_tree_node_id,
++      content::NavigationUIData* navigation_data,
++      bool is_primary_main_frame,
++      bool is_in_fenced_frame_tree,
++      network::mojom::WebSandboxFlags sandbox_flags,
++      ui::PageTransition page_transition,
++      bool has_user_gesture,
++      const std::optional<url::Origin>& initiating_origin,
++      content::RenderFrameHost* initiator_document,
++      const net::IsolationInfo& isolation_info,
++      mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory)
++      override;
+ };
+ 
+ }  // namespace openarc
+diff --git a/openarc/browser/openarc_content_browser_client.mm b/openarc/browser/openarc_content_browser_client.mm
+index f8cdfc699c9b..649970b97ba4 100644
+--- a/openarc/browser/openarc_content_browser_client.mm
++++ b/openarc/browser/openarc_content_browser_client.mm
+@@ -4,36 +4,57 @@
+ 
+ #include "openarc/browser/openarc_content_browser_client.h"
+ 
+-#include "components/embedder_support/user_agent_utils.h"
+-#include "content/public/browser/browser_context.h"
+-#include "openarc/browser/openarc_browser_main_parts.h"
++#include "base/functional/callback_helpers.h"
++#include "chrome/browser/chrome_browser_main.h"
++#include "chrome/browser/chrome_browser_main_extra_parts.h"
++#include "content/public/browser/client_certificate_delegate.h"
++#include "content/public/browser/login_delegate.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_view_delegate.h"
++#include "net/ssl/client_cert_identity.h"
++#include "net/ssl/ssl_private_key.h"
++#include "net/cert/x509_certificate.h"
++#include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ #include "openarc/common/openarc_paths.h"
+-#include "services/network/public/mojom/network_context.mojom.h"
+-#include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ 
+ namespace openarc {
+ 
+-OpenArcContentBrowserClient::OpenArcContentBrowserClient(
+-    const base::FilePath& user_data_directory)
+-    : user_data_directory_(user_data_directory) {}
+-OpenArcContentBrowserClient::~OpenArcContentBrowserClient() = default;
++namespace {
+ 
+-std::unique_ptr<content::BrowserMainParts>
+-OpenArcContentBrowserClient::CreateBrowserMainParts(
+-    bool is_integration_test) {
+-  return std::make_unique<OpenArcBrowserMainParts>();
++// Applies the shell's per-tab color scheme (OACTab.preferredColorScheme, B21).
++// The system appearance does not leak in; tabs the engine made itself
++// (script-opened windows before adoption) start light. Returns true if
++// |prefs| changed.
++bool ApplyTabColorScheme(content::WebContents* web_contents,
++                         blink::web_pref::WebPreferences* prefs) {
++  const OpenArcTabPreferences* tab_preferences =
++      web_contents ? OpenArcTabPreferences::FromWebContents(web_contents)
++                   : nullptr;
++  const blink::mojom::PreferredColorScheme scheme =
++      tab_preferences ? tab_preferences->color_scheme()
++                      : blink::mojom::PreferredColorScheme::kLight;
++  const bool changed =
++      prefs->preferred_color_scheme != scheme ||
++      prefs->preferred_root_scrollbar_color_scheme != scheme;
++  prefs->preferred_color_scheme = scheme;
++  prefs->preferred_root_scrollbar_color_scheme = scheme;
++  return changed;
+ }
+ 
+-std::string OpenArcContentBrowserClient::GetUserAgent() {
+-  // Chromium's reduced user agent, with no product token of our own
+-  // (OACApplication.h, userAgent).
+-  return embedder_support::GetUserAgent();
+-}
++}  // namespace
++
++OpenArcContentBrowserClient::OpenArcContentBrowserClient() = default;
++OpenArcContentBrowserClient::~OpenArcContentBrowserClient() = default;
+ 
+-blink::UserAgentMetadata OpenArcContentBrowserClient::GetUserAgentMetadata() {
+-  return embedder_support::GetUserAgentMetadata();
++std::unique_ptr<content::BrowserMainParts>
++OpenArcContentBrowserClient::CreateBrowserMainParts(bool is_integration_test) {
++  std::unique_ptr<content::BrowserMainParts> parts =
++      ChromeContentBrowserClient::CreateBrowserMainParts(is_integration_test);
++  static_cast<ChromeBrowserMainParts*>(parts.get())
++      ->AddParts(std::make_unique<OpenArcBrowserMainExtraParts>());
++  return parts;
+ }
+ 
+ base::FilePath OpenArcContentBrowserClient::GetChildProcessPath(int flags) {
+@@ -42,48 +63,86 @@
+   return GetHelperExecutablePath();
+ }
+ 
+-std::string OpenArcContentBrowserClient::GetAcceptLangs(
+-    content::BrowserContext* context) {
+-  return "en-US,en";  // TODO(C6b): the profile's language prefs.
++std::unique_ptr<content::WebContentsViewDelegate>
++OpenArcContentBrowserClient::GetWebContentsViewDelegate(
++    content::WebContents* web_contents) {
++  // Chrome's view delegate shows Chrome's context menu and drag-and-drop UI.
++  // The shell draws its own menus (OACTabDelegate tab:willShowContextMenu:),
++  // so content's default behaviour stays.
++  return nullptr;
+ }
+ 
+-void OpenArcContentBrowserClient::ConfigureNetworkContextParams(
+-    content::BrowserContext* context,
+-    bool in_memory,
+-    const base::FilePath& relative_partition_path,
+-    network::mojom::NetworkContextParams* network_context_params,
+-    cert_verifier::mojom::CertVerifierCreationParams*
+-        cert_verifier_creation_params) {
+-  network_context_params->user_agent = GetUserAgent();
+-  network_context_params->accept_language = GetAcceptLangs(context);
+-  // TODO(C11): persistent cookies and HTTP cache under the profile directory
+-  // (file_paths); today cookies live in memory.
+-}
+-
+-std::vector<base::FilePath>
+-OpenArcContentBrowserClient::GetNetworkContextsParentDirectory() {
+-  // The network service's sandbox may write only below these directories.
+-  if (user_data_directory_.empty()) {
+-    return {};
+-  }
+-  return {user_data_directory_};
++void OpenArcContentBrowserClient::OverrideWebPreferences(
++    content::WebContents* web_contents,
++    content::SiteInstance& main_frame_site,
++    blink::web_pref::WebPreferences* prefs) {
++  ChromeContentBrowserClient::OverrideWebPreferences(web_contents,
++                                                     main_frame_site, prefs);
++  ApplyTabColorScheme(web_contents, prefs);
+ }
+ 
+-void OpenArcContentBrowserClient::OverrideWebPreferences(
++bool OpenArcContentBrowserClient::OverrideWebPreferencesAfterNavigation(
+     content::WebContents* web_contents,
+     content::SiteInstance& main_frame_site,
+     blink::web_pref::WebPreferences* prefs) {
+-  // The shell decides the scheme per tab (the Space's theme, View ▸
+-  // Appearance); the system appearance does not leak in. Tabs created by the
+-  // engine itself (script-opened windows before adoption) start light.
+-  const OpenArcTabPreferences* tab_preferences =
+-      web_contents ? OpenArcTabPreferences::FromWebContents(web_contents)
+-                   : nullptr;
+-  const blink::mojom::PreferredColorScheme scheme =
+-      tab_preferences ? tab_preferences->color_scheme()
+-                      : blink::mojom::PreferredColorScheme::kLight;
+-  prefs->preferred_color_scheme = scheme;
+-  prefs->preferred_root_scrollbar_color_scheme = scheme;
++  // Chrome recomputes the color scheme from its theme after every navigation;
++  // the shell's choice wins again.
++  bool changed = ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
++      web_contents, main_frame_site, prefs);
++  changed |= ApplyTabColorScheme(web_contents, prefs);
++  return changed;
++}
++
++base::OnceClosure OpenArcContentBrowserClient::SelectClientCertificate(
++    content::BrowserContext* browser_context,
++    int process_id,
++    content::WebContents* web_contents,
++    net::SSLCertRequestInfo* cert_request_info,
++    net::ClientCertIdentityList client_certs,
++    std::unique_ptr<content::ClientCertificateDelegate> delegate) {
++  // TODO(C12): a client-certificate request through OACDialogDelegate.
++  // Chrome's picker needs a Browser window; continue without a certificate.
++  delegate->ContinueWithCertificate(nullptr, nullptr);
++  return base::DoNothing();
++}
++
++std::unique_ptr<content::LoginDelegate>
++OpenArcContentBrowserClient::CreateLoginDelegate(
++    const net::AuthChallengeInfo& auth_info,
++    content::WebContents* web_contents,
++    content::BrowserContext* browser_context,
++    const content::GlobalRequestID& request_id,
++    bool is_request_for_primary_main_frame_navigation,
++    bool is_request_for_navigation,
++    const GURL& url,
++    scoped_refptr<net::HttpResponseHeaders> response_headers,
++    bool first_auth_attempt,
++    content::GuestPageHolder* guest,
++    content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
++  // TODO(C12): OACHTTPAuthenticationRequest. Chrome's login prompt is a tab
++  // modal dialog of a Browser window; without one, no credentials (content
++  // cancels the challenge and shows the 401 page).
++  return nullptr;
++}
++
++bool OpenArcContentBrowserClient::HandleExternalProtocol(
++    const GURL& url,
++    content::WebContents::Getter web_contents_getter,
++    content::FrameTreeNodeId frame_tree_node_id,
++    content::NavigationUIData* navigation_data,
++    bool is_primary_main_frame,
++    bool is_in_fenced_frame_tree,
++    network::mojom::WebSandboxFlags sandbox_flags,
++    ui::PageTransition page_transition,
++    bool has_user_gesture,
++    const std::optional<url::Origin>& initiating_origin,
++    content::RenderFrameHost* initiator_document,
++    const net::IsolationInfo& isolation_info,
++    mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) {
++  // TODO(C12): OACExternalProtocolRequest. Chrome's handler asks with a
++  // Browser-anchored dialog; until the shell asks, external apps are not
++  // launched and the navigation is dropped silently.
++  return true;
+ }
+ 
+ }  // namespace openarc
+diff --git a/openarc/browser/openarc_tab_helpers.h b/openarc/browser/openarc_tab_helpers.h
+new file mode 100644
+index 000000000000..93455b3f4f8b
+--- /dev/null
++++ b/openarc/browser/openarc_tab_helpers.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_TAB_HELPERS_H_
++#define OPENARC_BROWSER_OPENARC_TAB_HELPERS_H_
++
++namespace content {
++class WebContents;
++}
++
++namespace openarc {
++
++// Makes a WebContents a full //chrome tab without a Browser: Chrome's tab
++// helpers (favicon driver, find, zoom, content settings, permissions, history,
++// password manager and autofill drivers, extensions tab helper, ...) are
++// attached by TabHelpers::AttachTabHelpers() (an Open Arc patch makes this
++// class its friend). The permission prompt is replaced: Chrome's bubbles need
++// a Browser window, so until plan C12 routes prompts to the shell every
++// request is dismissed (the page sees "denied", nothing is stored).
++class TabHelpersAccess {
++ public:
++  TabHelpersAccess() = delete;
++
++  // Safe to call more than once.
++  static void AttachTabHelpers(content::WebContents* web_contents);
++};
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_TAB_HELPERS_H_
+diff --git a/openarc/browser/openarc_tab_helpers.mm b/openarc/browser/openarc_tab_helpers.mm
+new file mode 100644
+index 000000000000..2ce571ab3b74
+--- /dev/null
++++ b/openarc/browser/openarc_tab_helpers.mm
+@@ -0,0 +1,88 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_tab_helpers.h"
++
++#include <memory>
++#include <optional>
++#include <variant>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/ui/tab_helpers.h"
++#include "components/permissions/permission_prompt.h"
++#include "components/permissions/permission_request_manager.h"
++#include "components/permissions/permission_uma_constants.h"
++#include "content/public/browser/web_contents.h"
++
++namespace openarc {
++
++namespace {
++
++// A permission prompt nobody sees: it dismisses the request as soon as it is
++// shown. Dismissing (not denying) stores no decision for the site.
++// TODO(C12): ask the shell through OACDialogDelegate instead.
++class DismissingPermissionPrompt : public permissions::PermissionPrompt {
++ public:
++  explicit DismissingPermissionPrompt(Delegate* delegate) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(
++                       [](base::WeakPtr<Delegate> delegate) {
++                         if (delegate && !delegate->Requests().empty()) {
++                           delegate->Dismiss(std::monostate());
++                         }
++                       },
++                       delegate->GetWeakPtr()));
++  }
++  DismissingPermissionPrompt(const DismissingPermissionPrompt&) = delete;
++  DismissingPermissionPrompt& operator=(const DismissingPermissionPrompt&) =
++      delete;
++  ~DismissingPermissionPrompt() override = default;
++
++  // permissions::PermissionPrompt:
++  bool UpdateAnchor() override { return true; }
++  TabSwitchingBehavior GetTabSwitchingBehavior() override {
++    return TabSwitchingBehavior::kKeepPromptAlive;
++  }
++  permissions::PermissionPromptDisposition GetPromptDisposition()
++      const override {
++    return permissions::PermissionPromptDisposition::NONE_VISIBLE;
++  }
++  bool IsAskPrompt() const override { return false; }
++  std::optional<gfx::Rect> GetViewBoundsInScreen() const override {
++    return std::nullopt;
++  }
++  std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
++      const override {
++    return {};
++  }
++  std::optional<permissions::feature_params::PermissionElementPromptPosition>
++  GetPromptPosition() const override {
++    return std::nullopt;
++  }
++};
++
++std::unique_ptr<permissions::PermissionPrompt> CreateDismissingPrompt(
++    content::WebContents* web_contents,
++    permissions::PermissionPrompt::Delegate* delegate) {
++  return std::make_unique<DismissingPermissionPrompt>(delegate);
++}
++
++}  // namespace
++
++// static
++void TabHelpersAccess::AttachTabHelpers(content::WebContents* web_contents) {
++  TabHelpers::AttachTabHelpers(web_contents);
++  if (auto* manager = permissions::PermissionRequestManager::FromWebContents(
++          web_contents)) {
++    // The setter is named for tests; it is the only way to choose the prompt
++    // view without a Browser.
++    manager->set_view_factory_for_testing(
++        base::BindRepeating(&CreateDismissingPrompt));
++  }
++}
++
++}  // namespace openarc
+diff --git a/openarc/common/openarc_content_client.h b/openarc/common/openarc_content_client.h
+deleted file mode 100644
+index a8bf7e4e9946..000000000000
+--- a/openarc/common/openarc_content_client.h
++++ /dev/null
+@@ -1,36 +0,0 @@
+-// Copyright 2026 The Open Arc Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#ifndef OPENARC_COMMON_OPENARC_CONTENT_CLIENT_H_
+-#define OPENARC_COMMON_OPENARC_CONTENT_CLIENT_H_
+-
+-#include <string>
+-#include <string_view>
+-
+-#include "content/public/common/content_client.h"
+-
+-namespace openarc {
+-
+-// Resources and strings for every process, served from openarc.pak.
+-class OpenArcContentClient : public content::ContentClient {
+- public:
+-  OpenArcContentClient();
+-  OpenArcContentClient(const OpenArcContentClient&) = delete;
+-  OpenArcContentClient& operator=(const OpenArcContentClient&) = delete;
+-  ~OpenArcContentClient() override;
+-
+-  // content::ContentClient:
+-  std::u16string GetLocalizedString(int message_id) override;
+-  std::string_view GetDataResource(
+-      int resource_id,
+-      ui::ResourceScaleFactor scale_factor) override;
+-  scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+-      int resource_id) override;
+-  std::string GetDataResourceString(int resource_id) override;
+-  gfx::Image& GetNativeImageNamed(int resource_id) override;
+-};
+-
+-}  // namespace openarc
+-
+-#endif  // OPENARC_COMMON_OPENARC_CONTENT_CLIENT_H_
+diff --git a/openarc/common/openarc_content_client.mm b/openarc/common/openarc_content_client.mm
+deleted file mode 100644
+index f371a1a66e1a..000000000000
+--- a/openarc/common/openarc_content_client.mm
++++ /dev/null
+@@ -1,43 +0,0 @@
+-// Copyright 2026 The Open Arc Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "openarc/common/openarc_content_client.h"
+-
+-#include "base/memory/ref_counted_memory.h"
+-#include "ui/base/l10n/l10n_util.h"
+-#include "ui/base/resource/resource_bundle.h"
+-
+-namespace openarc {
+-
+-OpenArcContentClient::OpenArcContentClient() = default;
+-OpenArcContentClient::~OpenArcContentClient() = default;
+-
+-std::u16string OpenArcContentClient::GetLocalizedString(int message_id) {
+-  return l10n_util::GetStringUTF16(message_id);
+-}
+-
+-std::string_view OpenArcContentClient::GetDataResource(
+-    int resource_id,
+-    ui::ResourceScaleFactor scale_factor) {
+-  return ui::ResourceBundle::GetSharedInstance().GetRawDataResourceForScale(
+-      resource_id, scale_factor);
+-}
+-
+-scoped_refptr<base::RefCountedMemory>
+-OpenArcContentClient::GetDataResourceBytes(int resource_id) {
+-  return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+-      resource_id);
+-}
+-
+-std::string OpenArcContentClient::GetDataResourceString(int resource_id) {
+-  return ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+-      resource_id);
+-}
+-
+-gfx::Image& OpenArcContentClient::GetNativeImageNamed(int resource_id) {
+-  return ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
+-      resource_id);
+-}
+-
+-}  // namespace openarc
+diff --git a/openarc/common/openarc_paths.h b/openarc/common/openarc_paths.h
+index 3be19e5dda3c..94a12b8eaa71 100644
+--- a/openarc/common/openarc_paths.h
++++ b/openarc/common/openarc_paths.h
+@@ -14,7 +14,7 @@ namespace openarc {
+ //
+ //   OpenArcCore.framework/Versions/A/            GetFrameworkVersionDirectory()
+ //     OpenArcCore                                the library
+-//     Resources/openarc.pak, icudtl.dat, ...     GetResourcesPakPath()
++//     Resources/resources.pak, *.lproj, ...      Chrome's resource packs
+ //     Helpers/openarc_helper                     GetHelperExecutablePath()
+ //     Libraries/                                 SwiftShader
+ 
+@@ -22,9 +22,6 @@ namespace openarc {
+ // library that contains this code.
+ base::FilePath GetFrameworkVersionDirectory();
+ 
+-// openarc.pak, the engine's resource pack.
+-base::FilePath GetResourcesPakPath();
+-
+ // The child-process executable (renderer, GPU, utility).
+ base::FilePath GetHelperExecutablePath();
+ 
+diff --git a/openarc/common/openarc_paths.mm b/openarc/common/openarc_paths.mm
+index e79e563fd9cb..dda6c99967b6 100644
+--- a/openarc/common/openarc_paths.mm
++++ b/openarc/common/openarc_paths.mm
+@@ -88,11 +88,6 @@ bool IsOwnBundleID(NSString* bundle_id) {
+   return base::FilePath(path).DirName();
+ }
+ 
+-base::FilePath GetResourcesPakPath() {
+-  return GetFrameworkVersionDirectory().Append("Resources").Append(
+-      "openarc.pak");
+-}
+-
+ base::FilePath GetHelperExecutablePath() {
+   return GetFrameworkVersionDirectory().Append("Helpers").Append(
+       "openarc_helper");
+diff --git a/openarc/shell_test/openarc_shell_test_main.mm b/openarc/shell_test/openarc_shell_test_main.mm
+index ce92f34380bb..f5e74008f3d6 100644
+--- a/openarc/shell_test/openarc_shell_test_main.mm
++++ b/openarc/shell_test/openarc_shell_test_main.mm
+@@ -174,12 +174,42 @@ - (void)tab:(OACTab*)tab didFinishNavigation:(OACNavigation*)navigation {
+     _quitAfterLoad = NO;
+     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
+                    dispatch_get_main_queue(), ^{
++                     [self logUIState];
+                      NSLog(@"openarc_shell_test: quitting (--quit-after-load)");
+                      [NSApp terminate:nil];
+                    });
+   }
+ }
+ 
++// What an unattended run checks: the host still owns NSApp, its delegate and
++// the menu, and the only window is ours (no Chrome window, plan C6b).
++- (void)logUIState {
++  NSMutableArray<NSString*>* windows = [NSMutableArray array];
++  for (NSWindow* window in NSApp.windows) {
++    [windows addObject:[NSString stringWithFormat:@"%@ '%@' visible=%d",
++                                                  window.className,
++                                                  window.title,
++                                                  window.isVisible]];
++  }
++  NSMutableArray<NSString*>* menus = [NSMutableArray array];
++  for (NSMenuItem* item in NSApp.mainMenu.itemArray) {
++    [menus addObject:item.submenu.title ?: item.title];
++  }
++  NSLog(@"openarc_shell_test: NSApp=%@ delegate=%@ windows=%@ menu=%@",
++        NSApp.className, [(NSObject*)NSApp.delegate className], windows,
++        menus);
++  OACTabState* state = _tab.state;
++  NSLog(@"openarc_shell_test: title='%@' favicon=%@ (%lu bytes)", state.title,
++        state.faviconURL, (unsigned long)state.faviconPNGData.length);
++}
++
++- (void)tab:(OACTab*)tab
++    didChangeFaviconURL:(NSURL*)faviconURL
++                pngData:(NSData*)pngData {
++  NSLog(@"openarc_shell_test: favicon %@ (%lu bytes)", faviconURL,
++        (unsigned long)pngData.length);
++}
++
+ - (void)tab:(OACTab*)tab
+     renderProcessDidTerminate:(OACRenderProcessTermination)reason {
+   NSLog(@"openarc_shell_test: renderer terminated, reason %ld", (long)reason);

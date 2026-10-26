@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 18:09:45 -0700
+Subject: [PATCH] openarc: chrome: let the Open Arc embedder attach tab helpers
+
+TabHelpers::AttachTabHelpers() is private and limited to a list of
+friends (the tab strip, prerendering, link preview). Open Arc creates
+every tab's WebContents in its own bridge, shows it in its own UI and
+needs Chrome's per-tab features on it (favicon driver, find, zoom,
+permissions, content settings, history, password manager, extensions
+tab helper). Adds openarc::TabHelpersAccess as a friend.
+
+Needed by plan task C6b. Upstream offers no public way to adopt a
+WebContents as a tab outside the Browser tab strip.
+---
+ chrome/browser/ui/tab_helpers.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/chrome/browser/ui/tab_helpers.h b/chrome/browser/ui/tab_helpers.h
+index c6e05eb620dd..382fa515f739 100644
+--- a/chrome/browser/ui/tab_helpers.h
++++ b/chrome/browser/ui/tab_helpers.h
+@@ -41,6 +41,10 @@ namespace tabs {
+ class TabModel;
+ }  // namespace tabs
+ 
++namespace openarc {
++class TabHelpersAccess;
++}  // namespace openarc
++
+ // A "tab contents" is a WebContents that is used as a tab in a browser window
+ // (or the equivalent on Android). The TabHelpers class allows specific classes
+ // to attach the set of tab helpers that is used for tab contents.
+@@ -79,6 +83,11 @@ class TabHelpers {
+   // Link Preview shows a preview of a page, then promote it as a new tab.
+   friend class PreviewTab;
+ 
++  // Open Arc: an app that embeds the browser process and shows its tabs in its
++  // own UI (no Browser windows) adopts every WebContents it creates as a tab.
++  // Not part of upstream Chromium.
++  friend class openarc::TabHelpersAccess;
++
+   // FYI: Do NOT add any more friends here. The functions above are the ONLY
+   // ones that need to call AttachTabHelpers; if you think you do, re-read the
+   // design document linked above, especially the section "Reusing tab helpers".

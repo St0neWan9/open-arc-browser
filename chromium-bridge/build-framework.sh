@@ -65,7 +65,8 @@ if ! diff -r "$HERE/include/OpenArcCore" "$FRAMEWORK/Versions/A/Headers" >/dev/n
     echo "  copy them into //openarc/bridge/public/OpenArcCore and rebuild" >&2
     exit 1
 fi
-for item in Modules/module.modulemap Helpers/openarc_helper Resources/openarc.pak \
+for item in Modules/module.modulemap Helpers/openarc_helper Helpers/chrome_crashpad_handler \
+            Resources/resources.pak Resources/chrome_100_percent.pak Resources/en.lproj/locale.pak \
             Resources/icudtl.dat Resources/Info.plist; do
     [ -e "$FRAMEWORK/Versions/A/$item" ] ||
         { echo "build-framework.sh: missing $item in the framework" >&2; exit 1; }

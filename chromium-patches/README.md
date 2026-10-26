@@ -62,7 +62,7 @@ Then run `third_party/ninja/ninja -C out/Release openarc_framework openarc_shell
 
 ## Where `//openarc` lives (decision)
 
-All new code goes in the top-level directory `src/openarc/` of the Chromium tree: the embedder, the Objective-C bridge (`bridge/`), the helper and the test host. **It is kept as one patch** (the last one in the series), not as a separate repository or a DEPS entry. Reasons:
+All new code goes in the top-level directory `src/openarc/` of the Chromium tree: the embedder, the Objective-C bridge (`bridge/`), the helper and the test host. **It is kept as patches at the end of the series** (one directory, a few focused commits; they can be squashed), not as a separate repository or a DEPS entry. Reasons:
 
 - It is the simplest workflow that works now. One branch, one export and one apply reproduce the whole tree, with no extra checkout or gclient configuration to keep in sync.
 - `//openarc` changes in step with the upstream patches it depends on. Keeping it in the same series keeps them consistent at every point.
@@ -105,7 +105,15 @@ Rebase one milestone at a time. Skipping milestones piles up API changes in `//o
 |---|---|
 | 0001 | `base`: on Mac, let the UI thread's message pump attach to a run loop that the embedding app already runs (`-[NSApplication run]`), instead of running it. This is the iOS model, extended to `MessagePumpNSApplication`. It adds `CurrentUIThread::Attach()` and `CurrentUIThread::Detach()` on Mac. |
 | 0002 | `content`: `ContentMainParams::host_runs_main_loop`, so `RunContentProcess()` returns to the host app instead of shutting content down. The embedder shuts down later. |
-| 0003 | `embedder`: the `//openarc` directory, containing the embedder, the bridge, the helper and the test host (plan C6), and the `OpenArcCore.framework` packaging (plan C8). The embedder is content-level for now; `//chrome` is plan C6b. |
-| 0004 | `embedder`: the base bundle id (Mach rendezvous names, the sandbox's `bundle-id`) comes from the app that embeds `OpenArcCore.framework` when it is ours (`org.openarc.browser` or `org.openarc.browser.dev`), else the release id, so the release and development builds never share names (plan B37). |
+| 0003 | `components`: define `ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE` on Mac so the embedder can name the keychain item that protects cookies and passwords (`Open Arc Safe Storage`, never Chromium's own). |
+| 0004 | `chrome`: `chrome::SetEmbedderOwnsUI()` / `EmbedderOwnsUI()` (`chrome/browser/embedder_owned_ui_mac.h`). In that mode the host's NSApplication is accepted, and Chrome creates no `AppController`, main menu, Services-menu swizzle, initial or last-opened profile, `StartupBrowserCreator` run (first run, profile picker, session restore), quit closure, updater schedule, code-signature clone or `Browser` window; a second launch is dropped and Chrome-initiated exits ask NSApp to terminate. Plan C6b. |
+| 0005 | `chrome`: `HistoryTabHelper` records history for tabs of an embedder-owned UI (they are never in a `Browser`). |
+| 0006 | `chrome`: `TabHelpers` befriends `openarc::TabHelpersAccess`, so the embedder attaches Chrome's tab helpers to its own WebContents. |
+| 0007 | `chrome`: no `StatusTray` (menu bar status items) when an embedding app owns the UI. |
+| 0008 | `embedder`: the `//openarc` directory, containing the embedder, the bridge, the helper and the test host (plan C6), and the `OpenArcCore.framework` packaging (plan C8). |
+| 0009 | `embedder`: the base bundle id (Mach rendezvous, sandbox) comes from the embedding app, so release and development builds do not collide (plan B37). |
+| 0010 | `embedder`: keep `//chrome` without its UI (plan C6b, decision Q7): `ChromeMainDelegate` / `ChromeContentBrowserClient` subclasses, profiles through `ProfileManager`, Chrome tab helpers on every tab, favicons from `ContentFaviconDriver`, Chrome's resource packs and crashpad handler in the framework. |
 
-Verified on 2026-10-25: `apply.sh` onto a clean `156.0.8078.48` worktree produces the same tree hash as `openarc/156`, and a second run is a no-op.
+Patches 0008 to 0010 are the `//openarc` directory; they stay last and may later be squashed into one.
+
+Verified on 2026-10-25 (after C6b): `apply.sh` onto a clean `156.0.8078.48` worktree produces the same tree hash as `openarc/156`, and a second run is a no-op.
