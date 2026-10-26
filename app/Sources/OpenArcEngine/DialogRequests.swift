@@ -14,6 +14,8 @@ import os
 // - The engine may withdraw an unanswered request (navigation, the page gave up); it then sends
 //   `TabEvent.dialogCancelled(id)` and the reply ignores answers from then on.
 // The look of every dialog is not in docs/arc-spec (unknown); the shell designs them.
+// Plan C13 adds the password manager's save prompt and the autofill dropdown ([00 §A] observed:
+// "inherited from the engine; prompts drawn by the shell, style not captured").
 
 /// Single-shot answer channel of one dialog request. Thread-safe; equal by identity.
 public final class DialogReply<Answer: Sendable>: Sendable, Hashable {
@@ -287,6 +289,204 @@ public enum ExternalProtocolReply: Hashable, Sendable {
     case block
 }
 
+// MARK: - Password manager (plan C13)
+
+/// The password manager offers to save (or update) the credential the user just signed in with
+/// (after a login form was submitted and the page moved on). The engine keeps the password; the
+/// prompt shows `passwordLength` dots. Bridge: `OACPasswordSavePrompt`. Arc's look of this prompt
+/// is not recorded ([00 §A]: "prompts drawn by the shell, style not captured"): unknown.
+public struct PasswordSavePrompt: Identifiable, Hashable, Sendable {
+    public enum Kind: String, Hashable, Sendable {
+        /// A new credential for the site.
+        case save
+        /// A new password for a saved username.
+        case update
+    }
+
+    public let id: UUID
+    public let origin: SiteOrigin?
+    public let kind: Kind
+    /// The submitted username (may be empty; the prompt lets the user edit it).
+    public let username: String
+    public let passwordLength: Int
+    public let reply: DialogReply<PasswordSaveReply>
+
+    public init(
+        id: UUID, origin: SiteOrigin?, kind: Kind = .save, username: String, passwordLength: Int,
+        reply: DialogReply<PasswordSaveReply>
+    ) {
+        self.id = id
+        self.origin = origin
+        self.kind = kind
+        self.username = username
+        self.passwordLength = passwordLength
+        self.reply = reply
+    }
+}
+
+/// Answer to a password save prompt. Default: `.dismiss` (closed without a choice; the engine counts
+/// dismissals and stops offering on a site after a few, Chromium's rule).
+public enum PasswordSaveReply: Hashable, Sendable {
+    /// Save or update. A non-nil `username` replaces the submitted one.
+    case save(username: String?)
+    /// Never offer for this site (save prompts; an update prompt treats it as `.decline`).
+    case neverForThisSite
+    /// Not now / no thanks.
+    case decline
+    case dismiss
+}
+
+/// One row of the autofill dropdown.
+public struct AutofillSuggestion: Hashable, Sendable {
+    public enum Kind: String, Hashable, Sendable {
+        /// A saved credential (`mainText` is the username).
+        case password
+        case address
+        case creditCard
+        /// A value typed earlier into a field of the same name.
+        case autocomplete
+        /// A `<datalist>` option.
+        case dataList
+        /// Another command ("Manage passwords…", "Clear form", a notice).
+        case action
+        /// A heading (not selectable).
+        case title
+        /// A divider line (not selectable).
+        case separator
+    }
+
+    public var kind: Kind
+    /// First line: the value that would be filled.
+    public var mainText: String
+    /// More first-line text (may be empty).
+    public var minorText: String
+    /// Second line (masked password, address summary…; may be empty).
+    public var label: String
+    public var isSelectable: Bool
+    public var isAcceptable: Bool
+
+    public init(
+        kind: Kind, mainText: String, minorText: String = "", label: String = "",
+        isSelectable: Bool = true, isAcceptable: Bool = true
+    ) {
+        self.kind = kind
+        self.mainText = mainText
+        self.minorText = minorText
+        self.label = label
+        self.isSelectable = isSelectable
+        self.isAcceptable = isAcceptable
+    }
+}
+
+/// A rectangle in points. (This module stays free of CoreGraphics; the shell converts.)
+public struct EngineRect: Hashable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+}
+
+/// What the autofill dropdown shows now.
+public struct AutofillPopupState: Hashable, Sendable {
+    public var suggestions: [AutofillSuggestion]
+    /// The form field, in points, in the tab view's coordinates (origin top left, y down).
+    public var elementBounds: EngineRect
+    /// The field's text runs right to left (the dropdown aligns to the field's right edge).
+    public var isRightToLeft: Bool
+    /// The highlighted row.
+    public var selectedIndex: Int?
+
+    public init(suggestions: [AutofillSuggestion], elementBounds: EngineRect, isRightToLeft: Bool = false, selectedIndex: Int? = nil) {
+        self.suggestions = suggestions
+        self.elementBounds = elementBounds
+        self.isRightToLeft = isRightToLeft
+        self.selectedIndex = selectedIndex
+    }
+}
+
+/// What the shell tells a live autofill dropdown.
+public enum AutofillPopupCommand: Hashable, Sendable {
+    /// Highlight a row (pointer hover); nil clears it. The engine previews it in the form.
+    case select(Int?)
+    /// Choose a row: the engine fills the form and then withdraws the dropdown. The engine ignores
+    /// choices in the first half second after the dropdown appeared (Chromium's guard).
+    case accept(Int)
+    /// The pointer is over the dropdown: the engine keeps it open when the page loses focus to the
+    /// click that follows.
+    case pointerInside(Bool)
+}
+
+/// The live side of an autofill dropdown: its current rows (`state`, updated while the user types or
+/// presses ↑ / ↓ in the page) and the commands the shell sends. Thread-safe; equal by identity.
+public final class AutofillPopupSession: Sendable, Hashable {
+    public typealias CommandHandler = @Sendable (AutofillPopupCommand) -> Void
+
+    private let current: OSAllocatedUnfairLock<AutofillPopupState>
+    private let broadcaster = AsyncBroadcaster<AutofillPopupState>()
+    private let handler: CommandHandler
+
+    public init(state: AutofillPopupState, handler: @escaping CommandHandler) {
+        current = OSAllocatedUnfairLock(initialState: state)
+        self.handler = handler
+    }
+
+    public var state: AutofillPopupState { current.withLock { $0 } }
+
+    /// The state now, then every change; finishes when the engine ends the session.
+    public func updates() -> AsyncStream<AutofillPopupState> {
+        current.withLock { broadcaster.subscribe(initial: [$0]) }
+    }
+
+    /// Shell side.
+    public func send(_ command: AutofillPopupCommand) { handler(command) }
+
+    /// Engine side: new rows, bounds or highlight.
+    public func update(_ state: AutofillPopupState) {
+        current.withLock {
+            $0 = state
+            broadcaster.yield(state)
+        }
+    }
+
+    /// Engine side: the dropdown went away.
+    public func finish() { broadcaster.finish() }
+
+    public static func == (lhs: AutofillPopupSession, rhs: AutofillPopupSession) -> Bool { lhs === rhs }
+    public func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
+}
+
+/// The autofill dropdown under the focused form field (saved passwords, addresses, cards, earlier
+/// entries). Not modal: keyboard focus stays in the page. Bridge: `OACAutofillPopup`. Look:
+/// unknown ([00 §A]).
+public struct AutofillPopup: Identifiable, Hashable, Sendable {
+    public let id: UUID
+    public let origin: SiteOrigin?
+    public let session: AutofillPopupSession
+    /// Closing without a choice (Escape in the shell, a click elsewhere). Choosing a row goes
+    /// through `session` (`.accept`), after which the engine withdraws the request.
+    public let reply: DialogReply<AutofillPopupReply>
+
+    public init(id: UUID, origin: SiteOrigin?, session: AutofillPopupSession, reply: DialogReply<AutofillPopupReply>) {
+        self.id = id
+        self.origin = origin
+        self.session = session
+        self.reply = reply
+    }
+}
+
+/// Answer to an autofill dropdown. Default: `.dismiss`.
+public enum AutofillPopupReply: Hashable, Sendable {
+    case dismiss
+}
+
 // MARK: - Request
 
 /// One dialog request of a tab (`BrowserTab.dialogRequests()`).
@@ -296,6 +496,10 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
     case permission(PermissionPrompt)
     case fileChooser(FileChooserRequest)
     case externalProtocol(ExternalProtocolRequest)
+    /// Password manager save / update prompt (plan C13).
+    case passwordSave(PasswordSavePrompt)
+    /// Autofill dropdown under the focused field (plan C13). Not modal.
+    case autofillPopup(AutofillPopup)
 
     public var id: UUID {
         switch self {
@@ -304,6 +508,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .permission(let r): r.id
         case .fileChooser(let r): r.id
         case .externalProtocol(let r): r.id
+        case .passwordSave(let r): r.id
+        case .autofillPopup(let r): r.id
         }
     }
 
@@ -314,6 +520,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .permission(let r): r.origin
         case .fileChooser(let r): r.origin
         case .externalProtocol(let r): r.origin
+        case .passwordSave(let r): r.origin
+        case .autofillPopup(let r): r.origin
         }
     }
 
@@ -325,6 +533,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .permission(let r): r.reply.isFinished
         case .fileChooser(let r): r.reply.isFinished
         case .externalProtocol(let r): r.reply.isFinished
+        case .passwordSave(let r): r.reply.isFinished
+        case .autofillPopup(let r): r.reply.isFinished
         }
     }
 
@@ -337,6 +547,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .permission(let r): r.reply.sendDefault()
         case .fileChooser(let r): r.reply.sendDefault()
         case .externalProtocol(let r): r.reply.sendDefault()
+        case .passwordSave(let r): r.reply.sendDefault()
+        case .autofillPopup(let r): r.reply.sendDefault()
         }
     }
 
@@ -348,6 +560,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .permission(let r): r.reply.withdraw()
         case .fileChooser(let r): r.reply.withdraw()
         case .externalProtocol(let r): r.reply.withdraw()
+        case .passwordSave(let r): r.reply.withdraw()
+        case .autofillPopup(let r): r.reply.withdraw()
         }
     }
 }

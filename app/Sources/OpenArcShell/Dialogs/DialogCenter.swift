@@ -4,16 +4,19 @@ import CoreGraphics
 import OpenArcEngine
 import OpenArcDesign
 
-// Shell side of engine dialog requests (plan C7b / C12; chromium-bridge/SWIFT_PROTOCOL_CHANGES.md
-// §3). The engine raises JavaScript dialogs, HTTP auth, permission prompts, file choosers and
-// external-protocol prompts per tab (`BrowserTab.dialogRequests()`); this queue holds them per
+// Shell side of engine dialog requests (plan C7b / C12 / C13; chromium-bridge/SWIFT_PROTOCOL_CHANGES.md
+// §3). The engine raises JavaScript dialogs, HTTP auth, permission prompts, file choosers,
+// external-protocol prompts, password save prompts and autofill dropdowns per tab (`BrowserTab.dialogRequests()`); this queue holds them per
 // tab and the views draw the head of each queue (TabDialogViews.swift).
 //
 // Decisions without evidence (the spec records none of these dialogs; all inferred):
 // - One FIFO queue per tab: a tab shows one dialog at a time, the next one after it is answered.
 // - Dialogs are tab-modal: they cover only that tab's web panel or split pane, never the window.
-// - Permission prompts are a bubble under the sidebar's URL box when the tab is the selected
-//   tab and the sidebar shows; otherwise at the top left of the tab's panel.
+// - Permission prompts and the password save prompt (C13) are a bubble under the sidebar's URL box
+//   when the tab is the selected tab and the sidebar shows; otherwise at the top left of the tab's
+//   panel.
+// - The autofill dropdown (C13) is not queued: one per tab, under its form field, beside whatever
+//   dialog shows.
 // - Closing the tab's page (archive, unload, window close) answers every queued request with its
 //   default, like the bridge does for a released request.
 
@@ -24,6 +27,8 @@ public enum DialogAnswer: Hashable, Sendable {
     case permission(PermissionReply)
     case fileChooser(FileChooserReply)
     case externalProtocol(ExternalProtocolReply)
+    case passwordSave(PasswordSaveReply)
+    case autofillPopup(AutofillPopupReply)
 }
 
 /// Dialog requests of every live tab of one workspace controller, queued per engine tab.
@@ -31,6 +36,9 @@ public enum DialogAnswer: Hashable, Sendable {
 public final class DialogCenter: ObservableObject {
     /// Unanswered requests per tab, oldest first.
     @Published public private(set) var queues: [EngineTabID: [EngineDialogRequest]] = [:]
+    /// The autofill dropdown of each tab (C13). Not queued: it is not modal, a newer one replaces the
+    /// older, and it shows alongside a queued dialog.
+    @Published public private(set) var autofillPopups: [EngineTabID: AutofillPopup] = [:]
 
     private var observers: [EngineTabID: [Task<Void, Never>]] = [:]
 
@@ -65,6 +73,13 @@ public final class DialogCenter: ObservableObject {
         observers.removeValue(forKey: tabID)?.forEach { $0.cancel() }
         let pending = queues.removeValue(forKey: tabID) ?? []
         for request in pending { request.answerWithDefault() }
+        autofillPopups.removeValue(forKey: tabID)?.reply.sendDefault()
+    }
+
+    /// The autofill dropdown `tabID` shows now (C13).
+    public func autofillPopup(for tabID: EngineTabID) -> AutofillPopup? {
+        guard let popup = autofillPopups[tabID], !popup.reply.isFinished else { return nil }
+        return popup
     }
 
     /// The request `tabID` shows now: the oldest unanswered one.
@@ -89,6 +104,8 @@ public final class DialogCenter: ObservableObject {
         case (.permission(let r), .permission(let a)): sent = r.reply.send(a)
         case (.fileChooser(let r), .fileChooser(let a)): sent = r.reply.send(a)
         case (.externalProtocol(let r), .externalProtocol(let a)): sent = r.reply.send(a)
+        case (.passwordSave(let r), .passwordSave(let a)): sent = r.reply.send(a)
+        case (.autofillPopup(let r), .autofillPopup(let a)): sent = r.reply.send(a)
         default: return false
         }
         remove(requestID)
@@ -106,6 +123,10 @@ public final class DialogCenter: ObservableObject {
     private func enqueue(_ request: EngineDialogRequest, on tabID: EngineTabID) {
         // The engine may have withdrawn it already (events and requests are separate streams).
         guard !request.isFinished else { return }
+        if case .autofillPopup(let popup) = request {
+            autofillPopups[tabID] = popup
+            return
+        }
         queues[tabID, default: []].append(request)
     }
 
@@ -113,10 +134,12 @@ public final class DialogCenter: ObservableObject {
         for queue in queues.values {
             if let found = queue.first(where: { $0.id == requestID }) { return found }
         }
+        if let popup = autofillPopups.values.first(where: { $0.id == requestID }) { return .autofillPopup(popup) }
         return nil
     }
 
     private func remove(_ requestID: UUID) {
+        for (tabID, popup) in autofillPopups where popup.id == requestID { autofillPopups[tabID] = nil }
         for (tabID, queue) in queues where queue.contains(where: { $0.id == requestID }) {
             let rest = queue.filter { $0.id != requestID && !$0.isFinished }
             queues[tabID] = rest.isEmpty ? nil : rest
@@ -136,6 +159,8 @@ public struct DialogPresentation: Equatable, Sendable {
         case permissionBubble
         /// The system open / save panel.
         case filePanel
+        /// The autofill dropdown under a form field (C13; drawn by `AutofillDropdownView`).
+        case dropdown
     }
 
     public enum Field: Equatable, Sendable {
@@ -206,6 +231,23 @@ public struct DialogPresentation: Equatable, Sendable {
             fields = []
             checkbox = nil
             buttons = ["Cancel", chooser.mode == .save ? "Save" : "Open"]
+        case .passwordSave(let prompt):
+            // Chrome anchors its save bubble to the address bar; Arc's address bar is the sidebar's
+            // URL box, so it hangs there like a permission prompt. Wording is Chrome's meaning in
+            // our words: unknown ([00 §A] records no style).
+            style = .permissionBubble
+            title = prompt.kind == .update ? "Update password?" : "Save password?"
+            message = "Password: " + String(repeating: "•", count: max(prompt.passwordLength, 1))
+            fields = [.text(placeholder: "Username", initial: prompt.username)]
+            checkbox = nil
+            buttons = prompt.kind == .update ? ["Not Now", "Update"] : ["Never", "Not Now", "Save"]
+        case .autofillPopup:
+            style = .dropdown
+            title = ""
+            message = ""
+            fields = []
+            checkbox = nil
+            buttons = []
         case .externalProtocol(let external):
             style = .sheet
             let app = external.handlerApplicationName ?? "the application"
@@ -239,6 +281,14 @@ public struct DialogPresentation: Equatable, Sendable {
             return .fileChooser(.cancel)
         case .externalProtocol:
             return .externalProtocol(isDefaultButton ? .open(rememberForOrigin: checkbox) : .block)
+        case .passwordSave(let prompt):
+            if isDefaultButton {
+                let edited = fieldValues.first.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                return .passwordSave(.save(username: edited == prompt.username ? nil : edited))
+            }
+            return .passwordSave(prompt.kind == .save && index == 0 ? .neverForThisSite : .decline)
+        case .autofillPopup:
+            return .autofillPopup(.dismiss)
         }
     }
 }

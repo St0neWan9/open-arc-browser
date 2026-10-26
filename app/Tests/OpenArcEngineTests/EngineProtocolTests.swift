@@ -164,6 +164,8 @@ final class EngineProtocolTests: XCTestCase {
             case .externalProtocol(let r):
                 XCTAssertEqual(r.handlerApplicationName, "Mail")
                 r.reply.send(.open(rememberForOrigin: false))
+            case .passwordSave, .autofillPopup:
+                XCTFail("not raised here (C13 has its own tests)")
             }
             XCTAssertTrue(request.isFinished)
             XCTAssertFalse(request.answerWithDefault(), "single-shot")

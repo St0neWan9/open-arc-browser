@@ -145,10 +145,11 @@ public enum SettingsCatalog {
         SettingsControl("profiles.newDocuments", "New documents", .picker(defaultValue: "—"), .pending(task: "E3")),
         SettingsControl("profiles.downloadLocation", "Download location", .picker(defaultValue: "Downloads"), .pending(task: "C12")),
         SettingsControl("profiles.privacy", "Privacy and Security", .navigationRow, .pending(task: "C12")),
-        SettingsControl("profiles.passwords", "Passwords", .navigationRow, .pending(task: "C13")),
-        SettingsControl("profiles.creditCards", "Credit Cards", .navigationRow, .pending(task: "C13")),
+        // C13 made the password manager work in pages; the list view of saved passwords is a follow-up.
+        SettingsControl("profiles.passwords", "Passwords", .navigationRow, .pending(task: "C13 follow-up")),
+        SettingsControl("profiles.creditCards", "Credit Cards", .navigationRow, .pending(task: "C13 follow-up")),
         SettingsControl("profiles.notifications", "Notifications", .navigationRow, .pending(task: "C12")),
-        SettingsControl("profiles.autofill", "Autofill", .navigationRow, .pending(task: "C13")),
+        SettingsControl("profiles.autofill", "Autofill", .navigationRow, .pending(task: "C13 follow-up")),
         SettingsControl("profiles.clearBrowsingData", "Clear Browsing Data", .navigationRow, .pending(task: "C11")),
     ]
 

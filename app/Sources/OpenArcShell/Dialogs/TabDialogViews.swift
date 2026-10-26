@@ -48,6 +48,18 @@ struct TabDialogOverlay: View {
     let windowDrawnPermissionTab: EngineTabID?
 
     var body: some View {
+        ZStack(alignment: .topLeading) {
+            queuedDialog
+            // The autofill dropdown (C13) floats under its field, beside any queued dialog.
+            if let popup = center.autofillPopup(for: tabID) {
+                AutofillDropdownView(center: center, popup: popup)
+                    .id(popup.id)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var queuedDialog: some View {
         if let request = center.current(for: tabID) {
             let presentation = DialogPresentation(request)
             switch presentation.style {
@@ -72,19 +84,23 @@ struct TabDialogOverlay: View {
             case .filePanel:
                 FileChooserPresenter(center: center, request: request)
                     .id(request.id)
+            case .dropdown:
+                // Never queued (`DialogCenter.autofillPopups`).
+                EmptyView()
             }
         }
     }
 }
 
-/// The permission bubble under the sidebar's URL box, for the selected tab.
+/// The permission bubble (or the password save prompt, C13) under the sidebar's URL box, for the
+/// selected tab.
 struct PermissionBubbleUnderURLBox: View {
     @ObservedObject var center: DialogCenter
     let tabID: EngineTabID
     let origin: CGPoint
 
     var body: some View {
-        if let request = center.current(for: tabID), case .permission = request {
+        if let request = center.current(for: tabID), DialogPresentation(request).style == .permissionBubble {
             DialogCardView(center: center, request: request, presentation: DialogPresentation(request))
                 .frame(width: PermissionPromptPlacement.bubbleWidth)
                 .offset(x: origin.x, y: origin.y)
@@ -215,6 +231,167 @@ struct FileChooserPresenter: View {
             panel.beginSheetModal(for: window, completionHandler: completion)
         } else {
             panel.begin(completionHandler: completion)
+        }
+    }
+}
+
+// MARK: - Autofill dropdown (C13)
+
+/// Local tokens of the autofill dropdown. Arc's dropdown is not recorded ([00 §A]: "style not
+/// captured"): all unknown, sized like a macOS menu.
+enum AutofillDropdownTokens {
+    static let minWidth: CGFloat = 220
+    static let maxWidth: CGFloat = 420
+    static let rowHeight: CGFloat = 36
+    static let singleLineRowHeight: CGFloat = 26
+    static let separatorHeight: CGFloat = 9
+    static let maxVisibleRows = 8
+    static let gap: CGFloat = 2
+    static let cornerRadius: CGFloat = 8
+    static let padding: CGFloat = 4
+}
+
+/// Where the dropdown goes: under the field (above it when there is no room below), left-aligned
+/// (right-aligned for right-to-left fields), kept inside the panel. inferred (Chromium's popup
+/// placement).
+enum AutofillDropdownPlacement {
+    static func height(of suggestions: [AutofillSuggestion]) -> CGFloat {
+        var height: CGFloat = 0
+        var rows = 0
+        for suggestion in suggestions {
+            if suggestion.kind == .separator {
+                height += AutofillDropdownTokens.separatorHeight
+                continue
+            }
+            guard rows < AutofillDropdownTokens.maxVisibleRows else { break }
+            rows += 1
+            height += suggestion.label.isEmpty ? AutofillDropdownTokens.singleLineRowHeight : AutofillDropdownTokens.rowHeight
+        }
+        return height + 2 * AutofillDropdownTokens.padding
+    }
+
+    static func frame(for state: AutofillPopupState, in panel: CGSize) -> CGRect {
+        let bounds = state.elementBounds
+        let field = CGRect(x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height)
+        let width = min(max(field.width, AutofillDropdownTokens.minWidth), AutofillDropdownTokens.maxWidth, max(panel.width, 1))
+        let height = height(of: state.suggestions)
+        var x = state.isRightToLeft ? field.maxX - width : field.minX
+        x = min(max(x, 0), max(panel.width - width, 0))
+        let below = field.maxY + AutofillDropdownTokens.gap
+        let above = field.minY - AutofillDropdownTokens.gap - height
+        let y = below + height <= panel.height || above < 0 ? below : above
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+/// The autofill dropdown under a form field. Keyboard focus stays in the page (the engine handles
+/// ↑ / ↓ / Return / Escape there and updates `session`); the pointer highlights and chooses rows.
+struct AutofillDropdownView: View {
+    let center: DialogCenter
+    let popup: AutofillPopup
+    @State private var state: AutofillPopupState
+
+    init(center: DialogCenter, popup: AutofillPopup) {
+        self.center = center
+        self.popup = popup
+        _state = State(initialValue: popup.session.state)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let frame = AutofillDropdownPlacement.frame(for: state, in: proxy.size)
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(state.suggestions.enumerated()), id: \.offset) { index, suggestion in
+                        row(suggestion, index: index)
+                    }
+                }
+                .padding(AutofillDropdownTokens.padding)
+            }
+            .scrollIndicators(.never)
+            .frame(width: frame.width, height: frame.height)
+            .background(
+                RoundedRectangle(cornerRadius: AutofillDropdownTokens.cornerRadius, style: .continuous)
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: AutofillDropdownTokens.cornerRadius, style: .continuous))
+            .onHover { inside in
+                popup.session.send(.pointerInside(inside))
+                if !inside { popup.session.send(.select(nil)) }
+            }
+            .offset(x: frame.minX, y: frame.minY)
+        }
+        .task {
+            for await next in popup.session.updates() { state = next }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("openarc.autofill")
+    }
+
+    @ViewBuilder
+    private func row(_ suggestion: AutofillSuggestion, index: Int) -> some View {
+        switch suggestion.kind {
+        case .separator:
+            Divider().frame(height: AutofillDropdownTokens.separatorHeight)
+        case .title:
+            Text(suggestion.mainText)
+                .font(Typography.settingsBody.font.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .frame(height: AutofillDropdownTokens.singleLineRowHeight, alignment: .leading)
+        default:
+            let highlighted = state.selectedIndex == index
+            HStack(spacing: 8) {
+                Image(systemName: Self.symbol(for: suggestion.kind))
+                    .foregroundStyle(highlighted ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(suggestion.mainText).lineLimit(1)
+                        if !suggestion.minorText.isEmpty {
+                            Text(suggestion.minorText).lineLimit(1).foregroundStyle(highlighted ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                        }
+                    }
+                    .font(Typography.settingsBody.font)
+                    if !suggestion.label.isEmpty {
+                        Text(suggestion.label)
+                            .font(Typography.settingsBody.font)
+                            .foregroundStyle(highlighted ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(highlighted ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .padding(.horizontal, 8)
+            .frame(height: suggestion.label.isEmpty ? AutofillDropdownTokens.singleLineRowHeight : AutofillDropdownTokens.rowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(highlighted ? Color.accentColor : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside, suggestion.isSelectable { popup.session.send(.select(index)) }
+            }
+            .onTapGesture {
+                if suggestion.isAcceptable { popup.session.send(.accept(index)) }
+            }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(suggestion.label.isEmpty ? suggestion.mainText : "\(suggestion.mainText), \(suggestion.label)")
+        }
+    }
+
+    /// Row icon (SF Symbols; Chrome's icons are not ours to copy). unknown.
+    static func symbol(for kind: AutofillSuggestion.Kind) -> String {
+        switch kind {
+        case .password: "key.fill"
+        case .address: "mappin.and.ellipse"
+        case .creditCard: "creditcard"
+        case .autocomplete, .dataList: "clock.arrow.circlepath"
+        case .action: "gearshape"
+        case .title, .separator: "circle"
         }
     }
 }

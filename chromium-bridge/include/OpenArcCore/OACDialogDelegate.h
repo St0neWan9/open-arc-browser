@@ -204,6 +204,9 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 
 // MARK: - Delegate
 
+@class OACPasswordSavePrompt;
+@class OACAutofillPopup;
+
 /// Implemented by the shell. Each method returns YES when the shell will show UI and answer the
 /// request later, NO to let the bridge use the default answer right away.
 NS_SWIFT_UI_ACTOR
@@ -214,6 +217,15 @@ NS_SWIFT_UI_ACTOR
 - (BOOL)tab:(OACTab *)tab requestPermission:(OACPermissionRequest *)request;
 - (BOOL)tab:(OACTab *)tab runFileChooser:(OACFileChooserRequest *)request;
 - (BOOL)tab:(OACTab *)tab openExternalProtocol:(OACExternalProtocolRequest *)request;
+/// Password manager save / update prompt (plan C13, OACAutofill.h).
+- (BOOL)tab:(OACTab *)tab offerToSavePassword:(OACPasswordSavePrompt *)prompt
+    NS_SWIFT_NAME(tab(_:offerToSavePassword:));
+/// Autofill dropdown for the focused field (plan C13, OACAutofill.h).
+- (BOOL)tab:(OACTab *)tab showAutofillPopup:(OACAutofillPopup *)popup
+    NS_SWIFT_NAME(tab(_:showAutofillPopup:));
+/// The dropdown's rows or highlighted row changed (the user typed, or pressed ↑ / ↓).
+- (void)tab:(OACTab *)tab didUpdateAutofillPopup:(OACAutofillPopup *)popup
+    NS_SWIFT_NAME(tab(_:didUpdateAutofillPopup:));
 
 /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
 - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;
