@@ -18,16 +18,22 @@ struct SplitWebArea: View {
         let container = CGRect(origin: .zero, size: size)
         let panes = model.splitPaneFrames(in: container)
         let showsRing = panes.count > 1
+        // The pane at the panel's top-left corner leads with the show-sidebar button while the
+        // sidebar is hidden (toolbar on). [06 §17.2] observed for the single page; inferred here.
+        let topLeading = panes.min { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }?.tabID
         ZStack(alignment: .topLeading) {
             ForEach(panes, id: \.tabID) { pane in
                 SplitPaneView(
+                    model: model,
                     tab: sidebar.liveTab(for: pane.tabID),
                     findBar: FindBarHost(model: model.findBar, tabID: pane.tabID),
                     bar: model.paneBarState(for: pane.tabID),
+                    toolbar: model.webToolbarState(for: pane.tabID),
+                    items: model.webToolbarItems(role: .pane(isActive: pane.tabID == sidebar.selectedTabID),
+                                                 isTopLeading: pane.tabID == topLeading),
                     layout: SplitPaneBarLayout(paneFrame: CGRect(origin: .zero, size: pane.frame.size)),
                     isFocused: showsRing && pane.tabID == sidebar.selectedTabID,
                     palette: palette,
-                    actions: SplitPaneBarActions(model: model, tabID: pane.tabID),
                     crashed: model.crashedPageState(for: pane.tabID)
                 )
                 .frame(width: pane.frame.width, height: pane.frame.height)
@@ -46,112 +52,53 @@ struct SplitWebArea: View {
     }
 }
 
-/// What the buttons of one pane's top bar do; every action names its pane's tab, so the right
-/// tab is affected even when another pane is focused.
-@MainActor
-struct SplitPaneBarActions {
-    let model: ShellModel
-    let tabID: UUID
-
-    func focus() { model.focusPane(tabID) }
-    func back() { model.paneGoBack(tabID) }
-    func forward() { model.paneGoForward(tabID) }
-    func openAddress() { model.paneOpenAddressBar(tabID) }
-    func close() { model.paneClose(tabID) }
-}
-
 /// One pane: its top bar, then the page below it, rounded like the single web panel, with a ring
-/// when focused. [06 §5] observed.
+/// when focused. [06 §5] observed. The bar is the web toolbar strip ([06 §17.6] observed: "the
+/// pane top bar of §5"): with the toolbar off it holds back, forward, the domain group and ✕
+/// ([06 §5]); with it on, the active pane adds reload, site controls and the split menu.
 struct SplitPaneView: View {
+    @ObservedObject var model: ShellModel
     let tab: (any BrowserTab)?
     /// The pane's find bar; it shows only over the focused pane (`FindBarModel` targets the
     /// selected tab). B25.
     let findBar: FindBarHost
     let bar: SplitPaneBarState
+    let toolbar: WebToolbarState
+    let items: WebToolbarItems
     let layout: SplitPaneBarLayout
     let isFocused: Bool
     let palette: ThemePalette
-    let actions: SplitPaneBarActions
     /// Set while the pane's renderer is gone (C9).
     var crashed: CrashedPageState? = nil
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous)
+        let colors = model.webToolbarColors(isSplitPane: true)
         ZStack(alignment: .topLeading) {
-            SplitPaneBarView(bar: bar, layout: layout, palette: palette, actions: actions)
-                .frame(width: layout.barFrame.width, height: layout.barFrame.height)
+            WebToolbarView(model: model, state: toolbar, items: items, colors: colors, size: layout.barFrame.size,
+                           siteControls: model.siteControls, settings: model.webToolbar)
+                // An inactive pane's bar is fainter with the toolbar off. [06 §5] observed.
+                .opacity(model.isWebToolbarShown ? SplitPaneBarTokens.activeOpacity : bar.opacity)
                 .offset(x: layout.barFrame.minX, y: layout.barFrame.minY)
             WebPanel(tab: tab, findBar: findBar, background: palette.webPanelBackground, crashed: crashed)
                 .frame(width: layout.pageFrame.width, height: layout.pageFrame.height)
                 .offset(x: layout.pageFrame.minX, y: layout.pageFrame.minY)
         }
         .frame(width: layout.paneFrame.width, height: layout.paneFrame.height, alignment: .topLeading)
-        .background(palette.controlFill.swiftUI)
+        .background(colors.background.swiftUI)
         .clipShape(shape)
         .webPanelEdgeShadow(palette.appearance)
         .overlay {
             if isFocused {
                 shape
-                    .strokeBorder(palette.commandBarSelection.swiftUI.opacity(SplitPaneStyle.focusRingOpacity), lineWidth: SplitPaneStyle.focusRingWidth)
+                    // ≈ 1 pt theme-color ring with the toolbar on ([06 §17.6] observed); the
+                    // toolbar-off width stays the B18 placeholder.
+                    .strokeBorder(palette.commandBarSelection.swiftUI.opacity(SplitPaneStyle.focusRingOpacity),
+                                  lineWidth: model.isWebToolbarShown ? Metrics.WebToolbar.splitPaneFocusRingWidth : SplitPaneStyle.focusRingWidth)
                     .allowsHitTesting(false)
             }
         }
-        .background(PointerDownObserver(onPointerDown: actions.focus))
-    }
-}
-
-/// The slim bar: back and forward on the left, the "🔗 domain" pill centered, ✕ on the right.
-/// An inactive pane's bar is fainter. [06 §5] observed.
-struct SplitPaneBarView: View {
-    let bar: SplitPaneBarState
-    let layout: SplitPaneBarLayout
-    let palette: ThemePalette
-    let actions: SplitPaneBarActions
-
-    var body: some View {
-        let tint = palette.primaryText.swiftUI
-        let origin = layout.barFrame.origin
-        ZStack(alignment: .topLeading) {
-            button("chevron.left", label: "Back", enabled: bar.canGoBack, frame: layout.backButtonFrame, origin: origin, tint: tint, action: actions.back)
-            button("chevron.right", label: "Forward", enabled: bar.canGoForward, frame: layout.forwardButtonFrame, origin: origin, tint: tint, action: actions.forward)
-            Button(action: actions.openAddress) {
-                HStack(spacing: 4) {
-                    Image(systemName: "link").font(.system(size: 11, weight: .medium))
-                    Text(bar.domain ?? SidebarURLBoxContent.placeholderText)
-                        .font(Typography.paneBarPill.font)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .foregroundStyle(tint.opacity(0.8))
-                .padding(.horizontal, SplitPaneBarTokens.pillHorizontalPadding)
-                .frame(width: layout.pillFrame.width, height: layout.pillFrame.height)
-                .background(Capsule().fill(Color.black.opacity(SplitPaneBarTokens.pillFillOpacity)))
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Address")
-            .offset(x: layout.pillFrame.minX - origin.x, y: layout.pillFrame.minY - origin.y)
-            button("xmark", label: "Close split pane", enabled: true, frame: layout.closeButtonFrame, origin: origin, tint: tint, action: actions.close)
-        }
-        .frame(width: layout.barFrame.width, height: layout.barFrame.height, alignment: .topLeading)
-        .opacity(bar.opacity)
-    }
-
-    private func button(
-        _ symbol: String, label: String, enabled: Bool, frame: CGRect, origin: CGPoint, tint: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: SplitPaneBarTokens.symbolFontSize, weight: .medium))
-                .foregroundStyle(tint.opacity(enabled ? 0.8 : 0.3))
-                .frame(width: frame.width, height: frame.height)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .accessibilityLabel(label)
-        .offset(x: frame.minX - origin.x, y: frame.minY - origin.y)
+        .background(PointerDownObserver(onPointerDown: { model.focusPane(bar.tabID) }))
     }
 }
 

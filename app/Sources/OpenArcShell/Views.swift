@@ -20,7 +20,7 @@ public struct MainWindowView: View {
     }
 
     public var body: some View {
-        MainWindowContent(model: model, sidebar: model.sidebar)
+        MainWindowContent(model: model, sidebar: model.sidebar, webToolbar: model.webToolbar)
             .modifier(LaunchNoticeAlert(model: model))
     }
 }
@@ -30,6 +30,16 @@ public struct MainWindowView: View {
 struct MainWindowContent: View {
     @ObservedObject var model: ShellModel
     @ObservedObject var sidebar: SidebarViewModel
+    /// View ▸ Show Toolbar, shared by every window (B43, [06 §17.1]).
+    @ObservedObject var webToolbar: WebToolbarSettings
+    /// "Copied Current URL" after the toolbar's copy link button (B43, [06 §17.3]).
+    @StateObject private var copyToast = WebToolbarCopyToast()
+
+    init(model: ShellModel, sidebar: SidebarViewModel, webToolbar: WebToolbarSettings? = nil) {
+        self.model = model
+        self.sidebar = sidebar
+        self.webToolbar = webToolbar ?? model.webToolbar
+    }
 
     var body: some View {
         // While the Create Space view is up the window uses the default light neutral theme. [06 §1] observed.
@@ -68,8 +78,18 @@ struct MainWindowContent: View {
 
                 // First-run onboarding cards over the themed background (D9, own design).
                 OnboardingLayer(model: model, onboarding: model.controller.onboarding, palette: palette)
+
+                // Copy link notice at the panel's top right, under the toolbar. [06 §17.3] observed. B43.
+                if layout.isWebToolbarShown {
+                    WebToolbarCopyToastView(toast: copyToast, palette: palette)
+                        .frame(width: layout.webPanelFrame.maxX - WebToolbarLocalTokens.copiedToastInset, alignment: .trailing)
+                        .offset(y: layout.pageFrame.minY + WebToolbarLocalTokens.copiedToastInset)
+                        .allowsHitTesting(false)
+                }
             }
             .environment(\.dialogCenter, model.controller.dialogs)
+            .environment(\.isWebToolbarShown, layout.isWebToolbarShown)
+            .environment(\.webToolbarCopyToast, copyToast)
             // The window command bar and onboarding cover the sidebar: presses go to them.
             .environment(\.sidebarAcceptsPointer, !(model.isCommandBarPresented && model.commandBarPaneTabID == nil)
                          && !model.controller.onboarding.isShown(in: model))
@@ -100,7 +120,8 @@ struct MainWindowContent: View {
     /// The engine tab whose permission bubble goes under the URL box: the selected tab's, while
     /// the sidebar shows and the Library is not up. inferred.
     private var permissionTabUnderURLBox: EngineTabID? {
-        let visible = model.isSidebarVisible && !model.spaceFlow.isCreating && !model.library.isActive
+        // With the web toolbar on the sidebar has no URL box: the tab's own panel draws the prompt. inferred (B43).
+        let visible = model.isSidebarVisible && !model.spaceFlow.isCreating && !model.library.isActive && !model.isWebToolbarShown
         guard PermissionPromptPlacement.isUnderURLBox(tabID: sidebar.selectedTabID, selectedTabID: sidebar.selectedTabID, isSidebarVisible: visible) else {
             return nil
         }
@@ -130,8 +151,7 @@ struct MainWindowContent: View {
                 })
                 .offset(x: layout.webPanelFrame.minX, y: layout.webPanelFrame.minY)
         } else {
-            WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground,
-                     crashed: model.crashedPageState(for: sidebar.selectedTabID))
+            singlePanel(layout: layout, palette: palette)
                 .frame(width: layout.webPanelFrame.width, height: layout.webPanelFrame.height)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
                 .webPanelEdgeShadow(palette.appearance)
@@ -141,6 +161,19 @@ struct MainWindowContent: View {
                     [SidebarWebPanelDrop.Pane(tabID: $0, frame: CGRect(origin: .zero, size: layout.webPanelFrame.size))]
                 } ?? [])
                 .offset(x: layout.webPanelFrame.minX, y: layout.webPanelFrame.minY)
+        }
+    }
+
+    /// The single web panel: the page, under the toolbar strip while View ▸ Show Toolbar is on
+    /// (the panel's rounded corners and shadow wrap both). [06 §17.2] observed. B43.
+    @ViewBuilder
+    private func singlePanel(layout: MainWindowLayout, palette: ThemePalette) -> some View {
+        let page = WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground,
+                            crashed: model.crashedPageState(for: sidebar.selectedTabID))
+        if layout.isWebToolbarShown {
+            WebPanelWithToolbar(model: model, sidebar: sidebar, size: layout.webPanelFrame.size) { page }
+        } else {
+            page
         }
     }
 

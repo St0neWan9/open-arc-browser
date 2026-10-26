@@ -45,7 +45,10 @@ extension ShellModel {
 
     /// Frames of the window. The floating sidebar does not take part: the web panel keeps its
     /// hidden-state frame while it is out. [06 §14] observed.
+    /// The web toolbar takes part while View ▸ Show Toolbar is on ([06 §17], B43); the Library
+    /// keeps its own layout (inferred).
     func windowLayout(size: CGSize) -> MainWindowLayout {
-        MainWindowLayout(windowSize: size, isSidebarVisible: showsSidebarColumn)
+        MainWindowLayout(windowSize: size, isSidebarVisible: showsSidebarColumn,
+                         isWebToolbarShown: isWebToolbarShown && !library.isActive)
     }
 }

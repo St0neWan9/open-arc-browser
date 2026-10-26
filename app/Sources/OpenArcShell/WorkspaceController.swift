@@ -76,6 +76,10 @@ public final class WorkspaceController: ObservableObject {
     /// Update checks and the automatic-update settings, shared by the app menu and Settings (D7).
     /// Creating it starts the checker, so it is made on first use.
     public private(set) lazy var updates = UpdatesModel(checker: dependencies.updateChecker, preferences: dependencies.preferences)
+    /// View ▸ Show Toolbar and "Show full URL when Toolbar is enabled", global for every window
+    /// (B43, [06 §17.1] observed). An incognito controller uses its parent's.
+    public var webToolbar: WebToolbarSettings { parent?.webToolbar ?? ownWebToolbar }
+    private lazy var ownWebToolbar = WebToolbarSettings(preferences: dependencies.preferences)
 
     private var liveTabs: [UUID: any BrowserTab] = [:]
     private var eventTasks: [UUID: Task<Void, Never>] = [:]

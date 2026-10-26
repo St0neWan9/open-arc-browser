@@ -15,6 +15,8 @@ public struct SidebarView: View {
     @State private var regions: [SidebarDropRegion: CGRect] = [:]
     /// The floating peek panel's deeper fill instead of the window color. [06 §14] B34.
     @Environment(\.sidebarFillOverride) private var fillOverride
+    /// View ▸ Show Toolbar: no URL box or navigation buttons here, content 46 pt higher. [06 §17.1] B43.
+    @Environment(\.isWebToolbarShown) private var isWebToolbarShown
 
     public init(viewModel: SidebarViewModel) {
         self.viewModel = viewModel
@@ -22,7 +24,8 @@ public struct SidebarView: View {
 
     public var body: some View {
         GeometryReader { proxy in
-            content(layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height)))
+            content(layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height),
+                                          isWebToolbarShown: isWebToolbarShown))
         }
         .frame(width: CGFloat(Metrics.Sidebar.width))
     }
@@ -39,9 +42,11 @@ public struct SidebarView: View {
             SidebarTopBarView(viewModel: viewModel, layout: layout)
 
             ZStack(alignment: .topLeading) {
-                SidebarURLBoxView(viewModel: viewModel)
-                    .frame(width: url.width, height: url.height)
-                    .offset(x: url.minX, y: url.minY)
+                if layout.showsAddressControls {
+                    SidebarURLBoxView(viewModel: viewModel)
+                        .frame(width: url.width, height: url.height)
+                        .offset(x: url.minX, y: url.minY)
+                }
 
                 // An incognito window has no favorites: the block keeps its place empty. inferred (B14).
                 if !viewModel.isIncognito {

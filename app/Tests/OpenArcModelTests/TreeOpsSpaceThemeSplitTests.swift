@@ -234,4 +234,29 @@ final class TreeOpsSpaceThemeSplitTests: XCTestCase {
         // Default: nothing excluded.
         XCTAssertEqual(TreeOps.autoArchive(s, now: at(13 * 3600)).archive[kept]?.reason, .autoArchived)
     }
+
+    // MARK: Split side [06 §17.3]
+
+    /// [06 §17.3] observed: the web toolbar's split menu adds a pane right, left, top or bottom.
+    /// `side` puts the new pane before or after the existing one, in a new layout and in an
+    /// existing one; the default stays "after" (⌃⇧=, [06 §5]). Only `layout` is stamped.
+    func testAddSplitPaneOnEitherSide() throws {
+        let a = UUID(), b = UUID(), c = UUID(), layout = UUID()
+        var s = try base()
+        for (id, title) in [(a, "A"), (b, "B"), (c, "C")] {
+            s = try TreeOps.openTab(s, id: id, spaceID: home, url: nil, title: title, now: t0)
+        }
+        let left = try TreeOps.addSplitPane(s, layoutID: layout, existingTabID: a, newTabID: b, side: .leading, now: at(1))
+        XCTAssertEqual(left.splits[layout]?.root.tabIDs, [b, a])
+        let top = try TreeOps.addSplitPane(s, layoutID: layout, existingTabID: a, newTabID: b, axis: .vertical, side: .leading, now: at(1))
+        guard case .split(let axis, _) = top.splits[layout]?.root else { return XCTFail("no split") }
+        XCTAssertEqual(axis, .vertical)
+        XCTAssertEqual(top.splits[layout]?.root.tabIDs, [b, a])
+        let right = try TreeOps.addSplitPane(s, layoutID: layout, existingTabID: a, newTabID: b, now: at(1))
+        XCTAssertEqual(right.splits[layout]?.root.tabIDs, [a, b])
+        // Joining an existing layout: before the existing pane.
+        let three = try TreeOps.addSplitPane(right, layoutID: UUID(), existingTabID: b, newTabID: c, side: .leading, now: at(2))
+        XCTAssertEqual(three.splits[layout]?.root.tabIDs, [a, c, b])
+        XCTAssertEqual(groupTimes(three.splits[layout])[SplitLayout.FieldGroup.layout.rawValue], at(2))
+    }
 }

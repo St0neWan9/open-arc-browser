@@ -6,10 +6,36 @@ import OpenArcDesign
 public struct MainWindowLayout: Equatable, Sendable {
     public var windowSize: CGSize
     public var isSidebarVisible: Bool
+    /// View ▸ Show Toolbar: the address and navigation buttons move from the sidebar into a strip at
+    /// the top of the web panel. [06 §17] observed.
+    public var isWebToolbarShown: Bool
 
-    public init(windowSize: CGSize, isSidebarVisible: Bool = true) {
+    public init(windowSize: CGSize, isSidebarVisible: Bool = true, isWebToolbarShown: Bool = false) {
         self.windowSize = windowSize
         self.isSidebarVisible = isSidebarVisible
+        self.isWebToolbarShown = isWebToolbarShown
+    }
+
+    /// The toolbar strip: the top 32 pt of the web panel, inside its rounded corners. Empty while
+    /// the toolbar is off. [06 §17.2] observed (276, 10, 1634 × 32; hidden sidebar 10, 10, 1900 × 32).
+    public var webToolbarFrame: CGRect {
+        guard isWebToolbarShown else { return .zero }
+        let panel = webPanelFrame
+        return CGRect(x: panel.minX, y: panel.minY, width: panel.width, height: min(Metrics.WebToolbar.height, panel.height))
+    }
+
+    /// Where the page goes: the web panel below the toolbar strip (the whole panel while the
+    /// toolbar is off). [06 §17.2] observed (page from y 42, 933 tall in a 985 window).
+    public var pageFrame: CGRect {
+        let panel = webPanelFrame
+        let strip = webToolbarFrame.height
+        return CGRect(x: panel.minX, y: panel.minY + strip, width: panel.width, height: max(0, panel.height - strip))
+    }
+
+    /// How far the sidebar content below the (removed) URL box moves up while the toolbar shows.
+    /// [06 §17.1] observed (46: favorites y 82 → 36).
+    public var sidebarContentShift: Double {
+        isWebToolbarShown ? Metrics.WebToolbar.sidebarContentShift : 0
     }
 
     /// Sidebar area (includes its right-hand gap). [07 §1] observed
@@ -32,7 +58,9 @@ public struct MainWindowLayout: Equatable, Sendable {
         return CGRect(x: leading, y: Metrics.WebPanel.insetTop, width: max(0, width), height: max(0, height))
     }
 
-    /// Address/search field inside the sidebar: x 8–268, y 46–82. [07 §4] observed
+    /// Address/search field inside the sidebar: x 8–268, y 46–82. [07 §4] observed. While the
+    /// toolbar shows, the sidebar has no address field ([06 §17.1] observed); the frame stays for
+    /// callers that only need the toolbar-off geometry.
     public var addressFieldFrame: CGRect {
         let inset = Metrics.Sidebar.addressFieldHorizontalInset
         return CGRect(
@@ -43,12 +71,13 @@ public struct MainWindowLayout: Equatable, Sendable {
         )
     }
 
-    /// Favorites blocks: x 8–268, y 90–137. [07 §4] observed
+    /// Favorites blocks: x 8–268, y 90–137 [07 §4] observed; 46 pt higher while the toolbar shows
+    /// [06 §17.1] observed.
     public var favoritesFrame: CGRect {
         let inset = Metrics.Sidebar.addressFieldHorizontalInset
         return CGRect(
             x: inset,
-            y: Metrics.Sidebar.favoritesTop,
+            y: Metrics.Sidebar.favoritesTop - sidebarContentShift,
             width: sidebarContentWidth - 2 * inset,
             height: Metrics.Sidebar.favoritesHeight
         )

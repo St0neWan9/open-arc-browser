@@ -72,6 +72,15 @@ struct SidebarTopBarView: View {
                     viewModel.toggleSidebar()
                 }
             }
+            // With the web toolbar on, back / forward / reload live there instead. [06 §17.1] observed.
+            if layout.showsAddressControls {
+                navigationButtons(tint: tint, ink: ink, isStop: isStop)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func navigationButtons(tint: Color, ink: ChromeInkOpacities, isStop: Bool) -> some View {
             place(layout.backButtonFrame) {
                 SidebarToolbarButton(symbol: "arrow.left", glyphSize: SidebarLocalTokens.toolbarArrowGlyphSize,
                                      glyphWeight: SidebarLocalTokens.toolbarGlyphWeight, label: "Back", tint: tint, isEnabled: viewModel.canGoBack,
@@ -102,7 +111,6 @@ struct SidebarTopBarView: View {
                     viewModel.reloadOrStop()
                 }
             }
-        }
     }
 
     private func place<Content: View>(_ frame: CGRect, @ViewBuilder _ content: () -> Content) -> some View {
@@ -313,14 +321,14 @@ struct SidebarSpaceNameRowView: View {
                 .frame(width: layout.width, height: CGFloat(s.spaceHeaderHeight))
                 .contentShape(Rectangle())
                 .sidebarDropRegion(.spaceName)
-                .offset(y: CGFloat(s.spaceHeaderTop))
+                .offset(y: CGFloat(s.spaceHeaderTop) - layout.contentShift)
             if let icon {
                 // A ≈ 14 pt glyph centered in the 26 pt cell (B33 round-2 PX), not a 26 pt glyph.
                 SidebarSpaceIconView(icon: icon, size: CGFloat(s.spaceIconFrame.width),
                                      glyphSize: SidebarLocalTokens.spaceIconGlyphSize, tint: palette.ink(\.spaceIcon).swiftUI)
                     .frame(width: CGFloat(s.spaceIconFrame.width), height: CGFloat(s.spaceIconFrame.height))
                     .accessibilityBox(label: "Space icon", identifier: "openarc.sidebar.spaceIcon", traits: .isImage)
-                    .offset(x: CGFloat(s.spaceIconFrame.x), y: CGFloat(s.spaceIconFrame.y))
+                    .offset(x: CGFloat(s.spaceIconFrame.x), y: CGFloat(s.spaceIconFrame.y) - layout.contentShift)
             }
             Text(viewModel.selectedSpace?.name ?? "")
                 .font(style.font)
@@ -330,7 +338,7 @@ struct SidebarSpaceNameRowView: View {
                 .frame(width: CGFloat(s.spaceNameTrailing) - nameLeading, height: CGFloat(style.lineHeight), alignment: .leading)
                 // The element spans the name line (x to 259, 18 tall), like the reference.
                 .accessibilityBox(label: viewModel.selectedSpace?.name ?? "", identifier: "openarc.sidebar.spaceName")
-                .offset(x: nameLeading, y: CGFloat(s.spaceNameTop))
+                .offset(x: nameLeading, y: CGFloat(s.spaceNameTop) - layout.contentShift)
             Menu {
                 SidebarSpaceMenu(viewModel: viewModel)
             } label: {
@@ -348,7 +356,7 @@ struct SidebarSpaceNameRowView: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("More")
             .accessibilityIdentifier("openarc.sidebar.spaceMoreButton")
-            .offset(x: CGFloat(more.maxX) - moreWidth, y: CGFloat(more.y))
+            .offset(x: CGFloat(more.maxX) - moreWidth, y: CGFloat(more.y) - layout.contentShift)
         }
         .onHover { isHovering = $0 }
     }

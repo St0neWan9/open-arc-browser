@@ -18,12 +18,23 @@ enum SidebarListItemKind: Equatable {
 /// consistent.
 struct SidebarLayout: Equatable {
     var windowSize: CGSize
+    /// View ▸ Show Toolbar is on: no URL box and no back / forward / reload in the sidebar, and
+    /// everything from the favorites down sits `contentShift` higher. [06 §17.1] observed.
+    var isWebToolbarShown: Bool
 
-    init(windowSize: CGSize = CGSize(width: Metrics.referenceWindowSize.width, height: Metrics.referenceWindowSize.height)) {
+    init(windowSize: CGSize = CGSize(width: Metrics.referenceWindowSize.width, height: Metrics.referenceWindowSize.height),
+         isWebToolbarShown: Bool = false) {
         self.windowSize = windowSize
+        self.isWebToolbarShown = isWebToolbarShown
     }
 
-    private var window: MainWindowLayout { MainWindowLayout(windowSize: windowSize) }
+    private var window: MainWindowLayout { MainWindowLayout(windowSize: windowSize, isWebToolbarShown: isWebToolbarShown) }
+
+    /// Upward shift of the favorites, Space header and list (0 with the toolbar off). [06 §17.1] observed (46).
+    var contentShift: CGFloat { CGFloat(window.sidebarContentShift) }
+
+    /// Whether the URL box and the back / forward / reload buttons are in the sidebar. [06 §17.1] observed.
+    var showsAddressControls: Bool { !isWebToolbarShown }
 
     /// Sidebar width including the right-hand gap: rows and the list span all of it. [07 §1, §4] observed.
     var width: CGFloat { CGFloat(Metrics.Sidebar.width) }
@@ -60,11 +71,11 @@ struct SidebarLayout: Equatable {
     /// "More" strip at 261. [07 §4] observed.
     var spaceNameRowFrame: CGRect {
         let icon = Metrics.Sidebar.spaceIconFrame
-        return CGRect(x: icon.x, y: icon.y, width: Metrics.Sidebar.spaceMoreButtonFrame.maxX - icon.x, height: icon.height)
+        return CGRect(x: icon.x, y: icon.y - contentShift, width: Metrics.Sidebar.spaceMoreButtonFrame.maxX - icon.x, height: icon.height)
     }
 
-    /// Top of the scrolling list. [07 §1] observed (181).
-    var listTop: CGFloat { CGFloat(Metrics.Sidebar.listTop) }
+    /// Top of the scrolling list. [07 §1] observed (181); 46 higher with the toolbar ([06 §17.1]).
+    var listTop: CGFloat { CGFloat(Metrics.Sidebar.listTop) - contentShift }
 
     /// Top edge of the first list row: the list starts with a 3 pt spacer. [07 §1] observed (184).
     var firstRowTop: CGFloat { listTop + CGFloat(Metrics.Sidebar.listTopSpacer) }

@@ -858,12 +858,15 @@ public final class SidebarViewModel: ObservableObject {
 
     /// Add Split View (⌃⇧=): the current tab goes left, a new empty tab opens right and the
     /// command bar opens inside that pane. [06 §5] observed.
-    public func addSplitView() {
+    /// `axis` and `side` place the new pane (the web toolbar's Add Right / Left / Top / Bottom
+    /// Split, [06 §17.3] observed); the default is ⌃⇧='s right pane.
+    public func addSplitView(axis: SplitAxis = .horizontal, side: SplitSide = .trailing) {
         guard let base = selectedTabID, let spaceID = selectedSpaceID else { return }
         let newID = makeID(), layoutID = makeID()
         let ok = mutate { state in
             let opened = try TreeOps.openTab(state, id: newID, spaceID: spaceID, url: nil, title: "New Tab", now: now())
-            return try TreeOps.addSplitPane(opened, layoutID: layoutID, existingTabID: base, newTabID: newID, now: now())
+            return try TreeOps.addSplitPane(opened, layoutID: layoutID, existingTabID: base, newTabID: newID,
+                                            axis: axis, side: side, now: now())
         }
         guard ok else { return }
         selectTab(newID)
