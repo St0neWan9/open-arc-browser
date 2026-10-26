@@ -45,6 +45,20 @@ public enum EditCommand: String, CaseIterable, Hashable, Sendable {
     case undo, redo, cut, copy, paste, pasteAndMatchStyle, delete, selectAll
 }
 
+/// File ▸ Save Page As formats. [01 §File] observes only the item; the three formats are
+/// Chromium's (inferred). Raw values match the bridge's `OACSavePageFormat`.
+public enum SavePageFormat: Int, CaseIterable, Hashable, Sendable {
+    /// The HTML file plus a `<name>_files` folder with its images, styles and scripts.
+    case complete = 0
+    /// The HTML file only.
+    case htmlOnly = 1
+    /// One MHTML file.
+    case singleFile = 2
+
+    /// File name extension the format writes.
+    public var fileExtension: String { self == .singleFile ? "mhtml" : "html" }
+}
+
 /// DevTools panels reachable from View ▸ Developer ▸ ([01 §View] observed: Developer Tools,
 /// Inspect Elements, JavaScript Console, Network Inspector).
 public enum DevToolsPanel: String, Hashable, Sendable {

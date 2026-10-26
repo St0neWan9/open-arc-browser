@@ -411,6 +411,12 @@ struct AdvancedPane: View {
                         // [03 §Advanced] observed, off by default; [06 §17.2] the toolbar shows the
                         // address without its scheme. Live since B43; every window follows.
                         WebToolbarFullURLToggle(settings: model.shell.webToolbar)
+                    } else if id == "advanced.pictureInPicture" {
+                        // [03 §Advanced] observed, on by default. Live since C15.
+                        Toggle(SettingsCatalog.control(id).label, isOn: Binding(
+                            get: { model.entersPictureInPictureOnLeavingVideoTab },
+                            set: { model.entersPictureInPictureOnLeavingVideoTab = $0 }
+                        ))
                     } else {
                         PendingToggle(id: id)
                     }

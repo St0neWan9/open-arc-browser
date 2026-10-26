@@ -243,9 +243,12 @@ public enum FakeTabCommand: Hashable, Sendable {
     case stopFinding(keepSelection: Bool)
     case edit(EditCommand)
     case print
-    case savePage(URL)
+    case savePage(URL, SavePageFormat)
     case showDevTools(DevToolsPanel?)
     case viewSource
+    /// `enterPictureInPicture(automatically:)`.
+    case enterPictureInPicture(automatically: Bool)
+    case exitPictureInPicture
     case exitFullscreen
     case requestClose
 }
@@ -311,6 +314,13 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private var selection = ""
     private var findActiveOrdinal = 0
     private var colorScheme: WebColorScheme
+    /// The page has a video (`simulateVideo`); `isVideoPlaying` and `isInPictureInPicture` follow
+    /// the fake's simple model of one player.
+    private var hasVideo = false
+    private var isVideoPlaying = false
+    private var isInPictureInPicture = false
+    /// The site's "Automatic Picture-In-Picture" setting ([06 §12] observed, default Allowed).
+    private var allowsAutomaticPictureInPicture = true
     private var colorSchemeLog: [WebColorScheme] = []
     private let broadcaster = AsyncBroadcaster<TabEvent>()
     private let dialogBroadcaster = AsyncBroadcaster<EngineDialogRequest>()
@@ -538,10 +548,11 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
 
     public func print() async { _ = record(.print) }
 
-    public func savePage(to fileURL: URL) async throws {
+    public func savePage(to fileURL: URL, format: SavePageFormat) async throws {
         try lock.withLock {
             guard !isClosed else { throw EngineError.tabClosed(id) }
-            commandLog.append(.savePage(fileURL))
+            guard fileURL.isFileURL else { throw EngineError.invalidArgument }
+            commandLog.append(.savePage(fileURL, format))
         }
     }
 
@@ -584,7 +595,55 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         }
     }
 
+    /// Same rules as the Chromium engine: automatic entry needs a playing video, not already in
+    /// Picture in Picture, on a site that allows it; a manual one needs a video.
+    @discardableResult
+    public func enterPictureInPicture(automatically: Bool) async -> Bool {
+        lock.withLock {
+            guard !isClosed else { return false }
+            commandLog.append(.enterPictureInPicture(automatically: automatically))
+            guard hasVideo else { return false }
+            if automatically {
+                guard isVideoPlaying, !isInPictureInPicture, allowsAutomaticPictureInPicture else { return false }
+            }
+            isInPictureInPicture = true
+            return true
+        }
+    }
+
+    public func exitPictureInPicture() async {
+        lock.withLock {
+            guard !isClosed else { return }
+            commandLog.append(.exitPictureInPicture)
+            isInPictureInPicture = false
+        }
+    }
+
     // MARK: Test hooks: page state
+
+    /// Simulates the page asking to be shown (`window.focus()`, Picture in Picture's "back to tab").
+    public func simulateActivationRequest() {
+        lock.withLock {
+            guard !isClosed else { return }
+            broadcaster.yield(.activationRequested)
+        }
+    }
+
+    /// Simulates a page with one video, playing or paused.
+    public func simulateVideo(playing: Bool) {
+        lock.withLock {
+            hasVideo = true
+            isVideoPlaying = playing
+        }
+    }
+
+    /// Simulates the site's "Automatic Picture-In-Picture" setting.
+    public func simulateAutomaticPictureInPicture(allowed: Bool) {
+        lock.withLock { allowsAutomaticPictureInPicture = allowed }
+    }
+
+    /// Whether the fake's video is in Picture in Picture.
+    public var isPictureInPictureActive: Bool { lock.withLock { isInPictureInPicture } }
 
     /// Simulates the page starting or stopping sound.
     public func simulateAudio(_ audible: Bool) {

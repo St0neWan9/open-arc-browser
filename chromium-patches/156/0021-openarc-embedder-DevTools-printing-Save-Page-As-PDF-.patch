@@ -1,0 +1,1325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 08:46:58 -0700
+Subject: [PATCH] openarc: embedder: DevTools, printing, Save Page As, PDF,
+ Picture in Picture
+
+Plan C15 (DevTools, View Source, PDF viewer, Picture in Picture,
+printing; acceptance: the menu items of docs/arc-spec/01 work). Until
+now -print and -showDevToolsWithPanel: did nothing, -savePageToURL:
+failed, PDFs never loaded and requestPictureInPicture() was rejected
+("not supported by the embedder").
+
+- DevTools (openarc/browser/openarc_page_tools.mm): Chrome's bundled
+  front end in an NSWindow of its own, one per tab, reused by later
+  commands and closed with its tab, its close button or Cmd-W. It plays
+  DevToolsWindow's part without a Browser: DevToolsUIBindings delegate
+  (through a forwarding delegate the bindings own), front-end
+  WebContents delegate (zoom, links open next to the inspected page,
+  unhandled keys go to the app menu), panel on open (&panel=), "Inspect
+  Elements" enters element-picking mode once the front end's connection
+  is ready. Bridge tabs are registered as DevTools pages (previous
+  patch) so every panel works.
+- Printing: --disable-print-preview (print preview is a Browser-window
+  tab-modal dialog) and printing::StartPrint(), i.e. the macOS print
+  panel for the page, the focused frame with a selection, or the PDF
+  plugin frame. window.print() shows the same panel.
+- Save Page As: -savePageToURL:format: with complete page (HTML plus
+  "<name>_files"), HTML only, or one MHTML file, through
+  WebContents::SavePage (a download of the profile). A page that is not
+  HTML (PDF, image, media) is saved as its original file, as Chrome
+  does, with its own extension.
+- PDF viewer: chrome.tabs resolves bridge tabs (lookup registered with
+  ExtensionTabUtil, previous-but-one patch), so Chrome's OOPIF PDF
+  viewer loads the document.
+- Picture in Picture: the tab's WebContentsDelegate enters and leaves
+  video PiP through PictureInPictureWindowManager (Chrome's floating
+  window; "back to tab" reaches the shell as tabDidRequestActivation:).
+  -enterPictureInPictureAutomatically: lets the shell put a playing video
+  in PiP when the user leaves the tab (Arc's "Enable Picture in Picture
+  when you leave a video tab"), honoring the site's auto-PiP content
+  setting. Document Picture in Picture needs a Chrome window type and is
+  refused up front.
+
+Public API (OACTab.h): OACSavePageFormat, -savePageToURL:format:...,
+-closeDevTools, hasPictureInPictureVideo,
+-enterPictureInPictureAutomatically:, -exitPictureInPicture; -print is
+printPage() in Swift.
+---
+ openarc/BUILD.gn                           |  40 ++
+ openarc/bridge/oac_application.mm          |  17 +
+ openarc/bridge/oac_tab.mm                  | 197 +++++-
+ openarc/bridge/oac_tab_internal.h          |  11 +
+ openarc/bridge/public/OpenArcCore/OACTab.h |  59 +-
+ openarc/browser/openarc_page_tools.h       |  80 +++
+ openarc/browser/openarc_page_tools.mm      | 708 +++++++++++++++++++++
+ 7 files changed, 1100 insertions(+), 12 deletions(-)
+ create mode 100644 openarc/browser/openarc_page_tools.h
+ create mode 100644 openarc/browser/openarc_page_tools.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 43f68fb386ef..fad1625df7f9 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -144,6 +144,38 @@ source_set("embedder") {
+   ]
+ }
+ 
++# Page tools of plan C15 (DevTools window, printing, Save Page As) for tabs
++# without a Browser window.
++source_set("page_tools") {
++  visibility = [ ":*" ]
++  sources = [
++    "browser/openarc_page_tools.h",
++    "browser/openarc_page_tools.mm",
++  ]
++  deps = [
++    "//base",
++    "//chrome/browser/devtools",
++    "//chrome/browser/printing",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/search_engines",
++    "//chrome/browser/ui/webui/devtools",
++    "//components/download/public/common:public",
++    "//components/input",
++    "//components/search_engines",
++    "//components/zoom",
++    "//content/public/browser",
++    "//content/public/common",
++    "//net/traffic_annotation",
++    "//third_party/blink/public/mojom:mojom_platform",
++    "//ui/base",
++    "//url",
++  ]
++  frameworks = [
++    "AppKit.framework",
++    "Foundation.framework",
++  ]
++}
++
+ # The Objective-C implementation of the public API.
+ source_set("bridge") {
+   visibility = [ ":*" ]
+@@ -168,6 +200,14 @@ source_set("bridge") {
+   public_configs = [ ":openarc_public_config" ]
+   deps = [
+     ":embedder",
++    ":page_tools",
++    "//chrome/browser/devtools",
++    "//chrome/browser/content_settings:content_settings_factory",
++    "//chrome/browser/extensions",
++    "//chrome/browser/picture_in_picture",
++    "//components/content_settings/core/browser",
++    "//components/sessions",
++    "//services/media_session/public/mojom",
+     "//base",
+     "//chrome/browser/browsing_data:constants",
+     "//chrome/browser/download",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index c564ecfc6549..a58c5b6c332c 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -37,6 +37,8 @@
+ #include "content/public/app/content_main_runner.h"
+ #include "openarc/app/openarc_main_delegate.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
++#include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/common/openarc_paths.h"
+@@ -46,6 +48,7 @@
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
+ 
+ namespace {
+ 
+@@ -81,6 +84,10 @@
+     "--disable-domain-reliability",
+     "--disable-updater-scheduler",
+     "--metrics-recording-only",
++    // Plan C15: Chrome's print preview is a tab-modal dialog of a Browser
++    // window, which embedder-owned tabs do not have; File ▸ Print and
++    // window.print() use the macOS print panel instead.
++    "--disable-print-preview",
+ };
+ 
+ }  // namespace
+@@ -294,6 +301,16 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+     return NO;
+   }
+ 
++  // The bridge's tabs live in no Browser window (plan C15). chrome.tabs (the
++  // PDF viewer, extensions) finds them through this lookup, and
++  extensions::ExtensionTabUtil::SetEmbedderTabLookup(
++      base::BindRepeating(&OACFindTabWebContentsForExtensions));
++  // DevTools treats them as pages, with Elements, Console and Network.
++  ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate(
++      base::BindRepeating([](content::WebContents* contents) {
++        return OACTabForWebContents(contents).webContents == contents;
++      }));
++
+   __weak OACApplication* weakSelf = self;
+   openarc::OpenArcBrowserMainExtraParts::Get()->SetWillDestroyProfilesCallback(
+       base::BindOnce(^{
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 3a02ed318d77..11002026f689 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -52,6 +52,16 @@
+ #include "ui/gfx/image/image_skia_operations.h"
+ #include "url/gurl.h"
+ #include "url/url_constants.h"
++#include "base/apple/foundation_util.h"
++#include "base/no_destructor.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
++#include "components/content_settings/core/browser/host_content_settings_map.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "content/public/browser/media_session.h"
++#include "services/media_session/public/mojom/media_session.mojom.h"
+ #include "chrome/browser/external_protocol/external_protocol_observer.h"
+ #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+ #include "chrome/browser/file_select_helper.h"
+@@ -71,6 +81,7 @@
+ #import "openarc/bridge/oac_requests_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
++#include "openarc/browser/openarc_page_tools.h"
+ #include "openarc/browser/openarc_tab_helpers.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ 
+@@ -229,6 +240,24 @@ void ActivateContents(content::WebContents* contents) override {
+   void UpdateTargetURL(content::WebContents* source, const GURL& url) override {
+     [tab_ webContentsDidHoverURL:url];
+   }
++
++  // Video Picture in Picture (plan C15): Chrome's floating PiP window, the
++  // same one a Browser tab gets. Its "back to tab" button activates this
++  // contents, which reaches the shell as tabDidRequestActivation:.
++  content::PictureInPictureResult EnterPictureInPicture(
++      content::WebContents* web_contents) override {
++    return PictureInPictureWindowManager::GetInstance()
++        ->EnterVideoPictureInPicture(web_contents);
++  }
++  void ExitPictureInPicture() override {
++    PictureInPictureWindowManager::GetInstance()->ExitPictureInPicture();
++  }
++  // Document Picture in Picture opens a Browser window of its own type, which
++  // an embedder-owned UI does not have: refuse it up front, so
++  // documentPictureInPicture.requestWindow() rejects cleanly.
++  bool IsDocumentPictureInPictureBlockedBySystem() const override {
++    return true;
++  }
+   bool HandleKeyboardEvent(
+       content::WebContents* source,
+       const input::NativeWebKeyboardEvent& event) override {
+@@ -1286,7 +1315,7 @@ - (void)selectedTextWithCompletionHandler:(void (^)(NSString*))
+   });
+ }
+ 
+-// MARK: Not implemented yet (C15)
++// MARK: Editing
+ 
+ - (void)performEditCommand:(NSString*)command {
+   if (_closed) {
+@@ -1312,19 +1341,151 @@ - (void)performEditCommand:(NSString*)command {
+   }
+ }
+ 
++// MARK: Page tools (plan C15)
++
+ - (void)print {
++  if (!_closed) {
++    openarc::PrintPage(_webContents.get());
++  }
+ }
+ 
+ - (void)savePageToURL:(NSURL*)url
+     completionHandler:(void (^)(NSError*))completionHandler {
+-  NSError* error = OACMakeError(OACErrorInvalidArgument,
+-                                @"Saving pages is not implemented yet.");
+-  OACPostToMainThread(^{
+-    completionHandler(error);
+-  });
++  [self savePageToURL:url
++                format:OACSavePageFormatComplete
++     completionHandler:completionHandler];
++}
++
++- (void)savePageToURL:(NSURL*)url
++               format:(OACSavePageFormat)format
++    completionHandler:(void (^)(NSError*))completionHandler {
++  void (^finish)(NSError*) = [completionHandler copy];
++  if (_closed) {
++    NSError* error = OACMakeError(OACErrorTabClosed, @"The tab is closed.");
++    OACPostToMainThread(^{
++      finish(error);
++    });
++    return;
++  }
++  if (!url.isFileURL) {
++    NSError* error =
++        OACMakeError(OACErrorInvalidArgument, @"Save Page As needs a file URL.");
++    OACPostToMainThread(^{
++      finish(error);
++    });
++    return;
++  }
++  openarc::SavePageFormat chromium_format =
++      openarc::SavePageFormat::kComplete;
++  switch (format) {
++    case OACSavePageFormatComplete:
++      chromium_format = openarc::SavePageFormat::kComplete;
++      break;
++    case OACSavePageFormatHTMLOnly:
++      chromium_format = openarc::SavePageFormat::kHtmlOnly;
++      break;
++    case OACSavePageFormatSingleFile:
++      chromium_format = openarc::SavePageFormat::kSingleFile;
++      break;
++  }
++  openarc::SavePage(
++      _webContents.get(), base::apple::NSURLToFilePath(url), chromium_format,
++      base::BindOnce(^(bool started) {
++        NSError* error =
++            started ? nil
++                    : OACMakeError(OACErrorInvalidArgument,
++                                   @"The page could not be saved.");
++        OACPostToMainThread(^{
++          finish(error);
++        });
++      }));
+ }
+ 
+ - (void)showDevToolsWithPanel:(NSString*)panel {
++  if (_closed) {
++    return;
++  }
++  // Panel names of OACTab.h: nil = last used, "elements" = Inspect Elements
++  // (pick an element), "console", "network".
++  if (!panel) {
++    openarc::ShowDevTools(_webContents.get(), openarc::DevToolsCommand::kShow,
++                          std::string());
++  } else if ([panel isEqualToString:@"elements"]) {
++    openarc::ShowDevTools(_webContents.get(),
++                          openarc::DevToolsCommand::kInspectElement,
++                          std::string());
++  } else {
++    openarc::ShowDevTools(_webContents.get(),
++                          openarc::DevToolsCommand::kShowPanel,
++                          base::SysNSStringToUTF8(panel));
++  }
++}
++
++- (void)closeDevTools {
++  if (!_closed) {
++    openarc::CloseDevTools(_webContents.get());
++  }
++}
++
++- (BOOL)hasPictureInPictureVideo {
++  return !_closed && _webContents->HasPictureInPictureVideo();
++}
++
++- (BOOL)enterPictureInPictureAutomatically:(BOOL)automatic {
++  if (_closed) {
++    return NO;
++  }
++  content::MediaSession* session =
++      content::MediaSession::GetIfExists(_webContents.get());
++  if (!session) {
++    return NO;
++  }
++  if (!automatic) {
++    session->EnterPictureInPicture();
++    return YES;
++  }
++  // [03 §Advanced] observed "Enable Picture in Picture when you leave a video
++  // tab" and [06 §12] observed "Automatic Picture-In-Picture" per site: only a
++  // playing video, and only where the site's setting allows it (Chrome's
++  // auto-PiP content setting; "ask" counts as allowed, matching the observed
++  // default "Allowed").
++  media_session::mojom::MediaSessionInfoPtr info =
++      session->GetMediaSessionInfoSync();
++  if (!info ||
++      info->playback_state !=
++          media_session::mojom::MediaPlaybackState::kPlaying ||
++      info->picture_in_picture_state ==
++          media_session::mojom::MediaPictureInPictureState::
++              kInPictureInPicture) {
++    return NO;
++  }
++  bool has_video = false;
++  if (info->audio_video_states) {
++    for (auto state : *info->audio_video_states) {
++      has_video |=
++          state == media_session::mojom::MediaAudioVideoState::kAudioVideo ||
++          state == media_session::mojom::MediaAudioVideoState::kVideoOnly;
++    }
++  }
++  if (!has_video) {
++    return NO;
++  }
++  Profile* profile =
++      Profile::FromBrowserContext(_webContents->GetBrowserContext());
++  const GURL& url = _webContents->GetLastCommittedURL();
++  if (HostContentSettingsMapFactory::GetForProfile(profile)->GetContentSetting(
++          url, url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE) ==
++      CONTENT_SETTING_BLOCK) {
++    return NO;
++  }
++  session->EnterPictureInPicture();
++  return YES;
++}
++
++- (void)exitPictureInPicture {
++  if (!_closed && _webContents->HasPictureInPictureVideo()) {
++    PictureInPictureWindowManager::GetInstance()->ExitPictureInPicture();
++  }
+ }
+ 
+ - (void)viewSource {
+@@ -1386,6 +1547,30 @@ - (void)closeRunningUnloadHandlers {
+ 
+ @end
+ 
++content::WebContents* OACFindTabWebContentsForExtensions(
++    int tab_id,
++    content::BrowserContext* browser_context,
++    bool include_incognito) {
++  if (!browser_context) {
++    return nullptr;
++  }
++  Profile* profile = Profile::FromBrowserContext(browser_context);
++  for (OACTab* tab in LiveTabs().objectEnumerator) {
++    content::WebContents* contents = tab.webContents;
++    if (!contents ||
++        sessions::SessionTabHelper::IdForTab(contents).id() != tab_id) {
++      continue;
++    }
++    Profile* tab_profile =
++        Profile::FromBrowserContext(contents->GetBrowserContext());
++    if (tab_profile == profile ||
++        (include_incognito && profile->IsSameOrParent(tab_profile))) {
++      return contents;
++    }
++  }
++  return nullptr;
++}
++
+ OACTab* OACTabForWebContents(content::WebContents* web_contents) {
+   if (!web_contents) {
+     return nil;
+diff --git a/openarc/bridge/oac_tab_internal.h b/openarc/bridge/oac_tab_internal.h
+index 496ffcc9b79e..071371d6d5fd 100644
+--- a/openarc/bridge/oac_tab_internal.h
++++ b/openarc/bridge/oac_tab_internal.h
+@@ -11,6 +11,7 @@
+ #include <memory>
+ 
+ namespace content {
++class BrowserContext;
+ class WebContents;
+ }
+ 
+@@ -66,4 +67,14 @@ struct OACTabStateFields {
+ // WebContents have none.
+ OACTab* OACTabForWebContents(content::WebContents* web_contents);
+ 
++// The live tab whose session id (what chrome.tabs calls the tab id) is
++// |tab_id|, in |browser_context| or, with |include_incognito|, its
++// off-the-record profile; else nullptr. Registered as
++// ExtensionTabUtil's embedder tab lookup (plan C15: the PDF viewer, an
++// extension, resolves its tab through chrome.tabs).
++content::WebContents* OACFindTabWebContentsForExtensions(
++    int tab_id,
++    content::BrowserContext* browser_context,
++    bool include_incognito);
++
+ #endif  // OPENARC_BRIDGE_OAC_TAB_INTERNAL_H_
+diff --git a/openarc/bridge/public/OpenArcCore/OACTab.h b/openarc/bridge/public/OpenArcCore/OACTab.h
+index bdeee63dd534..883de735f75e 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTab.h
++++ b/openarc/bridge/public/OpenArcCore/OACTab.h
+@@ -273,23 +273,70 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ /// already; these exist for the command bar, which is not in the responder chain.
+ - (void)performEditCommand:(NSString *)command NS_SWIFT_NAME(performEditCommand(_:));
+ 
+-/// File ▸ Print ([01 §File] observed item); Chromium's print preview is replaced by the macOS
+-/// print panel (plan C15).
+-- (void)print;
++/// File ▸ Print ([01 §File] observed item, plan C15): the macOS print panel for the page (or for
++/// the focused frame when it has a selection). Chromium's print preview needs a Browser window's
++/// tab-modal host, so the bridge runs with print preview off; `window.print()` shows the same
++/// panel. The panel is app-modal (Chromium's Mac printing runs it modally). Swift: `printPage()`,
++/// so it does not read as Swift's global `print`.
++- (void)print NS_SWIFT_NAME(printPage());
++
++/// Save Page As formats ([01 §File] observed item; the formats are Chromium's, inferred).
++typedef NS_ENUM(NSInteger, OACSavePageFormat) {
++    /// The HTML file plus a `<name>_files` folder with images, styles and scripts.
++    OACSavePageFormatComplete = 0,
++    /// The HTML file only.
++    OACSavePageFormatHTMLOnly = 1,
++    /// One MHTML file (`.mhtml`).
++    OACSavePageFormatSingleFile = 2,
++};
+ 
+-/// File ▸ Save Page As ([01 §File] observed item): saves the page as a web archive or HTML.
++/// File ▸ Save Page As ([01 §File] observed item): saves the page at `url` (a file URL) as a
++/// complete page. Same as `-savePageToURL:format:completionHandler:` with
++/// `OACSavePageFormatComplete`.
+ - (void)savePageToURL:(NSURL *)url completionHandler:(void (^)(NSError *_Nullable error))completionHandler;
+ 
++/// Saves the page at `url` (a file URL) in `format`. A page that is not HTML (a PDF, an image,
++/// media) is saved as its original file whatever the format, as Chromium does. The save runs as a
++/// download of the tab's profile (it appears in `OACDownloads`); the handler runs once the save
++/// started (nil) or could not start (an error), not when the file is complete.
++- (void)savePageToURL:(NSURL *)url
++               format:(OACSavePageFormat)format
++    completionHandler:(void (^)(NSError *_Nullable error))completionHandler
++    NS_SWIFT_NAME(savePage(to:format:completionHandler:));
++
+ /// View ▸ Developer ▸ Developer Tools / Inspect Elements / JavaScript Console / Network Inspector
+-/// ([01 §View] observed items, plan C15). DevTools opens in its own window owned by the bridge;
+-/// docking into the web panel is a later decision.
++/// ([01 §View] observed items, plan C15). DevTools opens in its own window owned by the bridge,
++/// one per tab, reused by later calls and closed with the tab (inferred: the spec records no
++/// docked DevTools). `panel`: nil = the last panel used, `"elements"` = Inspect Elements (the
++/// Elements panel in element-picking mode), `"console"`, `"network"`.
+ - (void)showDevToolsWithPanel:(nullable NSString *)panel NS_SWIFT_NAME(showDevTools(panel:));
++/// Closes this tab's DevTools window, if open.
++- (void)closeDevTools;
+ /// View ▸ Developer ▸ View Source: asks the delegate for a new tab with `view-source:` +URL.
+ - (void)viewSource;
+ 
+ /// Leaves HTML fullscreen (Escape is handled by the page view itself).
+ - (void)exitFullscreen;
+ 
++// MARK: Picture in Picture (plan C15)
++
++// A video's own Picture in Picture button (or `requestPictureInPicture()`) opens Chromium's
++// floating Picture in Picture window, which the bridge shows like Chrome does; its "back to tab"
++// button reaches the delegate as `tabDidRequestActivation:`. Document Picture in Picture needs a
++// Chrome window type the embedder does not have and is refused.
++
++/// A video of this tab is in Picture in Picture.
++@property (nonatomic, readonly) BOOL hasPictureInPictureVideo;
++/// Puts the tab's video in Picture in Picture. `automatic`: the user left the tab ([03 §Advanced]
++/// observed "Enable Picture in Picture when you leave a video tab"): only a playing video that is
++/// not in Picture in Picture yet, and only where the site's "Automatic Picture-In-Picture" setting
++/// allows it ([06 §12] observed, default Allowed). Not automatic: the tab's single media player,
++/// playing or not. Returns whether the request went to the page (the window opens a moment later;
++/// `hasPictureInPictureVideo` tells when it is up).
++- (BOOL)enterPictureInPictureAutomatically:(BOOL)automatic NS_SWIFT_NAME(enterPictureInPicture(automatically:));
++/// Closes the Picture in Picture window if it shows this tab's video.
++- (void)exitPictureInPicture;
++
+ // MARK: Ad blocking (plan C16)
+ 
+ /// Subresources and frames the built-in ad blocker kept from loading on the current page (all
+diff --git a/openarc/browser/openarc_page_tools.h b/openarc/browser/openarc_page_tools.h
+new file mode 100644
+index 000000000000..2903648b7ead
+--- /dev/null
++++ b/openarc/browser/openarc_page_tools.h
+@@ -0,0 +1,80 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_PAGE_TOOLS_H_
++#define OPENARC_BROWSER_OPENARC_PAGE_TOOLS_H_
++
++#include <string>
++
++#include "base/functional/callback_forward.h"
++
++namespace base {
++class FilePath;
++}
++
++namespace content {
++class WebContents;
++}
++
++namespace openarc {
++
++// Page tools of plan C15 for tabs that live in the embedding app's own UI (no
++// Browser window): DevTools, printing and Save Page As. Menu items: [01 §File]
++// "Save Page As", "Print"; [01 §View] Developer ▸ "Developer Tools", "Inspect
++// Elements", "JavaScript Console", "Network Inspector" (observed names).
++
++// What View ▸ Developer ▸ asks DevTools to do.
++enum class DevToolsCommand {
++  // Developer Tools: open, or bring forward, on the last panel used.
++  kShow,
++  // Inspect Elements: the Elements panel in element-picking mode, like
++  // Chrome's "Inspect elements" command.
++  kInspectElement,
++  // JavaScript Console, Network Inspector: the panel named by `panel`
++  // ("console", "network"; DevTools' own panel ids).
++  kShowPanel,
++};
++
++// Shows Chrome's DevTools front end for `inspected` in a window of its own,
++// one per inspected tab; a second command reuses it. Chrome docks DevTools
++// into its Browser window, which Open Arc does not have, and the spec records
++// nothing about docking, so the front end gets a separate resizable window
++// (inferred). The window closes with its tab, with ⌘W, or with its close
++// button. Does nothing when policy forbids DevTools for the profile.
++void ShowDevTools(content::WebContents* inspected,
++                  DevToolsCommand command,
++                  const std::string& panel);
++
++// Closes the DevTools window of `inspected`, if any.
++void CloseDevTools(content::WebContents* inspected);
++
++// File ▸ Print: the macOS print panel for the page (or the focused frame with
++// a selection). Chrome's print preview is a dialog hosted by a Browser
++// window's tab-modal host, which embedder-owned tabs do not have, so Open Arc
++// runs with print preview disabled (--disable-print-preview) and prints
++// through the system panel, which needs only the page's view. Also what
++// window.print() shows.
++void PrintPage(content::WebContents* contents);
++
++// File ▸ Save Page As formats (Chrome's three; the spec records only the menu
++// item, so the choice is inferred).
++enum class SavePageFormat {
++  kComplete,    // HTML plus a "<name>_files" folder with the resources.
++  kHtmlOnly,    // The page's HTML only.
++  kSingleFile,  // One MHTML file.
++};
++
++// Saves the page at `path`. A page that is not HTML (a PDF, an image, plain
++// media) is saved as its original file instead, whatever `format` says, as
++// Chrome does. The save runs as a download of the tab's profile, so it shows
++// in the downloads list. `done` runs once the save started (true) or could
++// not start (false); it does not wait for the file to be written.
++void SavePage(content::WebContents* contents,
++              const base::FilePath& path,
++              SavePageFormat format,
++              base::OnceCallback<void(bool started)> done);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_PAGE_TOOLS_H_
+diff --git a/openarc/browser/openarc_page_tools.mm b/openarc/browser/openarc_page_tools.mm
+new file mode 100644
+index 000000000000..f01de151199b
+--- /dev/null
++++ b/openarc/browser/openarc_page_tools.mm
+@@ -0,0 +1,708 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_page_tools.h"
++
++#import <AppKit/AppKit.h>
++
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/apple/foundation_util.h"
++#include "base/check.h"
++#include "base/files/file_path.h"
++#include "base/functional/bind.h"
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/devtools/devtools_ui_bindings.h"
++#include "chrome/browser/devtools/devtools_window.h"
++#include "chrome/browser/printing/print_view_manager_common.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
++#include "chrome/browser/ui/webui/devtools/devtools_ui.h"
++#include "components/input/native_web_keyboard_event.h"
++#include "components/search_engines/util.h"
++#include "components/zoom/page_zoom.h"
++#include "components/zoom/zoom_controller.h"
++#include "components/download/public/common/download_url_parameters.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/devtools_agent_host.h"
++#include "content/public/browser/download_manager.h"
++#include "content/public/browser/download_request_utils.h"
++#include "content/public/browser/file_select_listener.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/page_navigator.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/save_page_type.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_delegate.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "content/public/common/url_constants.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/base/window_open_disposition.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
++#include "url/gurl.h"
++
++@class OpenArcDevToolsWindowController;
++
++namespace openarc {
++
++namespace {
++
++// The front end Chrome loads for a tab target (DevToolsWindow::GetDevToolsURL
++// for kFrontendDefault, without "can_dock": there is nothing to dock into).
++constexpr char kFrontendURL[] = "devtools://devtools/bundled/devtools_app.html";
++
++// Initial size of a DevTools window, in points. inferred: Chrome's own
++// undocked default is in this range; the spec records no DevTools window.
++constexpr CGFloat kDevToolsWindowWidth = 900;
++constexpr CGFloat kDevToolsWindowHeight = 640;
++
++class DevToolsHost;
++
++// Keeps one DevToolsHost per inspected tab. Owned by the inspected
++// WebContents, so the window goes away with its tab.
++class DevToolsHostOwner
++    : public content::WebContentsUserData<DevToolsHostOwner> {
++ public:
++  ~DevToolsHostOwner() override;
++
++  DevToolsHost* host() { return host_.get(); }
++  void SetHost(std::unique_ptr<DevToolsHost> host);
++  // Destroys the host from a posted task (it may be on the stack).
++  void ResetHostSoon();
++
++ private:
++  explicit DevToolsHostOwner(content::WebContents* inspected);
++  friend class content::WebContentsUserData<DevToolsHostOwner>;
++
++  std::unique_ptr<DevToolsHost> host_;
++  base::WeakPtrFactory<DevToolsHostOwner> weak_factory_{this};
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++// One DevTools front end (its own WebContents) in an NSWindow, attached to the
++// inspected tab. Plays the role of Chrome's undocked DevToolsWindow for a tab
++// that has no Browser: it serves the front end's bindings (through a
++// forwarding DevToolsUIBindings::Delegate, which the bindings own) and is the
++// delegate of the front end's WebContents.
++class DevToolsHost : public content::WebContentsDelegate,
++                     public content::WebContentsObserver {
++ public:
++  DevToolsHost(content::WebContents* inspected, DevToolsHostOwner* owner);
++  DevToolsHost(const DevToolsHost&) = delete;
++  DevToolsHost& operator=(const DevToolsHost&) = delete;
++  ~DevToolsHost() override;
++
++  // Loads the front end on `panel` ("" = last used), attaches it to the
++  // inspected tab and shows the window. Returns false when DevTools is not
++  // allowed for the profile.
++  bool Start(const std::string& panel);
++  // Runs `command` now if the front end is loaded, else once it is.
++  void Run(DevToolsCommand command, const std::string& panel);
++  // Closes the window; the owner then destroys this host.
++  void Close();
++  // The window's close button or ⌘W.
++  void WindowWillClose();
++
++  // Called by the bindings (DevToolsUIBindings::Delegate, forwarded).
++  content::WebContents* inspected() { return inspected_.get(); }
++  void ActivateWindow();
++  void OpenInNewTab(const std::string& url);
++  void OpenSearchResultsInNewTab(const std::string& query);
++  void OnLoadCompleted();
++  void ConnectionReady();
++
++  // content::WebContentsDelegate (the front end's contents):
++  content::WebContents* OpenURLFromTab(
++      content::WebContents* source,
++      const content::OpenURLParams& params,
++      base::OnceCallback<void(content::NavigationHandle&)>
++          navigation_handle_callback) override;
++  void ActivateContents(content::WebContents* contents) override {
++    ActivateWindow();
++  }
++  void CloseContents(content::WebContents* source) override { Close(); }
++  void ContentsZoomChange(bool zoom_in) override;
++  bool HandleKeyboardEvent(content::WebContents* source,
++                           const input::NativeWebKeyboardEvent& event) override;
++  void RunFileChooser(content::RenderFrameHost* render_frame_host,
++                      scoped_refptr<content::FileSelectListener> listener,
++                      const blink::mojom::FileChooserParams& params) override;
++
++  // content::WebContentsObserver (the front end's contents): a new document of
++  // the front end has new bindings.
++  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
++                              content::RenderFrameHost* new_host) override;
++
++ private:
++  void RunNow(DevToolsCommand command, const std::string& panel);
++  void MaybeBecomeReady();
++  void UpdateTitle();
++
++  base::WeakPtr<content::WebContents> inspected_;
++  raw_ptr<DevToolsHostOwner> owner_;
++  std::unique_ptr<content::WebContents> frontend_;
++  // Owned by the front end's WebContents (its DevToolsUI).
++  raw_ptr<DevToolsUIBindings> bindings_ = nullptr;
++  OpenArcDevToolsWindowController* __strong window_controller_ = nil;
++  // The front end takes commands once its document loaded and its connection
++  // to the inspected tab is up (it has its root target); before that, an
++  // "enterInspectElementMode" is lost.
++  bool document_loaded_ = false;
++  bool connection_ready_ = false;
++  bool loaded_ = false;
++  bool closing_ = false;
++  bool has_pending_command_ = false;
++  DevToolsCommand pending_command_ = DevToolsCommand::kShow;
++  std::string pending_panel_;
++  base::WeakPtrFactory<DevToolsHost> weak_factory_{this};
++};
++
++// The delegate the front end's bindings own. Forwards to the host while it
++// lives; everything Chrome's docked-window features need (infobars, eye
++// dropper, docking, certificate viewer) is unsupported.
++class DevToolsBindingsForwarder : public DevToolsUIBindings::Delegate {
++ public:
++  explicit DevToolsBindingsForwarder(base::WeakPtr<DevToolsHost> host)
++      : host_(std::move(host)) {}
++
++  content::WebContents* GetInspectedWebContents() override {
++    return host_ ? host_->inspected() : nullptr;
++  }
++  void ActivateWindow() override {
++    if (host_) {
++      host_->ActivateWindow();
++    }
++  }
++  void CloseWindow() override {
++    if (host_) {
++      host_->Close();
++    }
++  }
++  void Inspect(scoped_refptr<content::DevToolsAgentHost> host) override {}
++  void SetInspectedPageBounds(const gfx::Rect& rect) override {}
++  void InspectElementCompleted() override {}
++  void SetIsDocked(bool is_docked) override {}
++  void OpenInNewTab(const std::string& url) override {
++    if (host_) {
++      host_->OpenInNewTab(url);
++    }
++  }
++  void OpenSearchResultsInNewTab(const std::string& query) override {
++    if (host_) {
++      host_->OpenSearchResultsInNewTab(query);
++    }
++  }
++  void SetWhitelistedShortcuts(const std::string& message) override {}
++  void SetEyeDropperActive(bool active) override {}
++  void OpenNodeFrontend() override {}
++  void InspectedContentsClosing() override {
++    if (host_) {
++      host_->Close();
++    }
++  }
++  void OnLoadCompleted() override {
++    if (host_) {
++      host_->OnLoadCompleted();
++    }
++  }
++  void ReadyForTest() override {}
++  void ConnectionReady() override {
++    if (host_) {
++      host_->ConnectionReady();
++    }
++  }
++  void SetOpenNewWindowForPopups(bool value) override {}
++  infobars::ContentInfoBarManager* GetInfoBarManager() override {
++    return nullptr;
++  }
++  void RenderProcessGone(bool crashed) override {}
++  void ShowCertificateViewer(const std::string& cert_chain) override {}
++  int GetDockStateForLogging() override { return 0; }
++  int GetOpenedByForLogging() override { return 0; }
++  int GetClosedByForLogging() override { return 0; }
++
++ private:
++  base::WeakPtr<DevToolsHost> host_;
++};
++
++}  // namespace
++}  // namespace openarc
++
++// The NSWindow side of a DevToolsHost.
++@interface OpenArcDevToolsWindowController : NSObject <NSWindowDelegate>
++- (instancetype)initWithHost:(openarc::DevToolsHost*)host
++                        view:(NSView*)view;
++@property(nonatomic, readonly) NSWindow* window;
++- (void)detachHost;
++@end
++
++@implementation OpenArcDevToolsWindowController {
++  raw_ptr<openarc::DevToolsHost> _host;
++  NSWindow* __strong _window;
++}
++
++- (instancetype)initWithHost:(openarc::DevToolsHost*)host view:(NSView*)view {
++  if ((self = [super init])) {
++    _host = host;
++    NSRect frame =
++        NSMakeRect(0, 0, openarc::kDevToolsWindowWidth,
++                   openarc::kDevToolsWindowHeight);
++    _window = [[NSWindow alloc]
++        initWithContentRect:frame
++                  styleMask:NSWindowStyleMaskTitled |
++                            NSWindowStyleMaskClosable |
++                            NSWindowStyleMaskMiniaturizable |
++                            NSWindowStyleMaskResizable
++                    backing:NSBackingStoreBuffered
++                      defer:NO];
++    _window.releasedWhenClosed = NO;
++    _window.delegate = self;
++    _window.minSize = NSMakeSize(400, 240);
++    // Frame remembered across launches (inferred convenience).
++    [_window setFrameAutosaveName:@"OpenArcDevToolsWindow"];
++    if (![_window setFrameUsingName:@"OpenArcDevToolsWindow"]) {
++      [_window center];
++    }
++    view.frame = _window.contentView.bounds;
++    view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
++    [_window.contentView addSubview:view];
++  }
++  return self;
++}
++
++- (NSWindow*)window {
++  return _window;
++}
++
++- (void)detachHost {
++  _host = nullptr;
++  _window.delegate = nil;
++}
++
++- (void)windowWillClose:(NSNotification*)notification {
++  if (openarc::DevToolsHost* host = _host) {
++    _host = nullptr;
++    host->WindowWillClose();
++  }
++}
++
++@end
++
++namespace openarc {
++namespace {
++
++DevToolsHostOwner::DevToolsHostOwner(content::WebContents* inspected)
++    : content::WebContentsUserData<DevToolsHostOwner>(*inspected) {}
++
++DevToolsHostOwner::~DevToolsHostOwner() = default;
++
++void DevToolsHostOwner::SetHost(std::unique_ptr<DevToolsHost> host) {
++  host_ = std::move(host);
++}
++
++void DevToolsHostOwner::ResetHostSoon() {
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::WeakPtr<DevToolsHostOwner> owner) {
++                       if (owner) {
++                         owner->SetHost(nullptr);
++                       }
++                     },
++                     weak_factory_.GetWeakPtr()));
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(DevToolsHostOwner);
++
++DevToolsHost::DevToolsHost(content::WebContents* inspected,
++                           DevToolsHostOwner* owner)
++    : inspected_(inspected->GetWeakPtr()), owner_(owner) {}
++
++DevToolsHost::~DevToolsHost() {
++  closing_ = true;
++  [window_controller_ detachHost];
++  [window_controller_.window orderOut:nil];
++  [window_controller_.window close];
++  window_controller_ = nil;
++  if (bindings_) {
++    bindings_->Detach();
++  }
++  // The bindings belong to the front end's WebContents: drop the pointer
++  // before they go (raw_ptr must not dangle).
++  bindings_ = nullptr;
++  Observe(nullptr);
++  if (frontend_) {
++    frontend_->SetDelegate(nullptr);
++  }
++  // Destroys DevToolsUI, its bindings and their forwarding delegate.
++  frontend_.reset();
++}
++
++bool DevToolsHost::Start(const std::string& panel) {
++  content::WebContents* inspected = inspected_.get();
++  if (!inspected) {
++    return false;
++  }
++  Profile* profile =
++      Profile::FromBrowserContext(inspected->GetBrowserContext());
++  if (!DevToolsWindow::AllowDevToolsFor(profile, inspected)) {
++    return false;
++  }
++  frontend_ =
++      content::WebContents::Create(content::WebContents::CreateParams(profile));
++  frontend_->SetDelegate(this);
++  Observe(frontend_.get());
++  // DevTools zooms its own UI with PageZoom (⌘+ / ⌘- inside the front end).
++  zoom::ZoomController::CreateForWebContents(frontend_.get());
++  zoom::ZoomController::FromWebContents(frontend_.get())
++      ->SetShowsNotificationBubble(false);
++
++  // The URL Chrome builds for a tab target, sanitized the same way.
++  std::string url = std::string(kFrontendURL) +
++                    "?remoteBase=" + DevToolsUI::GetRemoteBaseURL().spec() +
++                    "&targetType=tab";
++  if (!panel.empty()) {
++    url += "&panel=" + panel;
++  }
++  frontend_->GetController().LoadURL(
++      DevToolsUIBindings::SanitizeFrontendURL(GURL(url)), content::Referrer(),
++      ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
++  bindings_ = DevToolsUIBindings::ForWebContents(frontend_.get());
++  if (!bindings_) {
++    return false;
++  }
++  // The bindings own (and delete) their delegate.
++  bindings_->SetDelegate(
++      new DevToolsBindingsForwarder(weak_factory_.GetWeakPtr()));
++  bindings_->AttachTo(content::DevToolsAgentHost::GetOrCreateForTab(inspected));
++
++  window_controller_ = [[OpenArcDevToolsWindowController alloc]
++      initWithHost:this
++              view:frontend_->GetNativeView().GetNativeNSView()];
++  UpdateTitle();
++  [window_controller_.window makeKeyAndOrderFront:nil];
++  frontend_->Focus();
++  return true;
++}
++
++void DevToolsHost::Run(DevToolsCommand command, const std::string& panel) {
++  if (!loaded_) {
++    has_pending_command_ = true;
++    pending_command_ = command;
++    pending_panel_ = panel;
++    return;
++  }
++  RunNow(command, panel);
++}
++
++void DevToolsHost::RunNow(DevToolsCommand command, const std::string& panel) {
++  ActivateWindow();
++  if (!bindings_) {
++    return;
++  }
++  switch (command) {
++    case DevToolsCommand::kShow:
++      break;
++    case DevToolsCommand::kInspectElement:
++      // DevToolsWindow::DoAction for kInspect.
++      bindings_->CallClientMethod("DevToolsAPI", "enterInspectElementMode");
++      break;
++    case DevToolsCommand::kShowPanel:
++      bindings_->CallClientMethod("DevToolsAPI", "showPanel",
++                                  base::Value(panel));
++      break;
++  }
++}
++
++void DevToolsHost::OnLoadCompleted() {
++  document_loaded_ = true;
++  UpdateTitle();
++  MaybeBecomeReady();
++}
++
++void DevToolsHost::ConnectionReady() {
++  connection_ready_ = true;
++  MaybeBecomeReady();
++}
++
++void DevToolsHost::MaybeBecomeReady() {
++  if (loaded_ || !document_loaded_ || !connection_ready_) {
++    return;
++  }
++  loaded_ = true;
++  if (has_pending_command_) {
++    has_pending_command_ = false;
++    RunNow(pending_command_, pending_panel_);
++  }
++}
++
++void DevToolsHost::ActivateWindow() {
++  if (closing_) {
++    return;
++  }
++  UpdateTitle();
++  [window_controller_.window makeKeyAndOrderFront:nil];
++  if (frontend_) {
++    frontend_->Focus();
++  }
++}
++
++void DevToolsHost::UpdateTitle() {
++  content::WebContents* inspected = inspected_.get();
++  if (!inspected || !window_controller_) {
++    return;
++  }
++  // inferred: Chrome titles its undocked window "DevTools - <url>".
++  std::string url = inspected->GetLastCommittedURL().spec();
++  window_controller_.window.title =
++      base::SysUTF8ToNSString("DevTools - " + url);
++}
++
++void DevToolsHost::Close() {
++  if (closing_) {
++    return;
++  }
++  closing_ = true;
++  [window_controller_ detachHost];
++  [window_controller_.window orderOut:nil];
++  owner_->ResetHostSoon();
++}
++
++void DevToolsHost::WindowWillClose() {
++  if (closing_) {
++    return;
++  }
++  closing_ = true;
++  owner_->ResetHostSoon();
++}
++
++void DevToolsHost::OpenInNewTab(const std::string& url) {
++  content::WebContents* inspected = inspected_.get();
++  if (!inspected) {
++    return;
++  }
++  // A link in DevTools (a resource, documentation): a new tab next to the
++  // inspected page; the tab's delegate (the shell) places it.
++  inspected->OpenURL(content::OpenURLParams(
++                         GURL(url), content::Referrer(),
++                         WindowOpenDisposition::NEW_FOREGROUND_TAB,
++                         ui::PAGE_TRANSITION_LINK,
++                         /*is_renderer_initiated=*/false),
++                     /*navigation_handle_callback=*/{});
++}
++
++void DevToolsHost::OpenSearchResultsInNewTab(const std::string& query) {
++  content::WebContents* inspected = inspected_.get();
++  if (!inspected) {
++    return;
++  }
++  TemplateURLService* service = TemplateURLServiceFactory::GetForProfile(
++      Profile::FromBrowserContext(inspected->GetBrowserContext()));
++  if (!service) {
++    return;
++  }
++  OpenInNewTab(
++      GetDefaultSearchURLForSearchTerms(service, base::UTF8ToUTF16(query))
++          .spec());
++}
++
++content::WebContents* DevToolsHost::OpenURLFromTab(
++    content::WebContents* source,
++    const content::OpenURLParams& params,
++    base::OnceCallback<void(content::NavigationHandle&)>
++        navigation_handle_callback) {
++  // The front end reloading itself stays in its window (DevToolsWindow does
++  // the same); anything else opens next to the inspected page.
++  if (params.url.SchemeIs(content::kChromeDevToolsScheme)) {
++    frontend_->GetController().Reload(content::ReloadType::NORMAL, false);
++    return frontend_.get();
++  }
++  content::WebContents* inspected = inspected_.get();
++  if (!inspected) {
++    return nullptr;
++  }
++  content::OpenURLParams modified = params;
++  modified.referrer = content::Referrer();
++  if (modified.disposition == WindowOpenDisposition::CURRENT_TAB) {
++    modified.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++  }
++  return inspected->OpenURL(modified, /*navigation_handle_callback=*/{});
++}
++
++void DevToolsHost::ContentsZoomChange(bool zoom_in) {
++  zoom::PageZoom::Zoom(frontend_.get(), zoom_in ? content::PAGE_ZOOM_IN
++                                                : content::PAGE_ZOOM_OUT);
++}
++
++bool DevToolsHost::HandleKeyboardEvent(
++    content::WebContents* source,
++    const input::NativeWebKeyboardEvent& event) {
++  // Keys DevTools did not use: ⌘W closes the window (the window's own key
++  // equivalent), the rest go to the app's menu (View ▸ Developer ▸ items keep
++  // working while DevTools has focus).
++  if (event.skip_if_unhandled) {
++    return false;
++  }
++  NSEvent* ns_event = event.os_event.Get();
++  if (!ns_event || ns_event.type != NSEventTypeKeyDown) {
++    return false;
++  }
++  if ((ns_event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) ==
++          NSEventModifierFlagCommand &&
++      [ns_event.charactersIgnoringModifiers isEqualToString:@"w"]) {
++    [window_controller_.window performClose:nil];
++    return true;
++  }
++  return [NSApp.mainMenu performKeyEquivalent:ns_event];
++}
++
++void DevToolsHost::RunFileChooser(
++    content::RenderFrameHost* render_frame_host,
++    scoped_refptr<content::FileSelectListener> listener,
++    const blink::mojom::FileChooserParams& params) {
++  // DevTools' own file inputs (import a HAR, a snippet): not supported in the
++  // separate window yet (plan C15 keeps DevTools' save/load-to-disk features
++  // out of scope).
++  listener->FileSelectionCanceled();
++}
++
++void DevToolsHost::RenderFrameHostChanged(content::RenderFrameHost* old_host,
++                                          content::RenderFrameHost* new_host) {
++  // DevToolsWindow::MainWebContentRenderFrameHostChanged: a new document of
++  // the front end has new bindings; move our delegate over.
++  DevToolsUIBindings* new_bindings =
++      DevToolsUIBindings::ForWebContents(frontend_.get());
++  if (!new_bindings || new_bindings == bindings_) {
++    return;
++  }
++  bindings_->TransferDelegate(*new_bindings);
++  bindings_ = new_bindings;
++}
++
++}  // namespace
++
++void ShowDevTools(content::WebContents* inspected,
++                  DevToolsCommand command,
++                  const std::string& panel) {
++  if (!inspected) {
++    return;
++  }
++  DevToolsHostOwner::CreateForWebContents(inspected);
++  DevToolsHostOwner* owner = DevToolsHostOwner::FromWebContents(inspected);
++  if (!owner->host()) {
++    auto host = std::make_unique<DevToolsHost>(inspected, owner);
++    // Open on the requested panel; Inspect Elements also picks an element.
++    const std::string initial_panel =
++        command == DevToolsCommand::kShowPanel        ? panel
++        : command == DevToolsCommand::kInspectElement ? "elements"
++                                                      : std::string();
++    if (!host->Start(initial_panel)) {
++      return;
++    }
++    owner->SetHost(std::move(host));
++    if (command != DevToolsCommand::kInspectElement) {
++      return;
++    }
++  }
++  owner->host()->Run(command, panel);
++}
++
++void CloseDevTools(content::WebContents* inspected) {
++  if (!inspected) {
++    return;
++  }
++  if (DevToolsHostOwner* owner = DevToolsHostOwner::FromWebContents(inspected);
++      owner && owner->host()) {
++    owner->host()->Close();
++  }
++}
++
++void PrintPage(content::WebContents* contents) {
++  if (!contents) {
++    return;
++  }
++  printing::StartPrint(contents,
++                       /*print_preview_disabled=*/true,
++                       /*has_selection=*/false);
++}
++
++void SavePage(content::WebContents* contents,
++              const base::FilePath& path,
++              SavePageFormat format,
++              base::OnceCallback<void(bool started)> done) {
++  if (!contents || path.empty()) {
++    std::move(done).Run(false);
++    return;
++  }
++  if (!contents->IsSavable()) {
++    // Not a document Blink can serialize (a PDF, an image, a video): save the
++    // original file, as Chrome's Save Page As does, as a download forced to
++    // `path` (no second "save as" prompt).
++    std::unique_ptr<download::DownloadUrlParameters> download =
++        content::DownloadRequestUtils::CreateDownloadForWebContentsMainFrame(
++            contents, contents->GetLastCommittedURL(),
++            net::DefineNetworkTrafficAnnotation("openarc_save_page_as", R"(
++              semantics {
++                sender: "Open Arc Save Page As"
++                description:
++                  "Saves the current page's original file (a PDF, an image or "
++                  "media) to the location the user chose."
++                trigger: "File > Save Page As on a page that is not HTML."
++                data: "None."
++                destination: WEBSITE
++              }
++              policy {
++                cookies_allowed: YES
++                cookies_store: "user"
++                setting: "None."
++                policy_exception_justification: "Not implemented."
++              })"));
++    // Keep the original file's type: "page.html" for a PDF becomes "page.pdf".
++    base::FilePath target = path;
++    const base::FilePath::StringType original_extension =
++        base::FilePath::FromUTF8Unsafe(
++            contents->GetLastCommittedURL().ExtractFileName())
++            .Extension();
++    if (!original_extension.empty()) {
++      target = target.ReplaceExtension(original_extension);
++    } else if (contents->GetContentsMimeType() == "application/pdf") {
++      target = target.ReplaceExtension(FILE_PATH_LITERAL(".pdf"));
++    }
++    download->set_file_path(target);
++    download->set_prompt(false);
++    contents->GetBrowserContext()->GetDownloadManager()->DownloadUrl(
++        std::move(download));
++    std::move(done).Run(true);
++    return;
++  }
++  content::SavePageType type = content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML;
++  switch (format) {
++    case SavePageFormat::kComplete:
++      type = content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML;
++      break;
++    case SavePageFormat::kHtmlOnly:
++      type = content::SAVE_PAGE_TYPE_AS_ONLY_HTML;
++      break;
++    case SavePageFormat::kSingleFile:
++      type = content::SAVE_PAGE_TYPE_AS_MHTML;
++      break;
++  }
++  // The resources folder of a complete page: "<name>_files" next to it, as
++  // Chrome names it.
++  const base::FilePath dir =
++      path.DirName().Append(path.RemoveExtension().BaseName().value() +
++                            FILE_PATH_LITERAL("_files"));
++  std::move(done).Run(contents->SavePage(path, dir, type));
++}
++
++}  // namespace openarc

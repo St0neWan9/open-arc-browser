@@ -118,22 +118,33 @@ public final class ChromiumTab: BrowserTab, @unchecked Sendable {
         await core.perform { $0.performEditCommand(command.rawValue) }
     }
 
-    /// Not implemented by the bridge yet (C15): does nothing. (`-[OACTab print]` is an empty stub
-    /// today; C15 wires it here.)
-    public func print() async {}
-
-    /// Not implemented by the bridge yet (C15).
-    public func savePage(to fileURL: URL) async throws {
-        throw EngineError.unsupported("savePage")
+    /// The macOS print panel (C15; the bridge runs Chromium without its print preview).
+    public func print() async {
+        await core.perform { tab in tab.printPage() }
     }
 
-    /// Not implemented by the bridge yet (C15): does nothing.
+    /// C15: Chromium's Save Page As, run as a download of the tab's profile.
+    public func savePage(to fileURL: URL, format: SavePageFormat) async throws {
+        try await core.savePage(to: fileURL, format: format)
+    }
+
+    /// C15: DevTools in its own window (one per tab, owned by the bridge).
     public func showDevTools(_ panel: DevToolsPanel?) async {
         await core.perform { $0.showDevTools(panel: panel?.rawValue) }
     }
 
     public func viewSource() async {
         await core.perform { $0.viewSource() }
+    }
+
+    /// C15: Chromium's Picture in Picture window.
+    @discardableResult
+    public func enterPictureInPicture(automatically: Bool) async -> Bool {
+        await core.enterPictureInPicture(automatically: automatically)
+    }
+
+    public func exitPictureInPicture() async {
+        await core.perform { $0.exitPictureInPicture() }
     }
 
     public func exitFullscreen() async {
@@ -289,6 +300,28 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         }
     }
 
+    func savePage(to fileURL: URL, format: SavePageFormat) async throws {
+        guard let tab, !tab.isClosed else { throw EngineError.tabClosed(id) }
+        guard fileURL.isFileURL, let bridgeFormat = OACSavePageFormat(rawValue: format.rawValue) else {
+            throw EngineError.invalidArgument
+        }
+        let id = self.id
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            tab.savePage(to: fileURL, format: bridgeFormat) { error in
+                if let error {
+                    continuation.resume(throwing: EngineError(bridge: error, tabID: id))
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func enterPictureInPicture(automatically: Bool) -> Bool {
+        guard let tab, !tab.isClosed else { return false }
+        return tab.enterPictureInPicture(automatically: automatically)
+    }
+
     func selectedText() async -> String {
         guard let tab, !tab.isClosed else { return "" }
         return await withCheckedContinuation { continuation in
@@ -394,6 +427,10 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
 
     func tabDidRequestClose(_ tab: OACTab) {
         channel.send(.closeRequested)
+    }
+
+    func tabDidRequestActivation(_ tab: OACTab) {
+        channel.send(.activationRequested)
     }
 
     func tab(_ tab: OACTab, didRequestNewTab request: OACNewTabRequest) {

@@ -273,22 +273,69 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// already; these exist for the command bar, which is not in the responder chain.
 - (void)performEditCommand:(NSString *)command NS_SWIFT_NAME(performEditCommand(_:));
 
-/// File ▸ Print ([01 §File] observed item); Chromium's print preview is replaced by the macOS
-/// print panel (plan C15).
-- (void)print;
+/// File ▸ Print ([01 §File] observed item, plan C15): the macOS print panel for the page (or for
+/// the focused frame when it has a selection). Chromium's print preview needs a Browser window's
+/// tab-modal host, so the bridge runs with print preview off; `window.print()` shows the same
+/// panel. The panel is app-modal (Chromium's Mac printing runs it modally). Swift: `printPage()`,
+/// so it does not read as Swift's global `print`.
+- (void)print NS_SWIFT_NAME(printPage());
 
-/// File ▸ Save Page As ([01 §File] observed item): saves the page as a web archive or HTML.
+/// Save Page As formats ([01 §File] observed item; the formats are Chromium's, inferred).
+typedef NS_ENUM(NSInteger, OACSavePageFormat) {
+    /// The HTML file plus a `<name>_files` folder with images, styles and scripts.
+    OACSavePageFormatComplete = 0,
+    /// The HTML file only.
+    OACSavePageFormatHTMLOnly = 1,
+    /// One MHTML file (`.mhtml`).
+    OACSavePageFormatSingleFile = 2,
+};
+
+/// File ▸ Save Page As ([01 §File] observed item): saves the page at `url` (a file URL) as a
+/// complete page. Same as `-savePageToURL:format:completionHandler:` with
+/// `OACSavePageFormatComplete`.
 - (void)savePageToURL:(NSURL *)url completionHandler:(void (^)(NSError *_Nullable error))completionHandler;
 
+/// Saves the page at `url` (a file URL) in `format`. A page that is not HTML (a PDF, an image,
+/// media) is saved as its original file whatever the format, as Chromium does. The save runs as a
+/// download of the tab's profile (it appears in `OACDownloads`); the handler runs once the save
+/// started (nil) or could not start (an error), not when the file is complete.
+- (void)savePageToURL:(NSURL *)url
+               format:(OACSavePageFormat)format
+    completionHandler:(void (^)(NSError *_Nullable error))completionHandler
+    NS_SWIFT_NAME(savePage(to:format:completionHandler:));
+
 /// View ▸ Developer ▸ Developer Tools / Inspect Elements / JavaScript Console / Network Inspector
-/// ([01 §View] observed items, plan C15). DevTools opens in its own window owned by the bridge;
-/// docking into the web panel is a later decision.
+/// ([01 §View] observed items, plan C15). DevTools opens in its own window owned by the bridge,
+/// one per tab, reused by later calls and closed with the tab (inferred: the spec records no
+/// docked DevTools). `panel`: nil = the last panel used, `"elements"` = Inspect Elements (the
+/// Elements panel in element-picking mode), `"console"`, `"network"`.
 - (void)showDevToolsWithPanel:(nullable NSString *)panel NS_SWIFT_NAME(showDevTools(panel:));
+/// Closes this tab's DevTools window, if open.
+- (void)closeDevTools;
 /// View ▸ Developer ▸ View Source: asks the delegate for a new tab with `view-source:` +URL.
 - (void)viewSource;
 
 /// Leaves HTML fullscreen (Escape is handled by the page view itself).
 - (void)exitFullscreen;
+
+// MARK: Picture in Picture (plan C15)
+
+// A video's own Picture in Picture button (or `requestPictureInPicture()`) opens Chromium's
+// floating Picture in Picture window, which the bridge shows like Chrome does; its "back to tab"
+// button reaches the delegate as `tabDidRequestActivation:`. Document Picture in Picture needs a
+// Chrome window type the embedder does not have and is refused.
+
+/// A video of this tab is in Picture in Picture.
+@property (nonatomic, readonly) BOOL hasPictureInPictureVideo;
+/// Puts the tab's video in Picture in Picture. `automatic`: the user left the tab ([03 §Advanced]
+/// observed "Enable Picture in Picture when you leave a video tab"): only a playing video that is
+/// not in Picture in Picture yet, and only where the site's "Automatic Picture-In-Picture" setting
+/// allows it ([06 §12] observed, default Allowed). Not automatic: the tab's single media player,
+/// playing or not. Returns whether the request went to the page (the window opens a moment later;
+/// `hasPictureInPictureVideo` tells when it is up).
+- (BOOL)enterPictureInPictureAutomatically:(BOOL)automatic NS_SWIFT_NAME(enterPictureInPicture(automatically:));
+/// Closes the Picture in Picture window if it shows this tab's video.
+- (void)exitPictureInPicture;
 
 // MARK: Ad blocking (plan C16)
 

@@ -360,6 +360,16 @@ public final class SettingsModel: ObservableObject {
         }
     }
 
+    /// "Enable Picture in Picture when you leave a video tab". [03 §Advanced] observed, on by
+    /// default; a per-device app setting (plan C15).
+    public var entersPictureInPictureOnLeavingVideoTab: Bool {
+        get { preferences.entersPictureInPictureOnLeavingVideoTab }
+        set {
+            objectWillChange.send()
+            preferences.entersPictureInPictureOnLeavingVideoTab = newValue
+        }
+    }
+
     // MARK: Ad blocking (plan C16)
 
     /// The engine's ad blocker; nil until `loadAdBlocking()` found a ruleset (then the row shows).

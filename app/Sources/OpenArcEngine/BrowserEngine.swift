@@ -210,6 +210,10 @@ public enum TabEvent: Hashable, Sendable {
     /// agreed). The tab stays open: the shell updates the model through `TreeOps` and then calls
     /// `BrowserEngine.closeTab`. Bridge: `-[OACTabDelegate tabDidRequestClose:]`.
     case closeRequested
+    /// The page asked to be shown: `window.focus()`, or the "back to tab" button of its Picture
+    /// in Picture window (plan C15). The shell selects the tab and brings its window forward
+    /// (inferred). Bridge: `-[OACTabDelegate tabDidRequestActivation:]`.
+    case activationRequested
     /// The engine withdrew an unanswered dialog request (navigation, the page gave up). The shell
     /// removes its view; a later answer is ignored. Bridge: `tab:didCancelDialogRequest:`.
     case dialogCancelled(UUID)
@@ -410,14 +414,25 @@ public protocol BrowserTab: AnyObject, Sendable {
     func selectedText() async -> String
     /// Edit menu commands on the focused frame ([01 §Edit] observed items).
     func perform(_ command: EditCommand) async
-    /// File ▸ Print ([01 §File] observed item).
+    /// File ▸ Print ([01 §File] observed item): the engine's print UI for the page (the Chromium
+    /// engine shows the macOS print panel, plan C15).
     func print() async
-    /// File ▸ Save Page As ([01 §File] observed item).
-    func savePage(to fileURL: URL) async throws
+    /// File ▸ Save Page As ([01 §File] observed item): writes the page to `fileURL` in `format`. A
+    /// page that is not HTML (a PDF, an image, media) is saved as its original file whatever the
+    /// format. Throws when the save cannot start; finishing is not awaited.
+    func savePage(to fileURL: URL, format: SavePageFormat) async throws
     /// View ▸ Developer ▸ items ([01 §View] observed). nil opens the last panel used.
     func showDevTools(_ panel: DevToolsPanel?) async
     /// View ▸ Developer ▸ View Source: the engine asks for a new tab (`EngineEvent.newTabRequested`).
     func viewSource() async
+    /// Puts the page's video in Picture in Picture (plan C15). `automatically`: the user left the
+    /// tab ([03 §Advanced] observed "Enable Picture in Picture when you leave a video tab"), so
+    /// only a playing video qualifies and the site's "Automatic Picture-In-Picture" setting
+    /// ([06 §12] observed) must allow it. Returns whether a video was asked to enter.
+    @discardableResult
+    func enterPictureInPicture(automatically: Bool) async -> Bool
+    /// Closes the Picture in Picture window if it shows this tab's video.
+    func exitPictureInPicture() async
     /// Leaves HTML fullscreen.
     func exitFullscreen() async
 
@@ -435,5 +450,10 @@ extension BrowserTab {
     /// Normal reload (View ▸ Refresh the Page).
     public func reload() async throws {
         try await reload(bypassingCache: false)
+    }
+
+    /// Save Page As with the default format (a complete page).
+    public func savePage(to fileURL: URL) async throws {
+        try await savePage(to: fileURL, format: .complete)
     }
 }

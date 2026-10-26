@@ -275,11 +275,11 @@ final class FindAndDeveloperTests: XCTestCase {
         var suggested: String?
         model.chooseSavePageLocation = { name in
             suggested = name
-            return target
+            return SavePageChoice(url: target)
         }
         model.savePageAs()
         await model.controller.settleEngineWork()
-        XCTAssertEqual(live.commands.last, .savePage(target))
+        XCTAssertEqual(live.commands.last, .savePage(target, .complete))
         XCTAssertEqual(suggested, "doc.example.html", "the page title names the file")
 
         // Cancelling the panel saves nothing.
@@ -287,6 +287,58 @@ final class FindAndDeveloperTests: XCTestCase {
         model.savePageAs()
         await model.controller.settleEngineWork()
         XCTAssertEqual(live.commands.filter { if case .savePage = $0 { return true } else { return false } }.count, 1)
+    }
+
+    /// Save Page As passes the chosen format to the engine. [01 §File] observed item; the formats
+    /// and their names are Chromium's (inferred). C15.
+    func testSavePageAsPassesTheFormat() async throws {
+        let (_, live) = try await openPage("https://doc.example")
+        let target = URL(fileURLWithPath: "/tmp/openarc-c15/doc.mhtml")
+        model.chooseSavePageLocation = { _ in SavePageChoice(url: target, format: .singleFile) }
+        model.savePageAs()
+        await model.controller.settleEngineWork()
+        XCTAssertEqual(live.commands.last, .savePage(target, .singleFile))
+        XCTAssertEqual(SavePageFormat.allCases.map(SavePagePanel.title(of:)),
+                       ["Web Page, Complete", "Web Page, HTML Only", "Web Page, Single File"])
+    }
+
+    // MARK: - Picture in Picture (C15)
+
+    /// Leaving a tab whose video plays puts it in Picture in Picture; coming back closes it.
+    /// [03 §Advanced] observed "Enable Picture in Picture when you leave a video tab" (on).
+    func testLeavingAVideoTabEntersPictureInPicture() async throws {
+        let (videoID, video) = try await openPage("https://video.example")
+        video.simulateVideo(playing: true)
+        let (otherID, _) = try await openPage("https://other.example")
+        try await waitUntil { video.commands.contains(.enterPictureInPicture(automatically: true)) }
+        XCTAssertTrue(video.isPictureInPictureActive)
+
+        model.sidebar.selectTab(videoID)
+        try await waitUntil { video.commands.contains(.exitPictureInPicture) }
+        XCTAssertFalse(video.isPictureInPictureActive)
+        XCTAssertNotEqual(videoID, otherID)
+    }
+
+    /// The Advanced toggle off: leaving the tab leaves the video alone.
+    func testAutomaticPictureInPictureFollowsTheSetting() async throws {
+        model.dependencies.preferences.entersPictureInPictureOnLeavingVideoTab = false
+        defer { model.dependencies.preferences.entersPictureInPictureOnLeavingVideoTab = true }
+        let (_, video) = try await openPage("https://video.example")
+        video.simulateVideo(playing: true)
+        _ = try await openPage("https://other.example")
+        await model.controller.settleEngineWork()
+        XCTAssertFalse(video.commands.contains(.enterPictureInPicture(automatically: true)))
+        XCTAssertFalse(video.isPictureInPictureActive)
+    }
+
+    /// "Back to tab" in the Picture in Picture window (`TabEvent.activationRequested`) selects
+    /// the tab again. inferred.
+    func testActivationRequestSelectsTheTab() async throws {
+        let (videoID, video) = try await openPage("https://video.example")
+        let (otherID, _) = try await openPage("https://other.example")
+        XCTAssertEqual(model.selectedTabID, otherID)
+        video.simulateActivationRequest()
+        try await waitUntil { self.model.selectedTabID == videoID }
     }
 
     func testSuggestedFileName() {

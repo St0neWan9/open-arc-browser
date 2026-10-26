@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 08:46:55 -0700
+Subject: [PATCH] openarc: chrome: let an embedder report its tabs as DevTools
+ pages
+
+ChromeDevToolsManagerDelegate reports a WebContents as a "page" target,
+and as a tab target, only when tabs::TabInterface finds it, i.e. when it
+is a tab of a Browser window. Open Arc's tabs live in its own UI, so
+Chrome called them "other": DevTools attached to them showed an empty
+Elements panel and no page panels, and remote debugging listed them as
+"other".
+
+Adds ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate(): the
+embedder tells which WebContents are its tabs, and those get the same
+target type and tab-target answer as a Browser tab. Nothing changes when
+no predicate is registered.
+
+Needed by plan task C15 (View > Developer > Developer Tools, Inspect
+Elements, JavaScript Console, Network Inspector).
+---
+ .../chrome_devtools_manager_delegate.cc       | 26 +++++++++++++++++--
+ .../chrome_devtools_manager_delegate.h        | 11 ++++++++
+ 2 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+index 37a83372cec4..7e699f705563 100644
+--- a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
++++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+@@ -10,6 +10,7 @@
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/no_destructor.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/values.h"
+@@ -177,6 +178,19 @@ bool GetExtensionInfo(content::WebContents* wc,
+ 
+ ChromeDevToolsManagerDelegate* g_instance;
+ 
++// Open Arc: see ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate().
++ChromeDevToolsManagerDelegate::EmbedderTabPredicate& GetEmbedderTabPredicate() {
++  static base::NoDestructor<ChromeDevToolsManagerDelegate::EmbedderTabPredicate>
++      predicate;
++  return *predicate;
++}
++
++bool IsEmbedderTab(content::WebContents* web_contents) {
++  const ChromeDevToolsManagerDelegate::EmbedderTabPredicate& predicate =
++      GetEmbedderTabPredicate();
++  return predicate && predicate.Run(web_contents);
++}
++
+ }  // namespace
+ 
+ // static
+@@ -184,6 +198,12 @@ ChromeDevToolsManagerDelegate* ChromeDevToolsManagerDelegate::GetInstance() {
+   return g_instance;
+ }
+ 
++// static
++void ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate(
++    EmbedderTabPredicate predicate) {
++  GetEmbedderTabPredicate() = std::move(predicate);
++}
++
+ ChromeDevToolsManagerDelegate::ChromeDevToolsManagerDelegate() {
+   DCHECK(!g_instance);
+   g_instance = this;
+@@ -312,7 +332,8 @@ std::string ChromeDevToolsManagerDelegate::GetTargetType(
+     return ChromeDevToolsManagerDelegate::kTypeApp;
+   }
+ 
+-  if (tabs::TabInterface::MaybeGetFromContents(web_contents)) {
++  if (tabs::TabInterface::MaybeGetFromContents(web_contents) ||
++      IsEmbedderTab(web_contents)) {  // Open Arc: embedder-owned tabs.
+     return DevToolsAgentHost::kTypePage;
+   }
+ 
+@@ -339,7 +360,8 @@ std::optional<bool> ChromeDevToolsManagerDelegate::ShouldReportAsTabTarget(
+     return false;
+   }
+ 
+-  if (tabs::TabInterface::MaybeGetFromContents(web_contents)) {
++  if (tabs::TabInterface::MaybeGetFromContents(web_contents) ||
++      IsEmbedderTab(web_contents)) {  // Open Arc: embedder-owned tabs.
+     return true;
+   }
+ 
+diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.h b/chrome/browser/devtools/chrome_devtools_manager_delegate.h
+index 5a1fb503d2ce..de8e2d302c3f 100644
+--- a/chrome/browser/devtools/chrome_devtools_manager_delegate.h
++++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.h
+@@ -10,6 +10,7 @@
+ #include <set>
+ #include <string>
+ 
++#include "base/functional/callback.h"
+ #include "base/gtest_prod_util.h"
+ #include "chrome/browser/devtools/device/devtools_device_discovery.h"
+ #include "chrome/browser/devtools/global_confirm_info_bar.h"
+@@ -41,6 +42,16 @@ class ChromeDevToolsManagerDelegate : public content::DevToolsManagerDelegate,
+   ~ChromeDevToolsManagerDelegate() override;
+ 
+   static ChromeDevToolsManagerDelegate* GetInstance();
++
++  // Open Arc: an app that embeds the browser process shows its tabs in its own
++  // UI, without Browser windows, so tabs::TabInterface never finds them and
++  // they would be "other" targets (DevTools then shows no Elements, Console or
++  // Network panel). The embedder registers a predicate that tells its tab
++  // WebContents; those are reported as pages and as tab targets. Not part of
++  // upstream Chromium.
++  using EmbedderTabPredicate =
++      base::RepeatingCallback<bool(content::WebContents*)>;
++  static void SetEmbedderTabPredicate(EmbedderTabPredicate predicate);
+   void UpdateDeviceDiscovery();
+ 
+   // Resets |device_manager_|.
