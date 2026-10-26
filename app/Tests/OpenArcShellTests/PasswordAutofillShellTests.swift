@@ -1,0 +1,166 @@
+import XCTest
+import CoreGraphics
+import OpenArcModel
+import OpenArcEngine
+import OpenArcSyncAPI
+@testable import OpenArcShell
+
+/// Plan C13: the shell draws the password save prompt and the autofill dropdown.
+/// `docs/arc-spec/00-feature-inventory.md §A`, observed: passwords and autofill are inherited from
+/// the engine and their prompts are drawn by the shell, style not captured. Placement and wording
+/// are ours (inferred from Chromium's behavior; look unknown).
+@MainActor
+final class PasswordAutofillShellTests: XCTestCase {
+    private var engine: FakeEngine!
+    private var model: ShellModel!
+
+    override func setUp() async throws {
+        engine = FakeEngine()
+        model = ShellModel(
+            dependencies: AppDependencies(engine: engine, sync: DisabledSyncStore()),
+            workspace: .demo(now: Date(timeIntervalSince1970: 0)),
+            now: { Date(timeIntervalSince1970: 0) }
+        )
+    }
+
+    override func tearDown() async throws {
+        model.stop()
+        model = nil
+        engine = nil
+    }
+
+    private func openPage(_ address: String) async throws -> FakeTab {
+        let opened = try await model.openNewTab(url: try XCTUnwrap(URL(string: address)))
+        let id = try XCTUnwrap(opened)
+        return try XCTUnwrap(model.sidebar.liveTab(for: id) as? FakeTab)
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<400 {
+            if condition() { return }
+            await model.controller.settleEngineWork()
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTFail("condition not met", file: file, line: line)
+    }
+
+    // MARK: Save prompt
+
+    /// [00 §A] observed (shell-drawn); wording and buttons inferred from Chromium's save bubble.
+    func testSavePromptHangsUnderTheURLBoxAndSavesTheEditedUsername() async throws {
+        let live = try await openPage("https://login.example")
+        let center = model.controller.dialogs
+        let id = live.simulatePasswordSavePrompt(username: "ada", passwordLength: 4)
+        try await waitUntil { center.current(for: live.id) != nil }
+        let request = try XCTUnwrap(center.current(for: live.id))
+        let presentation = DialogPresentation(request)
+        XCTAssertEqual(presentation.style, .permissionBubble, "bubble under the URL box, like Chrome's anchored bubble")
+        XCTAssertEqual(presentation.title, "Save password?")
+        XCTAssertEqual(presentation.message, "Password: ••••")
+        XCTAssertEqual(presentation.fields, [.text(placeholder: "Username", initial: "ada")])
+        XCTAssertEqual(presentation.buttons, ["Never", "Not Now", "Save"])
+        center.answer(id, with: DialogPresentation.answer(for: request, button: 2, fieldValues: [" grace "], checkbox: false))
+        XCTAssertEqual(live.dialogAnswers[id], .passwordSave(.save(username: "grace")))
+        XCTAssertNil(center.current(for: live.id))
+    }
+
+    func testSavePromptButtons() async throws {
+        let live = try await openPage("https://login.example")
+        let center = model.controller.dialogs
+        let save = live.simulatePasswordSavePrompt(username: "ada")
+        try await waitUntil { center.current(for: live.id)?.id == save }
+        var request = try XCTUnwrap(center.current(for: live.id))
+        // Unchanged username: nil (keep the submitted one).
+        XCTAssertEqual(DialogPresentation.answer(for: request, button: 2, fieldValues: ["ada"], checkbox: false), .passwordSave(.save(username: nil)))
+        XCTAssertEqual(DialogPresentation.answer(for: request, button: 1, fieldValues: ["ada"], checkbox: false), .passwordSave(.decline))
+        center.answer(save, with: DialogPresentation.answer(for: request, button: 0, fieldValues: ["ada"], checkbox: false))
+        XCTAssertEqual(live.dialogAnswers[save], .passwordSave(.neverForThisSite))
+
+        let update = live.simulatePasswordSavePrompt(username: "ada", kind: .update)
+        try await waitUntil { center.current(for: live.id)?.id == update }
+        request = try XCTUnwrap(center.current(for: live.id))
+        XCTAssertEqual(DialogPresentation(request).title, "Update password?")
+        XCTAssertEqual(DialogPresentation(request).buttons, ["Not Now", "Update"])
+        center.dismiss(update)
+        XCTAssertEqual(live.dialogAnswers[update], .passwordSave(.dismiss))
+    }
+
+    // MARK: Autofill dropdown
+
+    /// Not queued: it shows beside a queued dialog, a newer one replaces it, and withdrawing it
+    /// removes it.
+    func testAutofillDropdownIsNotQueued() async throws {
+        let live = try await openPage("https://login.example")
+        let center = model.controller.dialogs
+        let alert = live.simulateJavaScriptDialog(.alert, message: "hi")
+        let state = AutofillPopupState(
+            suggestions: [AutofillSuggestion(kind: .password, mainText: "ada", label: "••••")],
+            elementBounds: EngineRect(x: 20, y: 100, width: 240, height: 28)
+        )
+        let (first, _) = live.simulateAutofillPopup(state)
+        try await waitUntil { center.autofillPopup(for: live.id)?.id == first }
+        XCTAssertEqual(center.current(for: live.id)?.id, alert, "the queued dialog is unaffected")
+        XCTAssertEqual(center.pendingCount(for: live.id), 1)
+
+        let (second, session) = live.simulateAutofillPopup(state)
+        try await waitUntil { center.autofillPopup(for: live.id)?.id == second }
+
+        // Choosing a row: the engine fills and withdraws the dropdown.
+        session.send(.accept(0))
+        try await waitUntil { center.autofillPopup(for: live.id) == nil }
+        XCTAssertEqual(live.autofillCommands, [.accept(0)])
+    }
+
+    func testClosingTheTabDismissesTheDropdown() async throws {
+        let live = try await openPage("https://login.example")
+        let center = model.controller.dialogs
+        let (id, _) = live.simulateAutofillPopup(AutofillPopupState(
+            suggestions: [AutofillSuggestion(kind: .autocomplete, mainText: "x")],
+            elementBounds: EngineRect(x: 0, y: 0, width: 100, height: 20)
+        ))
+        try await waitUntil { center.autofillPopup(for: live.id) != nil }
+        center.stopObserving(live.id)
+        XCTAssertNil(center.autofillPopup(for: live.id))
+        XCTAssertEqual(live.dialogAnswers[id], .autofillPopup(.dismiss))
+    }
+
+    /// Under the field; above it when there is no room below; right-aligned for right-to-left
+    /// fields; never outside the panel. inferred (Chromium's popup placement).
+    func testDropdownPlacement() {
+        let rows = [AutofillSuggestion(kind: .password, mainText: "ada", label: "••••")]
+        let panel = CGSize(width: 800, height: 600)
+        var state = AutofillPopupState(suggestions: rows, elementBounds: EngineRect(x: 20, y: 100, width: 300, height: 28))
+        var frame = AutofillDropdownPlacement.frame(for: state, in: panel)
+        XCTAssertEqual(frame.minX, 20)
+        XCTAssertEqual(frame.minY, 128 + AutofillDropdownTokens.gap)
+        XCTAssertEqual(frame.width, 300)
+
+        state.elementBounds = EngineRect(x: 20, y: 570, width: 100, height: 24)
+        frame = AutofillDropdownPlacement.frame(for: state, in: panel)
+        XCTAssertEqual(frame.width, AutofillDropdownTokens.minWidth, "at least the minimum width")
+        XCTAssertEqual(frame.maxY, 570 - AutofillDropdownTokens.gap, accuracy: 0.001, "above the field near the bottom")
+
+        state.elementBounds = EngineRect(x: 700, y: 100, width: 90, height: 24)
+        state.isRightToLeft = true
+        frame = AutofillDropdownPlacement.frame(for: state, in: panel)
+        XCTAssertEqual(frame.maxX, 790, accuracy: 0.001, "right-aligned to the field")
+
+        state.isRightToLeft = false
+        frame = AutofillDropdownPlacement.frame(for: state, in: panel)
+        XCTAssertLessThanOrEqual(frame.maxX, panel.width, "kept inside the panel")
+    }
+
+    func testDropdownHeightCountsSeparatorsAndCapsRows() {
+        let row = AutofillSuggestion(kind: .autocomplete, mainText: "x")
+        let separator = AutofillSuggestion(kind: .separator, mainText: "", isSelectable: false, isAcceptable: false)
+        XCTAssertEqual(
+            AutofillDropdownPlacement.height(of: [row, separator, row]),
+            2 * AutofillDropdownTokens.singleLineRowHeight + AutofillDropdownTokens.separatorHeight + 2 * AutofillDropdownTokens.padding
+        )
+        let many = Array(repeating: row, count: 20)
+        XCTAssertEqual(
+            AutofillDropdownPlacement.height(of: many),
+            CGFloat(AutofillDropdownTokens.maxVisibleRows) * AutofillDropdownTokens.singleLineRowHeight + 2 * AutofillDropdownTokens.padding
+        )
+    }
+}

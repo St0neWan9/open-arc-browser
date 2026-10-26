@@ -267,6 +267,8 @@ public enum FakeDialogAnswer: Hashable, Sendable {
     case permission(PermissionReply)
     case fileChooser(FileChooserReply)
     case externalProtocol(ExternalProtocolReply)
+    case passwordSave(PasswordSaveReply)
+    case autofillPopup(AutofillPopupReply)
 }
 
 /// Per-site zoom levels, shared by every tab of one FakeEngine. Keyed by profile, off-the-record
@@ -314,6 +316,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private var isClosed = false
     private var commandLog: [FakeTabCommand] = []
     private var answers: [UUID: FakeDialogAnswer] = [:]
+    private var autofillCommandLog: [AutofillPopupCommand] = []
     /// Withdraws an outstanding dialog request (captures the reply weakly).
     private var outstandingDialogs: [UUID: @Sendable () -> Void] = [:]
     private var hasBeforeUnloadHandler = false
@@ -819,6 +822,43 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         deliver(.externalProtocol(request), withdraw: { [weak reply] in reply?.withdraw() })
         return requestID
     }
+
+    /// The password manager offers to save (C13). Returns the request id.
+    @discardableResult
+    public func simulatePasswordSavePrompt(username: String, passwordLength: Int = 8, kind: PasswordSavePrompt.Kind = .save) -> UUID {
+        let requestID = UUID()
+        let reply = DialogReply<PasswordSaveReply>(default: .dismiss, handler: answerHandler(requestID) { .passwordSave($0) })
+        let request = PasswordSavePrompt(id: requestID, origin: currentOrigin(), kind: kind, username: username,
+                                         passwordLength: passwordLength, reply: reply)
+        deliver(.passwordSave(request), withdraw: { [weak reply] in reply?.withdraw() })
+        return requestID
+    }
+
+    /// Shows an autofill dropdown (C13). Commands the shell sends to it are recorded in
+    /// `autofillCommands`; `.accept` withdraws the dropdown, as the engine does after filling.
+    @discardableResult
+    public func simulateAutofillPopup(_ state: AutofillPopupState) -> (id: UUID, session: AutofillPopupSession) {
+        let requestID = UUID()
+        let session = AutofillPopupSession(state: state) { [weak self] command in
+            guard let self else { return }
+            self.lock.withLock { self.autofillCommandLog.append(command) }
+            if case .accept = command { self.simulateDialogCancel(requestID) }
+        }
+        let record = answerHandler(requestID) { FakeDialogAnswer.autofillPopup($0) }
+        let reply = DialogReply<AutofillPopupReply>(default: .dismiss) { [weak session] answer in
+            record(answer)
+            session?.finish()
+        }
+        let request = AutofillPopup(id: requestID, origin: currentOrigin(), session: session, reply: reply)
+        deliver(.autofillPopup(request), withdraw: { [weak reply, weak session] in
+            reply?.withdraw()
+            session?.finish()
+        })
+        return (requestID, session)
+    }
+
+    /// Commands the shell sent to autofill dropdowns, oldest first. For tests.
+    public var autofillCommands: [AutofillPopupCommand] { lock.withLock { autofillCommandLog } }
 
     /// The engine withdraws an unanswered request (`TabEvent.dialogCancelled`).
     public func simulateDialogCancel(_ requestID: UUID) {

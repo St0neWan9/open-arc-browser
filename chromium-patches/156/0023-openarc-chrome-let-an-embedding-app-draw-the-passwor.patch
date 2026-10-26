@@ -1,0 +1,232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 12:14:47 -0700
+Subject: [PATCH] openarc: chrome: let an embedding app draw the password
+ bubble and autofill popup
+
+Plan C13 (password manager and autofill popups drawn by the shell). Chrome
+keeps deciding when to offer saving a password and what to suggest for a
+form field, but draws both with Views anchored to a Browser window: the
+password bubble through the omnibox page action (ManagePasswordsUIController
+returns early without a Browser), the Autofill popup as a Views widget that
+needs a Views or Cocoa browser window around the tab (AutofillPopupView::
+Create returns nullptr otherwise). Open Arc's tabs have no Browser, so no
+save prompt ever appeared and the Autofill dropdown never showed.
+
+Two embedder hooks, active only while set (Mac only, for an app that owns
+the UI, chrome::EmbedderOwnsUI()):
+
+- ManagePasswordsUIController::SetEmbedderBubbleHost(): the controller asks
+  the host to show the bubble wherever it would pop up its Views bubble (in
+  UpdateBubbleAndIconVisibility(), ShowBubble()) and to close it in
+  HideBubble(). The host builds Chrome's own bubble controller (for example
+  SaveUpdateBubbleController) from GetModelDelegateProxy(), as the Views
+  bubble does, so saving, "never for this site" and the dismissal counts
+  behave as in Chrome.
+- AutofillPopupView::SetEmbedderFactory(): AutofillPopupView::Create()
+  returns the embedder's view. AutofillPopupControllerImpl stays in charge
+  of suggestions, keyboard routing, filling and hiding.
+
+Without a host or factory nothing changes.
+---
+ .../browser/ui/autofill/autofill_popup_view.h | 13 +++++
+ .../manage_passwords_ui_controller.cc         | 49 +++++++++++++++++++
+ .../manage_passwords_ui_controller.h          | 26 ++++++++++
+ .../views/autofill/popup/popup_view_views.cc  | 17 +++++++
+ 4 files changed, 105 insertions(+)
+
+diff --git a/chrome/browser/ui/autofill/autofill_popup_view.h b/chrome/browser/ui/autofill/autofill_popup_view.h
+index 4fd4ae88612e..cd93ef2470a5 100644
+--- a/chrome/browser/ui/autofill/autofill_popup_view.h
++++ b/chrome/browser/ui/autofill/autofill_popup_view.h
+@@ -12,6 +12,7 @@
+ 
+ #include "base/memory/weak_ptr.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "components/autofill/core/browser/foundations/autofill_client.h"
+ #include "components/autofill/core/browser/ui/tabbed_pane_enums.h"
+ #include "components/autofill/core/common/aliases.h"
+@@ -67,6 +68,18 @@ class AutofillPopupView {
+       std::optional<const TabbedPaneConfig> tabbed_pane_config = std::nullopt,
+       std::optional<const SubPopupConfig> sub_popup_config = std::nullopt);
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that embeds Chrome's browser process and owns the UI
++  // (chrome::EmbedderOwnsUI()) draws the Autofill popup itself; Chrome's Views
++  // popup needs a Views or Cocoa browser window around the tab. While a
++  // factory is set, Create() returns what it returns (nullptr hides the
++  // popup, as when the Views popup cannot be shown). Sub-popups are the
++  // embedder view's CreateSubPopupView().
++  using EmbedderFactory = base::WeakPtr<AutofillPopupView> (*)(
++      base::WeakPtr<AutofillPopupController> controller);
++  static void SetEmbedderFactory(EmbedderFactory factory);
++#endif
++
+   // Attempts to display the Autofill popup and fills it with data from the
+   // controller. Returns whether the popup was shown.
+   virtual bool Show(AutoselectFirstSuggestion autoselect_first_suggestion) = 0;
+diff --git a/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc b/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc
+index 0d2c0bbb5b89..2d64d0ef0e7c 100644
+--- a/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc
++++ b/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc
+@@ -119,6 +119,12 @@ int ManagePasswordsUIController::save_fallback_timeout_in_seconds_ = 90;
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_MAC)
++// Open Arc: see ManagePasswordsUIController::SetEmbedderBubbleHost().
++ManagePasswordsUIController::EmbedderBubbleHost* g_embedder_bubble_host =
++    nullptr;
++#endif
++
+ using Logger = autofill::SavePasswordProgressLogger;
+ using enum password_manager::PasswordForm::Store;
+ 
+@@ -1241,6 +1247,29 @@ void ManagePasswordsUIController::UpdateBubbleAndIconVisibility() {
+     ClearPopUpFlagForBubble();
+   }
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the embedding app draws the bubble (no Browser window, no
++  // omnibox icon). Same steps as UpdatePasswordIconAndBubbleState() without
++  // the icon.
++  if (g_embedder_bubble_host) {
++    const password_manager::ui::State state = GetState();
++    if (state != last_page_action_state_) {
++      g_embedder_bubble_host->HideBubble(*this);
++    }
++    last_page_action_state_ = state;
++    if (IsAutomaticallyOpeningBubble() ||
++        bubble_status_ == BubbleStatus::SHOULD_POP_UP_WITH_FOCUS) {
++      g_embedder_bubble_host->HideBubble(*this);
++      // Detaches a closing bubble, so OnBubbleHidden() isn't called.
++      weak_ptr_factory_.InvalidateWeakPtrs();
++      g_embedder_bubble_host->ShowBubble(*this);
++      // If the bubble appeared the status is updated in OnBubbleShown().
++      ClearPopUpFlagForBubble();
++    }
++    return;
++  }
++#endif
++
+   BrowserWindowInterface* browser =
+       GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+           web_contents());
+@@ -1534,6 +1563,12 @@ bool ManagePasswordsUIController::BubbleManagerHasPasswordBubbleInQueue()
+ }
+ 
+ void ManagePasswordsUIController::ShowBubble() {
++#if BUILDFLAG(IS_MAC)
++  if (g_embedder_bubble_host) {
++    g_embedder_bubble_host->ShowBubble(*this);
++    return;
++  }
++#endif
+   if (TabDialogs* tab_dialogs = TabDialogs::FromWebContents(web_contents())) {
+     tab_dialogs->ShowManagePasswordsBubble(user_action_);
+   }
+@@ -1541,6 +1576,12 @@ void ManagePasswordsUIController::ShowBubble() {
+ 
+ void ManagePasswordsUIController::HideBubble(bool initiated_by_bubble_manager) {
+   is_mouse_hovered_ = false;
++#if BUILDFLAG(IS_MAC)
++  if (g_embedder_bubble_host) {
++    g_embedder_bubble_host->HideBubble(*this);
++    return;
++  }
++#endif
+   if (TabDialogs* tab_dialogs = TabDialogs::FromWebContents(web_contents())) {
+     tab_dialogs->HideManagePasswordsBubble();
+   }
+@@ -1679,4 +1720,12 @@ void ManagePasswordsUIController::QueueOrShowBubble(bool user_action) {
+   }
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++// static
++void ManagePasswordsUIController::SetEmbedderBubbleHost(
++    EmbedderBubbleHost* host) {
++  g_embedder_bubble_host = host;
++}
++#endif
++
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(ManagePasswordsUIController);
+diff --git a/chrome/browser/ui/passwords/manage_passwords_ui_controller.h b/chrome/browser/ui/passwords/manage_passwords_ui_controller.h
+index 6155d8a1c327..0b15da23dba7 100644
+--- a/chrome/browser/ui/passwords/manage_passwords_ui_controller.h
++++ b/chrome/browser/ui/passwords/manage_passwords_ui_controller.h
+@@ -14,6 +14,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/timer/timer.h"
++#include "build/build_config.h"
+ #include "chrome/browser/ui/autofill/bubble_controller_base.h"
+ #include "chrome/browser/ui/passwords/manage_passwords_state.h"
+ #include "chrome/browser/ui/passwords/passwords_client_ui_delegate.h"
+@@ -258,6 +259,31 @@ class ManagePasswordsUIController
+ 
+   void ShowAutoSignInToast();
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that embeds Chrome's browser process and owns the UI
++  // (chrome::EmbedderOwnsUI()) draws the password bubble itself; its tabs have
++  // no Browser window, so the omnibox icon and the Views bubble never appear.
++  // While a host is set, the controller asks it instead of the Browser window
++  // whenever Chrome would pop the bubble up, and when Chrome would close it.
++  // The host builds the bubble controller for GetState() from
++  // GetModelDelegateProxy() (for example a SaveUpdateBubbleController), as
++  // Chrome's Views bubble does, and destroys it when the user answered or the
++  // bubble went away.
++  class EmbedderBubbleHost {
++   public:
++    virtual ~EmbedderBubbleHost() = default;
++    // Shows the bubble for the controller's current state. May decline (the
++    // state has no embedder bubble); the controller then stays as if the
++    // bubble had been closed.
++    virtual void ShowBubble(ManagePasswordsUIController& controller) = 0;
++    // Closes the bubble of `controller` if one is open. Must tolerate being
++    // called while that bubble is closing.
++    virtual void HideBubble(ManagePasswordsUIController& controller) = 0;
++  };
++  // Not owned; nullptr clears it. UI thread only.
++  static void SetEmbedderBubbleHost(EmbedderBubbleHost* host);
++#endif
++
+  protected:
+   explicit ManagePasswordsUIController(content::WebContents* web_contents);
+ 
+diff --git a/chrome/browser/ui/views/autofill/popup/popup_view_views.cc b/chrome/browser/ui/views/autofill/popup/popup_view_views.cc
+index 3febe2d2e25a..329f6977e811 100644
+--- a/chrome/browser/ui/views/autofill/popup/popup_view_views.cc
++++ b/chrome/browser/ui/views/autofill/popup/popup_view_views.cc
+@@ -1966,12 +1966,29 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+     PopupViewViews,
+     kAutofillAccountNameEmailSuggestionElementId);
+ 
++#if BUILDFLAG(IS_MAC)
++namespace {
++// Open Arc: see AutofillPopupView::SetEmbedderFactory().
++AutofillPopupView::EmbedderFactory g_embedder_popup_factory = nullptr;
++}  // namespace
++
++// static
++void AutofillPopupView::SetEmbedderFactory(EmbedderFactory factory) {
++  g_embedder_popup_factory = factory;
++}
++#endif
++
+ // static
+ base::WeakPtr<AutofillPopupView> AutofillPopupView::Create(
+     base::WeakPtr<AutofillPopupController> controller,
+     std::optional<const AutofillPopupView::SearchBarConfig> search_bar_config,
+     std::optional<const AutofillPopupView::TabbedPaneConfig> tabbed_pane_config,
+     std::optional<const AutofillPopupView::SubPopupConfig> sub_popup_config) {
++#if BUILDFLAG(IS_MAC)
++  if (g_embedder_popup_factory) {
++    return controller ? g_embedder_popup_factory(controller) : nullptr;
++  }
++#endif
+   if (!controller || !CanShowRootPopup(*controller)) {
+     return nullptr;
+   }

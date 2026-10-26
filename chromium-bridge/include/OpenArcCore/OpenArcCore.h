@@ -15,6 +15,7 @@
 #import <OpenArcCore/OACTab.h>
 #import <OpenArcCore/OACTabDelegate.h>
 #import <OpenArcCore/OACDialogDelegate.h>
+#import <OpenArcCore/OACAutofill.h>
 #import <OpenArcCore/OACSiteSettings.h>
 #import <OpenArcCore/OACDownloads.h>
 #import <OpenArcCore/OACExtensions.h>

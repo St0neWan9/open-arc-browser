@@ -241,6 +241,8 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     /// Withdraws an outstanding dialog request, by the bridge request's identity. Weak toward the
     /// reply, so a request the shell dropped still gets its default answer.
     private var outstandingDialogs: [ObjectIdentifier: (id: UUID, withdraw: () -> Void)] = [:]
+    /// Live autofill dropdowns (C13), by the bridge request's identity, for row updates.
+    private var autofillSessions: [ObjectIdentifier: AutofillPopupSession] = [:]
     /// Re-reads the bridge state a few times after a load settles (see `scheduleSettleResync`).
     private var settleResync: Task<Void, Never>?
 
@@ -347,6 +349,8 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         settleResync = nil
         for entry in outstandingDialogs.values { entry.withdraw() }
         outstandingDialogs.removeAll()
+        for session in autofillSessions.values { session.finish() }
+        autofillSessions.removeAll()
         channel.finish()
         tab?.delegate = nil
         tab?.dialogDelegate = nil
@@ -559,6 +563,57 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         })
     }
 
+    func tab(_ tab: OACTab, offerToSavePassword prompt: OACPasswordSavePrompt) -> Bool {
+        deliver(prompt, default: PasswordSaveReply.dismiss, answer: { prompt, answer in
+            switch answer {
+            case .save(let username): prompt.save(username: username)
+            case .neverForThisSite: prompt.neverForThisSite()
+            case .decline: prompt.decline()
+            case .dismiss: prompt.cancel()
+            }
+        }, make: { id, reply in
+            .passwordSave(PasswordSavePrompt(
+                id: id,
+                origin: prompt.origin.map(SiteOrigin.init(bridge:)),
+                kind: prompt.kind == .update ? .update : .save,
+                username: prompt.username,
+                passwordLength: Int(prompt.passwordLength),
+                reply: reply
+            ))
+        })
+    }
+
+    /// C13: the autofill dropdown. Its rows change while it is open (`didUpdateAutofillPopup`), so
+    /// besides the single-shot reply it carries an `AutofillPopupSession`.
+    func tab(_ tab: OACTab, showAutofillPopup popup: OACAutofillPopup) -> Bool {
+        let box = MainActorBox(popup)
+        let session = AutofillPopupSession(state: AutofillPopupState(popup)) { command in
+            ChromiumTabCore.onMain {
+                let popup = box.value
+                switch command {
+                case .select(let index): popup.selectSuggestion(at: index ?? -1)
+                case .accept(let index): popup.acceptSuggestion(at: index)
+                case .pointerInside(let inside): popup.containsPointer = inside
+                }
+            }
+        }
+        let key = ObjectIdentifier(popup)
+        let delivered = deliver(popup, default: AutofillPopupReply.dismiss, answer: { [weak self] popup, _ in
+            self?.autofillSessions.removeValue(forKey: key)?.finish()
+            popup.cancel()
+        }, make: { id, reply in
+            .autofillPopup(AutofillPopup(
+                id: id, origin: popup.origin.map(SiteOrigin.init(bridge:)), session: session, reply: reply
+            ))
+        })
+        if delivered { autofillSessions[key] = session }
+        return delivered
+    }
+
+    func tab(_ tab: OACTab, didUpdateAutofillPopup popup: OACAutofillPopup) {
+        autofillSessions[ObjectIdentifier(popup)]?.update(AutofillPopupState(popup))
+    }
+
     /// Wraps a bridge request in an `EngineDialogRequest` with a single-shot reply and yields it.
     /// The reply holds the bridge request until answered (answering on the main actor); the
     /// outstanding table holds the reply weakly, so a request the shell dropped still gets its
@@ -587,6 +642,7 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     }
 
     func tab(_ tab: OACTab, didCancel request: OACDialogRequest) {
+        autofillSessions.removeValue(forKey: ObjectIdentifier(request))?.finish()
         guard let entry = outstandingDialogs.removeValue(forKey: ObjectIdentifier(request)) else { return }
         entry.withdraw()
         channel.send(.dialogCancelled(entry.id))
@@ -673,6 +729,40 @@ extension PageTopColor {
         case .scrollbar: self = .scrollbar
         default: return nil
         }
+    }
+}
+
+extension AutofillPopupState {
+    @MainActor
+    init(_ popup: OACAutofillPopup) {
+        self.init(
+            suggestions: popup.suggestions.map(AutofillSuggestion.init),
+            elementBounds: EngineRect(
+                x: popup.elementBounds.minX, y: popup.elementBounds.minY,
+                width: popup.elementBounds.width, height: popup.elementBounds.height
+            ),
+            isRightToLeft: popup.isRightToLeft,
+            selectedIndex: popup.selectedIndex >= 0 ? popup.selectedIndex : nil
+        )
+    }
+}
+
+extension AutofillSuggestion {
+    init(_ suggestion: OACAutofillSuggestion) {
+        let kind: Kind = switch suggestion.kind {
+        case .password: .password
+        case .address: .address
+        case .creditCard: .creditCard
+        case .autocomplete: .autocomplete
+        case .dataList: .dataList
+        case .title: .title
+        case .separator: .separator
+        default: .action
+        }
+        self.init(
+            kind: kind, mainText: suggestion.mainText, minorText: suggestion.minorText, label: suggestion.label,
+            isSelectable: suggestion.isSelectable, isAcceptable: suggestion.isAcceptable
+        )
     }
 }
 
