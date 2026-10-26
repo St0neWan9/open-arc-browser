@@ -15,8 +15,12 @@
 // Downloads): the shell sets `defaultDirectory`; the bridge never asks where to save unless
 // `promptsForLocation` is YES.
 //
-// Skeleton: the shape is fixed enough for the Library list; the dangerous-download flow and the
-// "ask where to save" dialog are settled in C12.
+// As built in C12: the profile's `content::DownloadManager` with //chrome's
+// `ChromeDownloadManagerDelegate` (history-backed list, target paths, dangerous and insecure
+// download checks, "ask where to save" through Chromium's native save panel when
+// `promptsForLocation` is YES; Chrome turns that on for off-the-record profiles). Chrome's bubble
+// never shows (it needs a Browser window). Items that are temporary or transient (Save Page As
+// internals, extension downloads) are not listed.
 
 #import <OpenArcCore/OACDefines.h>
 
@@ -55,6 +59,9 @@ OAC_EXPORT NS_SWIFT_SENDABLE
 @property (nonatomic, readonly, copy, nullable) NSDate *endDate;
 /// Started from an off-the-record profile (kept in memory only).
 @property (nonatomic, readonly) BOOL isOffTheRecord;
+/// For `OACDownloadStateNeedsConfirmation`: why ("This type of file can harm your computer",
+/// "insecure download"), Chromium's wording. nil otherwise.
+@property (nonatomic, readonly, copy, nullable) NSString *warningText;
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
 @end

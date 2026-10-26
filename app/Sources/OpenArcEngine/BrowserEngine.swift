@@ -350,6 +350,12 @@ public protocol BrowserEngine: AnyObject, Sendable {
     var downloads: any EngineDownloads { get }
     /// Installed extensions of every profile.
     var extensions: any EngineExtensions { get }
+    /// The built-in ad blocker (plan C16). Engines without one get `UnavailableAdBlocking`.
+    var adBlocking: any EngineAdBlocking { get }
+}
+
+extension BrowserEngine {
+    public var adBlocking: any EngineAdBlocking { UnavailableAdBlocking.shared }
 }
 
 /// One live web contents.

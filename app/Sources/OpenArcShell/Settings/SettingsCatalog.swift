@@ -207,6 +207,10 @@ public enum SettingsCatalog {
         SettingsControl("advanced.moreSettings", "More Settings…", .button, .pending(task: "C12")),
         SettingsControl("advanced.resetTranslatePrompts", "Reset Translated-site Prompts", .button, .pending(task: "C12")),
         SettingsControl("advanced.exportData", "Export Data", .button, .pending(task: "D3")),
+        // Plan C16: the engine's built-in ad blocker (EasyList + EasyPrivacy). [00 §A] records an ad
+        // blocking switch in Arc's settings but 03 does not record its label or pane: "Block ads and
+        // trackers" under Advanced, default on, is inferred. Shown only when the engine has a ruleset.
+        SettingsControl("advanced.adBlocking", "Block ads and trackers", .toggle(defaultValue: true), .live),
         // Plan decision Q8: crash reports are stored locally only. The folder may not exist until
         // D8 writes the first report; the button creates it so Finder has something to show.
         SettingsControl("advanced.showCrashReports", "Show Crash Reports in Finder", .button, .live),

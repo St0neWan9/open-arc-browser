@@ -196,7 +196,9 @@ public struct DialogPresentation: Equatable, Sendable {
             message = prompt.kinds.map(\.promptText).joined(separator: "\n")
             fields = []
             checkbox = nil
-            buttons = ["Don’t Allow", "Allow This Time", "Allow"]
+            // A one-time grant only where the engine supports it (Chromium: camera, microphone,
+            // location); otherwise "Allow" is the only grant. Chromium's semantics, inferred.
+            buttons = prompt.supportsAllowingOnce ? ["Don’t Allow", "Allow This Time", "Allow"] : ["Don’t Allow", "Allow"]
         case .fileChooser(let chooser):
             style = .filePanel
             title = chooser.mode == .save ? "Save" : "Open"
@@ -210,7 +212,8 @@ public struct DialogPresentation: Equatable, Sendable {
             title = "Open \(external.handlerApplicationName.map { "“\($0)”" } ?? "application")?"
             message = "\(site) wants to open \(app)."
             fields = []
-            checkbox = request.origin.map { "Always allow \($0.displayHost) to open links of this type" }
+            checkbox = external.canRememberForOrigin
+                ? request.origin.map { "Always allow \($0.displayHost) to open links of this type" } : nil
             buttons = ["Cancel", "Open"]
         }
     }
@@ -226,10 +229,10 @@ public struct DialogPresentation: Equatable, Sendable {
         case .authentication:
             guard isDefaultButton else { return .authentication(.cancel) }
             return .authentication(.proceed(username: fieldValues.first ?? "", password: fieldValues.dropFirst().first ?? ""))
-        case .permission:
-            switch index {
-            case 0: return .permission(.deny(remember: true))
-            case 1: return .permission(.allow(remember: false))
+        case .permission(let prompt):
+            switch (index, prompt.supportsAllowingOnce) {
+            case (0, _): return .permission(.deny(remember: true))
+            case (1, true): return .permission(.allow(remember: false))
             default: return .permission(.allow(remember: true))
             }
         case .fileChooser:

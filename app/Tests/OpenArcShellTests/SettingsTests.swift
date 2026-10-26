@@ -366,7 +366,7 @@ final class SettingsTests: XCTestCase {
             "account.syncSidebar", "general.profileSettings", "profiles.list", "profiles.add", "profiles.remove",
             "profiles.searchEngine", "profiles.archiveTabsAfter", "shortcuts.search", "shortcuts.defaults",
             "icon.grid", "advanced.showCrashReports", "advanced.restoreWindows", "account.makeDefault",
-            "links.littleArcExternal",
+            "links.littleArcExternal", "advanced.adBlocking",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {

@@ -236,6 +236,15 @@ if [[ -d "$package_dir/Vendor/OpenArcCore.xcframework" ]]; then
     done
     [[ $helper_count -eq ${#openarc_helpers[@]} ]] \
         || { echo "expected ${#openarc_helpers[@]} helper apps in $helpers_dir, found $helper_count" >&2; exit 1; }
+    # Plan C16: the ad blocker's filter lists (EasyList + EasyPrivacy, CC BY-SA 3.0) need their
+    # attribution in the app; the framework carries it next to the ruleset
+    # (chromium-bridge/build-adblock-ruleset.sh), and a copy goes to the app's Resources.
+    adblock_attribution="$openarc_core/Versions/A/Resources/AdBlock/ATTRIBUTION"
+    if [[ -f "$adblock_attribution" ]]; then
+        cp "$adblock_attribution" "$app/Contents/Resources/ATTRIBUTION-AdBlock.txt"
+    else
+        echo "warning: OpenArcCore.framework has no ad block ruleset (run chromium-bridge/build-adblock-ruleset.sh)" >&2
+    fi
     # Notifications shown by the alerts helper carry the app's icon.
     alerts_app="$helpers_dir/Open Arc Helper (Alerts).app"
     mkdir -p "$alerts_app/Contents/Resources"

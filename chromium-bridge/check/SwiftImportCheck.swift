@@ -70,6 +70,14 @@ func exerciseAPI(delegate: ImportCheckDelegate) throws {
             _ = (profile.originalProfile, s.isDeveloperModeEnabled, s.decision(for: .camera), s.cookieCount)
         }
         profile.siteSettings.setDecision(.allow, for: .camera, origin: OACOrigin(scheme: "https", host: "example.com", port: nil))
+        // Plan C16: ad blocking.
+        let origin = OACOrigin(scheme: "https", host: "example.com", port: nil)
+        profile.siteSettings.setAdBlockingEnabled(false, for: origin)
+        let siteOn: Bool = profile.siteSettings.isAdBlockingEnabled(forOrigin: origin)
+        app.isAdBlockingEnabled = !siteOn
+        let version: String? = app.adBlockingRulesetVersion
+        let blocked: Int = tab.blockedAdCount
+        _ = (version, blocked)
         _ = profile.downloads.items
         _ = profile.extensions.installedExtensions
     }

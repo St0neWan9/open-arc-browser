@@ -126,6 +126,18 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
                   completionHandler:(void (^)(NSError *_Nullable error))completionHandler
     NS_SWIFT_NAME(deleteProfile(identifier:completionHandler:));
 
+// MARK: Ad blocking (plan C16)
+
+/// The built-in ad blocker's global switch, for every profile (Settings). Stored in Chromium's
+/// Local State, so it survives restarts; default YES. A change applies to each tab's next page
+/// load (the page on screen keeps its filter until reloaded). Sites can opt out one by one with
+/// `-[OACSiteSettings setAdBlockingEnabled:forOrigin:]`. NO before the engine started.
+@property (nonatomic, getter=isAdBlockingEnabled) BOOL adBlockingEnabled;
+/// Content version of the filter ruleset in use (EasyList + EasyPrivacy, built with the
+/// framework), or nil when the framework carries none and nothing was indexed before: the
+/// blocker then matches nothing.
+@property (nonatomic, readonly, copy, nullable) NSString *adBlockingRulesetVersion;
+
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
 @end

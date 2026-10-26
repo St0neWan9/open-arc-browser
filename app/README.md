@@ -135,9 +135,9 @@ The bundle is ad hoc signed, so it only runs on the machine that built it. Build
 | Default data dir | `~/Library/Application Support/org.openarc.browser/` | `~/Library/Application Support/org.openarc.browser.dev/` |
 | Defaults domain | `org.openarc.browser` | `org.openarc.browser.dev` |
 | Exported drag types | `org.openarc.browser.sidebar-item`, `.library-space` | `org.openarc.browser.dev.sidebar-item`, `.library-space` (make-app.sh rewrites them) |
-| Chromium Mach rendezvous / sandbox bundle id | `org.openarc.browser.*` | `org.openarc.browser.dev.*` (read from the embedding app, patch 0009) |
+| Chromium Mach rendezvous / sandbox bundle id | `org.openarc.browser.*` | `org.openarc.browser.dev.*` (read from the embedding app, patch 0011) |
 | Chromium helper apps | `org.openarc.browser.helper…` | `org.openarc.browser.dev.helper…` (make-app.sh) |
-| Keychain item (cookie encryption key) | "Open Arc Safe Storage" | "Open Arc Dev Safe Storage" (patch 0012) |
+| Keychain item (cookie encryption key) | "Open Arc Safe Storage" | "Open Arc Dev Safe Storage" (patch 0014) |
 | Sparkle updates | on once a release key exists | off: no `SUFeedURL`, and `UpdateConfiguration` refuses any non-release id |
 | CloudKit container | `iCloud.org.openarc.browser` (needs D4's entitlement) | unchanged; ad-hoc dev builds have no entitlement, so sync reports "not set up" |
 | URL / document types | http, https, HTML, PDF | the same. Declaring them never makes the app the default browser; do not make the dev build the default |

@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 04:12:26 -0700
+Subject: [PATCH] openarc: chrome: let an embedding app draw the external
+ protocol dialog
+
+Plan C12 (shell-drawn dialogs). When a page navigates to a scheme
+Chromium cannot handle (zoommtg:, a custom app scheme), Chrome first runs
+its policy (denied schemes, per-origin "always allow" memory, enterprise
+policy, the user-gesture flood guard, "is Chrome the handler" check) and,
+if it still has to ask, shows ExternalProtocolDialog: a Views dialog that
+needs a Browser window. Open Arc's tabs have none, so the prompt never
+appeared and external apps could not be launched.
+
+ExternalProtocolHandler::SetEmbedderDialogRunner() lets an app that owns
+the UI (chrome::EmbedderOwnsUI()) draw that dialog itself. The runner is
+called exactly where RunExternalProtocolDialog() would be, after the same
+checks; on acceptance the embedder calls SetBlockState() (when the user
+asks to remember) and LaunchUrlWithoutSecurityCheck(), as Chrome's dialog
+does. Without a runner nothing changes. Mac only.
+
+The existing Delegate (SetDelegateForTesting) is not usable for this: it
+replaces the whole policy, not just the dialog.
+---
+ .../external_protocol_handler.cc              | 25 +++++++++++++++++++
+ .../external_protocol_handler.h               | 17 +++++++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/chrome/browser/external_protocol/external_protocol_handler.cc b/chrome/browser/external_protocol/external_protocol_handler.cc
+index 1f269b22374c..9c47f11747bc 100644
+--- a/chrome/browser/external_protocol/external_protocol_handler.cc
++++ b/chrome/browser/external_protocol/external_protocol_handler.cc
+@@ -68,6 +68,12 @@ bool g_accept_requests = true;
+ ExternalProtocolHandler::Delegate* g_external_protocol_handler_delegate =
+     nullptr;
+ 
++#if BUILDFLAG(IS_MAC)
++// Open Arc: see ExternalProtocolHandler::SetEmbedderDialogRunner().
++ExternalProtocolHandler::EmbedderDialogRunner g_embedder_dialog_runner =
++    nullptr;
++#endif
++
+ // Prefix for schemes that apps declare must not be launched by web content.
+ // See crbug.com/539667062.
+ constexpr std::string_view kLocalOnlySchemePrefix = "local+";
+@@ -161,6 +167,17 @@ void RunExternalProtocolDialogWithDelegate(
+   }
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the embedding app draws the dialog; Chrome's own needs a
++  // Browser window.
++  if (g_embedder_dialog_runner) {
++    g_embedder_dialog_runner(url, web_contents, has_user_gesture,
++                             initiating_origin, std::move(initiator_document),
++                             program_name);
++    return;
++  }
++#endif
++
+   ExternalProtocolHandler::RunExternalProtocolDialog(
+       url, web_contents, page_transition, has_user_gesture,
+       is_in_fenced_frame_tree, initiating_origin, std::move(initiator_document),
+@@ -630,6 +647,14 @@ void ExternalProtocolHandler::LaunchUrlWithoutSecurityCheck(
+       g_external_protocol_handler_delegate);
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++// static
++void ExternalProtocolHandler::SetEmbedderDialogRunner(
++    EmbedderDialogRunner runner) {
++  g_embedder_dialog_runner = runner;
++}
++#endif
++
+ // static
+ void ExternalProtocolHandler::PermitLaunchUrl() {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+diff --git a/chrome/browser/external_protocol/external_protocol_handler.h b/chrome/browser/external_protocol/external_protocol_handler.h
+index 99921caca295..ee6927644270 100644
+--- a/chrome/browser/external_protocol/external_protocol_handler.h
++++ b/chrome/browser/external_protocol/external_protocol_handler.h
+@@ -204,6 +204,23 @@ class ExternalProtocolHandler {
+ 
+   // Clears the external protocol handling data.
+   static void ClearData(Profile* profile);
++
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that embeds Chrome's browser process and owns the UI
++  // (chrome::EmbedderOwnsUI()) draws the "Open <app>?" dialog itself. When set,
++  // the runner is called where RunExternalProtocolDialog() would be, after the
++  // same policy checks and with a non-empty program name. If the user accepts,
++  // the embedder calls SetBlockState() (when remembered) and
++  // LaunchUrlWithoutSecurityCheck(), as Chrome's dialog does.
++  using EmbedderDialogRunner = void (*)(
++      const GURL& url,
++      content::WebContents* web_contents,
++      bool has_user_gesture,
++      const std::optional<url::Origin>& initiating_origin,
++      content::WeakDocumentPtr initiator_document,
++      const std::u16string& program_name);
++  static void SetEmbedderDialogRunner(EmbedderDialogRunner runner);
++#endif
+ };
+ 
+ #endif  // CHROME_BROWSER_EXTERNAL_PROTOCOL_EXTERNAL_PROTOCOL_HANDLER_H_

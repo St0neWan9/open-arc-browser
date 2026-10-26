@@ -290,6 +290,12 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// Leaves HTML fullscreen (Escape is handled by the page view itself).
 - (void)exitFullscreen;
 
+// MARK: Ad blocking (plan C16)
+
+/// Subresources and frames the built-in ad blocker kept from loading on the current page (all
+/// frames); 0 after each new page. Read on demand, no change callback.
+@property (nonatomic, readonly) NSInteger blockedAdCount;
+
 // MARK: Lifetime (`BrowserEngine.closeTab`)
 
 /// Closes the tab immediately, without beforeunload handlers. Idempotent.

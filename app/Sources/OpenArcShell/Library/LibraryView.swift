@@ -201,7 +201,9 @@ struct LibraryListColumn: View {
             if library.isMediaIntroVisible {
                 LibraryMediaIntroCard(library: library, palette: palette)
             }
-        case .downloads, .easels, .boosts:
+        case .downloads:
+            LibraryDownloadsList(library: library, downloads: library.downloads, palette: palette)
+        case .easels, .boosts:
             if let empty = section.emptyState {
                 LibraryEmptyStateView(state: empty, isBoosts: section == .boosts, palette: palette)
             }

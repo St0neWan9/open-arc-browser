@@ -360,6 +360,31 @@ public final class SettingsModel: ObservableObject {
         }
     }
 
+    // MARK: Ad blocking (plan C16)
+
+    /// The engine's ad blocker; nil until `loadAdBlocking()` found a ruleset (then the row shows).
+    @Published public private(set) var adBlockingRulesetVersion: String?
+    /// "Block ads and trackers" (inferred label, see `SettingsCatalog`). The engine stores it
+    /// (Chromium's Local State), so it is per device and survives restarts.
+    @Published public private(set) var isAdBlockingOn = true
+
+    /// Reads the switch and the ruleset version from the engine. The view runs it in `.task`.
+    public func loadAdBlocking() async {
+        let blocker = shell.controller.dependencies.engine.adBlocking
+        let version = await blocker.rulesetVersion()
+        let on = await blocker.isEnabled()
+        adBlockingRulesetVersion = version
+        isAdBlockingOn = on
+    }
+
+    /// Sets the global switch. Open tabs follow at their next page load.
+    public func setAdBlocking(_ isOn: Bool) async {
+        isAdBlockingOn = isOn
+        let blocker = shell.controller.dependencies.engine.adBlocking
+        await blocker.setEnabled(isOn)
+        isAdBlockingOn = await blocker.isEnabled()
+    }
+
     /// Creates the crash report folder if needed (so Finder has something to show) and reveals it.
     public func showCrashReports(base: URL = AppDataLocation.directory()) {
         let directory = CrashReportLocation.directory(in: base)

@@ -36,6 +36,7 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     private let zoomMap = FakeZoomMap()
     private let fakeDownloads = FakeDownloads()
     private let fakeExtensions = FakeExtensions()
+    private let fakeAdBlocking = FakeAdBlocking()
 
     public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle) {
         self.titleProvider = titleProvider
@@ -49,6 +50,9 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     /// Typed access for tests.
     public var fakeDownloadService: FakeDownloads { fakeDownloads }
     public var fakeExtensionService: FakeExtensions { fakeExtensions }
+    public var adBlocking: any EngineAdBlocking { fakeAdBlocking }
+    /// Typed access for tests (plan C16).
+    public var fakeAdBlockingService: FakeAdBlocking { fakeAdBlocking }
 
     /// Ids of all live tabs (for tests and debug UI).
     public var tabIDs: Set<EngineTabID> {
@@ -710,10 +714,13 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     }
 
     @discardableResult
-    public func simulatePermissionPrompt(_ kinds: [SitePermissionKind], hasUserGesture: Bool = true) -> UUID {
+    public func simulatePermissionPrompt(
+        _ kinds: [SitePermissionKind], hasUserGesture: Bool = true, supportsAllowingOnce: Bool = true
+    ) -> UUID {
         let requestID = UUID()
         let reply = DialogReply<PermissionReply>(default: .dismiss, handler: answerHandler(requestID) { .permission($0) })
-        let request = PermissionPrompt(id: requestID, origin: currentOrigin(), kinds: kinds, hasUserGesture: hasUserGesture, reply: reply)
+        let request = PermissionPrompt(id: requestID, origin: currentOrigin(), kinds: kinds, hasUserGesture: hasUserGesture,
+                                       supportsAllowingOnce: supportsAllowingOnce, reply: reply)
         deliver(.permission(request), withdraw: { [weak reply] in reply?.withdraw() })
         return requestID
     }
@@ -729,11 +736,12 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     }
 
     @discardableResult
-    public func simulateExternalProtocol(_ url: URL, handlerApplicationName: String?) -> UUID {
+    public func simulateExternalProtocol(_ url: URL, handlerApplicationName: String?, canRememberForOrigin: Bool = true) -> UUID {
         let requestID = UUID()
         let reply = DialogReply<ExternalProtocolReply>(default: .block, handler: answerHandler(requestID) { .externalProtocol($0) })
         let request = ExternalProtocolRequest(id: requestID, origin: currentOrigin(), url: url,
-                                              handlerApplicationName: handlerApplicationName, reply: reply)
+                                              handlerApplicationName: handlerApplicationName,
+                                              canRememberForOrigin: canRememberForOrigin, reply: reply)
         deliver(.externalProtocol(request), withdraw: { [weak reply] in reply?.withdraw() })
         return requestID
     }

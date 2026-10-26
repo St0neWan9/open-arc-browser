@@ -17,6 +17,10 @@ public final class FakeDownloads: EngineDownloads, @unchecked Sendable {
 
     /// Commands received, as "pause:<id>" etc. For tests.
     public var commands: [String] { lock.withLock { commandLog } }
+    /// Live `events(profileID:)` streams of a profile. For tests.
+    public func subscriberCount(profileID: Profile.ID) -> Int {
+        lock.withLock { broadcasters[profileID]?.subscriberCount ?? 0 }
+    }
     public var defaultDirectory: URL? { lock.withLock { directory } }
 
     public func items(profileID: Profile.ID) async -> [DownloadItem] {
@@ -160,5 +164,66 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
         let made = AsyncBroadcaster<ExtensionEvent>()
         broadcasters[profileID] = made
         return made
+    }
+}
+
+/// Fake ad blocker (plan C16): in-memory switches, a fixed ruleset version and blocked counts set
+/// with `simulateBlocked`. Records every switch change.
+// @unchecked: every mutable stored property is read and written only under `lock` (`Mutex` needs macOS 15).
+public final class FakeAdBlocking: EngineAdBlocking, @unchecked Sendable {
+    private struct SiteKey: Hashable {
+        var origin: SiteOrigin
+        var profileID: Profile.ID
+    }
+
+    private let lock = NSLock()
+    private var version: String?
+    private var enabled = true
+    private var allowList: Set<SiteKey> = []
+    private var counts: [EngineTabID: Int] = [:]
+    private var changeLog: [String] = []
+
+    public init(rulesetVersion: String? = "fake-ruleset") {
+        version = rulesetVersion
+    }
+
+    /// "global:on", "site:<host>:off" … in call order. For tests.
+    public var changes: [String] { lock.withLock { changeLog } }
+
+    /// Sets the version `rulesetVersion()` reports (nil: no ruleset).
+    public func simulateRuleset(_ rulesetVersion: String?) {
+        lock.withLock { version = rulesetVersion }
+    }
+
+    /// Sets a tab's blocked count as if its page loaded ads.
+    public func simulateBlocked(_ count: Int, tabID: EngineTabID) {
+        lock.withLock { counts[tabID] = count }
+    }
+
+    public func rulesetVersion() async -> String? { lock.withLock { version } }
+
+    public func isEnabled() async -> Bool { lock.withLock { enabled } }
+
+    public func setEnabled(_ enabled: Bool) async {
+        lock.withLock {
+            self.enabled = enabled
+            changeLog.append("global:\(enabled ? "on" : "off")")
+        }
+    }
+
+    public func isEnabled(forOrigin origin: SiteOrigin, profileID: Profile.ID) async -> Bool {
+        lock.withLock { !allowList.contains(SiteKey(origin: origin, profileID: profileID)) }
+    }
+
+    public func setEnabled(_ enabled: Bool, forOrigin origin: SiteOrigin, profileID: Profile.ID) async {
+        lock.withLock {
+            let key = SiteKey(origin: origin, profileID: profileID)
+            if enabled { allowList.remove(key) } else { allowList.insert(key) }
+            changeLog.append("site:\(origin.displayHost):\(enabled ? "on" : "off")")
+        }
+    }
+
+    public func blockedCount(tabID: EngineTabID) async -> Int {
+        lock.withLock { counts[tabID] ?? 0 }
     }
 }

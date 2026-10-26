@@ -34,7 +34,7 @@ GN arguments (on top of `out/Release/args.gn`):
 ```gn
 proprietary_codecs = true          # MP4 / MSE / ADTS / TS demuxing of H.264, HEVC, AAC
 ffmpeg_branding = "Chromium"       # FFmpeg without H.264 or AAC decoders
-media_proprietary_decoders_platform_only = true   # new, from patch 0008
+media_proprietary_decoders_platform_only = true   # new, from patch 0009
 ```
 
 `media_proprietary_decoders_platform_only` is a new argument that patch `0008-openarc-media-decode-H.264-and-AAC-only-with-the-pla.patch` adds to `media/media_options.gni`. It is upstream code only, so it sits before the `//openarc` patches in the series. With the argument off (the default, and `out/Release` today) every change compiles away. With it on:
@@ -97,7 +97,7 @@ Measured on 2026-10-25 on Apple silicon (arm64, macOS 26), framework from `out/R
 
 Video can only come from VideoToolbox here: the build has no other H.264 or HEVC decoder, and WebCodecs confirms that no software decoder exists. Audio comes from AudioToolbox, because FFmpeg's allowlist and build have no AAC decoder.
 
-Not tested yet: WebCodecs decoding itself (only `isConfigSupported`), WebRTC, the MPEG-2 TS / HLS demuxers, HE-AAC v2 and xHE-AAC files, Intel Macs, YouTube itself, and long or seek-heavy playback. A first build hit a debug check (`DCHECK`) in `AVCodecContextToAudioDecoderConfig` (bytes per sample for demux-only AAC); this is fixed in patch 0008 and is the reason it skips that check for AAC.
+Not tested yet: WebCodecs decoding itself (only `isConfigSupported`), WebRTC, the MPEG-2 TS / HLS demuxers, HE-AAC v2 and xHE-AAC files, Intel Macs, YouTube itself, and long or seek-heavy playback. A first build hit a debug check (`DCHECK`) in `AVCodecContextToAudioDecoderConfig` (bytes per sample for demux-only AAC); this is fixed in patch 0009 and is the reason it skips that check for AAC.
 
 ## Switching the main build
 
