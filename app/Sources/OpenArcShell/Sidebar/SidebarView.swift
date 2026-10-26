@@ -50,11 +50,7 @@ public struct SidebarView: View {
                         .offset(x: favorites.minX, y: favorites.minY)
                 }
 
-                SidebarSpaceNameRowView(viewModel: viewModel, layout: layout)
-
-                SidebarListView(viewModel: viewModel, snapshot: snapshot, isSidebarHovered: isSidebarHovered, layout: layout)
-                    .frame(width: layout.width, height: listHeight)
-                    .offset(y: layout.listTop)
+                spacePage(layout: layout, snapshot: snapshot, listHeight: listHeight)
 
                 // No Space dock in an incognito window (one in-memory Space). inferred (B14).
                 if !viewModel.isIncognito {
@@ -64,8 +60,6 @@ public struct SidebarView: View {
                 }
             }
             .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
-            .id(viewModel.selectedSpaceID)
-            .transition(.opacity)
 
             dropIndicator(layout: layout)
 
@@ -86,7 +80,9 @@ public struct SidebarView: View {
         .onChange(of: rowFrames) { viewModel.refreshDropTarget(in: dropGeometry(viewModel.snapshot, layout: layout)) }
         .onDrop(of: [SidebarDragPayload.itemType, .url], delegate: SidebarRootDropDelegate(viewModel: viewModel, geometry: dropGeometry(snapshot, layout: layout)))
         .onHover { isSidebarHovered = $0 }
-        .animation(.easeInOut(duration: Motion.spaceCreateFade), value: viewModel.selectedSpaceID)
+        // Space switch: the page slides by one sidebar width on a critically damped spring, no
+        // fade. [07 §11] observed (response 0.2 s, dampingFraction 1.0). B40.
+        .animation(ShellMotion.spaceSwitch, value: viewModel.selectedSpaceID)
         .sheet(isPresented: $viewModel.isNewFolderSheetPresented) {
             SidebarNewFolderSheet(viewModel: viewModel)
         }
@@ -99,6 +95,27 @@ public struct SidebarView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar")
+    }
+
+    /// The Space page: the Space name row and the tab list, one page per Space. Switching Spaces
+    /// pages it sideways ([07 §11] observed: the page container's x moves by 276 pt; [05] the URL
+    /// box, favorites and dock are outside the page and stay). Clipped to the sidebar so the
+    /// outgoing page never draws over the web panel.
+    private func spacePage(layout: SidebarLayout, snapshot: SidebarSnapshot, listHeight: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
+                SidebarSpaceNameRowView(viewModel: viewModel, layout: layout)
+
+                SidebarListView(viewModel: viewModel, snapshot: snapshot, isSidebarHovered: isSidebarHovered, layout: layout)
+                    .frame(width: layout.width, height: listHeight)
+                    .offset(y: layout.listTop)
+            }
+            .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
+            .id(viewModel.selectedSpaceID)
+            .transition(ShellMotion.spacePageTransition(viewModel.spacePager))
+        }
+        .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
+        .clipped()
     }
 
     private func dropGeometry(_ snapshot: SidebarSnapshot, layout: SidebarLayout) -> SidebarDropGeometry {

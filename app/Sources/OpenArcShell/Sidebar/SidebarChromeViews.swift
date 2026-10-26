@@ -243,7 +243,7 @@ struct SidebarFavoritesView: View {
             }
         }
         .frame(width: block.width, height: block.height, alignment: .topLeading)
-        .animation(.easeInOut(duration: SidebarLocalTokens.favoriteMakeRoomDuration), value: viewModel.dropTarget)
+        .animation(ShellMotion.favoriteMakeRoom, value: viewModel.dropTarget)
         .sidebarDropRegion(.favorites)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.favorites")

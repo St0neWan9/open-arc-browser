@@ -57,8 +57,14 @@ public final class SidebarViewModel: ObservableObject {
     public var workspace: WorkspaceState { controller.workspace }
     @Published public private(set) var selectedSpaceID: UUID? {
         // Favorites follow the window's Space for their pages' color scheme (B21).
-        didSet { if oldValue != selectedSpaceID { controller.syncWebColorSchemes() } }
+        didSet {
+            guard oldValue != selectedSpaceID else { return }
+            controller.syncWebColorSchemes()
+            spacePager.show(selectedSpaceID, order: dockSpaces.map(\.id))
+        }
     }
+    /// Direction of the latest Space switch, for the sidebar's paging transition. [07 §11] B40.
+    let spacePager = SpacePagerState()
     @Published public private(set) var selectedTabID: UUID?
     /// Item being renamed inline (tab or folder).
     @Published public internal(set) var renamingItemID: UUID?

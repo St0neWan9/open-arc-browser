@@ -74,8 +74,10 @@ struct MainWindowContent: View {
             .environment(\.sidebarAcceptsPointer, !(model.isCommandBarPresented && model.commandBarPaneTabID == nil)
                          && !model.controller.onboarding.isShown(in: model))
             .environment(\.windowDrawnPermissionTab, permissionTabUnderURLBox)
-            .animation(ShellLocalTokens.sidebarToggleAnimation, value: model.isSidebarVisible)
-            .animation(SidebarPeekTokens.slideAnimation, value: model.showsSidebarPeek)
+            // ⌘S: web panel resize and sidebar slide on one fast ease-out. [07 §11] B40.
+            .animation(ShellMotion.sidebarToggle, value: model.isSidebarVisible)
+            // Peek slide: curve unknown, within the observed 0.3 s bound. [07 §11] B40.
+            .animation(ShellMotion.sidebarPeekSlide, value: model.showsSidebarPeek)
             // Window-level pointer tracking for the left-edge hot zone; it sees the pointer over
             // the engine's web view too, and never takes clicks. [06 §14] B34.
             .overlay {
@@ -88,7 +90,7 @@ struct MainWindowContent: View {
             }
         }
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: Motion.spaceCreateFade), value: model.spaceFlow.isCreating)
+        .animation(ShellMotion.spaceCreateFade, value: model.spaceFlow.isCreating)
         .modifier(SpaceFlowSheets(flow: model.spaceFlow, workspace: sidebar.workspace, palette: model.windowPalette))
         .overlay(alignment: .bottomLeading) { themeEditorAnchor }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.
@@ -112,7 +114,7 @@ struct MainWindowContent: View {
             NewSpaceView(flow: model.spaceFlow, palette: palette)
                 .frame(width: layout.sidebarFrame.width, height: layout.sidebarFrame.height)
         } else if model.isSidebarVisible {
-            // Slides out to the left while the web panel expands. Timing: see `ShellLocalTokens`.
+            // Slides out to the left while the web panel expands. Timing: `ShellMotion.sidebarToggle`.
             SidebarView(viewModel: sidebar)
                 .environment(\.siteControlsModel, model.siteControls)
                 .frame(width: layout.sidebarFrame.width, height: layout.sidebarFrame.height)
@@ -158,6 +160,8 @@ struct MainWindowContent: View {
                         get: { model.spaceFlow.themeDraft(of: spaceID) },
                         set: { model.spaceFlow.applyThemeDraft($0, to: spaceID) }
                     ), systemAppearance: model.controller.systemAppearance)
+                    // Grows from the lower left, where it is anchored. [07 §11] observed. B40.
+                    .themeBubbleMotion(anchor: .bottomLeading)
                 }
             }
             .allowsHitTesting(false)

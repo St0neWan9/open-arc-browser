@@ -1,19 +1,9 @@
 import SwiftUI
 import OpenArcDesign
 
-// Sidebar hide/show: the animation token and the view-facing state derived from `ShellModel`.
-// [01 §View] observed: the View menu has "Hide Sidebar". [00 §sidebar] says the collapse
-// animation was not measured, so the timing below is a local placeholder.
-
-enum ShellLocalTokens {
-    /// Duration of the sidebar slide-out/in while the web panel resizes. unknown (not measured);
-    /// kept short on purpose.
-    static let sidebarToggleDuration: Double = 0.25
-
-    /// Curve of the sidebar slide. unknown (not measured).
-    static var sidebarToggleAnimation: Animation { .easeInOut(duration: sidebarToggleDuration) }
-
-}
+// Sidebar hide/show: the view-facing state derived from `ShellModel`. [01 §View] observed: the
+// View menu has "Hide Sidebar". The ⌘S animation is `ShellMotion.sidebarToggle`
+// (`Motion.sidebarToggle`, [07 §11] inferred curve over observed frames).
 
 extension View {
     /// The edge shadow of a web content surface (main panel, split pane, Little Arc page, Library

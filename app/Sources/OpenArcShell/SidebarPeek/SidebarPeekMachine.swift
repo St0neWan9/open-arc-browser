@@ -1,8 +1,9 @@
 import Foundation
 
 // Hidden-sidebar peek: the pure state machine. [06 §14] observed: with the sidebar hidden, the
-// pointer at the window's left edge slides the sidebar out as a floating overlay; it stays while
-// the pointer is inside, collapses ≈ 0.2 s after the pointer leaves to the page, and "Lock
+// pointer at the window's left edge slides the sidebar out as a floating overlay after a ≈ 0.11 s
+// dwell [07 §11]; it stays while the pointer is inside, starts to collapse as soon as the pointer
+// leaves to the page ([07 §11] observed, no delay), and "Lock
 // sidebar" pins it back. Time is passed in (`now`), so tests drive it with a fake clock.
 
 /// How the sidebar is on screen.
@@ -36,7 +37,7 @@ enum SidebarPeekPointerRegion: Equatable, Sendable {
     case outside
 }
 
-/// Delays of the peek. Both are local tokens (see `SidebarPeekTokens`).
+/// Delays of the peek: `Motion.sidebarPeekOpenDwell` / `sidebarPeekCloseDelay` ([07 §11] observed).
 struct SidebarPeekTiming: Equatable, Sendable {
     /// Time the pointer must rest in the edge zone before the overlay opens.
     var openDelay: TimeInterval
