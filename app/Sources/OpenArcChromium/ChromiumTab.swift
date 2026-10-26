@@ -383,7 +383,11 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
 
     var nativeView: AnyObject? { tab?.nativeView }
 
+    /// The page is attached to a host on screen.
+    private(set) var isVisible = false
+
     func setVisible(_ visible: Bool) {
+        isVisible = visible
         tab?.setVisible(visible)
         // Pick up state the bridge changed without telling (see `settleResyncDelays`).
         if visible {
@@ -608,6 +612,32 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         })
         if delivered { autofillSessions[key] = session }
         return delivered
+    }
+
+    /// C14: an extension install confirmation for this tab (the Web Store page, or the tab the
+    /// engine chose for a tab-less install). Comes from `OACExtensions`, not `OACDialogDelegate`.
+    func deliverExtensionInstall(_ request: OACExtensionInstallRequest) -> Bool {
+        guard channel.dialogs.subscriberCount > 0 else { return false }
+        let box = MainActorBox(request)
+        let reply = DialogReply<ExtensionInstallReply>(default: .cancel) { answer in
+            ChromiumTabCore.onMain {
+                if answer == .add { box.value.approve() } else { box.value.cancel() }
+            }
+        }
+        let origin = tab?.state.committedURL.flatMap(SiteOrigin.init(url:))
+        channel.dialogs.yield(.extensionInstall(ExtensionInstallPrompt(
+            id: UUID(),
+            origin: origin,
+            extensionID: request.extensionIdentifier,
+            extensionName: request.extensionName,
+            iconPNGData: request.iconPNGData,
+            title: request.title,
+            acceptTitle: request.acceptButtonTitle,
+            cancelTitle: request.cancelButtonTitle,
+            permissionWarnings: request.permissionWarnings,
+            reply: reply
+        )))
+        return true
     }
 
     func tab(_ tab: OACTab, didUpdateAutofillPopup popup: OACAutofillPopup) {

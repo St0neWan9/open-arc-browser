@@ -14,7 +14,8 @@ import OpenArcDesign
 //   "Secure" pill on the left and a "⋯" button on the right.
 // - Moving the pointer away makes the bubble disappear.
 //
-// Engine-backed values go through `SiteSettingsProvider` (fake until plan tasks C12 / C14 / C16).
+// Engine-backed values go through `SiteSettingsProvider` (ad blocking C16 and extensions C14 are
+// the engine's; the rest is fake until C12 settles it).
 
 /// The 4 square buttons at the top of the bubble. [06 §12] observed.
 public enum SiteControlsTool: String, CaseIterable, Sendable {
@@ -54,6 +55,20 @@ public enum SiteControlsCloseReason: Equatable, Sendable {
     case action
 }
 
+/// The extension popup the Site Control Center opened (C14). The spec records where extension
+/// actions live ([06 §12], [06 §17.2]) but not where their popups appear: we anchor the popup to
+/// the same site-controls button, below it, like the Site Control Center itself. inferred.
+public struct ExtensionPopupState: Equatable, Sendable {
+    public var extensionID: String
+    /// The model tab whose action ran.
+    public var tabID: UUID
+    /// The page's size in points; Chromium's 25×25 minimum until the page reports one.
+    public var width: Double
+    public var height: Double
+    /// The page finished its first load; the bubble shows only then (Chrome does the same).
+    public var isLoaded: Bool
+}
+
 /// One row of the "Settings" section: round icon + title + small status. [06 §12] observed shape.
 public struct SiteControlsSettingRow: Identifiable, Equatable, Sendable {
     public enum Kind: Hashable, Sendable {
@@ -86,6 +101,8 @@ public final class SiteControlsModel: ObservableObject {
     /// True for a moment after Copy Link. [06 §12] does not describe feedback; inferred.
     @Published public private(set) var isLinkCopied = false
     @Published public private(set) var lastCloseReason: SiteControlsCloseReason?
+    /// The open extension popup, if any (C14).
+    @Published public private(set) var extensionPopup: ExtensionPopupState?
 
     // MARK: Dependencies
 
@@ -110,13 +127,19 @@ public final class SiteControlsModel: ObservableObject {
     private var leaveTask: Task<Void, Never>?
     private var selectionChanges: AnyCancellable?
     private var sidebarChanges: AnyCancellable?
+    private var openPopup: (any ExtensionPopup)?
+    private var popupEvents: Task<Void, Never>?
+    private var extensionEvents: Task<Void, Never>?
 
     init(sidebar: SidebarViewModel, provider: any SiteSettingsProvider, pasteboard: any PasteboardWriter) {
         self.sidebar = sidebar
         self.provider = provider
         self.pasteboard = pasteboard
         selectionChanges = sidebar.$selectedTabID.dropFirst().sink { [weak self] newID in
-            guard let self, self.isPresented, newID != self.tabID else { return }
+            guard let self else { return }
+            // A popup belongs to its tab; switching tabs closes it (Chrome does). inferred.
+            if let popup = self.extensionPopup, popup.tabID != newID { self.closeExtensionPopup() }
+            guard self.isPresented, newID != self.tabID else { return }
             self.close(.tabChanged)
         }
         // Rows read the tab's live audio state from the sidebar; redraw the bubble when it changes.
@@ -133,8 +156,15 @@ public final class SiteControlsModel: ObservableObject {
     /// The "Secure" pill. [06 §12] observed "Secure"; the insecure label is inferred.
     public var securityLabel: String { site?.isSecure == false ? "Not Secure" : "Secure" }
 
-    /// "Manage" shows only when extensions exist. [06 §12] observed.
-    public var showsManageExtensions: Bool { !settings.extensions.isEmpty }
+    /// "Manage" shows only when extensions exist. [06 §12] observed. Any installed extension
+    /// counts, also one without an action on this page. inferred.
+    public var showsManageExtensions: Bool { !settings.extensions.isEmpty || hasInstalledExtensions }
+
+    /// The profile has extensions (C14), whether or not they have an action here.
+    @Published public private(set) var hasInstalledExtensions = false
+
+    /// Engine extensions (C14): installed list and change events for the bubble's section.
+    var engineExtensions: (any EngineExtensions)?
 
     /// Permissions the "⋯" menu offers: the common four, plus any other kind the site has a
     /// decision for. inferred.
@@ -201,6 +231,8 @@ public final class SiteControlsModel: ObservableObject {
         guard isPresented else { return }
         isPresented = false
         lastCloseReason = reason
+        extensionEvents?.cancel()
+        extensionEvents = nil
     }
 
     /// The pointer left the bubble (or the icon it opened from). [06 §12] observed: it closes.
@@ -249,11 +281,80 @@ public final class SiteControlsModel: ObservableObject {
         toolHandler(tool, id)
     }
 
+    /// Runs an extension's action on the bubble's tab, as a click on Chrome's toolbar button does.
+    /// The Site Control Center closes and the extension's popup, if it has one, opens in its own
+    /// bubble at the same button once its page loaded. inferred (see `ExtensionPopupState`).
     public func runExtension(_ extensionID: String) {
         guard let id = tabID, let site else { return }
         let profile = sidebar.currentProfileID
         let provider = provider
-        work.append(Task { await provider.runExtensionAction(extensionID, tabID: id, site: site, profileID: profile) })
+        closeExtensionPopup()
+        close(.action)
+        work.append(Task { [weak self] in
+            guard let popup = await provider.runExtensionAction(extensionID, tabID: id, site: site, profileID: profile) else { return }
+            self?.show(popup, tabID: id)
+        })
+    }
+
+    // MARK: Extension popup
+
+    private func show(_ popup: any ExtensionPopup, tabID: UUID) {
+        // The tab changed while the engine opened it.
+        guard sidebar.selectedTabID == tabID else {
+            Task { await popup.close() }
+            return
+        }
+        openPopup = popup
+        let minimum = SiteControlsLocalTokens.extensionPopupMinimumSize
+        extensionPopup = ExtensionPopupState(extensionID: popup.extensionID, tabID: tabID,
+                                             width: minimum, height: minimum, isLoaded: false)
+        let events = popup.events()
+        popupEvents?.cancel()
+        popupEvents = Task { [weak self, weak popup] in
+            for await event in events {
+                guard let self, let popup, self.openPopup === popup else { return }
+                self.apply(event)
+            }
+        }
+    }
+
+    private func apply(_ event: ExtensionPopupEvent) {
+        switch event {
+        case .loaded:
+            extensionPopup?.isLoaded = true
+        case .resized(let width, let height):
+            let size = SiteControlsLocalTokens.clampedExtensionPopupSize(width: width, height: height)
+            extensionPopup?.width = size.width
+            extensionPopup?.height = size.height
+        case .closed:
+            openPopup = nil
+            extensionPopup = nil
+            popupEvents?.cancel()
+            popupEvents = nil
+        }
+    }
+
+    /// The popup's page view goes into `host` (the bubble's container).
+    func attachExtensionPopup(to host: any SurfaceHost) {
+        openPopup?.attach(to: host)
+    }
+
+    /// Gives the popup's page the keyboard once its bubble is up.
+    func focusExtensionPopup() {
+        openPopup?.focus()
+    }
+
+    /// Closes the popup (click outside, Escape, tab switch, another action).
+    public func closeExtensionPopup() {
+        guard let popup = openPopup else {
+            extensionPopup = nil
+            return
+        }
+        openPopup = nil
+        extensionPopup = nil
+        popupEvents?.cancel()
+        popupEvents = nil
+        work.append(Task { await popup.close() })
     }
 
     // MARK: Settings rows
@@ -300,13 +401,34 @@ public final class SiteControlsModel: ObservableObject {
     private func reload() {
         guard let site else { return }
         let profile = sidebar.currentProfileID
+        observeExtensions(profileID: profile)
         work.append(Task { [weak self] in await self?.refresh(site: site, profileID: profile) })
     }
 
     private func refresh(site: SiteOrigin, profileID: UUID?) async {
-        let state = await provider.settings(for: site, profileID: profileID)
+        var state = await provider.settings(for: site, profileID: profileID)
+        if let id = tabID, let actions = await provider.extensionActions(tabID: id, profileID: profileID) {
+            state.extensions = actions
+        }
+        var installed: [EngineExtensionInfo] = []
+        if let profileID, let engineExtensions { installed = await engineExtensions.installed(profileID: profileID) }
         guard self.site == site else { return }
         settings = state
+        hasInstalledExtensions = !installed.isEmpty
+    }
+
+    /// Follows the profile's extension changes (installs, badges, icons) while the bubble is open.
+    private func observeExtensions(profileID: UUID?) {
+        extensionEvents?.cancel()
+        extensionEvents = nil
+        guard let engineExtensions, let profileID else { return }
+        let events = engineExtensions.events(profileID: profileID)
+        extensionEvents = Task { [weak self] in
+            for await _ in events {
+                guard let self, self.isPresented, let site = self.site else { continue }
+                await self.refresh(site: site, profileID: profileID)
+            }
+        }
     }
 
     /// Waits for pending provider calls (tests).
@@ -319,6 +441,8 @@ public final class SiteControlsModel: ObservableObject {
     }
 
     func stop() {
+        closeExtensionPopup()
+        extensionEvents?.cancel()
         work.forEach { $0.cancel() }
         work.removeAll()
         copiedTask?.cancel()

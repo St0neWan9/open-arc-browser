@@ -1,0 +1,1605 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 13:53:20 -0700
+Subject: [PATCH] openarc: embedder: extensions
+
+Plan task C14: //chrome's extension system on the embedder's profiles,
+behind OACProfile.extensions (OACExtensions.h):
+
+- installedExtensions / actionsForTab: the profile's user-facing extensions
+  (no component extensions) and, per tab, each toolbar action's icon (PNG,
+  16 pt at 2x; the placeholder letter until the default icon loaded, which an
+  IconImage observer reports), badge, title, enabled state and popup. These
+  are what the shell's Site Control Center shows in its "Extensions" section.
+- runActionOfExtension:onTab: ExtensionActionRunner::RunAction (activeTab,
+  then action.onClicked or the popup), as a click on Chrome's toolbar button.
+  A popup is an ExtensionViewHost of type popup (OACExtensionPopup) whose
+  WebContents view the shell hosts in its own bubble; auto-resize within
+  Chrome's popup limits, load and close (window.close(), Escape) reach the
+  shell through OACExtensionPopupDelegate. One popup at a time per profile.
+- Install confirmations: ExtensionInstallPrompt's embedder dialog (the
+  previous patch) becomes an OACExtensionInstallRequest for the profile's
+  delegate, with the asking tab (the Web Store page), Chromium's title,
+  button labels and permission warnings. installFromWebStoreWithIdentifier:
+  uses Chrome's WebstoreInstallWithPrompt.
+- loadUnpackedFromURL: UnpackedInstaller, with developer mode turned on
+  (Chromium disables unpacked extensions without it).
+- setEnabled / uninstall through ExtensionRegistrar.
+- chrome.tabs.query lists the bridge's tabs (the previous patch's list).
+---
+ openarc/BUILD.gn                              |    4 +
+ openarc/bridge/oac_application.mm             |   14 +
+ openarc/bridge/oac_application_internal.h     |    2 +
+ openarc/bridge/oac_extensions.mm              | 1192 +++++++++++++++++
+ openarc/bridge/oac_extensions_internal.h      |   25 +
+ openarc/bridge/oac_profile.mm                 |   20 +-
+ .../bridge/public/OpenArcCore/OACExtensions.h |  132 +-
+ 7 files changed, 1350 insertions(+), 39 deletions(-)
+ create mode 100644 openarc/bridge/oac_extensions.mm
+ create mode 100644 openarc/bridge/oac_extensions_internal.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 8593e6cdc947..812e84218be4 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -190,6 +190,8 @@ source_set("bridge") {
+               "bridge/oac_dialog_requests_internal.h",
+               "bridge/oac_downloads.mm",
+               "bridge/oac_downloads_internal.h",
++              "bridge/oac_extensions.mm",
++              "bridge/oac_extensions_internal.h",
+               "bridge/oac_profile.mm",
+               "bridge/oac_profile_internal.h",
+               "bridge/oac_requests.mm",
+@@ -210,6 +212,8 @@ source_set("bridge") {
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/extensions",
+     "//chrome/browser/picture_in_picture",
++    "//extensions/browser",
++    "//extensions/common",
+     "//components/content_settings/core/browser",
+     "//components/sessions",
+     "//services/media_session/public/mojom",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index b1dba7a3bcea..7dfd52887df4 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -37,6 +37,7 @@
+ #include "content/public/app/content_main_runner.h"
+ #include "openarc/app/openarc_main_delegate.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
++#import "openarc/bridge/oac_extensions_internal.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+@@ -308,6 +309,9 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   // PDF viewer, extensions) finds them through this lookup, and
+   extensions::ExtensionTabUtil::SetEmbedderTabLookup(
+       base::BindRepeating(&OACFindTabWebContentsForExtensions));
++  // Extensions (plan C14): install confirmations are shell-drawn, and
++  // chrome.tabs.query lists the bridge's tabs.
++  OACInstallExtensionHooks();
+   // DevTools treats them as pages, with Elements, Console and Network.
+   ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate(
+       base::BindRepeating([](content::WebContents* contents) {
+@@ -627,6 +631,16 @@ - (void)registerTab:(OACTab*)tab {
+   [_tabs addObject:tab];
+ }
+ 
++- (NSArray<OACTab*>*)liveTabsForBridge {
++  NSMutableArray<OACTab*>* tabs = [NSMutableArray array];
++  for (OACTab* tab in _tabs.allObjects) {
++    if (!tab.closed) {
++      [tabs addObject:tab];
++    }
++  }
++  return tabs;
++}
++
+ - (void)unregisterTab:(OACTab*)tab {
+   [_tabs removeObject:tab];
+   OACProfile* original = tab.profile.originalProfile;
+diff --git a/openarc/bridge/oac_application_internal.h b/openarc/bridge/oac_application_internal.h
+index 9def00bd7e7c..4329e0897bfe 100644
+--- a/openarc/bridge/oac_application_internal.h
++++ b/openarc/bridge/oac_application_internal.h
+@@ -25,6 +25,8 @@ void OACPostToMainThread(dispatch_block_t block);
+ // browsing contexts go away. The set holds them weakly.
+ - (void)registerTab:(OACTab*)tab;
+ - (void)unregisterTab:(OACTab*)tab;
++// Every live tab (plan C14: chrome.tabs.query lists them for extensions).
++@property(nonatomic, readonly) NSArray<OACTab*>* liveTabsForBridge;
+ @end
+ 
+ #endif  // OPENARC_BRIDGE_OAC_APPLICATION_INTERNAL_H_
+diff --git a/openarc/bridge/oac_extensions.mm b/openarc/bridge/oac_extensions.mm
+new file mode 100644
+index 000000000000..6cbc5fc92146
+--- /dev/null
++++ b/openarc/bridge/oac_extensions.mm
+@@ -0,0 +1,1192 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// A profile's extensions (plan C14, OACExtensions.h). //chrome's extension
++// system runs as in Chrome (ExtensionService, the Web Store installer,
++// UnpackedInstaller, ExtensionActionManager / Runner, content scripts); the
++// bridge replaces the parts that are Chrome's toolbar and Views dialogs:
++// - the toolbar: action state per tab is read from ExtensionAction and given
++//   to the shell as data (icon PNG, badge, title, enabled, popup);
++// - popups: an ExtensionViewHost of type popup whose WebContents' view the
++//   shell puts in its own bubble (OACExtensionPopup);
++// - the install dialog: ExtensionInstallPrompt's embedder dialog hook (an
++//   Open Arc patch) turns every confirmation into an
++//   OACExtensionInstallRequest for the profile's delegate.
++
++#import "openarc/bridge/oac_extensions_internal.h"
++
++#import <AppKit/AppKit.h>
++
++#include <map>
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/apple/foundation_util.h"
++#include "base/check.h"
++#include "base/files/file_path.h"
++#include "base/functional/bind.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_multi_source_observation.h"
++#include "base/scoped_observation.h"
++#include "base/strings/sys_string_conversions.h"
++#include "chrome/browser/extensions/extension_action_dispatcher.h"
++#include "chrome/browser/extensions/extension_action_runner.h"
++#include "chrome/browser/extensions/extension_install_prompt.h"
++#include "chrome/browser/extensions/extension_install_prompt_show_params.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/extensions/extension_view.h"
++#include "chrome/browser/extensions/extension_view_host.h"
++#include "chrome/browser/extensions/webstore_install_with_prompt.h"
++#include "chrome/browser/extensions/window_controller.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "components/input/native_web_keyboard_event.h"
++#include "components/prefs/pref_service.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "content/public/browser/keyboard_event_processing_result.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "extensions/browser/disable_reason.h"
++#include "extensions/browser/extension_action.h"
++#include "extensions/browser/extension_action_manager.h"
++#include "extensions/browser/extension_host.h"
++#include "extensions/browser/extension_icon_image.h"
++#include "extensions/browser/extension_registrar.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_registry_observer.h"
++#include "extensions/browser/extension_util.h"
++#include "extensions/browser/install_prompt_data.h"
++#include "extensions/browser/permissions/active_tab_permission_granter.h"
++#include "extensions/browser/ui_util.h"
++#include "extensions/browser/uninstall_reason.h"
++#include "extensions/browser/unpacked_installer.h"
++#include "extensions/browser/webstore_install_result.h"
++#include "extensions/common/api/extension_action/action_info.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/manifest.h"
++#include "extensions/common/manifest_handlers/incognito_info.h"
++#include "extensions/common/mojom/view_type.mojom.h"
++#include "net/base/apple/url_conversions.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/base/window_open_disposition.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/geometry/size.h"
++#include "ui/gfx/image/image.h"
++#include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/image/image_skia_rep.h"
++#include "url/gurl.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++
++using extensions::Extension;
++using extensions::ExtensionAction;
++using extensions::InstallPromptData;
++
++@interface OACExtensions ()
++- (void)registryDidChange;
++- (void)actionDidUpdate:(const std::string&)extensionID
++            webContents:(content::WebContents*)webContents;
++- (void)popupDidClose:(OACExtensionPopup*)popup;
++@end
++
++@interface OACExtensionPopup ()
++- (instancetype)initWithHost:(std::unique_ptr<extensions::ExtensionViewHost>)host
++                         tab:(OACTab*)tab
++                       owner:(OACExtensions*)owner;
++- (void)hostDidLoad;
++- (void)hostDidResizeTo:(const gfx::Size&)size;
++- (void)hostDidAskToClose;
++@end
++
++@interface OACExtensionInstallRequest ()
++- (instancetype)initWithTab:(OACTab*)tab
++                 identifier:(NSString*)identifier
++                       name:(NSString*)name
++                       icon:(NSData*)icon
++                      title:(NSString*)title
++                acceptTitle:(NSString*)acceptTitle
++                cancelTitle:(NSString*)cancelTitle
++         permissionWarnings:(NSArray<NSString*>*)warnings
++                   callback:(ExtensionInstallPrompt::DoneCallback)callback;
++@end
++
++@interface OACExtensionInfo ()
++- (instancetype)initWithIdentifier:(NSString*)identifier
++                              name:(NSString*)name
++                           version:(NSString*)version
++                           enabled:(BOOL)enabled
++                allowedInIncognito:(BOOL)allowedInIncognito
++                          unpacked:(BOOL)unpacked
++                              icon:(NSData*)icon
++                         badgeText:(NSString*)badgeText
++                       actionTitle:(NSString*)actionTitle
++                     actionEnabled:(BOOL)actionEnabled
++                          hasPopup:(BOOL)hasPopup;
++@end
++
++namespace {
++
++// Chromium's popup limits (chrome/browser/ui/extensions/extension_popup_types.h,
++// a Views-side target the embedder does not link).
++constexpr gfx::Size kPopupMinSize(25, 25);
++constexpr gfx::Size kPopupMaxSize(800, 600);
++
++// Action icons go to the shell at 16 pt in 2x pixels.
++constexpr float kIconScale = 2.0f;
++
++NSString* ToNS(const std::string& value) {
++  return base::SysUTF8ToNSString(value);
++}
++
++NSData* PNGFromImage(const gfx::Image& image) {
++  if (image.IsEmpty()) {
++    return nil;
++  }
++  const gfx::ImageSkia* skia = image.ToImageSkia();
++  if (!skia || skia->isNull()) {
++    return nil;
++  }
++  const SkBitmap bitmap = skia->GetRepresentation(kIconScale).GetBitmap();
++  if (bitmap.drawsNothing()) {
++    return nil;
++  }
++  std::optional<std::vector<uint8_t>> encoded =
++      gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, /*discard_transparency=*/false);
++  return encoded ? [NSData dataWithBytes:encoded->data()
++                                  length:encoded->size()]
++                 : nil;
++}
++
++// Extensions the user manages: no component extensions (PDF viewer, Web
++// Store app), no themes or apps.
++bool IsUserExtension(const Extension& extension) {
++  return extension.is_extension() &&
++         extensions::ui_util::ShouldDisplayInExtensionSettings(extension);
++}
++
++// The on-disk profile behind |tab|, and whether the tab is off the record.
++Profile* OriginalProfileOfTab(OACTab* tab) {
++  content::WebContents* contents = tab.webContents;
++  if (!contents) {
++    return nullptr;
++  }
++  return Profile::FromBrowserContext(contents->GetBrowserContext())
++      ->GetOriginalProfile();
++}
++
++// The action's icon on |tab_id|: the one an extension set for the tab or
++// declaratively, else its default icon (Chrome's ExtensionActionIconFactory
++// order, without the grayscale treatment).
++gfx::Image ActionIcon(const ExtensionAction& action, int tab_id) {
++  gfx::Image icon = action.GetExplicitlySetIcon(tab_id);
++  if (icon.IsEmpty()) {
++    icon = action.GetDeclarativeIcon(tab_id);
++  }
++  if (icon.IsEmpty()) {
++    icon = action.GetDefaultIconImage();
++  }
++  return icon;
++}
++
++}  // namespace
++
++namespace openarc {
++
++// Observes a profile's ExtensionRegistry and ExtensionActionDispatcher for an
++// OACExtensions.
++class ExtensionsObserverBridge : public extensions::ExtensionRegistryObserver,
++                                 public extensions::ExtensionActionDispatcher::
++                                     Observer,
++                                 public extensions::IconImage::Observer {
++ public:
++  ExtensionsObserverBridge(OACExtensions* owner, Profile* profile)
++      : owner_(owner), profile_(profile) {
++    registry_observation_.Observe(extensions::ExtensionRegistry::Get(profile));
++    if (auto* dispatcher =
++            extensions::ExtensionActionDispatcher::Get(profile)) {
++      dispatcher_ = dispatcher;
++      dispatcher->AddObserver(this);
++    }
++  }
++  ExtensionsObserverBridge(const ExtensionsObserverBridge&) = delete;
++  ExtensionsObserverBridge& operator=(const ExtensionsObserverBridge&) =
++      delete;
++  ~ExtensionsObserverBridge() override {
++    if (dispatcher_) {
++      dispatcher_->RemoveObserver(this);
++    }
++  }
++
++  // extensions::ExtensionRegistryObserver:
++  void OnExtensionLoaded(content::BrowserContext* browser_context,
++                         const Extension* extension) override {
++    Changed();
++  }
++  void OnExtensionUnloaded(content::BrowserContext* browser_context,
++                           const Extension* extension,
++                           extensions::UnloadedExtensionReason reason) override {
++    Changed();
++  }
++  void OnExtensionInstalled(content::BrowserContext* browser_context,
++                            const Extension* extension,
++                            bool is_update) override {
++    Changed();
++  }
++  void OnExtensionUninstalled(content::BrowserContext* browser_context,
++                              const Extension* extension,
++                              extensions::UninstallReason reason) override {
++    Changed();
++  }
++  void OnShutdown(extensions::ExtensionRegistry* registry) override {
++    registry_observation_.Reset();
++  }
++
++  // extensions::ExtensionActionDispatcher::Observer:
++  void OnExtensionActionUpdated(
++      ExtensionAction* extension_action,
++      content::WebContents* web_contents,
++      content::BrowserContext* browser_context) override {
++    if (!browser_context ||
++        Profile::FromBrowserContext(browser_context)->GetOriginalProfile() !=
++            profile_) {
++      return;
++    }
++    [owner_ actionDidUpdate:extension_action->extension_id()
++                webContents:web_contents];
++  }
++  void OnShuttingDown() override {
++    if (dispatcher_) {
++      dispatcher_->RemoveObserver(this);
++      dispatcher_ = nullptr;
++    }
++  }
++
++  // An action's default icon loads asynchronously (IconImage); until it has,
++  // it reads as a transparent image. Chrome's toolbar watches it
++  // (ExtensionActionIconFactory); the bridge reports the change as an action
++  // update for every tab.
++  void WatchIcon(ExtensionAction* action) {
++    extensions::IconImage* image = action->default_icon_image();
++    if (!image || icon_observations_.IsObservingSource(image)) {
++      return;
++    }
++    icon_extensions_[image] = action->extension_id();
++    icon_observations_.AddObservation(image);
++  }
++
++  // extensions::IconImage::Observer:
++  void OnExtensionIconImageChanged(extensions::IconImage* image) override {
++    auto it = icon_extensions_.find(image);
++    if (it != icon_extensions_.end()) {
++      [owner_ actionDidUpdate:it->second webContents:nullptr];
++    }
++  }
++  void OnExtensionIconImageDestroyed(extensions::IconImage* image) override {
++    icon_observations_.RemoveObservation(image);
++    icon_extensions_.erase(image);
++  }
++
++ private:
++  void Changed() { [owner_ registryDidChange]; }
++
++  __weak OACExtensions* owner_;
++  raw_ptr<Profile> profile_;
++  raw_ptr<extensions::ExtensionActionDispatcher> dispatcher_ = nullptr;
++  base::ScopedObservation<extensions::ExtensionRegistry,
++                          extensions::ExtensionRegistryObserver>
++      registry_observation_{this};
++  base::ScopedMultiSourceObservation<extensions::IconImage,
++                                     extensions::IconImage::Observer>
++      icon_observations_{this};
++  std::map<extensions::IconImage*, std::string> icon_extensions_;
++};
++
++// The ExtensionView of a popup: hosts nothing itself (the shell's bubble
++// shows the WebContents' view) and forwards size and load to the popup.
++class PopupExtensionView : public extensions::ExtensionView {
++ public:
++  explicit PopupExtensionView(OACExtensionPopup* popup) : popup_(popup) {}
++
++  void set_native_view(gfx::NativeView view) { native_view_ = view; }
++
++  // extensions::ExtensionView:
++  gfx::NativeView GetNativeView() override { return native_view_; }
++  void ResizeDueToAutoResize(content::WebContents* web_contents,
++                             const gfx::Size& new_size) override {
++    [popup_ hostDidResizeTo:new_size];
++  }
++  void RenderFrameCreated(content::RenderFrameHost* frame) override {
++    // Chrome's popup view enables auto-resize the same way (views::WebView),
++    // so the page reports the size it needs. The popup page commits in a new
++    // main frame (cross-site from the initial about:blank one), which is not
++    // the primary one yet when it is created: every main frame gets it.
++    EnableAutoResize(frame);
++  }
++  bool HandleKeyboardEvent(content::WebContents* source,
++                           const input::NativeWebKeyboardEvent& event) override {
++    return false;
++  }
++  void OnLoaded() override { [popup_ hostDidLoad]; }
++
++  static void EnableAutoResize(content::RenderFrameHost* frame) {
++    if (frame && !frame->GetParent() && frame->GetView()) {
++      frame->GetView()->EnableAutoResize(kPopupMinSize, kPopupMaxSize);
++    }
++  }
++
++ private:
++  __weak OACExtensionPopup* popup_;
++  gfx::NativeView native_view_;
++};
++
++// The ExtensionViewHost delegate of a popup. Links the popup opens
++// (chrome.tabs-less `window.open`, target=_blank) go to the shell as new-tab
++// requests from the popup's tab.
++class PopupHostDelegate : public extensions::ExtensionViewHost::Delegate {
++ public:
++  explicit PopupHostDelegate(OACTab* tab) : tab_(tab) {}
++
++  content::WebContents* OpenURL(
++      const content::OpenURLParams& params,
++      base::OnceCallback<void(content::NavigationHandle&)>
++          navigation_handle_callback) override {
++    OACTab* tab = tab_;
++    content::WebContents* contents = tab.webContents;
++    if (!contents || !contents->GetDelegate()) {
++      return nullptr;
++    }
++    // The tab's own WebContentsDelegate turns a non-current-tab open into an
++    // OACNewTabRequest of that tab.
++    content::OpenURLParams forwarded(params);
++    if (forwarded.disposition == WindowOpenDisposition::CURRENT_TAB) {
++      forwarded.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    }
++    return contents->GetDelegate()->OpenURLFromTab(
++        contents, forwarded, std::move(navigation_handle_callback));
++  }
++  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
++      content::WebContents* source,
++      const input::NativeWebKeyboardEvent& event) override {
++    return content::KeyboardEventProcessingResult::NOT_HANDLED;
++  }
++  std::unique_ptr<content::EyeDropper> OpenEyeDropper(
++      content::RenderFrameHost* frame,
++      content::EyeDropperListener* listener) override {
++    return nullptr;
++  }
++  extensions::WindowController* GetExtensionWindowController() override {
++    return nullptr;
++  }
++
++ private:
++  __weak OACTab* tab_;
++};
++
++}  // namespace openarc
++
++// MARK: - OACExtensionInfo
++
++@implementation OACExtensionInfo {
++  NSString* _identifier;
++  NSString* _name;
++  NSString* _version;
++  BOOL _enabled;
++  BOOL _allowedInIncognito;
++  BOOL _unpacked;
++  NSData* _iconPNGData;
++  NSString* _badgeText;
++  NSString* _actionTitle;
++  BOOL _isActionEnabled;
++  BOOL _hasPopup;
++}
++
++- (instancetype)initWithIdentifier:(NSString*)identifier
++                              name:(NSString*)name
++                           version:(NSString*)version
++                           enabled:(BOOL)enabled
++                allowedInIncognito:(BOOL)allowedInIncognito
++                          unpacked:(BOOL)unpacked
++                              icon:(NSData*)icon
++                         badgeText:(NSString*)badgeText
++                       actionTitle:(NSString*)actionTitle
++                     actionEnabled:(BOOL)actionEnabled
++                          hasPopup:(BOOL)hasPopup {
++  if ((self = [super init])) {
++    _identifier = [identifier copy];
++    _name = [name copy];
++    _version = [version copy];
++    _enabled = enabled;
++    _allowedInIncognito = allowedInIncognito;
++    _unpacked = unpacked;
++    _iconPNGData = [icon copy];
++    _badgeText = [badgeText copy] ?: @"";
++    _actionTitle = [actionTitle copy] ?: @"";
++    _isActionEnabled = actionEnabled;
++    _hasPopup = hasPopup;
++  }
++  return self;
++}
++
++- (id)copyWithZone:(NSZone*)zone {
++  return self;
++}
++
++- (NSString*)identifier {
++  return _identifier;
++}
++- (NSString*)name {
++  return _name;
++}
++- (NSString*)version {
++  return _version;
++}
++- (BOOL)isEnabled {
++  return _enabled;
++}
++- (BOOL)allowedInIncognito {
++  return _allowedInIncognito;
++}
++- (BOOL)isUnpacked {
++  return _unpacked;
++}
++- (NSData*)iconPNGData {
++  return _iconPNGData;
++}
++- (NSString*)badgeText {
++  return _badgeText;
++}
++- (NSString*)actionTitle {
++  return _actionTitle;
++}
++- (BOOL)isActionEnabled {
++  return _isActionEnabled;
++}
++- (BOOL)hasPopup {
++  return _hasPopup;
++}
++
++- (NSString*)description {
++  return [NSString stringWithFormat:@"<OACExtensionInfo %@ %@ %@>",
++                                    _identifier, _name, _version];
++}
++
++@end
++
++// MARK: - OACExtensionInstallRequest
++
++@implementation OACExtensionInstallRequest {
++  __weak OACTab* _tab;
++  NSString* _extensionIdentifier;
++  NSString* _extensionName;
++  NSData* _iconPNGData;
++  NSString* _title;
++  NSString* _acceptButtonTitle;
++  NSString* _cancelButtonTitle;
++  NSArray<NSString*>* _permissionWarnings;
++  ExtensionInstallPrompt::DoneCallback _callback;
++  BOOL _finished;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                 identifier:(NSString*)identifier
++                       name:(NSString*)name
++                       icon:(NSData*)icon
++                      title:(NSString*)title
++                acceptTitle:(NSString*)acceptTitle
++                cancelTitle:(NSString*)cancelTitle
++         permissionWarnings:(NSArray<NSString*>*)warnings
++                   callback:(ExtensionInstallPrompt::DoneCallback)callback {
++  if ((self = [super init])) {
++    _tab = tab;
++    _extensionIdentifier = [identifier copy];
++    _extensionName = [name copy];
++    _iconPNGData = [icon copy];
++    _title = [title copy];
++    _acceptButtonTitle = [acceptTitle copy];
++    _cancelButtonTitle = [cancelTitle copy];
++    _permissionWarnings = [warnings copy];
++    _callback = std::move(callback);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self finishWith:ExtensionInstallPrompt::Result::USER_CANCELED];
++}
++
++- (OACTab*)tab {
++  return _tab;
++}
++- (NSString*)extensionIdentifier {
++  return _extensionIdentifier;
++}
++- (NSString*)extensionName {
++  return _extensionName;
++}
++- (NSData*)iconPNGData {
++  return _iconPNGData;
++}
++- (NSString*)title {
++  return _title;
++}
++- (NSString*)acceptButtonTitle {
++  return _acceptButtonTitle;
++}
++- (NSString*)cancelButtonTitle {
++  return _cancelButtonTitle;
++}
++- (NSArray<NSString*>*)permissionWarnings {
++  return _permissionWarnings;
++}
++- (BOOL)isFinished {
++  return _finished;
++}
++
++- (void)approve {
++  [self finishWith:ExtensionInstallPrompt::Result::ACCEPTED];
++}
++
++- (void)cancel {
++  [self finishWith:ExtensionInstallPrompt::Result::USER_CANCELED];
++}
++
++- (void)finishWith:(ExtensionInstallPrompt::Result)result {
++  if (_finished) {
++    return;
++  }
++  _finished = YES;
++  if (_callback) {
++    std::move(_callback).Run(ExtensionInstallPrompt::DoneCallbackPayload(result));
++  }
++}
++
++@end
++
++// MARK: - OACExtensionPopup
++
++@implementation OACExtensionPopup {
++  NSString* _extensionIdentifier;
++  __weak OACTab* _tab;
++  __weak OACExtensions* _owner;
++  std::unique_ptr<openarc::PopupExtensionView> _view;
++  std::unique_ptr<extensions::ExtensionViewHost> _host;
++  CGSize _preferredSize;
++  BOOL _hasLoaded;
++  BOOL _closed;
++}
++
++@synthesize delegate = _delegate;
++
++- (instancetype)initWithHost:(std::unique_ptr<extensions::ExtensionViewHost>)host
++                         tab:(OACTab*)tab
++                       owner:(OACExtensions*)owner {
++  if ((self = [super init])) {
++    _extensionIdentifier = ToNS(host->extension_id());
++    _tab = tab;
++    _owner = owner;
++    _host = std::move(host);
++    _view = std::make_unique<openarc::PopupExtensionView>(self);
++    _view->set_native_view(_host->host_contents()->GetNativeView());
++    _host->set_view(_view.get());
++    // window.close() in the popup (and Escape, which ExtensionViewHost turns
++    // into Close()).
++    __weak OACExtensionPopup* weakSelf = self;
++    _host->SetCloseHandler(base::BindOnce(^(extensions::ExtensionHost*) {
++      [weakSelf hostDidAskToClose];
++    }));
++    // Starts the renderer and loads the popup page; OnLoaded() follows.
++    _host->CreateRendererSoon();
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self tearDown];
++}
++
++- (NSString*)extensionIdentifier {
++  return _extensionIdentifier;
++}
++- (OACTab*)tab {
++  return _tab;
++}
++- (NSView*)view {
++  if (_closed || !_host) {
++    return nil;
++  }
++  return _host->host_contents()->GetNativeView().GetNativeNSView();
++}
++- (CGSize)preferredSize {
++  return _preferredSize;
++}
++- (BOOL)hasLoaded {
++  return _hasLoaded;
++}
++- (BOOL)isClosed {
++  return _closed;
++}
++
++- (void)focus {
++  if (!_closed && _host) {
++    _host->host_contents()->Focus();
++  }
++}
++
++- (void)close {
++  if (_closed) {
++    return;
++  }
++  [self tearDown];
++  OACExtensions* owner = _owner;
++  [owner popupDidClose:self];
++  __weak OACExtensionPopup* weakSelf = self;
++  id<OACExtensionPopupDelegate> delegate = _delegate;
++  OACPostToMainThread(^{
++    OACExtensionPopup* popup = weakSelf;
++    if (popup &&
++        [delegate respondsToSelector:@selector(extensionPopupDidClose:)]) {
++      [delegate extensionPopupDidClose:popup];
++    }
++  });
++}
++
++- (void)tearDown {
++  _closed = YES;
++  if (!_host) {
++    return;
++  }
++  NSView* view = _host->host_contents()->GetNativeView().GetNativeNSView();
++  [view removeFromSuperview];
++  // The host's WebContents goes with it; the view object must not outlive
++  // the host's pointer to it.
++  std::unique_ptr<extensions::ExtensionViewHost> host = std::move(_host);
++  host->set_view(nullptr);
++  host.reset();
++  _view.reset();
++}
++
++- (void)hostDidLoad {
++  if (_closed || _hasLoaded) {
++    return;
++  }
++  _hasLoaded = YES;
++  // The committed page's main frame (see PopupExtensionView).
++  openarc::PopupExtensionView::EnableAutoResize(
++      _host->host_contents()->GetPrimaryMainFrame());
++  __weak OACExtensionPopup* weakSelf = self;
++  OACPostToMainThread(^{
++    OACExtensionPopup* popup = weakSelf;
++    id<OACExtensionPopupDelegate> delegate = popup.delegate;
++    if (popup && !popup.closed &&
++        [delegate respondsToSelector:@selector(extensionPopupDidLoad:)]) {
++      [delegate extensionPopupDidLoad:popup];
++    }
++  });
++}
++
++- (void)hostDidResizeTo:(const gfx::Size&)size {
++  if (_closed) {
++    return;
++  }
++  CGSize newSize = CGSizeMake(size.width(), size.height());
++  if (CGSizeEqualToSize(newSize, _preferredSize)) {
++    return;
++  }
++  _preferredSize = newSize;
++  __weak OACExtensionPopup* weakSelf = self;
++  OACPostToMainThread(^{
++    OACExtensionPopup* popup = weakSelf;
++    id<OACExtensionPopupDelegate> delegate = popup.delegate;
++    if (popup && !popup.closed &&
++        [delegate respondsToSelector:@selector(extensionPopup:didResizeTo:)]) {
++      [delegate extensionPopup:popup didResizeTo:popup.preferredSize];
++    }
++  });
++}
++
++- (void)hostDidAskToClose {
++  // From inside the host's own call stack: close in a later turn.
++  __weak OACExtensionPopup* weakSelf = self;
++  OACPostToMainThread(^{
++    [weakSelf close];
++  });
++}
++
++@end
++
++// MARK: - OACExtensions
++
++@implementation OACExtensions {
++  __weak OACProfile* _profile;
++  std::unique_ptr<openarc::ExtensionsObserverBridge> _observer;
++  OACExtensionPopup* _popup;
++  BOOL _changePosted;
++}
++
++@synthesize delegate = _delegate;
++
++- (instancetype)initWithProfile:(OACProfile*)profile {
++  if ((self = [super init])) {
++    _profile = profile;
++    if (Profile* chrome = profile.chromeProfile) {
++      _observer = std::make_unique<openarc::ExtensionsObserverBridge>(
++          self, chrome->GetOriginalProfile());
++    }
++  }
++  return self;
++}
++
++- (void)invalidate {
++  [_popup close];
++  _popup = nil;
++  _observer.reset();
++}
++
++- (OACProfile*)profile {
++  return _profile;
++}
++
++- (Profile*)chromeProfile {
++  OACProfile* profile = _profile;
++  Profile* chrome = profile.valid ? profile.chromeProfile : nullptr;
++  return chrome ? chrome->GetOriginalProfile() : nullptr;
++}
++
++- (OACExtensionInfo*)infoForExtension:(const Extension&)extension
++                              enabled:(BOOL)enabled
++                              profile:(Profile*)profile
++                                tabID:(std::optional<int>)tabID {
++  NSData* icon = nil;
++  NSString* badge = @"";
++  NSString* title = @"";
++  BOOL actionEnabled = NO;
++  BOOL hasPopup = NO;
++  ExtensionAction* action =
++      enabled ? extensions::ExtensionActionManager::Get(profile)
++                    ->GetExtensionAction(extension)
++              : nullptr;
++  if (action) {
++    if (_observer) {
++      _observer->WatchIcon(action);
++    }
++    const int tab = tabID.value_or(ExtensionAction::kDefaultTabId);
++    extensions::IconImage* defaultImage = action->default_icon_image();
++    if (defaultImage && !defaultImage->did_complete_initial_load()) {
++      // IconImage loads a scale only when a representation is asked for;
++      // asking starts the load (the observer reports when it is in).
++      defaultImage->image_skia().GetRepresentation(kIconScale);
++    }
++    const bool defaultLoading = defaultImage &&
++                                !defaultImage->did_complete_initial_load();
++    gfx::Image image = ActionIcon(*action, tab);
++    // A default icon still loading reads as transparent: show the
++    // placeholder until it is in (the observer reports it then).
++    icon = defaultLoading && action->GetExplicitlySetIcon(tab).IsEmpty() &&
++                   action->GetDeclarativeIcon(tab).IsEmpty()
++               ? nil
++               : PNGFromImage(image);
++    badge = ToNS(action->GetDisplayBadgeText(tab));
++    title = ToNS(action->GetTitle(tab));
++    actionEnabled = action->GetIsVisible(tab);
++    hasPopup = action->HasPopup(tab);
++  }
++  if (!icon) {
++    // No action, or an icon still loading: the action's placeholder (the
++    // first letter of the name), as Chrome's toolbar shows.
++    icon = action ? PNGFromImage(action->GetPlaceholderIconImage()) : nil;
++  }
++  return [[OACExtensionInfo alloc]
++      initWithIdentifier:ToNS(extension.id())
++                    name:ToNS(extension.name())
++                 version:ToNS(extension.VersionString())
++                 enabled:enabled
++      allowedInIncognito:extensions::util::IsIncognitoEnabled(extension.id(),
++                                                              profile)
++                unpacked:extensions::Manifest::IsUnpackedLocation(
++                             extension.location())
++                    icon:icon
++               badgeText:badge
++             actionTitle:title
++           actionEnabled:actionEnabled
++                hasPopup:hasPopup];
++}
++
++- (NSArray<OACExtensionInfo*>*)installedExtensions {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  if (!profile) {
++    return @[];
++  }
++  extensions::ExtensionRegistry* registry =
++      extensions::ExtensionRegistry::Get(profile);
++  NSMutableArray<OACExtensionInfo*>* result = [NSMutableArray array];
++  for (const auto& extension : registry->enabled_extensions()) {
++    if (IsUserExtension(*extension)) {
++      [result addObject:[self infoForExtension:*extension
++                                       enabled:YES
++                                       profile:profile
++                                         tabID:std::nullopt]];
++    }
++  }
++  for (const auto& extension : registry->disabled_extensions()) {
++    if (IsUserExtension(*extension)) {
++      [result addObject:[self infoForExtension:*extension
++                                       enabled:NO
++                                       profile:profile
++                                         tabID:std::nullopt]];
++    }
++  }
++  return result;
++}
++
++- (NSArray<OACExtensionInfo*>*)actionsForTab:(OACTab*)tab {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  content::WebContents* contents = tab.webContents;
++  if (!profile || !contents || OriginalProfileOfTab(tab) != profile) {
++    return @[];
++  }
++  const bool off_the_record =
++      contents->GetBrowserContext()->IsOffTheRecord();
++  const int tab_id = sessions::SessionTabHelper::IdForTab(contents).id();
++  NSMutableArray<OACExtensionInfo*>* result = [NSMutableArray array];
++  for (const auto& extension :
++       extensions::ExtensionRegistry::Get(profile)->enabled_extensions()) {
++    if (!IsUserExtension(*extension) ||
++        !extensions::ActionInfo::GetExtensionActionInfo(extension.get())) {
++      continue;
++    }
++    if (off_the_record &&
++        !extensions::util::IsIncognitoEnabled(extension->id(), profile)) {
++      continue;
++    }
++    [result addObject:[self infoForExtension:*extension
++                                     enabled:YES
++                                     profile:profile
++                                       tabID:tab_id]];
++  }
++  return result;
++}
++
++- (OACExtensionPopup*)popup {
++  return _popup;
++}
++
++- (OACExtensionPopup*)runActionOfExtension:(NSString*)extensionIdentifier
++                                     onTab:(OACTab*)tab {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  content::WebContents* contents = tab.webContents;
++  if (!profile || !contents || OriginalProfileOfTab(tab) != profile) {
++    return nil;
++  }
++  const Extension* extension =
++      extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(
++          base::SysNSStringToUTF8(extensionIdentifier));
++  extensions::ExtensionActionRunner* runner =
++      extensions::ExtensionActionRunner::GetForWebContents(contents);
++  if (!extension || !runner) {
++    return nil;
++  }
++  // One popup at a time, as Chrome's toolbar does.
++  [_popup close];
++  _popup = nil;
++
++  // Grants activeTab on the tab and either sends action.onClicked or asks for
++  // the popup, as a click on Chrome's toolbar button does.
++  const ExtensionAction::ShowAction show =
++      runner->RunAction(extension, /*grant_tab_permissions=*/true);
++  if (show != ExtensionAction::ShowAction::kShowPopup) {
++    return nil;
++  }
++  ExtensionAction* action =
++      extensions::ExtensionActionManager::Get(profile)->GetExtensionAction(
++          *extension);
++  const int tab_id = sessions::SessionTabHelper::IdForTab(contents).id();
++  if (!action || !action->HasPopup(tab_id)) {
++    return nil;
++  }
++  // The popup runs in the tab's context: the off-the-record profile for an
++  // incognito tab when the extension runs split there, else the original.
++  Profile* tab_profile =
++      Profile::FromBrowserContext(contents->GetBrowserContext());
++  content::BrowserContext* host_context =
++      tab_profile->IsOffTheRecord() &&
++              extensions::IncognitoInfo::IsSplitMode(extension)
++          ? static_cast<content::BrowserContext*>(tab_profile)
++          : profile;
++  auto host = std::make_unique<extensions::ExtensionViewHost>(
++      extension, host_context, action->GetPopupUrl(tab_id),
++      extensions::mojom::ViewType::kExtensionPopup,
++      std::make_unique<openarc::PopupHostDelegate>(tab));
++  _popup = [[OACExtensionPopup alloc] initWithHost:std::move(host)
++                                               tab:tab
++                                             owner:self];
++  return _popup;
++}
++
++- (void)popupDidClose:(OACExtensionPopup*)popup {
++  if (_popup == popup) {
++    _popup = nil;
++  }
++}
++
++- (void)installFromWebStoreWithIdentifier:(NSString*)extensionIdentifier
++                        completionHandler:(void (^)(NSError*))completionHandler {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  if (!profile) {
++    NSError* error = OACMakeError(OACErrorProfileUnavailable,
++                                  @"The profile is not loaded.");
++    OACPostToMainThread(^{
++      completionHandler(error);
++    });
++    return;
++  }
++  // Chrome's standalone Web Store installer: fetches the item's data from the
++  // store, asks through ExtensionInstallPrompt (our embedder dialog), then
++  // downloads and installs the CRX.
++  auto installer = base::MakeRefCounted<extensions::WebstoreInstallWithPrompt>(
++      base::SysNSStringToUTF8(extensionIdentifier), profile,
++      gfx::NativeWindow(),
++      base::BindOnce(^(bool success, const std::string& error,
++                       extensions::webstore_install::Result result) {
++        NSError* nsError =
++            success ? nil
++                    : OACMakeError(OACErrorInvalidArgument,
++                                   error.empty() ? @"The install failed."
++                                                 : ToNS(error));
++        OACPostToMainThread(^{
++          completionHandler(nsError);
++        });
++      }));
++  installer->BeginInstall();
++}
++
++- (void)loadUnpackedFromURL:(NSURL*)folderURL
++          completionHandler:(void (^)(NSString*, NSError*))completionHandler {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  if (!profile || !folderURL.isFileURL) {
++    NSError* error = OACMakeError(
++        profile ? OACErrorInvalidArgument : OACErrorProfileUnavailable,
++        profile ? @"Not a folder URL." : @"The profile is not loaded.");
++    OACPostToMainThread(^{
++      completionHandler(nil, error);
++    });
++    return;
++  }
++  // Chromium disables unpacked extensions outside developer mode
++  // (ExtensionManagement::IsAllowedByUnpackedDeveloperModePolicy), as
++  // chrome://extensions' "Load unpacked" requires it on.
++  profile->GetPrefs()->SetBoolean(prefs::kExtensionsUIDeveloperMode, true);
++  scoped_refptr<extensions::UnpackedInstaller> installer =
++      extensions::UnpackedInstaller::Create(profile);
++  installer->set_be_noisy_on_failure(false);
++  installer->set_completion_callback(base::BindOnce(
++      ^(const Extension* extension, const base::FilePath& path,
++        const std::u16string& error) {
++        NSString* identifier = extension ? ToNS(extension->id()) : nil;
++        NSError* nsError =
++            extension ? nil
++                      : OACMakeError(OACErrorInvalidArgument,
++                                     base::SysUTF16ToNSString(error));
++        OACPostToMainThread(^{
++          completionHandler(identifier, nsError);
++        });
++      }));
++  installer->Load(base::apple::NSURLToFilePath(folderURL));
++}
++
++- (void)setEnabled:(BOOL)enabled forExtension:(NSString*)extensionIdentifier {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  if (!profile) {
++    return;
++  }
++  extensions::ExtensionRegistrar* registrar =
++      extensions::ExtensionRegistrar::Get(profile);
++  const std::string identifier = base::SysNSStringToUTF8(extensionIdentifier);
++  if (enabled) {
++    registrar->EnableExtension(identifier);
++  } else {
++    registrar->DisableExtension(
++        identifier, {extensions::disable_reason::DISABLE_USER_ACTION});
++  }
++}
++
++- (void)uninstallExtension:(NSString*)extensionIdentifier {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  if (!profile) {
++    return;
++  }
++  const std::string identifier = base::SysNSStringToUTF8(extensionIdentifier);
++  if (_popup && _popup.extensionIdentifier == extensionIdentifier) {
++    [_popup close];
++  }
++  std::u16string error;
++  extensions::ExtensionRegistrar::Get(profile)->UninstallExtension(
++      identifier, extensions::UNINSTALL_REASON_USER_INITIATED, &error);
++}
++
++// MARK: Events
++
++- (void)registryDidChange {
++  // Close a popup whose extension went away.
++  if (_popup) {
++    Profile* profile = self.chromeProfile;
++    if (!profile || !extensions::ExtensionRegistry::Get(profile)
++                         ->enabled_extensions()
++                         .Contains(base::SysNSStringToUTF8(
++                             _popup.extensionIdentifier))) {
++      [_popup close];
++    }
++  }
++  // Coalesced: an install loads, installs and maybe enables in one turn.
++  if (_changePosted) {
++    return;
++  }
++  _changePosted = YES;
++  __weak OACExtensions* weakSelf = self;
++  OACPostToMainThread(^{
++    OACExtensions* strongSelf = weakSelf;
++    if (!strongSelf) {
++      return;
++    }
++    strongSelf->_changePosted = NO;
++    id<OACExtensionsDelegate> delegate = strongSelf.delegate;
++    if ([delegate respondsToSelector:@selector(extensionsDidChange:)]) {
++      [delegate extensionsDidChange:strongSelf];
++    }
++  });
++}
++
++- (void)actionDidUpdate:(const std::string&)extensionID
++            webContents:(content::WebContents*)webContents {
++  NSString* identifier = ToNS(extensionID);
++  OACTab* tab = webContents ? OACTabForWebContents(webContents) : nil;
++  if (webContents && !tab) {
++    return;  // Not one of the shell's tabs.
++  }
++  __weak OACExtensions* weakSelf = self;
++  __weak OACTab* weakTab = tab;
++  const bool everyTab = !webContents;
++  OACPostToMainThread(^{
++    OACExtensions* strongSelf = weakSelf;
++    OACTab* strongTab = weakTab;
++    id<OACExtensionsDelegate> delegate = strongSelf.delegate;
++    if (!strongSelf || (!everyTab && !strongTab)) {
++      return;
++    }
++    if ([delegate respondsToSelector:@selector
++                  (extensions:didUpdateActionOfExtension:tab:)]) {
++      [delegate extensions:strongSelf
++          didUpdateActionOfExtension:identifier
++                                 tab:strongTab];
++    }
++  });
++}
++
++@end
++
++// MARK: - Hooks
++
++namespace {
++
++// ExtensionInstallPrompt's embedder dialog (an Open Arc patch): every install
++// confirmation goes to the profile's OACExtensions delegate.
++void ShowInstallConfirmation(
++    std::unique_ptr<ExtensionInstallPromptShowParams> show_params,
++    ExtensionInstallPrompt::DoneCallback done_callback,
++    std::unique_ptr<InstallPromptData> prompt) {
++  Profile* profile = show_params->profile();
++  content::WebContents* contents = show_params->GetParentWebContents();
++  OACTab* tab = contents ? OACTabForWebContents(contents) : nil;
++  OACProfile* owner = nil;
++  if (profile) {
++    for (OACProfile* candidate in OACApplication.sharedApplication
++             .loadedProfiles) {
++      if (candidate.valid &&
++          candidate.chromeProfile == profile->GetOriginalProfile()) {
++        owner = candidate;
++        break;
++      }
++    }
++  }
++  const Extension* extension = prompt->extension();
++  NSMutableArray<NSString*>* warnings = [NSMutableArray array];
++  for (size_t i = 0; i < prompt->GetPermissionCount(); ++i) {
++    [warnings addObject:base::SysUTF16ToNSString(prompt->GetPermission(i))];
++  }
++  OACExtensionInstallRequest* request = [[OACExtensionInstallRequest alloc]
++      initWithTab:tab
++       identifier:extension ? ToNS(extension->id()) : @""
++             name:extension ? ToNS(extension->name()) : @""
++             icon:PNGFromImage(prompt->icon())
++            title:base::SysUTF16ToNSString(prompt->GetDialogTitle())
++      acceptTitle:base::SysUTF16ToNSString(prompt->GetAcceptButtonLabel())
++      cancelTitle:base::SysUTF16ToNSString(prompt->GetAbortButtonLabel())
++      permissionWarnings:warnings
++         callback:std::move(done_callback)];
++  OACExtensions* extensions = owner.valid ? owner.extensions : nil;
++  // From a posted task (OACDefines.h): never inside Chromium's call.
++  OACPostToMainThread(^{
++    id<OACExtensionsDelegate> delegate = extensions.delegate;
++    BOOL shown = NO;
++    if (extensions &&
++        [delegate respondsToSelector:@selector(extensions:confirmInstall:)]) {
++      shown = [delegate extensions:extensions confirmInstall:request];
++    }
++    if (!shown) {
++      [request cancel];
++    }
++  });
++}
++
++// chrome.tabs.query's embedder tab list (an Open Arc patch): every live tab of
++// the profile. The shell does not tell the bridge which tabs are on screen,
++// so "active" means the tab's page is visible, and every tab counts as in the
++// current window (inferred: Arc shows one window's tabs in its sidebar).
++std::vector<extensions::ExtensionTabUtil::EmbedderTab> ListTabs(
++    content::BrowserContext* browser_context,
++    bool include_incognito) {
++  std::vector<extensions::ExtensionTabUtil::EmbedderTab> result;
++  Profile* profile = Profile::FromBrowserContext(browser_context);
++  for (OACTab* tab in OACApplication.sharedApplication.liveTabsForBridge) {
++    content::WebContents* contents = tab.webContents;
++    if (!contents) {
++      continue;
++    }
++    Profile* tab_profile =
++        Profile::FromBrowserContext(contents->GetBrowserContext());
++    if (tab_profile != profile &&
++        !(include_incognito && profile->IsSameOrParent(tab_profile))) {
++      continue;
++    }
++    extensions::ExtensionTabUtil::EmbedderTab entry;
++    entry.contents = contents;
++    entry.active =
++        contents->GetVisibility() == content::Visibility::VISIBLE;
++    entry.in_current_window = true;
++    result.push_back(entry);
++  }
++  return result;
++}
++
++}  // namespace
++
++void OACInstallExtensionHooks() {
++  ExtensionInstallPrompt::SetEmbedderShowDialogCallback(
++      base::BindRepeating(&ShowInstallConfirmation));
++  extensions::ExtensionTabUtil::SetEmbedderTabList(
++      base::BindRepeating(&ListTabs));
++}
+diff --git a/openarc/bridge/oac_extensions_internal.h b/openarc/bridge/oac_extensions_internal.h
+new file mode 100644
+index 000000000000..bfe776bad068
+--- /dev/null
++++ b/openarc/bridge/oac_extensions_internal.h
+@@ -0,0 +1,25 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_EXTENSIONS_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_EXTENSIONS_INTERNAL_H_
++
++#import <OpenArcCore/OACExtensions.h>
++
++@interface OACExtensions ()
++// The extensions of the on-disk |profile| (its off-the-record variant shares
++// them). Observes the profile's ExtensionRegistry and the action dispatcher
++// until -invalidate.
++- (instancetype)initWithProfile:(OACProfile*)profile;
++// The profile goes away (deletion, engine shutdown): closes the popup and
++// stops observing.
++- (void)invalidate;
++@end
++
++// Registers the bridge's hooks in //chrome's extension code (plan C14): the
++// install confirmation (ExtensionInstallPrompt's embedder dialog) and the
++// embedder tab list of chrome.tabs.query. Called once when the engine starts.
++void OACInstallExtensionHooks();
++
++#endif  // OPENARC_BRIDGE_OAC_EXTENSIONS_INTERNAL_H_
+diff --git a/openarc/bridge/oac_profile.mm b/openarc/bridge/oac_profile.mm
+index 6782a6fc0881..54848b36cc8a 100644
+--- a/openarc/bridge/oac_profile.mm
++++ b/openarc/bridge/oac_profile.mm
+@@ -19,6 +19,7 @@
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_downloads_internal.h"
++#import "openarc/bridge/oac_extensions_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_site_settings_internal.h"
+ 
+@@ -95,8 +96,8 @@ uint64_t RemoveMask(OACBrowsingDataTypes types) {
+ // ProfileManager in <userDataDirectory>/<UUID>. Its off-the-record variant is
+ // Chrome's primary OTR profile of that Profile: OACApplication destroys it
+ // after the last off-the-record tab closed (-destroyOffTheRecordContext), and
+-// the next incognito tab gets a fresh one. Downloads since C12; the extensions
+-// surface comes with C14.
++// the next incognito tab gets a fresh one. Downloads since C12, extensions
++// since C14.
+ @implementation OACProfile {
+   NSUUID* _identifier;
+   NSURL* _dataDirectory;
+@@ -104,6 +105,7 @@ @implementation OACProfile {
+   OACProfile* _offTheRecordProfile;
+   OACSiteSettings* _siteSettings;
+   OACDownloads* _downloads;
++  OACExtensions* _extensions;
+   base::WeakPtr<Profile> _profile;
+   // Keeps an on-disk profile loaded while the shell may use it (Chrome
+   // otherwise unloads a profile that has no browser window).
+@@ -160,6 +162,8 @@ - (Profile*)chromeProfile {
+ - (void)invalidate {
+   [_downloads invalidate];
+   _downloads = nil;
++  [_extensions invalidate];
++  _extensions = nil;
+   _valid = NO;
+   [_offTheRecordProfile invalidate];
+   _offTheRecordProfile = nil;
+@@ -239,8 +243,16 @@ - (OACDownloads*)downloads {
+ }
+ 
+ - (OACExtensions*)extensions {
+-  CHECK(false) << "OACProfile.extensions is not implemented yet (plan C14)";
+-  return nil;
++  // Off-the-record profiles share their original profile's extensions
++  // (OACProfile.h).
++  OACProfile* original = _originalProfile;
++  if (original) {
++    return original.extensions;
++  }
++  if (!_extensions) {
++    _extensions = [[OACExtensions alloc] initWithProfile:self];
++  }
++  return _extensions;
+ }
+ 
+ - (void)clearBrowsingDataOfTypes:(OACBrowsingDataTypes)types
+diff --git a/openarc/bridge/public/OpenArcCore/OACExtensions.h b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+index 0f2852f0334c..36208c4382fd 100644
+--- a/openarc/bridge/public/OpenArcCore/OACExtensions.h
++++ b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+@@ -2,23 +2,28 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-// OACExtensions: a profile's extensions. Skeleton for plan C14 (install from the Web Store,
+-// toolbar actions in the Site Control Center, popups). Spec: [01 §Extensions] observed
++// OACExtensions: a profile's extensions (plan C14). Spec: [01 §Extensions] observed
+ // "Add Extension…" and "Manage Extensions…"; [06 §12] observed the Site Control Center
+-// "Extensions" section with an add button and "Manage" when extensions exist.
++// "Extensions" section with an add button and "Manage" when extensions exist; [06 §17.2] observed
++// that the web toolbar has no extension buttons (they are all in the Site Control Center).
+ //
+-// Maps to: `SiteExtensionAction` and `SiteSettingsProvider.runExtensionAction` in
+-// app/Sources/OpenArcShell/SiteControls/SiteSettingsProvider.swift; the rest is proposed as
+-// `EngineExtensions` (SWIFT_PROTOCOL_CHANGES.md §9).
+-// The Chromium side (kept from `//chrome`, decision Q7): `ExtensionService` / `ExtensionRegistry`,
+-// the Web Store installer (webstore_private API on chromewebstore.google.com), and
+-// `ExtensionActionManager`. Chrome's toolbar (`ExtensionsToolbarContainer`) is replaced: action
+-// icons are given to the shell as data, and popups are hosted in a view the shell places in its
+-// own popover. Install confirmation (Chrome's install dialog) is a request to the shell.
++// Maps to: `EngineExtensions` (app/Sources/OpenArcEngine/EngineServices.swift), the Site Control
++// Center's `SiteExtensionAction`, `ExtensionPopup` and the `.extensionInstall` dialog request.
+ //
+-// Skeleton: enough for the Site Control Center list and the Add / Manage menu items. Permissions
+-// changes, side panels and the extension context menu are settled in C14. "Manage Extensions…"
+-// opens chrome://extensions in a tab until a native page exists.
++// The Chromium side (kept from `//chrome`, decision Q7): the profile's `ExtensionService` /
++// `ExtensionRegistry` / `ExtensionRegistrar`, the Web Store installer (the store page's
++// webstorePrivate API on chromewebstore.google.com, in a normal tab), `UnpackedInstaller`,
++// `ExtensionActionManager` / `ExtensionActionRunner` and an `ExtensionViewHost` per popup. Chrome's
++// toolbar (`ExtensionsToolbarContainer`) and its Views dialogs are replaced: action icons reach the
++// shell as data, a popup's page is a view the shell places in its own bubble, and install
++// confirmations (Chrome's install dialog, an Open Arc hook in `ExtensionInstallPrompt`) are
++// requests the shell answers.
++//
++// Not covered: the extension context menu, side panels, `chrome.action.openPopup()`, keyboard
++// shortcuts of extension commands, and APIs that need a Chrome `Browser` window
++// (`chrome.tabs.create`, `chrome.windows.*`, `chrome.runtime.openOptionsPage`): they fail as in a
++// Chrome without windows. "Manage Extensions…" opens chrome://extensions in a tab until a native
++// page exists.
+ 
+ #import <OpenArcCore/OACDefines.h>
+ 
+@@ -28,9 +33,10 @@ NS_ASSUME_NONNULL_BEGIN
+ @class OACProfile;
+ @class OACTab;
+ @class OACExtensions;
++@class OACExtensionPopup;
+ 
+ /// One installed extension, with its action state for a given tab when one was asked for.
+-/// Maps to `SiteExtensionAction` (id, name; the icon replaces the SF Symbol placeholder).
++/// Maps to `EngineExtensionInfo` and the Site Control Center's `SiteExtensionAction`.
+ OAC_EXPORT NS_SWIFT_SENDABLE
+ @interface OACExtensionInfo : NSObject <NSCopying>
+ /// The 32-character extension id (`SiteExtensionAction.id`).
+@@ -39,7 +45,10 @@ OAC_EXPORT NS_SWIFT_SENDABLE
+ @property (nonatomic, readonly, copy) NSString *version;
+ @property (nonatomic, readonly, getter=isEnabled) BOOL enabled;
+ @property (nonatomic, readonly) BOOL allowedInIncognito;
+-/// The action icon (for the tab, if the info was read for one) at 32 px, PNG.
++/// Loaded from a folder (developer mode), not from the Web Store.
++@property (nonatomic, readonly, getter=isUnpacked) BOOL unpacked;
++/// The action icon (for the tab, if the info was read for one) at 16 pt in 2x pixels (32 px), PNG.
++/// For an extension without an action: its product icon. nil while it is still loading.
+ @property (nonatomic, readonly, copy, nullable) NSData *iconPNGData;
+ /// Badge text and tooltip of the action for the tab; empty when none.
+ @property (nonatomic, readonly, copy) NSString *badgeText;
+@@ -52,20 +61,71 @@ OAC_EXPORT NS_SWIFT_SENDABLE
+ + (instancetype)new NS_UNAVAILABLE;
+ @end
+ 
+-/// Install confirmation for a Web Store install. Answer once; dropping it unanswered cancels.
++/// Install confirmation (Chrome's install dialog): a Web Store install, a re-enable after a
++/// permission increase, or `installFromWebStoreWithIdentifier:`. Answer once; dropping it
++/// unanswered cancels the install.
+ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ @interface OACExtensionInstallRequest : NSObject
++/// The tab that asked (the Web Store page); nil when no tab did (`installFromWebStore…`). The
++/// shell draws the confirmation over this tab.
++@property (nonatomic, readonly, weak, nullable) OACTab *tab;
++@property (nonatomic, readonly, copy) NSString *extensionIdentifier;
+ @property (nonatomic, readonly, copy) NSString *extensionName;
+ @property (nonatomic, readonly, copy, nullable) NSData *iconPNGData;
++/// Chromium's localized texts for the dialog ("Add “uBlock Origin Lite”?", "Add extension",
++/// "Cancel"). The shell may use its own wording.
++@property (nonatomic, readonly, copy) NSString *title;
++@property (nonatomic, readonly, copy) NSString *acceptButtonTitle;
++@property (nonatomic, readonly, copy) NSString *cancelButtonTitle;
+ /// Human-readable permission warnings from Chromium ("Read and change all your data on all
+-/// websites").
++/// websites"), in Chromium's order. Empty when the extension asks for nothing that warns.
+ @property (nonatomic, readonly, copy) NSArray<NSString *> *permissionWarnings;
++@property (nonatomic, readonly, getter=isFinished) BOOL finished;
+ - (void)approve;
+ - (void)cancel;
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;
+ @end
+ 
++/// Popup events. Delivered on the main thread from a posted task (OACDefines.h).
++NS_SWIFT_UI_ACTOR
++@protocol OACExtensionPopupDelegate <NSObject>
++@optional
++/// The popup's page finished its first load: the shell shows the bubble now (Chrome does the same,
++/// so a popup never shows half loaded).
++- (void)extensionPopupDidLoad:(OACExtensionPopup *)popup;
++/// The page laid out at `size` (points, within Chromium's popup limits 25×25…800×600). The shell
++/// sizes its bubble to it; the view follows its container.
++- (void)extensionPopup:(OACExtensionPopup *)popup didResizeTo:(CGSize)size;
++/// Closed: by `-close`, by the page (`window.close()`, Escape), or because the extension or its
++/// tab went away. The view is gone from the window afterwards.
++- (void)extensionPopupDidClose:(OACExtensionPopup *)popup;
++@end
++
++/// An extension action's popup page (Chrome's `ExtensionViewHost` of type popup), shown by the
++/// shell in a bubble anchored to the Site Control Center button (inferred: the spec records where
++/// extensions live, not where their popups appear). One per profile at a time: opening another
++/// closes the first.
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACExtensionPopup : NSObject
++@property (nonatomic, readonly, copy) NSString *extensionIdentifier;
++/// The tab the action ran on. nil once that tab closed (the popup closes with it).
++@property (nonatomic, readonly, weak, nullable) OACTab *tab;
++/// The popup page's view. The shell adds it to its bubble and keeps it at the bubble's size; nil
++/// once closed.
++@property (nonatomic, readonly, nullable) NSView *view;
++/// The size the page asked for; CGSizeZero until the first layout.
++@property (nonatomic, readonly) CGSize preferredSize;
++@property (nonatomic, readonly) BOOL hasLoaded;
++@property (nonatomic, readonly, getter=isClosed) BOOL closed;
++@property (nonatomic, weak, nullable) id<OACExtensionPopupDelegate> delegate;
++/// Gives the popup's page the keyboard (call once its bubble window is key).
++- (void)focus;
++- (void)close;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
+ NS_SWIFT_UI_ACTOR
+ @protocol OACExtensionsDelegate <NSObject>
+ @optional
+@@ -75,38 +135,40 @@ NS_SWIFT_UI_ACTOR
+ - (void)extensions:(OACExtensions *)extensions didUpdateActionOfExtension:(NSString *)extensionIdentifier tab:(nullable OACTab *)tab;
+ /// Chromium wants to confirm an install. Return YES to show UI and answer later, NO to cancel.
+ - (BOOL)extensions:(OACExtensions *)extensions confirmInstall:(OACExtensionInstallRequest *)request;
+-/// The extension wants its popup shown (action clicked, or `chrome.action.openPopup()`). The shell
+-/// puts `popupView` in a popover anchored to the Site Control Center row (inferred: where the
+-/// popup appears is not in the spec). The view resizes itself to the popup's content; observe its
+-/// frame. Calling `-closePopup` or closing the popover ends it.
+-- (void)extensions:(OACExtensions *)extensions showPopupView:(NSView *)popupView forExtension:(NSString *)extensionIdentifier tab:(OACTab *)tab;
+-- (void)extensions:(OACExtensions *)extensions didClosePopupForExtension:(NSString *)extensionIdentifier;
+ @end
+ 
++/// A profile's extensions. Off-the-record profiles share their original profile's object; only
++/// extensions allowed in incognito have actions on off-the-record tabs.
+ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ @interface OACExtensions : NSObject
+ 
+ @property (nonatomic, readonly, weak, nullable) OACProfile *profile;
+ @property (nonatomic, weak, nullable) id<OACExtensionsDelegate> delegate;
+ 
+-/// Installed extensions, without per-tab action state.
++/// Installed extensions the user manages (component extensions such as the PDF viewer are left
++/// out), without per-tab action state, in installation order.
+ @property (nonatomic, readonly, copy) NSArray<OACExtensionInfo *> *installedExtensions;
+ 
+-/// Extensions with an action on `tab`, with that tab's icon, badge and enabled state. The Site
+-/// Control Center "Extensions" section (`SiteSettingsState.extensions`).
++/// Enabled extensions with a toolbar action on `tab`, with that tab's icon, badge and enabled
++/// state. The Site Control Center "Extensions" section (`SiteSettingsState.extensions`).
+ - (NSArray<OACExtensionInfo *> *)actionsForTab:(OACTab *)tab;
+ 
+-/// Runs an extension's action on `tab` (`SiteSettingsProvider.runExtensionAction`). Opens the popup
+-/// through the delegate when the action has one.
+-- (void)runActionOfExtension:(NSString *)extensionIdentifier onTab:(OACTab *)tab;
+-- (void)closePopup;
++/// Runs an extension's action on `tab`, as a click on its toolbar button does in Chrome: grants
++/// the extension activeTab on the tab, then opens its popup or sends `action.onClicked`. Returns
++/// the popup (not shown yet: see `OACExtensionPopupDelegate`), or nil when there is none.
++- (nullable OACExtensionPopup *)runActionOfExtension:(NSString *)extensionIdentifier onTab:(OACTab *)tab;
++/// The open popup, if any.
++@property (nonatomic, readonly, nullable) OACExtensionPopup *popup;
+ 
+-/// Installs from the Web Store by id (the store page's "Add to Open Arc" button goes through the
+-/// same path via the webstore private API).
++/// Installs from the Web Store by id. Chromium asks through `-extensions:confirmInstall:` (with no
++/// tab). The store page's own "Add to …" button takes the store's install flow instead.
+ - (void)installFromWebStoreWithIdentifier:(NSString *)extensionIdentifier
+                         completionHandler:(void (^)(NSError *_Nullable error))completionHandler;
+-/// Loads an unpacked extension from a folder (developer mode in chrome://extensions).
+-- (void)loadUnpackedFromURL:(NSURL *)folderURL completionHandler:(void (^)(NSError *_Nullable error))completionHandler;
++/// Loads an unpacked extension from a folder, as "Load unpacked" in chrome://extensions does;
++/// turns developer mode on (Chromium disables unpacked extensions without it). The handler gets the
++/// extension id, or an error with Chromium's message.
++- (void)loadUnpackedFromURL:(NSURL *)folderURL
++          completionHandler:(void (^)(NSString *_Nullable extensionIdentifier, NSError *_Nullable error))completionHandler;
+ - (void)setEnabled:(BOOL)enabled forExtension:(NSString *)extensionIdentifier;
+ - (void)uninstallExtension:(NSString *)extensionIdentifier;
+ 

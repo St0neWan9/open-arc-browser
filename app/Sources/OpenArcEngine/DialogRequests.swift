@@ -487,6 +487,49 @@ public enum AutofillPopupReply: Hashable, Sendable {
     case dismiss
 }
 
+// MARK: - Extension install
+
+/// "Add <extension>?": Chromium's install confirmation (a Web Store install, a re-enable after new
+/// permissions), plan C14. Bridge: `OACExtensionInstallRequest`. Tab-modal over the store page.
+/// The look is not in the spec (the Web Store flow was not observed): unknown.
+public struct ExtensionInstallPrompt: Identifiable, Hashable, Sendable {
+    public let id: UUID
+    public let origin: SiteOrigin?
+    public let extensionID: String
+    public let extensionName: String
+    public let iconPNGData: Data?
+    /// Chromium's localized title, accept and cancel labels (the shell may use its own).
+    public let title: String
+    public let acceptTitle: String
+    public let cancelTitle: String
+    /// "Read and change all your data on all websites", in Chromium's order; may be empty.
+    public let permissionWarnings: [String]
+    public let reply: DialogReply<ExtensionInstallReply>
+
+    public init(
+        id: UUID, origin: SiteOrigin?, extensionID: String, extensionName: String, iconPNGData: Data? = nil,
+        title: String, acceptTitle: String = "Add extension", cancelTitle: String = "Cancel",
+        permissionWarnings: [String] = [], reply: DialogReply<ExtensionInstallReply>
+    ) {
+        self.id = id
+        self.origin = origin
+        self.extensionID = extensionID
+        self.extensionName = extensionName
+        self.iconPNGData = iconPNGData
+        self.title = title
+        self.acceptTitle = acceptTitle
+        self.cancelTitle = cancelTitle
+        self.permissionWarnings = permissionWarnings
+        self.reply = reply
+    }
+}
+
+/// Answer to an install confirmation. Default: `.cancel`.
+public enum ExtensionInstallReply: Hashable, Sendable {
+    case add
+    case cancel
+}
+
 // MARK: - Request
 
 /// One dialog request of a tab (`BrowserTab.dialogRequests()`).
@@ -500,6 +543,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
     case passwordSave(PasswordSavePrompt)
     /// Autofill dropdown under the focused field (plan C13). Not modal.
     case autofillPopup(AutofillPopup)
+    /// Extension install confirmation (plan C14).
+    case extensionInstall(ExtensionInstallPrompt)
 
     public var id: UUID {
         switch self {
@@ -510,6 +555,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.id
         case .passwordSave(let r): r.id
         case .autofillPopup(let r): r.id
+        case .extensionInstall(let r): r.id
         }
     }
 
@@ -522,6 +568,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.origin
         case .passwordSave(let r): r.origin
         case .autofillPopup(let r): r.origin
+        case .extensionInstall(let r): r.origin
         }
     }
 
@@ -535,6 +582,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.reply.isFinished
         case .passwordSave(let r): r.reply.isFinished
         case .autofillPopup(let r): r.reply.isFinished
+        case .extensionInstall(let r): r.reply.isFinished
         }
     }
 
@@ -549,6 +597,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.reply.sendDefault()
         case .passwordSave(let r): r.reply.sendDefault()
         case .autofillPopup(let r): r.reply.sendDefault()
+        case .extensionInstall(let r): r.reply.sendDefault()
         }
     }
 
@@ -562,6 +611,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.reply.withdraw()
         case .passwordSave(let r): r.reply.withdraw()
         case .autofillPopup(let r): r.reply.withdraw()
+        case .extensionInstall(let r): r.reply.withdraw()
         }
     }
 }

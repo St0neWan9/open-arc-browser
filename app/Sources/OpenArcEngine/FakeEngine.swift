@@ -269,6 +269,7 @@ public enum FakeDialogAnswer: Hashable, Sendable {
     case externalProtocol(ExternalProtocolReply)
     case passwordSave(PasswordSaveReply)
     case autofillPopup(AutofillPopupReply)
+    case extensionInstall(ExtensionInstallReply)
 }
 
 /// Per-site zoom levels, shared by every tab of one FakeEngine. Keyed by profile, off-the-record
@@ -831,6 +832,21 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         let request = PasswordSavePrompt(id: requestID, origin: currentOrigin(), kind: kind, username: username,
                                          passwordLength: passwordLength, reply: reply)
         deliver(.passwordSave(request), withdraw: { [weak reply] in reply?.withdraw() })
+        return requestID
+    }
+
+    /// Asks to confirm an extension install, as the Web Store page does (C14).
+    @discardableResult
+    public func simulateExtensionInstallPrompt(
+        extensionID: String, name: String, permissionWarnings: [String] = []
+    ) -> UUID {
+        let requestID = UUID()
+        let reply = DialogReply<ExtensionInstallReply>(default: .cancel, handler: answerHandler(requestID) { .extensionInstall($0) })
+        let request = ExtensionInstallPrompt(
+            id: requestID, origin: currentOrigin(), extensionID: extensionID, extensionName: name,
+            title: "Add “\(name)”?", permissionWarnings: permissionWarnings, reply: reply
+        )
+        deliver(.extensionInstall(request), withdraw: { [weak reply] in reply?.withdraw() })
         return requestID
     }
 

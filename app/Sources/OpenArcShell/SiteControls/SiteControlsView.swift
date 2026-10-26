@@ -31,7 +31,7 @@ struct SiteControlsURLBoxAccessories: View {
     let openSiteControls: () -> Void
 
     var body: some View {
-        if isHovering || model.isPresented || model.isLinkCopied {
+        if isHovering || model.isPresented || model.isLinkCopied || model.extensionPopup != nil {
             HStack(spacing: 2) {
                 Spacer()
                 SiteControlsIconButton(
@@ -58,6 +58,8 @@ struct SiteControlsURLBoxAccessories: View {
                             onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
                         )
                     }
+                    // Extension popups open from the same button (C14). inferred.
+                    .extensionPopupBubble(model, tabID: model.extensionPopup?.tabID, palette: chrome)
             }
             .padding(.trailing, 6)
         }
@@ -141,12 +143,12 @@ struct SiteControlsView: View {
             }
             HStack(spacing: SiteControlsLocalTokens.toolSpacing) {
                 ForEach(model.settings.extensions) { ext in
-                    Button { model.runExtension(ext.id) } label: {
-                        Image(systemName: ext.symbol).font(.system(size: 13)).frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.plain)
-                    .help(ext.name)
-                    .accessibilityLabel(ext.name)
+                    Button { model.runExtension(ext.id) } label: { ExtensionActionIcon(action: ext) }
+                        .buttonStyle(.plain)
+                        .disabled(!ext.isEnabled)
+                        .help(ext.title)
+                        .accessibilityLabel(ext.name)
+                        .accessibilityIdentifier("openarc.siteControls.extension.\(ext.id)")
                 }
                 Button { model.addExtensionHandler?() } label: {
                     Image(systemName: "plus").font(.system(size: 12, weight: .medium)).frame(width: 24, height: 24)
@@ -220,5 +222,97 @@ struct SiteControlsView: View {
         Text(text)
             .font(Typography.panelHeader.font)
             .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - Extension actions (C14)
+
+/// One extension's button in the "Extensions" section: its action icon for the tab (an SF Symbol
+/// until it loads) with the badge the extension set. [06 §12] observed section and "+" button; the
+/// look of an extension's button there is not recorded: size and badge inferred (Chrome's toolbar
+/// draws a 16 pt icon with a small badge at the lower right).
+struct ExtensionActionIcon: View {
+    let action: SiteExtensionAction
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Group {
+                if let data = action.iconPNGData, let image = NSImage(data: data) {
+                    Image(nsImage: image).resizable().interpolation(.high)
+                        .frame(width: SiteControlsLocalTokens.extensionIconSize, height: SiteControlsLocalTokens.extensionIconSize)
+                } else {
+                    Image(systemName: action.symbol).font(.system(size: 13))
+                }
+            }
+            .frame(width: 24, height: 24)
+            .opacity(action.isEnabled ? 1 : 0.4)
+            if !action.badgeText.isEmpty {
+                Text(action.badgeText)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 2)
+                    .frame(minWidth: 12, minHeight: 10)
+                    .background(Capsule().fill(Color(nsColor: .systemGray)))
+                    .offset(x: 3, y: 2)
+            }
+        }
+        .frame(width: 24, height: 24)
+    }
+}
+
+// MARK: - Extension popup (C14)
+
+/// The bubble that shows an extension's popup page. It opens from the site controls button, below
+/// it with the arrow up, like the Site Control Center (inferred: the spec does not record extension
+/// popups), shows once the page loaded, follows the page's size and takes the keyboard. A click
+/// outside or Escape closes it.
+struct ExtensionPopupBubbleContent: View {
+    @ObservedObject var model: SiteControlsModel
+
+    var body: some View {
+        ExtensionPopupHostView(model: model)
+            .padding(SiteControlsLocalTokens.extensionPopupInset)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("openarc.extensionPopup")
+    }
+}
+
+/// Hosts the popup page's native view (`ExtensionPopup.attach(to:)`).
+private struct ExtensionPopupHostView: NSViewRepresentable {
+    let model: SiteControlsModel
+
+    func makeNSView(context: Context) -> SurfaceContainerView {
+        let view = SurfaceContainerView()
+        model.attachExtensionPopup(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: SurfaceContainerView, context: Context) {}
+
+    static func dismantleNSView(_ nsView: SurfaceContainerView, coordinator: ()) {
+        nsView.clear()
+    }
+}
+
+extension View {
+    /// Anchors the extension popup bubble to this view (the site controls button). inferred.
+    func extensionPopupBubble(_ model: SiteControlsModel, tabID: UUID?, palette: ThemePalette) -> some View {
+        let popup = model.extensionPopup
+        let isPresented = popup.map { $0.isLoaded && $0.tabID == tabID } ?? false
+        return floatingBubble(isPresented: isPresented) {
+            let inset = SiteControlsLocalTokens.extensionPopupInset * 2
+            return FloatingBubbleRequest(
+                placement: .attached(.below),
+                style: FloatingBubbleStyle(width: CGFloat(popup?.width ?? 0) + inset,
+                                           height: CGFloat(popup?.height ?? 0) + inset,
+                                           cornerRadius: SiteControlsLocalTokens.extensionPopupCornerRadius,
+                                           tint: palette.floatingPanelBackground, isDark: palette.isDark,
+                                           becomesKey: true),
+                content: AnyView(ExtensionPopupBubbleContent(model: model)),
+                onDismiss: { _ in model.closeExtensionPopup() },
+                onBecameKey: { model.focusExtensionPopup() }
+            )
+        }
     }
 }

@@ -20,6 +20,8 @@ struct FloatingBubbleStyle {
     var cornerRadius: CGFloat
     var tint: RGBAColor
     var isDark: Bool
+    /// The bubble takes the keyboard (an extension popup's page, C14). Other bubbles never do.
+    var becomesKey = false
 }
 
 /// What the anchor asks for while the bubble is up.
@@ -35,6 +37,8 @@ struct FloatingBubbleRequest {
     var style: FloatingBubbleStyle
     var content: AnyView
     var onDismiss: (FloatingBubbleDismissReason) -> Void
+    /// Called after a `becomesKey` bubble became key.
+    var onBecameKey: (() -> Void)? = nil
 }
 
 extension View {
@@ -113,8 +117,12 @@ final class FloatingBubbleController: NSObject {
     func hide() {
         removeMonitors()
         if let panel {
-            panel.parent?.removeChildWindow(panel)
+            let parent = panel.parent
+            let wasKey = panel.isKeyWindow
+            parent?.removeChildWindow(panel)
             panel.orderOut(nil)
+            // A bubble that had the keyboard hands it back to its window.
+            if wasKey { parent?.makeKey() }
         }
         editThemePointerY = nil
         appliedFrame = nil
@@ -172,7 +180,15 @@ final class FloatingBubbleController: NSObject {
             window.addChildWindow(panel, ordered: .above)
             observe(window)
         }
-        if !panel.isVisible { panel.orderFront(nil) }
+        panel.allowsKey = style.becomesKey
+        if !panel.isVisible {
+            if style.becomesKey {
+                panel.makeKeyAndOrderFront(nil)
+                request.onBecameKey?()
+            } else {
+                panel.orderFront(nil)
+            }
+        }
         installMonitors()
     }
 

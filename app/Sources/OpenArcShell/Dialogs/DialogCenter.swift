@@ -29,6 +29,7 @@ public enum DialogAnswer: Hashable, Sendable {
     case externalProtocol(ExternalProtocolReply)
     case passwordSave(PasswordSaveReply)
     case autofillPopup(AutofillPopupReply)
+    case extensionInstall(ExtensionInstallReply)
 }
 
 /// Dialog requests of every live tab of one workspace controller, queued per engine tab.
@@ -106,6 +107,7 @@ public final class DialogCenter: ObservableObject {
         case (.externalProtocol(let r), .externalProtocol(let a)): sent = r.reply.send(a)
         case (.passwordSave(let r), .passwordSave(let a)): sent = r.reply.send(a)
         case (.autofillPopup(let r), .autofillPopup(let a)): sent = r.reply.send(a)
+        case (.extensionInstall(let r), .extensionInstall(let a)): sent = r.reply.send(a)
         default: return false
         }
         remove(requestID)
@@ -241,6 +243,17 @@ public struct DialogPresentation: Equatable, Sendable {
             fields = [.text(placeholder: "Username", initial: prompt.username)]
             checkbox = nil
             buttons = prompt.kind == .update ? ["Not Now", "Update"] : ["Never", "Not Now", "Save"]
+        case .extensionInstall(let prompt):
+            // Chrome's install dialog, tab-modal over the store page. The spec does not record the
+            // Web Store flow (C14): title and buttons are Chrome's meaning in our words, unknown.
+            style = .sheet
+            title = "Add “\(prompt.extensionName)”?"
+            message = prompt.permissionWarnings.isEmpty
+                ? ""
+                : "It can:\n" + prompt.permissionWarnings.map { "• " + $0 }.joined(separator: "\n")
+            fields = []
+            checkbox = nil
+            buttons = ["Cancel", "Add Extension"]
         case .autofillPopup:
             style = .dropdown
             title = ""
@@ -289,6 +302,8 @@ public struct DialogPresentation: Equatable, Sendable {
             return .passwordSave(prompt.kind == .save && index == 0 ? .neverForThisSite : .decline)
         case .autofillPopup:
             return .autofillPopup(.dismiss)
+        case .extensionInstall:
+            return .extensionInstall(isDefaultButton ? .add : .cancel)
         }
     }
 }

@@ -8,24 +8,54 @@ import OpenArcEngine
 // ad blocker), and its final shape is decided there. Plan tasks:
 // - C12: permission prompts and stored permission decisions (camera, microphone, location,
 //   notifications), cookies / site data.
-// - C14: extension toolbar actions shown in the "Extensions" section.
+// - C14: extension toolbar actions shown in the "Extensions" section (`EngineSiteSettingsProvider`
+//   reads them from `BrowserEngine.extensions`).
 // - C16: the ad-blocking toggle.
 // Until then `FakeSiteSettingsProvider` serves fake data so the popover can be built and tested.
 
 // `SiteOrigin`, `SitePermissionKind` and `SitePermissionDecision` live in OpenArcEngine
 // (SiteOrigin.swift) since C7b: engine dialog requests name the requesting origin too.
 
-/// An extension's toolbar action for the current site (C14).
+/// An extension's toolbar action for the current tab (C14), as the Site Control Center's
+/// "Extensions" section shows it ([06 §12] observed section; [06 §17.2] observed that the toolbar
+/// has no extension buttons, so this is where they live).
 public struct SiteExtensionAction: Identifiable, Hashable, Sendable {
     public var id: String
     public var name: String
-    /// SF Symbol placeholder until real extension icons exist. unknown.
+    /// SF Symbol shown while the extension has no icon (still loading, or a fake). unknown.
     public var symbol: String
+    /// The action's icon for the tab, PNG (16 pt at 2x).
+    public var iconPNGData: Data?
+    /// Badge text the extension set for the tab ("12"); empty when none.
+    public var badgeText: String
+    /// Tooltip: the action's title for the tab, else the extension's name.
+    public var title: String
+    /// The action is enabled on this tab.
+    public var isEnabled: Bool
+    /// Clicking opens the extension's popup (else the click goes to the extension).
+    public var hasPopup: Bool
 
-    public init(id: String, name: String, symbol: String = "puzzlepiece.extension") {
+    public init(
+        id: String, name: String, symbol: String = "puzzlepiece.extension", iconPNGData: Data? = nil,
+        badgeText: String = "", title: String? = nil, isEnabled: Bool = true, hasPopup: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.symbol = symbol
+        self.iconPNGData = iconPNGData
+        self.badgeText = badgeText
+        self.title = title ?? name
+        self.isEnabled = isEnabled
+        self.hasPopup = hasPopup
+    }
+
+    /// From the engine's action state for a tab.
+    public init(_ info: EngineExtensionInfo) {
+        self.init(
+            id: info.id, name: info.name, iconPNGData: info.iconPNGData, badgeText: info.badgeText,
+            title: info.actionTitle.isEmpty ? info.name : info.actionTitle,
+            isEnabled: info.isActionEnabled, hasPopup: info.hasPopup
+        )
     }
 }
 
@@ -88,8 +118,12 @@ public enum SiteSettingChange: Equatable, Sendable {
 public protocol SiteSettingsProvider: AnyObject {
     func settings(for site: SiteOrigin, profileID: UUID?) async -> SiteSettingsState
     func apply(_ change: SiteSettingChange, for site: SiteOrigin, profileID: UUID?) async
-    /// Runs an extension's toolbar action on the given tab (C14).
-    func runExtensionAction(_ id: String, tabID: UUID, site: SiteOrigin, profileID: UUID?) async
+    /// The extensions with an action on the given tab (C14), or nil when this provider has no
+    /// per-tab extension state (then `SiteSettingsState.extensions` is used as is).
+    func extensionActions(tabID: UUID, profileID: UUID?) async -> [SiteExtensionAction]?
+    /// Runs an extension's toolbar action on the given tab (C14). Returns the popup it opened, not
+    /// shown yet, or nil when the action has none.
+    func runExtensionAction(_ id: String, tabID: UUID, site: SiteOrigin, profileID: UUID?) async -> (any ExtensionPopup)?
 }
 
 /// In-memory stand-in until the Chromium bridge exists (C12 / C14 / C16). Records every call.
@@ -134,7 +168,10 @@ public final class FakeSiteSettingsProvider: SiteSettingsProvider {
         stored[key] = state
     }
 
-    public func runExtensionAction(_ id: String, tabID: UUID, site: SiteOrigin, profileID: UUID?) async {
+    public func extensionActions(tabID: UUID, profileID: UUID?) async -> [SiteExtensionAction]? { nil }
+
+    public func runExtensionAction(_ id: String, tabID: UUID, site: SiteOrigin, profileID: UUID?) async -> (any ExtensionPopup)? {
         extensionActionsRun.append(id)
+        return nil
     }
 }

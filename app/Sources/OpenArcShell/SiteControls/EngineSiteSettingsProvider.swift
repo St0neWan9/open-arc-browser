@@ -1,10 +1,11 @@
 import Foundation
 import OpenArcEngine
 
-/// `SiteSettingsProvider` with the engine's real ad blocker (plan C16) on top of another provider
-/// for everything the engine does not expose yet (permissions, Developer Mode, Picture in
-/// Picture, zoom, cookies, extensions: C12 / C14). `isAdBlockingOn` and `.adBlocking` go to
-/// `BrowserEngine.adBlocking`; the row stays hidden when the engine has no ruleset.
+/// `SiteSettingsProvider` with the engine's real ad blocker (plan C16) and extensions (C14) on top
+/// of another provider for everything the engine does not expose yet (permissions, Developer Mode,
+/// Picture in Picture, zoom, cookies). `isAdBlockingOn` and `.adBlocking` go to
+/// `BrowserEngine.adBlocking`; the row stays hidden when the engine has no ruleset. Extension
+/// actions and their popups go to `BrowserEngine.extensions` for the tab's engine tab.
 ///
 /// The row reads "On" when the global switch is on and the site is not on the profile's allow
 /// list; toggling it adds or removes the site. With the global switch off the row shows "Off"
@@ -14,10 +15,18 @@ import OpenArcEngine
 @MainActor
 public final class EngineSiteSettingsProvider: SiteSettingsProvider {
     private let adBlocking: any EngineAdBlocking
+    private let extensions: (any EngineExtensions)?
+    /// The live engine tab of a model tab, if any.
+    private let engineTab: @MainActor (UUID) -> EngineTabID?
     let base: any SiteSettingsProvider
 
-    public init(adBlocking: any EngineAdBlocking, base: any SiteSettingsProvider) {
+    public init(
+        adBlocking: any EngineAdBlocking, extensions: (any EngineExtensions)? = nil,
+        engineTab: @escaping @MainActor (UUID) -> EngineTabID? = { _ in nil }, base: any SiteSettingsProvider
+    ) {
         self.adBlocking = adBlocking
+        self.extensions = extensions
+        self.engineTab = engineTab
         self.base = base
     }
 
@@ -41,8 +50,16 @@ public final class EngineSiteSettingsProvider: SiteSettingsProvider {
         }
     }
 
-    public func runExtensionAction(_ id: String, tabID: UUID, site: SiteOrigin, profileID: UUID?) async {
-        await base.runExtensionAction(id, tabID: tabID, site: site, profileID: profileID)
+    public func extensionActions(tabID: UUID, profileID: UUID?) async -> [SiteExtensionAction]? {
+        guard let extensions else { return await base.extensionActions(tabID: tabID, profileID: profileID) }
+        guard let engineTabID = engineTab(tabID) else { return [] }
+        return await extensions.actions(for: engineTabID).map(SiteExtensionAction.init)
+    }
+
+    public func runExtensionAction(_ id: String, tabID: UUID, site: SiteOrigin, profileID: UUID?) async -> (any ExtensionPopup)? {
+        guard let extensions else { return await base.runExtensionAction(id, tabID: tabID, site: site, profileID: profileID) }
+        guard let engineTabID = engineTab(tabID) else { return nil }
+        return await extensions.runAction(id, on: engineTabID)
     }
 
     private func adBlockingState(for site: SiteOrigin, profileID: UUID?) async -> Bool? {

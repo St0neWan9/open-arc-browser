@@ -139,7 +139,7 @@ reached as `BrowserEngine.downloads`. Bridge: `OACDownloads`.
 
 ## §9 Extensions beyond the action row — P2, C14
 
-**Status: applied as a skeleton (C7b).** `EngineExtensions` and `EngineExtensionInfo` (icon, badge, action state, `hasPopup`), reached as `BrowserEngine.extensions`; `FakeExtensions`. `SiteExtensionAction` and popup hosting (`PopupSurface`) unchanged until C14.
+**Status: applied (C14).** `EngineExtensions` (installed list, per-tab actions, `runAction` returning an `ExtensionPopup`, `install(webStoreID:)`, `loadUnpacked`, enable / uninstall, events), `EngineExtensionInfo.isUnpacked`, `ExtensionPopup` / `ExtensionPopupEvent` (the popup page hosted through `SurfaceHost` like a tab, with load / resize / close events) and `EngineDialogRequest.extensionInstall` (`ExtensionInstallPrompt`, reply `.add` / `.cancel`); `FakeExtensions` / `FakeExtensionPopup`. `SiteExtensionAction` carries the icon, badge, title and popup flag; `SiteSettingsProvider.runExtensionAction` returns the popup.
 
 **Gap.** `SiteSettingsProvider` has `runExtensionAction` and `SiteExtensionAction` (id, name, SF Symbol). C14 needs installing, enabling, uninstalling, the real icon and badge, and hosting the popup (which is a native view, like a tab surface).
 

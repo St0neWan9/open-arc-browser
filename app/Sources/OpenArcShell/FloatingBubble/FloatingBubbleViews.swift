@@ -105,8 +105,8 @@ struct FloatingBubbleChrome<Content: View>: View {
     }
 }
 
-/// Borderless, transparent child panel for bubbles and the hover card. Never key: the keyboard
-/// stays with the browser window (Escape is caught by `FloatingBubbleController`).
+/// Borderless, transparent child panel for bubbles and the hover card. Not key unless `allowsKey`:
+/// the keyboard stays with the browser window (Escape is caught by `FloatingBubbleController`).
 final class FloatingBubblePanel: NSPanel {
     init(contentRect: NSRect) {
         super.init(contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -122,7 +122,10 @@ final class FloatingBubblePanel: NSPanel {
         collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Only a bubble that hosts a page (an extension popup, C14) takes the keyboard.
+    var allowsKey = false
+
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 }
 
