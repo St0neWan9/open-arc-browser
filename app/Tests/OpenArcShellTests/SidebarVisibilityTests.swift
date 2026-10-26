@@ -26,7 +26,10 @@ final class SidebarVisibilityTests: XCTestCase {
 
         let hidden = MainWindowLayout(windowSize: reference, isSidebarVisible: false)
         XCTAssertEqual(hidden.sidebarFrame, .zero)
-        XCTAssertEqual(hidden.webPanelFrame, CGRect(x: 5, y: 5, width: 1910, height: 975))
+        // Hiding the sidebar keeps the top/right/bottom inset and gives the left edge the same one.
+        XCTAssertEqual(hidden.webPanelFrame.minY, shown.webPanelFrame.minY)
+        XCTAssertEqual(hidden.webPanelFrame.maxY, shown.webPanelFrame.maxY)
+        XCTAssertEqual(hidden.webPanelFrame.maxX, shown.webPanelFrame.maxX)
         let inset = SidebarPeekTokens.hiddenWebPanelInset
         XCTAssertEqual(hidden.webPanelFrame.minX, inset)
         XCTAssertEqual(hidden.webPanelFrame.minY, inset)
@@ -44,7 +47,7 @@ final class SidebarVisibilityTests: XCTestCase {
     }
 
     /// [06 §5] observed: panes are 10 pt apart and fill the web panel. With the sidebar hidden the
-    /// panel is 1910 wide ([06 §14] 5 pt border).
+    /// panel is 1900 wide ([06 §14]: the same 10 pt border on all four sides).
     func testSplitPaneFramesFollowHiddenWebPanel() {
         let hiddenPanel = MainWindowLayout(windowSize: reference, isSidebarVisible: false).webPanelFrame
         let container = CGRect(origin: .zero, size: hiddenPanel.size)

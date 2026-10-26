@@ -31,8 +31,9 @@ final class MainWindowLayoutTests: XCTestCase {
     func testHiddenSidebarGivesPanelSymmetricInsets() {
         let layout = MainWindowLayout(windowSize: CGSize(width: 1000, height: 600), isSidebarVisible: false)
         XCTAssertEqual(layout.sidebarFrame, .zero)
-        // [06 §14] observed: ≈ 5 pt themed border on all four sides while hidden.
-        XCTAssertEqual(layout.webPanelFrame, CGRect(x: 5, y: 5, width: 990, height: 590))
+        // [06 §14] observed: the same themed border on all four sides while hidden as the shown
+        // panel keeps at top, right and bottom.
+        XCTAssertEqual(layout.webPanelFrame, CGRect(x: 10, y: 10, width: 980, height: 580))
     }
 
     /// [07 §5] observed: 765 × 327 at y 324 in the 1920 × 985 window.
