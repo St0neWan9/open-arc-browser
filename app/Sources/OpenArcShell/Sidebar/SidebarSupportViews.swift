@@ -199,6 +199,8 @@ struct SidebarRootDropDelegate: DropDelegate {
 struct SidebarDragSourceHost: NSViewRepresentable {
     let viewModel: SidebarViewModel
     let items: [SidebarDragSourceItem]
+    /// The sidebar layout, for the drag image's shape zones (B44).
+    var layout = SidebarLayout()
     /// False while something covers the sidebar (the window command bar, onboarding): presses
     /// then belong to that surface.
     @Environment(\.sidebarAcceptsPointer) private var acceptsPointer
@@ -207,24 +209,31 @@ struct SidebarDragSourceHost: NSViewRepresentable {
         let view = SidebarDragSourceView()
         view.viewModel = viewModel
         view.items = acceptsPointer ? items : []
+        view.layout = layout
         return view
     }
 
     func updateNSView(_ nsView: SidebarDragSourceView, context: Context) {
         nsView.viewModel = viewModel
         nsView.items = acceptsPointer ? items : []
+        nsView.layout = layout
     }
 }
 
 final class SidebarDragSourceView: NSView, NSDraggingSource {
     weak var viewModel: SidebarViewModel?
     var items: [SidebarDragSourceItem] = []
+    var layout = SidebarLayout()
+    /// The lifted row that follows the pointer (B44, [06 §15.1] E17 observed).
+    private let dragImage = SidebarDragImageController()
 
     /// Removes the event monitor when released (no `deinit` needed on the view).
     private var monitor: SidebarEventMonitorToken?
     /// The press that may become a drag: the picked item and the press point (view space).
     private var pending: (item: SidebarDragItem, start: CGPoint)?
     private var isDragging = false
+    /// Frame of the pressed item (sidebar root space), for the drag image's start position.
+    private var pendingFrame: CGRect = .zero
 
     /// Top-left origin, like the sidebar's SwiftUI coordinate space this view covers.
     override var isFlipped: Bool { true }
@@ -263,6 +272,7 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
                   let hit = SidebarDragSourceItem.item(at: point, in: items),
                   viewModel?.canStartDrag(hit.item) == true else { return false }
             pending = (hit.item, point)
+            pendingFrame = hit.frame
             // [06 §15.1] observed: the press alone selects the tab and brings it to the front.
             if clickCount == 1, let select = hit.selectRect, select.contains(point) {
                 viewModel?.pressSelect(hit.item)
@@ -293,8 +303,19 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
         isDragging = true
         viewModel.beginDrag(item)
         let draggingItem = NSDraggingItem(pasteboardWriter: SidebarDragPayload.makePasteboardItem(item))
-        // No row image follows the pointer. [06 §15.1] observed (inside the window; the image
-        // outside it is unknown).
+        // The session's own image stays invisible: the visible lifted row is drawn by
+        // `SidebarDragImageController` in a panel above every window, which can change its shape
+        // while the drag is held ([06 §15.1, §15.4, §15.5] E17 observed).
+        let isFavorite: Bool = if case .tab(let id) = item, case .favorite? = viewModel.workspace.tabs[id]?.location { true } else { false }
+        let sourceFill: CGRect
+        if isFavorite {
+            sourceFill = pendingFrame
+        } else {
+            let fill = layout.rowFillFrame
+            sourceFill = CGRect(x: fill.minX, y: pendingFrame.minY + fill.minY, width: fill.width, height: fill.height)
+        }
+        dragImage.begin(content: viewModel.dragImageContent(for: item), palette: viewModel.palette,
+                        press: point, sourceFill: sourceFill, isRowSource: !isFavorite)
         let size = SidebarLocalTokens.dragImageSize
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in true }
         draggingItem.setDraggingFrame(NSRect(x: point.x, y: point.y, width: size, height: size), contents: image)
@@ -312,8 +333,23 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
 
     /// The session is over: dropped (already applied), released outside every target, or Esc.
     /// [06 §15.9] observed: after Esc nothing changes.
+    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        moveDragImage(to: screenPoint)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        moveDragImage(to: screenPoint)
+    }
+
+    private func moveDragImage(to screenPoint: NSPoint) {
+        guard let window else { return }
+        let point = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
+        dragImage.move(sidebarPoint: point, screenPoint: screenPoint, layout: layout)
+    }
+
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         isDragging = false
+        dragImage.end()
         viewModel?.dragSessionEnded()
     }
 }

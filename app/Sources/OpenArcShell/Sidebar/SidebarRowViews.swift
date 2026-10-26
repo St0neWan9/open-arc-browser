@@ -16,13 +16,15 @@ struct SidebarRowFrame<Content: View>: View {
     /// Split preview while a tab is dragged over the row's middle band: a gray-violet block on the
     /// pointer's side, the row content moved to the other side. [06 §15.2] observed.
     var splitPreview: SplitSide? = nil
+    /// Color of the split preview block: follows the theme. [06 §15.4] observed (E17).
+    var splitPreviewFill: Color = RGBAColor(hex: SidebarLocalTokens.splitPreviewRGB).swiftUI
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         let layout = SidebarLayout()
         let fillFrame = layout.rowFillFrame
         let radius = CGFloat(Metrics.Sidebar.selectedRowCornerRadius)
-        let block = (fillFrame.width * SidebarLocalTokens.splitPreviewWidthFraction).rounded()
+        let block = (fillFrame.width * CGFloat(Metrics.SidebarDrag.splitPreviewWidthFraction)).rounded()
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(fill)
@@ -30,7 +32,7 @@ struct SidebarRowFrame<Content: View>: View {
                 .offset(x: fillFrame.minX, y: fillFrame.minY)
             if let splitPreview {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(RGBAColor(hex: SidebarLocalTokens.splitPreviewRGB).swiftUI)
+                    .fill(splitPreviewFill)
                     .frame(width: block, height: fillFrame.height)
                     .offset(x: splitPreview == .leading ? fillFrame.minX : fillFrame.maxX - block, y: fillFrame.minY)
                     .accessibilityHidden(true)
@@ -70,7 +72,7 @@ struct SidebarTabRowView: View {
         let iconSize = SidebarLocalTokens.rowIconSize
         let style = Typography.tabRowTitle
 
-        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth, splitPreview: viewModel.splitPreviewSide(for: tab.id)) {
+        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth, splitPreview: viewModel.splitPreviewSide(for: tab.id), splitPreviewFill: palette.splitPreviewFill.swiftUI) {
             Group {
                 if live?.isLoading == true {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
