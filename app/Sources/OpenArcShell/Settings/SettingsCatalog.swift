@@ -200,7 +200,7 @@ public enum SettingsCatalog {
         SettingsControl("advanced.restoreWindows", "When opening Open Arc, restore windows from previous session", .toggle(defaultValue: false), .live),
         SettingsControl("advanced.windowDragging", "Allow window dragging from the top of webpages", .toggle(defaultValue: true), .pending(task: "C8")),
         SettingsControl("advanced.showFullURL", "Show full URL when Toolbar is enabled", .toggle(defaultValue: false), .live),
-        SettingsControl("advanced.pictureInPicture", "Enable Picture in Picture when you leave a video tab", .toggle(defaultValue: true), .pending(task: "C15")),
+        SettingsControl("advanced.pictureInPicture", "Enable Picture in Picture when you leave a video tab", .toggle(defaultValue: true), .live),
         SettingsControl("advanced.themeData", "Allow websites to get your theme data", .toggle(defaultValue: true), .pending(task: "C17")),
         SettingsControl("advanced.boosts", "Enable Boosts on websites you visit", .toggle(defaultValue: true), .pending(task: "E1")),
         // Chromium's own settings pages.

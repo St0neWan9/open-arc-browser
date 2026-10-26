@@ -324,11 +324,57 @@ final class EngineProtocolTests: XCTestCase {
         await tab.print()
         let file = try url("file:///tmp/page.webarchive")
         try await tab.savePage(to: file)
+        try await tab.savePage(to: file, format: .singleFile)
         await tab.showDevTools(.console)
         await tab.showDevTools(nil)
         XCTAssertEqual(tab.commands, EditCommand.allCases.map(FakeTabCommand.edit) + [
-            .print, .savePage(file), .showDevTools(.console), .showDevTools(nil),
+            .print, .savePage(file, .complete), .savePage(file, .singleFile), .showDevTools(.console), .showDevTools(nil),
         ])
+    }
+
+    /// Save Page As takes a file URL and one of three formats ([01 §File] observed item; formats
+    /// inferred from Chromium). C15.
+    func testSavePageNeedsAFileURL() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine)
+        do {
+            try await tab.savePage(to: try url("https://elsewhere.example/page.html"), format: .htmlOnly)
+            XCTFail("a web URL is not a save location")
+        } catch let error as EngineError {
+            XCTAssertEqual(error, .invalidArgument)
+        }
+        XCTAssertEqual(SavePageFormat.allCases.map(\.rawValue), [0, 1, 2], "raw values match OACSavePageFormat")
+        XCTAssertEqual(SavePageFormat.singleFile.fileExtension, "mhtml")
+        XCTAssertEqual(SavePageFormat.complete.fileExtension, "html")
+    }
+
+    /// Picture in Picture ([03 §Advanced] observed "Enable Picture in Picture when you leave a video
+    /// tab", [06 §12] observed "Automatic Picture-In-Picture", default Allowed). C15: automatic
+    /// entry needs a playing video on a site that allows it; manual entry needs a video.
+    func testPictureInPictureRules() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine)
+        var entered = await tab.enterPictureInPicture(automatically: false)
+        XCTAssertFalse(entered, "no video on the page")
+
+        tab.simulateVideo(playing: false)
+        entered = await tab.enterPictureInPicture(automatically: true)
+        XCTAssertFalse(entered, "a paused video does not follow the user out of the tab")
+        entered = await tab.enterPictureInPicture(automatically: false)
+        XCTAssertTrue(entered, "the page's own button works on a paused video")
+        await tab.exitPictureInPicture()
+        XCTAssertFalse(tab.isPictureInPictureActive)
+
+        tab.simulateVideo(playing: true)
+        tab.simulateAutomaticPictureInPicture(allowed: false)
+        entered = await tab.enterPictureInPicture(automatically: true)
+        XCTAssertFalse(entered, "the site's setting blocks automatic entry")
+        tab.simulateAutomaticPictureInPicture(allowed: true)
+        entered = await tab.enterPictureInPicture(automatically: true)
+        XCTAssertTrue(entered)
+        XCTAssertTrue(tab.isPictureInPictureActive)
+        entered = await tab.enterPictureInPicture(automatically: true)
+        XCTAssertFalse(entered, "already in Picture in Picture")
     }
 
     func testViewSourceAsksForANewTab() async throws {

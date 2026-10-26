@@ -252,8 +252,11 @@ public final class SidebarViewModel: ObservableObject {
 
     /// Tabs this window has on screen: the selected tab and its split partners. They are kept from
     /// auto-archive and cannot be shown in another window at the same time. inferred.
-    var onScreenTabIDs: Set<UUID> {
-        guard let selected = selectedTabID else { return [] }
+    var onScreenTabIDs: Set<UUID> { onScreenTabIDs(selecting: selectedTabID) }
+
+    /// The tabs on screen when `selected` is the selected tab: it and its split partners.
+    func onScreenTabIDs(selecting selected: UUID?) -> Set<UUID> {
+        guard let selected else { return [] }
         var ids: Set<UUID> = [selected]
         if let layout = SplitPaneLayout.activeLayout(in: workspace, containing: selected) {
             ids.formUnion(layout.root.tabIDs)

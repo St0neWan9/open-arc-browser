@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 08:46:52 -0700
+Subject: [PATCH] openarc: chrome: let an embedder resolve chrome.tabs ids of
+ its own tabs
+
+ExtensionTabUtil::GetTabById() finds a tab id only in the tab strips of
+Browser windows (WindowControllerList) or among prerendered pages. Open
+Arc shows its tabs in its own UI without Browser windows, so every
+chrome.tabs call that names one of them fails with "No tab with id".
+That breaks Chrome's PDF viewer, a component extension: it asks
+chrome.tabs.get / getZoomSettings / setZoomSettings for the tab that
+shows the PDF and never loads the document without an answer.
+
+Adds ExtensionTabUtil::SetEmbedderTabLookup(): a callback that maps a
+tab id (the tab's SessionTabHelper id) to the embedder's WebContents in
+the given profile. GetTabById() asks it after the Browser windows; such a
+tab has no window and no index, like a prerendered tab. Nothing changes
+when no lookup is registered (Chrome itself never registers one).
+
+Needed by plan task C15 (PDF viewer). There is no upstream way to make a
+WebContents outside a Browser tab strip visible to chrome.tabs.
+---
+ .../browser/extensions/extension_tab_util.cc  | 23 +++++++++++++++++++
+ .../browser/extensions/extension_tab_util.h   | 12 ++++++++++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
+index dd919b9675f6..00ec87896760 100644
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -16,6 +16,7 @@
+ #include "base/containers/fixed_flat_set.h"
+ #include "base/hash/hash.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/no_destructor.h"
+ #include "base/notimplemented.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/stringprintf.h"
+@@ -104,6 +105,12 @@ namespace {
+ // Whether to disable tab list editing for testing purposes.
+ bool g_disable_tab_list_editing_for_testing = false;
+ 
++// Open Arc: see ExtensionTabUtil::SetEmbedderTabLookup().
++ExtensionTabUtil::EmbedderTabLookup& EmbedderTabLookupCallback() {
++  static base::NoDestructor<ExtensionTabUtil::EmbedderTabLookup> lookup;
++  return *lookup;
++}
++
+ constexpr char kGroupNotFoundError[] = "No group with id: *.";
+ constexpr char kSplitNotFoundError[] = "No split view with id: *.";
+ constexpr char kInvalidSplitIdError[] = "Invalid split view id: *.";
+@@ -672,6 +679,17 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
+     }
+   }
+ 
++  // Open Arc: tabs of an embedder-owned UI live in no Browser window.
++  if (const EmbedderTabLookup& lookup = EmbedderTabLookupCallback()) {
++    if (WebContents* embedder_contents =
++            lookup.Run(tab_id, browser_context, include_incognito)) {
++      if (out_contents) {
++        *out_contents = embedder_contents;
++      }
++      return true;
++    }
++  }
++
+   // Prerendering tab is not visible and it cannot be in `TabStripModel`, if the
+   // tab id exists as a prerendering tab, and the API will returns
+   // `api::tabs::TAB_INDEX_NONE` for `out_tab_index` and a valid `WebContents`.
+@@ -720,6 +738,11 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
+   return false;
+ }
+ 
++// static
++void ExtensionTabUtil::SetEmbedderTabLookup(EmbedderTabLookup lookup) {
++  EmbedderTabLookupCallback() = std::move(lookup);
++}
++
+ // static
+ bool ExtensionTabUtil::GetTabById(int tab_id,
+                                   content::BrowserContext* browser_context,
+diff --git a/chrome/browser/extensions/extension_tab_util.h b/chrome/browser/extensions/extension_tab_util.h
+index 7d0850b5489b..de520c171ce4 100644
+--- a/chrome/browser/extensions/extension_tab_util.h
++++ b/chrome/browser/extensions/extension_tab_util.h
+@@ -186,6 +186,18 @@ class ExtensionTabUtil {
+                          bool include_incognito,
+                          content::WebContents** contents);
+ 
++  // Open Arc: an app that embeds the browser process and shows its tabs in its
++  // own UI has no Browser windows, so the loop over WindowControllers in
++  // GetTabById() never finds its tabs. The embedder registers a lookup that
++  // returns its live tab with that session id in `browser_context` (or its
++  // incognito profile when `include_incognito`), or null. Such a tab has no
++  // window and no index. Not part of upstream Chromium.
++  using EmbedderTabLookup =
++      base::RepeatingCallback<content::WebContents*(int tab_id,
++                                                    content::BrowserContext*,
++                                                    bool include_incognito)>;
++  static void SetEmbedderTabLookup(EmbedderTabLookup lookup);
++
+   // Gets the extensions-specific Group ID.
+   static int GetGroupId(const tab_groups::TabGroupId& id);
+ 

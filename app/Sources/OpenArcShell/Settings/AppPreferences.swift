@@ -146,6 +146,17 @@ public final class AppPreferences: @unchecked Sendable {
         set { setBool(newValue, Self.littleArcExternalKey) }
     }
 
+    // MARK: App-level settings: Advanced
+
+    static let pictureInPictureKey = "\(keyPrefix)advanced.pictureInPicture"
+
+    /// "Enable Picture in Picture when you leave a video tab". [03 §Advanced] observed toggle, on
+    /// by default. Per device. Read by `AutoPictureInPicture` (plan C15).
+    public var entersPictureInPictureOnLeavingVideoTab: Bool {
+        get { boolValue(Self.pictureInPictureKey) ?? true }
+        set { setBool(newValue, Self.pictureInPictureKey) }
+    }
+
     // MARK: App-level settings: Developer
 
     static let javaScriptFromAppleEventsKey = "\(keyPrefix)developer.allowJavaScriptFromAppleEvents"

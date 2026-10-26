@@ -17,7 +17,10 @@ import OpenArcCore
 // script-opened windows as `PendingTabToken`s), NSView hosting, preferred color scheme, zoom, find,
 // edit commands, selected text, snapshots, view source, exit fullscreen, the beforeunload close
 // path, shell-drawn dialogs (C12: JavaScript alert / confirm / prompt / beforeunload, permission
-// prompts, HTTP auth, file chooser, external protocol), downloads (C12).
+// prompts, HTTP auth, file chooser, external protocol), downloads (C12), and the page tools of
+// C15: DevTools (its own window per tab), printing (the macOS print panel), Save Page As (complete
+// page, HTML only, one MHTML file), Picture in Picture (Chromium's PiP window, also entered
+// automatically when the user leaves a video tab) and Chromium's PDF viewer.
 //
 // Profiles (C11): one on-disk Chromium profile per model Profile at `<user data dir>/<UUID>`
 // (cookies, storage, cache, HTTP auth cache, permissions, history, favicons, service workers and
@@ -28,8 +31,8 @@ import OpenArcCore
 // URL again (`WorkspaceController.reconcileLiveTabProfiles`).
 //
 // Not supported yet (the bridge has no implementation):
-// - `savePage(to:)` throws `EngineError.unsupported` (C15).
-// - `print()` and `showDevTools(_:)` do nothing (C15).
+// - Document Picture in Picture (`documentPictureInPicture.requestWindow`) is refused: it needs a
+//   Chrome window type the embedder does not have (C15).
 // - Extensions are an empty service (C14).
 // - Downloads list the on-disk profile only; downloads of incognito windows are not listed (C12
 //   follow-up).

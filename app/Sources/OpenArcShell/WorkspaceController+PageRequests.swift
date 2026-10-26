@@ -141,6 +141,16 @@ extension WorkspaceController {
         }
     }
 
+    /// The page asked to be shown (`TabEvent.activationRequested`: `window.focus()`, or "back to
+    /// tab" in its Picture in Picture window). The window that shows the tab, else the active
+    /// window, selects it and comes to the front. inferred (the spec records neither).
+    func pageRequestedActivation(_ id: UUID) {
+        guard let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
+        if let window = browserWindows.first(where: { $0.selectedTabID == id }) ?? activeWindow {
+            window.revealTab(id)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Adopts a pending engine tab as the engine tab of model tab `id`.

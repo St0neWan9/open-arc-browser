@@ -138,12 +138,12 @@ struct ShellCommands: Commands {
 
         // [01 §File] observed: Save Page As, then Print, at the end of the menu. ⌘P [02 §页面与导航]
         // observed; Save Page As has no key in [02]. The system Page Setup… / Print… items are
-        // replaced (the spec lists only "Print"). B25.
-        CommandGroup(after: .saveItem) {
+        // replaced (the spec lists only "Print"). B25. Both live in the print group: SwiftUI leaves
+        // the save group (`.saveItem`) out of the menu of an app without document scenes, so an
+        // item placed after it never showed (C15).
+        CommandGroup(replacing: .printItem) {
             Button("Save Page As") { model.savePageAs() }
                 .disabled(!hasWindow || !model.canRunPageCommands)
-        }
-        CommandGroup(replacing: .printItem) {
             Button("Print") { model.printPage() }
                 .keyboardShortcut("p", modifiers: .command)
                 .disabled(!hasWindow || !model.canRunPageCommands)

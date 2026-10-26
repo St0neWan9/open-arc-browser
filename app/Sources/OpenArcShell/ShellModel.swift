@@ -29,9 +29,11 @@ public final class ShellModel: ObservableObject {
     public let findBar: FindBarModel
     /// Hidden-sidebar peek: pinned / hidden / floating. Follows `isSidebarVisible`. [06 §14] B34.
     let sidebarPeek: SidebarPeekController
-    /// Asks where Save Page As writes (suggested file name → location; nil cancels). nil uses the
-    /// system save panel; tests install their own. B25.
-    public var chooseSavePageLocation: (@MainActor (String) async -> URL?)?
+    /// Picture in Picture when the user leaves a video tab (C15).
+    private var autoPictureInPicture: AutoPictureInPicture?
+    /// Asks where and how Save Page As writes (suggested file name → location and format; nil
+    /// cancels). nil uses the system save panel; tests install their own. B25, C15.
+    public var chooseSavePageLocation: (@MainActor (String) async -> SavePageChoice?)?
 
     /// Whether the command bar panel is showing. [05 §command bar] observed: floating, no scrim.
     /// Also true while the bar is shown inside a split pane.
@@ -123,6 +125,8 @@ public final class ShellModel: ObservableObject {
         isSidebarVisible = window.isSidebarVisible
         if let tabID = window.selectedTabID { restoreSelectedTab(tabID) }
         connectLibraryFlags()
+        let preferences = controller.dependencies.preferences
+        autoPictureInPicture = AutoPictureInPicture(sidebar: sidebar) { preferences.entersPictureInPictureOnLeavingVideoTab }
         if isBrowserWindow {
             launchNotice = controller.takeLaunchNotice()
             // Starts auto-archive with the first window, after its selection is restored. [B3]
@@ -500,6 +504,7 @@ public final class ShellModel: ObservableObject {
         isStopped = true
         if isBrowserWindow { controller.unregisterWindow(self, save: false) }
         libraryFlagChanges = nil
+        autoPictureInPicture?.stop()
         siteControls.stop()
         sidebar.stop()
         if ownsController { controller.stop() }

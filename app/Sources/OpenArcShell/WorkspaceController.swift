@@ -494,6 +494,7 @@ public final class WorkspaceController: ObservableObject {
             syncContent(id)
         case .urlChanged, .titleChanged: syncContent(id)
         case .closeRequested: pageRequestedClose(id)
+        case .activationRequested: pageRequestedActivation(id)
         default: break
         }
     }
