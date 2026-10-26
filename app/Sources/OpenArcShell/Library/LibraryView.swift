@@ -57,6 +57,7 @@ struct LibraryView: View {
                      crashed: model.crashedPageState(for: sidebar.selectedTabID))
                 .frame(width: frame.width, height: frame.height)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
+                .webPanelEdgeShadow(palette.appearance)
                 .offset(x: frame.minX, y: frame.minY)
         }
     }

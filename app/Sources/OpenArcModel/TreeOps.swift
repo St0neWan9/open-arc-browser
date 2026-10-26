@@ -94,8 +94,8 @@ public enum TreeOps {
     }
 
     /// Deletes a profile. Refused for the Default profile ([03 §Profiles] observed) and while
-    /// live spaces still use it (inferred: we block instead of silently re-homing spaces, so no
-    /// space changes its browsing data behind the user's back). Otherwise the profile's favorites
+    /// live spaces still use it ([06 §16.3] observed: Arc disables "−" with "Only Profiles not
+    /// assigned to any Spaces can be deleted."; it neither moves nor deletes those spaces). Otherwise the profile's favorites
     /// are archived (inferred, mirrors deleting a space, 06 §11) with reason `.spaceDeleted` (their
     /// container went away; a new reason case would break older builds) and the profile is
     /// tombstoned.
@@ -549,6 +549,51 @@ public enum TreeOps {
         return s
     }
 
+    /// Puts `tabID` in a split next to `targetTabID`, on `side` of it (06 §15 observed: a tab
+    /// dropped on the middle band of a tab row, or on the web panel, forms a split with that tab;
+    /// the dropped tab is on the pointer's side).
+    ///
+    /// - The dropped tab first leaves any split it was in (it cannot be in two layouts).
+    /// - If the target is already in a live split, the dropped tab joins that layout beside it;
+    ///   otherwise a new two-pane layout with id `layoutID` is created.
+    /// - With `moveNextToTarget`, the dropped tab also moves into the target's container, right
+    ///   before (leading) or after (trailing) it, so the group row shows where it was dropped
+    ///   (inferred: 06 §15 shows one row with two cells, not where it sits). Ignored when the
+    ///   target is a favorite (favorites are not rows).
+    /// Both tabs must be live, distinct and in the same space.
+    public static func splitTab(
+        _ state: WorkspaceState,
+        layoutID: UUID,
+        tabID: UUID,
+        targetTabID: UUID,
+        side: SplitSide,
+        moveNextToTarget: Bool,
+        now: Date
+    ) throws -> WorkspaceState {
+        guard tabID != targetTabID else { throw TreeError.anchorNotInContainer(tabID) }
+        var s = state
+        let target = try live(s.tabs, targetTabID)
+        let dropped = try live(s.tabs, tabID)
+        guard let spaceID = target.location.spaceID ?? dropped.location.spaceID else { throw TreeError.spaceMismatch }
+        if let other = dropped.location.spaceID, other != spaceID { throw TreeError.spaceMismatch }
+
+        removeFromSplits(&s, tabID: tabID, now: now)
+        if moveNextToTarget, target.location.spaceID != nil {
+            s = try moveTab(s, id: tabID, to: target.location, position: side == .leading ? .before(targetTabID) : .after(targetTabID), now: now)
+        }
+        if let layout = s.splits.values.first(where: { !$0.meta.isTombstone && $0.root.tabIDs.contains(targetTabID) }) {
+            var updated = layout
+            updated.root = layout.root.inserting(tabID, beside: targetTabID, side: side, axis: .horizontal)
+            updated.meta.stamp([SplitLayout.FieldGroup.layout], at: now)
+            s.splits[layout.id] = updated
+        } else {
+            let panes = side == .leading ? [tabID, targetTabID] : [targetTabID, tabID]
+            let root = SplitNode.split(axis: .horizontal, children: panes.map { SplitChild(node: .pane(tabID: $0), fraction: 0.5) })
+            s.splits[layoutID] = SplitLayout(id: layoutID, spaceID: spaceID, root: root, now: now)
+        }
+        return s
+    }
+
     /// Moves a whole split group to another space: every member tab goes to the target space's
     /// Today area at `position`, next to each other and in their current relative order (pinned
     /// members first, then by sort key), and the layout's `spaceID` follows. The sidebar treats
@@ -782,22 +827,26 @@ extension SplitNode {
     /// same axis, the new pane becomes its sibling and fractions are equalized; otherwise the
     /// existing pane is replaced by a two-pane split.
     public func inserting(_ newTabID: UUID, after existingTabID: UUID, axis: SplitAxis) -> SplitNode {
+        inserting(newTabID, beside: existingTabID, side: .trailing, axis: axis)
+    }
+
+    /// Inserts `newTabID` on `side` of `existingTabID` (leading = before it, trailing = after it),
+    /// with the same sibling / nesting rules as `inserting(_:after:axis:)`.
+    public func inserting(_ newTabID: UUID, beside existingTabID: UUID, side: SplitSide, axis: SplitAxis) -> SplitNode {
         switch self {
         case .pane(let id):
             guard id == existingTabID else { return self }
-            return .split(axis: axis, children: [
-                SplitChild(node: self, fraction: 0.5),
-                SplitChild(node: .pane(tabID: newTabID), fraction: 0.5),
-            ])
+            let panes: [SplitNode] = side == .leading ? [.pane(tabID: newTabID), self] : [self, .pane(tabID: newTabID)]
+            return .split(axis: axis, children: panes.map { SplitChild(node: $0, fraction: 0.5) })
         case .split(let ownAxis, let children):
             if ownAxis == axis, let i = children.firstIndex(where: { $0.node == .pane(tabID: existingTabID) }) {
                 var nodes = children.map(\.node)
-                nodes.insert(.pane(tabID: newTabID), at: i + 1)
+                nodes.insert(.pane(tabID: newTabID), at: side == .leading ? i : i + 1)
                 let share = 1 / Double(nodes.count)
                 return .split(axis: axis, children: nodes.map { SplitChild(node: $0, fraction: share) })
             }
             return .split(axis: ownAxis, children: children.map {
-                SplitChild(node: $0.node.inserting(newTabID, after: existingTabID, axis: axis), fraction: $0.fraction)
+                SplitChild(node: $0.node.inserting(newTabID, beside: existingTabID, side: side, axis: axis), fraction: $0.fraction)
             })
         }
     }

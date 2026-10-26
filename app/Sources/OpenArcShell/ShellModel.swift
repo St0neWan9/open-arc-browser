@@ -360,7 +360,7 @@ public final class ShellModel: ObservableObject {
         case .previousSpace: sidebar.stepSpace(by: -1)
         case .manageSpaces: openLibrary(.spaces)
         // Tabs
-        case .archiveTab: if let id = selectedTabID { sidebar.closeTab(id) }
+        case .archiveTab: if let id = selectedTabID { sidebar.closeOrUnloadTab(id) }
         case .togglePin: if let id = selectedTabID { sidebar.togglePin(id) }
         case .newFolder: sidebar.requestNewFolder()
         case .nextTab: sidebar.stepTab(by: 1)

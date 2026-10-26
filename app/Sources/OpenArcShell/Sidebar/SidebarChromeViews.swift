@@ -215,6 +215,19 @@ struct SidebarFavoritesView: View {
     let favorites: [TabNode]
     let layout: SidebarLayout
 
+    /// While a tab hovers the block, the tiles move aside to open an empty slot at the drop gap
+    /// (no line, no placeholder fill). [06 §15.5] observed with one favorite; the slot follows the
+    /// hit-tested gap (inferred for several favorites).
+    private var slots: [CGRect] {
+        guard case .favoriteGap(let gap) = viewModel.dropTarget, !favorites.isEmpty else {
+            return layout.favoriteSlotFrames(count: favorites.count)
+        }
+        // The dragged favorite itself keeps its tile (the source does not move, [06 §15.1]).
+        var frames = layout.favoriteSlotFrames(count: favorites.count + 1)
+        frames.remove(at: min(max(gap, 0), favorites.count))
+        return frames
+    }
+
     var body: some View {
         let palette = viewModel.palette
         let block = layout.favoritesFrame
@@ -223,19 +236,14 @@ struct SidebarFavoritesView: View {
             if favorites.isEmpty {
                 RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.controlFill.swiftUI)
             }
-            ForEach(Array(zip(favorites, layout.favoriteSlotFrames(count: favorites.count))), id: \.0.id) { fav, slot in
+            ForEach(Array(zip(favorites, slots)), id: \.0.id) { fav, slot in
                 SidebarFavoriteCell(viewModel: viewModel, tab: fav)
                     .frame(width: slot.width, height: slot.height)
                     .offset(x: slot.minX - block.minX)
             }
-            if case .favoriteGap(let gap) = viewModel.dropTarget, !favorites.isEmpty {
-                let slot = block.width / CGFloat(favorites.count)
-                Capsule().fill(palette.commandBarSelection.swiftUI)
-                    .frame(width: SidebarLocalTokens.dropIndicatorThickness, height: block.height - 16)
-                    .position(x: CGFloat(gap) * slot, y: block.height / 2)
-            }
         }
         .frame(width: block.width, height: block.height, alignment: .topLeading)
+        .animation(.easeInOut(duration: SidebarLocalTokens.favoriteMakeRoomDuration), value: viewModel.dropTarget)
         .sidebarDropRegion(.favorites)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.favorites")
@@ -265,8 +273,6 @@ struct SidebarFavoriteCell: View {
             }
             .contentShape(Rectangle())
             .onTapGesture { viewModel.selectTab(tab.id) }
-            .opacity(viewModel.draggingItem == .tab(tab.id) ? SidebarLocalTokens.draggedRowOpacity : 1)
-            .sidebarDraggable(viewModel: viewModel, item: .tab(tab.id))
             .contextMenu { SidebarTabMenu(viewModel: viewModel, tab: tab, kind: .favorite) }
             .help(tab.displayTitle)
             .accessibilityLabel(tab.displayTitle)
@@ -293,10 +299,13 @@ struct SidebarSpaceNameRowView: View {
         let more = s.spaceMoreButtonFrame
         let moreWidth = isHovering ? SidebarLocalTokens.spaceMoreHoverWidth : CGFloat(more.width)
         ZStack(alignment: .topLeading) {
-            // Hover / context menu area: the whole header (y 145–181).
-            Color.clear
+            // Hover / context menu area: the whole header (y 145–181). It is also a drop target
+            // that pins the dragged tab first, shown as a full-width saturated blue band.
+            // [06 §15.4] observed.
+            (viewModel.dropTarget == .pinnedAreaTop ? RGBAColor(hex: SidebarLocalTokens.spaceNameDropRGB).swiftUI : Color.clear)
                 .frame(width: layout.width, height: CGFloat(s.spaceHeaderHeight))
                 .contentShape(Rectangle())
+                .sidebarDropRegion(.spaceName)
                 .offset(y: CGFloat(s.spaceHeaderTop))
             if let icon {
                 // A ≈ 14 pt glyph centered in the 26 pt cell (B33 round-2 PX), not a 26 pt glyph.
@@ -408,13 +417,11 @@ struct SidebarDockView: View {
             .opacity(isCurrent ? palette.inkOpacity.dockCurrentSpace : palette.inkOpacity.dockOtherSpace)
             .frame(width: frame.width, height: frame.height)
             .overlay {
+                // Hovering a dot only switches the Space after a moment ([06 §15.6] observed); the
+                // hover look is unknown, so the dot gets the light "drop into" fill of folders.
                 if viewModel.dropTarget == .dockSpace(space.id) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: radius)
-                            .fill(palette.commandBarSelection.swiftUI.opacity(SidebarLocalTokens.dropIntoFillOpacity))
-                        RoundedRectangle(cornerRadius: radius)
-                            .stroke(palette.commandBarSelection.swiftUI, lineWidth: SidebarLocalTokens.dropIndicatorThickness)
-                    }
+                    RoundedRectangle(cornerRadius: radius)
+                        .fill(RGBAColor(hex: SidebarLocalTokens.dropIntoRGB).swiftUI.opacity(SidebarLocalTokens.dockDropFillOpacity))
                 }
             }
             .sidebarDropRegion(.dock(space.id))

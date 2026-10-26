@@ -70,6 +70,9 @@ struct MainWindowContent: View {
                 OnboardingLayer(model: model, onboarding: model.controller.onboarding, palette: palette)
             }
             .environment(\.dialogCenter, model.controller.dialogs)
+            // The window command bar and onboarding cover the sidebar: presses go to them.
+            .environment(\.sidebarAcceptsPointer, !(model.isCommandBarPresented && model.commandBarPaneTabID == nil)
+                         && !model.controller.onboarding.isShown(in: model))
             .environment(\.windowDrawnPermissionTab, permissionTabUnderURLBox)
             .animation(ShellLocalTokens.sidebarToggleAnimation, value: model.isSidebarVisible)
             .animation(SidebarPeekTokens.slideAnimation, value: model.showsSidebarPeek)
@@ -118,17 +121,23 @@ struct MainWindowContent: View {
 
         if let splitLayout = model.activeSplitLayout {
             // Each pane is clipped on its own, so the gap between panes shows the window background.
-            SplitWebArea(model: model, sidebar: sidebar, layout: splitLayout, size: layout.webPanelFrame.size, palette: palette)
+            let size = layout.webPanelFrame.size
+            SplitWebArea(model: model, sidebar: sidebar, layout: splitLayout, size: size, palette: palette)
+                .webPanelDropTarget(sidebar: sidebar, panes: model.splitPaneFrames(in: CGRect(origin: .zero, size: size)).map {
+                    SidebarWebPanelDrop.Pane(tabID: $0.tabID, frame: $0.frame)
+                })
                 .offset(x: layout.webPanelFrame.minX, y: layout.webPanelFrame.minY)
         } else {
             WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground,
                      crashed: model.crashedPageState(for: sidebar.selectedTabID))
                 .frame(width: layout.webPanelFrame.width, height: layout.webPanelFrame.height)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
-                .shadow(color: .black.opacity(ShellLocalTokens.webPanelShadowOpacity),
-                        radius: ShellLocalTokens.webPanelShadowRadius, y: ShellLocalTokens.webPanelShadowOffsetY)
+                .webPanelEdgeShadow(palette.appearance)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("openarc.webPanel")
+                .webPanelDropTarget(sidebar: sidebar, panes: sidebar.selectedTabID.map {
+                    [SidebarWebPanelDrop.Pane(tabID: $0, frame: CGRect(origin: .zero, size: layout.webPanelFrame.size))]
+                } ?? [])
                 .offset(x: layout.webPanelFrame.minX, y: layout.webPanelFrame.minY)
         }
     }

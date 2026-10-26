@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenArcDesign
 
 // Sidebar hide/show: the animation token and the view-facing state derived from `ShellModel`.
 // [01 §View] observed: the View menu has "Hide Sidebar". [00 §sidebar] says the collapse
@@ -12,12 +13,16 @@ enum ShellLocalTokens {
     /// Curve of the sidebar slide. unknown (not measured).
     static var sidebarToggleAnimation: Animation { .easeInOut(duration: sidebarToggleDuration) }
 
-    /// Soft shadow around the web panel. Round-1 comparison (B32) observed: the window is ≈ 7 %
-    /// darker right above the panel, ≈ 11 % at its left and ≈ 13 % below it, fading within
-    /// ≈ 3–6 pt; black ≈ 18 %, radius 3, y + 1 reproduce it (inferred fit).
-    static let webPanelShadowOpacity: Double = 0.18
-    static let webPanelShadowRadius: CGFloat = 3
-    static let webPanelShadowOffsetY: CGFloat = 1
+}
+
+extension View {
+    /// The edge shadow of a web content surface (main panel, split pane, Little Arc page, Library
+    /// content), per appearance. Apply after the surface's rounded clip so the shadow follows the
+    /// corner. Values: `Metrics.WebPanel.shadow`, [07 §7.1].
+    func webPanelEdgeShadow(_ appearance: ResolvedAppearance) -> some View {
+        let s = Metrics.WebPanel.shadow(appearance)
+        return shadow(color: .black.opacity(s.opacity), radius: s.radius, x: s.offsetX, y: s.offsetY)
+    }
 }
 
 extension ShellModel {

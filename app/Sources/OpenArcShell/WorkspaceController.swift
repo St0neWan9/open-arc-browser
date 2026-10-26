@@ -327,12 +327,21 @@ public final class WorkspaceController: ObservableObject {
     }
 
     /// Deletes a profile through `TreeOps.deleteProfile` (refused for the Default profile and while
-    /// Spaces use it). Archived favorites lose their live engine tabs. Returns false if refused.
+    /// Spaces use it, [06 §16.3] observed). Archived favorites lose their live engine tabs, then the
+    /// profile's engine data is removed ([06 §16.3] observed: "permanently remove any cookies,
+    /// history, preferences, and logins"). Returns false if refused.
     @discardableResult
     public func deleteProfile(_ profileID: UUID) -> Bool {
         let favorites = workspace.favorites(profileID: profileID).map(\.id)
         guard (try? mutate(origin: nil) { try TreeOps.deleteProfile($0, id: profileID, now: now()) }) != nil else { return false }
         favorites.forEach(closeLive)
+        // The engine needs every tab of the profile closed first: wait for the queued closes.
+        let earlier = engineWork
+        let engine = dependencies.engine
+        enqueueEngineWork {
+            for task in earlier { await task.value }
+            try? await engine.deleteProfileData(profileID)
+        }
         return true
     }
 

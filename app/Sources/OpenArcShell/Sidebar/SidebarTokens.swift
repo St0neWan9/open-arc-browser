@@ -1,6 +1,7 @@
 import CoreGraphics
 import SwiftUI
 import OpenArcDesign
+import OpenArcModel
 
 // Sidebar-local constants. Everything that OpenArcDesign already measures is read from
 // `Metrics` / `Motion` / `ThemeDerivation`; the values below are the ones the spec does not
@@ -143,44 +144,107 @@ enum SidebarLocalTokens {
 
     // MARK: Drag and drop
 
-    /// Fraction of a folder row's height, at the top and at the bottom, that means
-    /// "before" / "after" instead of "into". [06 §12] only shows "dropped on the folder row
-    /// goes inside"; the band sizes are unknown.
-    static let dropEdgeBand: CGFloat = 0.25
+    // Row bands. [06 §15.2] observed on Arc's 41 pt pitch (35 pt highlight + 6 pt gap): about
+    // 21 pt around each row boundary inserts (≈ 6 pt of the upper row's bottom, the 6 pt gap and
+    // ≈ 8–9 pt of the lower row's top); the middle ≈ 20 pt of a tab row (highlight top + 8–9 to
+    // highlight bottom − 7) is the split band. Mapped onto our 41 pt row (fill at y 2–38): inferred.
 
-    /// Thickness of the drop indicator line. unknown.
+    /// Height of a tab row's "insert above" band, from the row frame top (fill top 2 + 8.5).
+    static let tabRowAboveBand: CGFloat = 10.5
+    /// Height of a tab row's "insert below" band, from the row frame bottom (41 − 38 + 7).
+    static let tabRowBelowBand: CGFloat = 10
+
+    /// Collapsed (or empty) folder row: the top ≈ 11 pt inserts above, the bottom ≈ 8 pt below,
+    /// the middle drops into the folder. [06 §15.3] observed (3 pt steps).
+    static let folderRowAboveBand: CGFloat = 11
+    static let folderRowBelowBand: CGFloat = 8
+
+    /// Drag start threshold, per axis: ≥ 4 pt vertically or ≥ 5 pt horizontally; (3, 3) does not
+    /// start. [06 §15.1] observed.
+    static let dragStartThresholdY: CGFloat = 4
+    static let dragStartThresholdX: CGFloat = 5
+
+    /// Insertion line: 2 pt, near white (#ECEDFF in a dark theme), from x ≈ 16 to the content
+    /// edge, with a hollow ring (outer ⌀ 8, 2 pt stroke, center x ≈ 20) at its left end; +16 pt per
+    /// folder level. [06 §15.2] observed (dark theme only; the light-theme color is inferred).
     static let dropIndicatorThickness: CGFloat = 2
+    static let dropIndicatorRingDiameter: CGFloat = 8
+    static let dropIndicatorLeading: CGFloat = 16
+    /// The line ends at x ≈ 265 in Arc's 270 pt sidebar: 3 pt inside our 268 content edge. inferred.
+    static let dropIndicatorTrailingInset: CGFloat = 3
+    static let dropIndicatorDarkThemeRGB: UInt32 = 0xECEDFF
+    /// Light themes: the spec only captured a dark theme; a dark ink line keeps contrast. inferred.
+    static let dropIndicatorLightThemeRGB: UInt32 = 0x1C1C1E
 
-    /// Fill opacity of the accent color on a folder row (or dock icon) that would receive the
-    /// drop. [06 §12] observed only the result ("goes inside"), not the highlight. unknown.
-    static let dropIntoFillOpacity: Double = 0.18
+    /// Split preview block on a tab row: light gray-violet (≈ #94939F), as tall as the row
+    /// highlight, ≈ 105 of the row's ≈ 250 pt, on the pointer's side; the row content moves to the
+    /// other side. [06 §15.2] observed.
+    static let splitPreviewRGB: UInt32 = 0x94939F
+    static let splitPreviewWidthFraction: CGFloat = 105.0 / 250.0
 
-    /// Opacity of the source row while it is being dragged. unknown.
+    /// Folder "drop into" highlight: a light gray-violet rounded fill (≈ #9493A6), no stroke.
+    /// [06 §15.3] observed.
+    static let dropIntoRGB: UInt32 = 0x9493A6
+
+    /// Opacity of a dragged Space column on the Library board (the sidebar source row stays
+    /// unchanged, [06 §15.1]). unknown.
     static let draggedRowOpacity: Double = 0.4
 
-    /// Drag preview ("lifted row"): shadow and scale. unknown.
-    static let dragPreviewShadowRadius: CGFloat = 6
-    static let dragPreviewScale: CGFloat = 1.02
+    /// Opacity of that fill on a dock dot under a drag. unknown.
+    static let dockDropFillOpacity: Double = 0.5
+
+    /// Space-name row as a drop target: a full-width saturated blue band (≈ #242CAA), not the
+    /// Space's theme color. [06 §15.4] observed.
+    static let spaceNameDropRGB: UInt32 = 0x242CAA
+
+    /// Favorites making room for a dragged tab. [06 §15.5] observed (an intermediate frame was
+    /// seen when leaving); the duration is unknown.
+    static let favoriteMakeRoomDuration: Double = 0.15
+
+    /// Drag image: the spec sees no row snapshot following the pointer inside the window
+    /// [06 §15.1] observed; outside the window its look is unknown. The image is transparent.
+    static let dragImageSize: CGFloat = 1
 
     /// How long a dragged item must hover over a dock icon before the sidebar switches to that
-    /// Space, so the item can be placed inside it. Spec: [06 §12] does not cover cross-Space
-    /// drags. inferred (macOS spring-loading uses roughly this delay).
+    /// Space. [06 §15.6] observed: within 1 s (sampling ≈ 0.8 s); 0.8 s stays inside that bound.
     static let dockSwitchDelay: Double = 0.8
 
-    /// How often the drag watchdog checks that the mouse button is still down. A cancelled drag
-    /// (released outside any drop target, or Esc) gives SwiftUI no callback. unknown (tuning value).
+    /// Edge switching while dragging: the pointer at the sidebar's left edge (x < 20) switches to
+    /// the previous Space after ≈ 0.5–1.5 s; at the right edge (fires at 4 pt from Arc's edge, not
+    /// at 20 pt) to the next Space after ≈ 0.8 s. [06 §15.6] observed; the exact delay of the left
+    /// edge and the right band width (between 4 and 20 pt) are inferred.
+    static let edgeSwitchLeftBand: CGFloat = 20
+    static let edgeSwitchRightBand: CGFloat = 12
+    static let edgeSwitchLeftDelay: Double = 1.0
+    static let edgeSwitchRightDelay: Double = 0.8
+
+    /// How often the drag watchdog checks that the mouse button is still down (tests and the
+    /// fallback path; the AppKit drag source reports the end itself). unknown (tuning value).
     static let dragWatchInterval: Double = 0.15
 
-    /// Auto-scroll while dragging near the top or bottom edge of the list. The spec does not
-    /// describe auto-scroll at all ([06 §12] covers drag results only): band height, top speed and
-    /// tick rate are inferred (about one row pitch; a speed that crosses a long list in about a
-    /// second; one tick per display frame).
-    static let autoScrollEdgeBand: CGFloat = 40
-    static let autoScrollMaxSpeed: CGFloat = 600
+    /// Auto-scroll while dragging near the top or bottom edge of the visible list.
+    /// [06 §15.8]: starts ≈ 13 pt from the edge (21 pt does not), after ≈ 0.3–0.5 s in the band
+    /// (observed); slow at the band's inner edge and much faster at the edge, growing with time,
+    /// ≈ 25 pt/s up to hundreds of pt/s (inferred). Stops at the content ends (observed).
+    static let autoScrollEdgeBand: CGFloat = 13
+    static let autoScrollDwell: Double = 0.4
+    static let autoScrollMinSpeed: CGFloat = 25
+    static let autoScrollMaxSpeed: CGFloat = 400
+    /// Speed multiplier gained per second spent scrolling, capped after `autoScrollRampCap` s. inferred.
+    static let autoScrollRampPerSecond: Double = 1
+    static let autoScrollRampCap: Double = 1.5
     static let autoScrollTickInterval: Double = 1.0 / 60.0
 
     // MARK: Colors
 
     /// Dark text on white floating cards (hover card, drag preview). inferred.
     static let cardTextRGB: UInt32 = 0x1C1C1E
+}
+
+extension ThemePalette {
+    /// Color of the insertion line and its ring: near white in dark themes ([06 §15.2] observed
+    /// #ECEDFF), dark ink in light themes (inferred).
+    var dropIndicatorColor: RGBAColor {
+        RGBAColor(hex: isDark || usesLightInk ? SidebarLocalTokens.dropIndicatorDarkThemeRGB : SidebarLocalTokens.dropIndicatorLightThemeRGB)
+    }
 }
