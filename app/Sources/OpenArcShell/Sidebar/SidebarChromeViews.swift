@@ -290,6 +290,12 @@ struct SidebarSpaceNameRowView: View {
     let layout: SidebarLayout
     @State private var isHovering = false
 
+    /// Ink of the Space name, icon and "…": the palette's, or white while the row shows the blue
+    /// drop band. [06 §15.4] observed band; white ink inferred.
+    static func ink(_ opacity: KeyPath<ChromeInkOpacities, Double>, palette: ThemePalette, isDropTarget: Bool) -> RGBAColor {
+        isDropTarget ? RGBAColor(hex: SidebarLocalTokens.spaceNameDropInkRGB) : palette.ink(opacity)
+    }
+
     var body: some View {
         let palette = viewModel.palette
         let s = Metrics.Sidebar.self
@@ -298,11 +304,12 @@ struct SidebarSpaceNameRowView: View {
         let nameLeading = CGFloat(icon == nil ? s.spaceNameLeadingWithoutIcon : s.spaceNameLeadingWithIcon)
         let more = s.spaceMoreButtonFrame
         let moreWidth = isHovering ? SidebarLocalTokens.spaceMoreHoverWidth : CGFloat(more.width)
+        let isDropTarget = viewModel.dropTarget == .pinnedAreaTop
         ZStack(alignment: .topLeading) {
             // Hover / context menu area: the whole header (y 145–181). It is also a drop target
             // that pins the dragged tab first, shown as a full-width saturated blue band.
             // [06 §15.4] observed.
-            (viewModel.dropTarget == .pinnedAreaTop ? RGBAColor(hex: SidebarLocalTokens.spaceNameDropRGB).swiftUI : Color.clear)
+            (isDropTarget ? RGBAColor(hex: SidebarLocalTokens.spaceNameDropRGB).swiftUI : Color.clear)
                 .frame(width: layout.width, height: CGFloat(s.spaceHeaderHeight))
                 .contentShape(Rectangle())
                 .sidebarDropRegion(.spaceName)
@@ -310,14 +317,14 @@ struct SidebarSpaceNameRowView: View {
             if let icon {
                 // A ≈ 14 pt glyph centered in the 26 pt cell (B33 round-2 PX), not a 26 pt glyph.
                 SidebarSpaceIconView(icon: icon, size: CGFloat(s.spaceIconFrame.width),
-                                     glyphSize: SidebarLocalTokens.spaceIconGlyphSize, tint: palette.ink(\.spaceIcon).swiftUI)
+                                     glyphSize: SidebarLocalTokens.spaceIconGlyphSize, tint: Self.ink(\.spaceIcon, palette: palette, isDropTarget: isDropTarget).swiftUI)
                     .frame(width: CGFloat(s.spaceIconFrame.width), height: CGFloat(s.spaceIconFrame.height))
                     .accessibilityBox(label: "Space icon", identifier: "openarc.sidebar.spaceIcon", traits: .isImage)
                     .offset(x: CGFloat(s.spaceIconFrame.x), y: CGFloat(s.spaceIconFrame.y))
             }
             Text(viewModel.selectedSpace?.name ?? "")
                 .font(style.font)
-                .foregroundStyle(palette.ink(\.spaceName).swiftUI)
+                .foregroundStyle(Self.ink(\.spaceName, palette: palette, isDropTarget: isDropTarget).swiftUI)
                 .lineLimit(1)
                 .padding(.leading, SidebarLocalTokens.textInkInset)
                 .frame(width: CGFloat(s.spaceNameTrailing) - nameLeading, height: CGFloat(style.lineHeight), alignment: .leading)
@@ -329,7 +336,7 @@ struct SidebarSpaceNameRowView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(palette.ink(\.spaceName).swiftUI.opacity(isHovering ? 1 : 0))
+                    .foregroundStyle(Self.ink(\.spaceName, palette: palette, isDropTarget: isDropTarget).swiftUI.opacity(isHovering ? 1 : 0))
                     .frame(width: moreWidth, height: CGFloat(more.height))
                     .contentShape(Rectangle())
             }
