@@ -115,8 +115,9 @@ public struct CommandBarArchiveSource: CommandBarSource {
 
 // MARK: - Built-in commands
 
-/// Built-in app commands. Rows have no action label. [06 §6] observed. Commands that cannot run
-/// in the current window state are left out (inferred, see `CommandBarCommand.isAvailable`).
+/// Built-in app commands. Rows have no action label ([06 §6] observed) and show their shortcut
+/// ([06 §16.2] observed). Commands that cannot run in the current window state are left out, not
+/// dimmed ([06 §16.2] observed, see `CommandBarCommand.isAvailable`).
 public struct CommandBarCommandsSource: CommandBarSource {
     private let commands: [CommandBarCommand]
     private let state: @Sendable () async -> CommandBarCommandState

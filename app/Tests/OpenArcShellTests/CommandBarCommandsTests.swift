@@ -117,6 +117,42 @@ final class CommandBarCommandsTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.action == .runCommand(.toggleSidebar) }?.title, "Show Sidebar")
     }
 
+    /// [06 §16.2] observed: command rows show their shortcut at the right end (in the window and
+    /// in a split pane); rows with right-hand text (Switch to Tab) do not.
+    func testCommandRowsShowShortcutHint() async {
+        let rows = await CommandBarCommandsSource().results(for: CommandBarQueryContext(text: "new window", mode: .newTab))
+        let newWindow = rows.first { $0.action == .runCommand(.newWindow) }
+        XCTAssertEqual(newWindow?.visibleShortcutHint(for: .window), "⌘N")
+        XCTAssertEqual(newWindow?.visibleShortcutHint(for: .pane), "⌘N")
+        XCTAssertNil(rows.first { $0.action == .runCommand(.newSpace) }?.visibleShortcutHint(for: .window))
+        var withLabel = newWindow!
+        withLabel.actionLabel = "Switch to Tab"
+        XCTAssertNil(withLabel.visibleShortcutHint(for: .window))
+    }
+
+    /// [06 §16.2] observed: "Unpin Tab" (⌘D) while the selected tab is pinned.
+    func testPinCommandTitleFollowsSelectedTab() {
+        XCTAssertEqual(CommandBarCommand.togglePin.title(in: CommandBarCommandState(isSelectedTabPinned: true)), "Unpin Tab")
+        XCTAssertEqual(CommandBarCommand.togglePin.title(in: CommandBarCommandState(isSelectedTabPinned: false)), "Pin Tab")
+        XCTAssertEqual(CommandBarCommand.togglePin.title(in: .everything), "Pin/Unpin Tab")
+    }
+
+    /// [06 §16.2] observed: "Go Back" and the split commands are hidden (not dimmed) until they
+    /// can run, then listed with their hint.
+    func testGoBackAndSplitRowsAppearOnlyWhenRunnable() async {
+        let ctx = CommandBarQueryContext(text: "x", mode: .newTab)
+        let none = CommandBarCommandState(hasActiveSplit: false, canGoBack: false)
+        let rowsNone = await CommandBarCommandsSource(state: { none }).results(for: ctx)
+        XCTAssertFalse(rowsNone.contains { $0.action == .runCommand(.goBack) })
+        XCTAssertFalse(rowsNone.contains { $0.action == .runCommand(.closeSplitPane) })
+        XCTAssertFalse(rowsNone.contains { $0.action == .runCommand(.expandSplit) })
+        let able = CommandBarCommandState(hasActiveSplit: true, canGoBack: true)
+        let rowsAble = await CommandBarCommandsSource(state: { able }).results(for: ctx)
+        XCTAssertEqual(rowsAble.first { $0.action == .runCommand(.goBack) }?.shortcutHint, "⌘[")
+        XCTAssertEqual(rowsAble.first { $0.action == .runCommand(.closeSplitPane) }?.shortcutHint, "⌃⇧-")
+        XCTAssertTrue(rowsAble.contains { $0.action == .runCommand(.expandSplit) })
+    }
+
     /// The shell's live state drives availability: split items appear only with a split. [01 §View] observed.
     func testShellStateDrivesAvailability() async throws {
         let model = makeModel()

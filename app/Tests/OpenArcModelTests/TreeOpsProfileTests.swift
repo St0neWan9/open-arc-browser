@@ -140,13 +140,15 @@ final class TreeOpsProfileTests: XCTestCase {
         }
     }
 
-    /// inferred: a profile that live spaces still use is refused (no silent re-homing).
+    /// [06 §16.3] observed: a profile that live spaces still use is refused; its spaces are
+    /// neither moved nor deleted.
     func testProfileWithLiveSpacesCannotBeDeleted() throws {
         var s = try base()
         s = try TreeOps.createSpace(s, id: UUID(), profileID: work, name: "Second", now: t0)
         XCTAssertThrowsError(try TreeOps.deleteProfile(s, id: work, now: at(10))) {
             XCTAssertEqual($0 as? TreeError, .profileHasSpaces(2))
         }
+        XCTAssertEqual(s.spaces(inProfile: work).count, 2)
         XCTAssertThrowsError(try TreeOps.deleteProfile(s, id: UUID(), now: at(10)))
     }
 

@@ -211,6 +211,12 @@ struct ProfilesPane: View {
             }
         }
         .padding(20)
+        .sheet(isPresented: Binding(
+            get: { model.profilePendingDeletion != nil },
+            set: { if !$0 { model.cancelProfileDeletion() } }
+        )) {
+            DeleteProfileSheet(model: model)
+        }
     }
 
     private var profileList: some View {
@@ -232,7 +238,7 @@ struct ProfilesPane: View {
                     .help(SettingsCatalog.control("profiles.add").label)
                 // Enabled only when the edited profile can be deleted; otherwise the reason shows.
                 // [03 §Profiles] observed: "The Default Profile cannot be deleted."
-                Button { model.deleteEditedProfile() } label: { Image(systemName: "minus") }
+                Button { model.requestDeleteEditedProfile() } label: { Image(systemName: "minus") }
                     .disabled(!model.canDeleteEditedProfile)
                     .help(model.profileDeletionBlockedReason ?? SettingsCatalog.control("profiles.remove").label)
             }
@@ -431,5 +437,39 @@ struct SettingsRootView: View {
 
     var body: some View {
         SettingsWindowView(model: model)
+    }
+}
+
+/// "Delete this Profile" confirmation. [06 §16.3] observed: app icon, title, body naming the
+/// profile, a text field for its name, Cancel and a red Delete that stays disabled until the
+/// typed text equals the name. Geometry: our own (the observed sheet is 450 × 349).
+struct DeleteProfileSheet: View {
+    @ObservedObject var model: SettingsModel
+    @State private var typed = ""
+
+    var body: some View {
+        let name = model.profilePendingDeletionName ?? ""
+        VStack(alignment: .leading, spacing: 12) {
+            Image(nsImage: NSApp?.applicationIconImage ?? NSImage())
+                .resizable()
+                .frame(width: 62, height: 62)
+            Text("Delete this Profile").font(.title3.weight(.semibold))
+            Text(SettingsModel.profileDeletionMessage(name: name))
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("", text: $typed)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { model.confirmProfileDeletion(typed: typed) }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { model.cancelProfileDeletion() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Delete", role: .destructive) { model.confirmProfileDeletion(typed: typed) }
+                    .tint(.red)
+                    .disabled(!model.canConfirmProfileDeletion(typed: typed))
+            }
+        }
+        .padding(38)
+        .frame(width: 450)
+        .accessibilityIdentifier("openarc.deleteProfile")
     }
 }

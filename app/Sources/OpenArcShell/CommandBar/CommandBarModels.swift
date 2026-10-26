@@ -141,6 +141,9 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     /// sidebar is hidden (inferred, like the View menu item; [01 §View] only records "Hide Sidebar").
     public func title(in state: CommandBarCommandState) -> String {
         if self == .toggleSidebar, !state.isSidebarVisible { return "Show Sidebar" }
+        // [06 §16.2] observed: "Unpin Tab" (⌘D) while the selected tab is pinned; "Pin Tab" for a
+        // Today tab is inferred by symmetry.
+        if self == .togglePin, let pinned = state.isSelectedTabPinned { return pinned ? "Unpin Tab" : "Pin Tab" }
         return title
     }
 
@@ -216,9 +219,10 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// Whether the command can run in this state. Rows of unavailable commands are left out, the
-    /// way the menus disable them (inferred: [01 §View] observed that the split items are only
-    /// available while a split exists; the same rule is applied to the other state-bound items).
+    /// Whether the command can run in this state. Rows of unavailable commands are left out, not
+    /// dimmed. [06 §16.2] observed: with no split, "Close this Split Pane" / "Expand Current Split"
+    /// are not listed (they are with a split); with no back history "Go Back" is not listed (it is,
+    /// with ⌘[, after a navigation). The other state-bound items follow the same rule (inferred).
     public func isAvailable(in state: CommandBarCommandState) -> Bool {
         switch self {
         case .archiveTab, .togglePin, .copyURL, .reload, .addSplitView:
@@ -256,6 +260,9 @@ public struct CommandBarCommandState: Hashable, Sendable {
     public var isSidebarVisible: Bool
     /// The tab "Move Tab to <Space>" rows act on; nil offers no move rows.
     public var movableTabID: UUID?
+    /// Whether the selected tab is pinned (true) or in Today (false); nil for no tab or a favorite.
+    /// Picks the "Pin Tab" / "Unpin Tab" title.
+    public var isSelectedTabPinned: Bool?
 
     public init(
         hasSelectedTab: Bool = true,
@@ -266,7 +273,8 @@ public struct CommandBarCommandState: Hashable, Sendable {
         canGoBack: Bool = true,
         canGoForward: Bool = true,
         isSidebarVisible: Bool = true,
-        movableTabID: UUID? = nil
+        movableTabID: UUID? = nil,
+        isSelectedTabPinned: Bool? = nil
     ) {
         self.hasSelectedTab = hasSelectedTab
         self.hasSelectedSpace = hasSelectedSpace
@@ -277,6 +285,7 @@ public struct CommandBarCommandState: Hashable, Sendable {
         self.canGoForward = canGoForward
         self.isSidebarVisible = isSidebarVisible
         self.movableTabID = movableTabID
+        self.isSelectedTabPinned = isSelectedTabPinned
     }
 
     /// Every command available, no move rows. For previews, tests and sources without a window.
@@ -394,8 +403,8 @@ public struct CommandBarResult: Identifiable, Hashable, Sendable {
     /// Extra texts the ranker matches besides the title (for example the bare space name of a
     /// "Go to “Work”" row). Not shown.
     public var matchTexts: [String]
-    /// Default shortcut of an app command. [02] observed; not drawn by the row (the spec shows no
-    /// hint on command rows), kept for the view and tests.
+    /// Default shortcut of the row's command, drawn at the row's right end. [06 §16.2] observed
+    /// for command rows ([02] observed keys); the ⌃N hints of "Go to" rows are inferred.
     public var shortcutHint: String?
 
     public init(
@@ -430,6 +439,13 @@ public struct CommandBarResult: Identifiable, Hashable, Sendable {
         self.sourceOrder = sourceOrder
         self.matchTexts = matchTexts
         self.shortcutHint = shortcutHint
+    }
+
+    /// Shortcut hint the row draws: only when it has no right-hand text. [06 §16.2] observed on
+    /// command rows, in the window and in a split pane.
+    public func visibleShortcutHint(for presentation: CommandBarPresentation) -> String? {
+        guard let shortcutHint, trailingLabel(for: presentation) == nil else { return nil }
+        return shortcutHint
     }
 
     /// Text shown on the right of the row for a presentation. [06 §6] observed: panes show the space name.
