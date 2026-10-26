@@ -241,6 +241,9 @@ struct SidebarTabLiveState: Equatable {
     var capture: CaptureState = []
     var isFullscreen = false
     var themeColor: RGBAColor?
+    /// The page's top-right color from the last finished load; the web toolbar paints with it.
+    /// [06 §17.4] observed. B45.
+    var pageTopColor: PageTopColor?
     /// Latest find-in-page result; nil when no search ran.
     var findResult: FindResult?
 
@@ -264,6 +267,7 @@ struct SidebarTabLiveState: Equatable {
         capture = snapshot.capture
         isFullscreen = snapshot.isFullscreen
         themeColor = snapshot.themeColor
+        pageTopColor = snapshot.pageTopColor
     }
 
     /// The favicon if it belongs to the site now shown (inferred: an icon of the previous site must
@@ -311,6 +315,8 @@ struct SidebarTabLiveState: Equatable {
             isFullscreen = on
         case .themeColorChanged(let color):
             themeColor = color
+        case .pageTopColorChanged(let color):
+            pageTopColor = color
         case .findResultChanged(let result):
             findResult = result
         case .renderProcessGone:

@@ -126,6 +126,9 @@ public struct BrowserTabState: Hashable, Sendable {
     public var isFullscreen: Bool
     /// `<meta name="theme-color">`, if any (plan C17).
     public var themeColor: RGBAColor?
+    /// The page's top-right color, sampled once per finished load (plan B45); nil until the first
+    /// sample. The web toolbar paints itself with it. [06 §17.4] observed.
+    public var pageTopColor: PageTopColor?
 
     public init(
         url: URL? = nil,
@@ -140,7 +143,8 @@ public struct BrowserTabState: Hashable, Sendable {
         zoomFactor: Double = 1,
         capture: CaptureState = [],
         isFullscreen: Bool = false,
-        themeColor: RGBAColor? = nil
+        themeColor: RGBAColor? = nil,
+        pageTopColor: PageTopColor? = nil
     ) {
         self.url = url
         self.title = title
@@ -155,7 +159,21 @@ public struct BrowserTabState: Hashable, Sendable {
         self.capture = capture
         self.isFullscreen = isFullscreen
         self.themeColor = themeColor
+        self.pageTopColor = pageTopColor
     }
+}
+
+/// What the engine found at the top-right of the visible page when a load finished (plan B45).
+///
+/// [06 §17.4] observed: the web toolbar takes the color of the top row of the page's viewport at
+/// its right end (a small area, averaged), sampled once per finished load (navigation, reload; at
+/// the scroll position of that moment), not on scroll or later style changes; when a classic
+/// (always shown) scrollbar sits there, the toolbar uses a neutral color instead.
+public enum PageTopColor: Hashable, Sendable {
+    /// The rendered color, in sRGB, opaque.
+    case color(RGBAColor)
+    /// The sample would land on a classic scrollbar's track; the shell uses its fallback color.
+    case scrollbar
 }
 
 /// Media capture in progress (`OACCaptureState`).
@@ -201,6 +219,8 @@ public enum TabEvent: Hashable, Sendable {
     case captureStateChanged(CaptureState)
     case fullscreenChanged(Bool)
     case themeColorChanged(RGBAColor?)
+    /// A finished load was sampled (`BrowserTabState.pageTopColor`). Plan B45.
+    case pageTopColorChanged(PageTopColor?)
     /// The pointer is over a link (nil: it left). Status bubble, inferred.
     case hoveredLinkChanged(URL?)
     /// Find-in-page results for the current search (`BrowserTab.find`).

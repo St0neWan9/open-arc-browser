@@ -6,8 +6,9 @@ import OpenArcSyncAPI
 import OpenArcPersistence
 @testable import OpenArcShell
 
-/// The web toolbar, View ▸ Show Toolbar (plan B43). Every test names `docs/arc-spec/06-flows.md`
-/// §17 (E16, observed unless noted) and `04 §网页工具栏`.
+/// The web toolbar, View ▸ Show Toolbar (plan B43; colors plan B45). Every test names
+/// `docs/arc-spec/06-flows.md` §17 (E16; §17.4 colors rewritten by E18; observed unless noted) and
+/// `04 §网页工具栏`.
 @MainActor
 final class WebToolbarTests: XCTestCase {
     private let reference = CGSize(width: 1920, height: 985)
@@ -37,33 +38,116 @@ final class WebToolbarTests: XCTestCase {
         XCTAssertFalse(t.defaultShowsFullURL, "03 §Advanced: off")
     }
 
-    /// 06 §17.4: the background follows only the Space's light / dark mode: white, #3D3E3D, and
-    /// #474747 for a dark split pane; icons and text turn light in dark.
-    func testBackgroundFollowsOnlyTheSpaceMode() {
-        XCTAssertEqual(ThemeDerivation.webToolbarBackground(appearance: .light), RGBAColor(hex: 0xFFFFFF))
-        XCTAssertEqual(ThemeDerivation.webToolbarBackground(appearance: .dark), RGBAColor(hex: 0x3D3E3D))
-        XCTAssertEqual(ThemeDerivation.webToolbarBackground(appearance: .dark, isSplitPane: true), RGBAColor(hex: 0x474747))
-        XCTAssertEqual(ThemeDerivation.webToolbarBackground(appearance: .light, isSplitPane: true), RGBAColor(hex: 0xFFFFFF))
-        let light = ThemeDerivation.webToolbarColors(appearance: .light)
-        XCTAssertEqual(light.icon, RGBAColor(hex: 0x7D7D7D))
-        XCTAssertEqual(light.iconDisabled, RGBAColor(hex: 0xC6C6C6))
-        let dark = ThemeDerivation.webToolbarColors(appearance: .dark)
-        XCTAssertGreaterThan(ThemeDerivation.luminance(dark.icon), ThemeDerivation.luminance(dark.background))
-        XCTAssertGreaterThan(ThemeDerivation.luminance(dark.domainText), ThemeDerivation.luminance(dark.background))
-        // 06 §17.5: the hover block is ≈ 4 % darker than the bar in light.
-        XCTAssertLessThan(light.buttonHoverFill.red, light.background.red)
+    // MARK: Colors (plan B45, 06 §17.4 as rewritten by E18)
+
+    /// 06 §17.4: the bar copies the sampled page color exactly (no blend, no theme tint), the
+    /// same in light and dark Spaces.
+    func testBackgroundIsTheSampledPageColorExactly() {
+        for color in [RGBAColor(hex: 0xFD0200), RGBAColor(hex: 0x00FE00), RGBAColor(hex: 0x0700FD),
+                      RGBAColor(hex: 0x222222), RGBAColor(hex: 0xFFFFFF), RGBAColor(hex: 0x540000)] {
+            for appearance in ResolvedAppearance.allCases {
+                let colors = ThemeDerivation.webToolbarColors(appearance: appearance, source: .page(color),
+                                                              panelBackground: RGBAColor(hex: 0x4D4253))
+                XCTAssertEqual(colors.background, color, "\(appearance)")
+            }
+        }
     }
 
-    /// 06 §17.4: the theme's hue does not reach the toolbar (red and purple themes give the same
-    /// colors in the same mode).
+    /// 06 §17.4: on a classic scrollbar the bar uses the Space-mode neutral #F3F2F3 / #3E3E3E;
+    /// with no page it is transparent over the panel fill.
+    func testFallbackAndEmptyPane() {
+        XCTAssertEqual(ThemeDerivation.webToolbarBackground(appearance: .light, source: .neutral), RGBAColor(hex: 0xF3F2F3))
+        XCTAssertEqual(ThemeDerivation.webToolbarBackground(appearance: .dark, source: .neutral), RGBAColor(hex: 0x3E3E3E))
+        XCTAssertEqual(ThemeDerivation.webToolbarBackground(appearance: .dark, source: .transparent).alpha, 0)
+        // Ink on an empty pane follows the panel underneath: light ink on a dark panel.
+        let empty = ThemeDerivation.webToolbarColors(appearance: .dark, source: .transparent, panelBackground: RGBAColor(hex: 0x4D4253))
+        XCTAssertGreaterThan(ThemeDerivation.luminance(empty.icon), ThemeDerivation.luminance(RGBAColor(hex: 0x4D4253)))
+    }
+
+    /// 06 §17.4: the ink flips by the bar's luminance. White and green take translucent black,
+    /// black, #222222, #540000 and pure red take translucent white; the threshold (unknown) lies
+    /// between pure red (≈ 0.21) and pure green (≈ 0.72).
+    func testInkFlipsByLuminance() {
+        let threshold = ThemeDerivation.webToolbarInkLuminanceThreshold
+        XCTAssertGreaterThan(threshold, ThemeDerivation.luminance(RGBAColor(hex: 0xFF0000)))
+        XCTAssertLessThan(threshold, ThemeDerivation.luminance(RGBAColor(hex: 0x00FF00)))
+        for light in [0xFFFFFF, 0x00FF00, 0xF3F2F3] {
+            XCTAssertFalse(ThemeDerivation.webToolbarUsesLightInk(on: RGBAColor(hex: UInt32(light))), String(light, radix: 16))
+        }
+        for dark in [0x000000, 0x222222, 0x540000, 0xFD0200, 0x3E3E3E, 0x0700FD] {
+            XCTAssertTrue(ThemeDerivation.webToolbarUsesLightInk(on: RGBAColor(hex: UInt32(dark))), String(dark, radix: 16))
+        }
+    }
+
+    /// 06 §17.4, §17.5: the measured ink values (±3 levels): on white, domain ≈ #6B6B6B, icons
+    /// ≈ #7D7D7D, disabled ≈ #C6C6C6; on green, icons ≈ #007300; on black, domain ≈ #CBCBCB; on
+    /// #540000 ≈ #ECC6C4; on #FD0200 ≈ #FFCFC0.
+    func testInkMatchesTheCapture() {
+        func colors(_ hex: UInt32) -> WebToolbarColors {
+            ThemeDerivation.webToolbarColors(appearance: .light, source: .page(RGBAColor(hex: hex)),
+                                             panelBackground: RGBAColor(hex: 0xFFFFFF))
+        }
+        func assertNear(_ a: RGBAColor, _ hex: UInt32, _ tolerance: Double, _ label: String) {
+            let b = RGBAColor(hex: hex)
+            for (x, y) in [(a.red, b.red), (a.green, b.green), (a.blue, b.blue)] {
+                XCTAssertEqual(x * 255, y * 255, accuracy: tolerance, label)
+            }
+        }
+        let white = colors(0xFFFFFF)
+        assertNear(white.domainText, 0x6B6B6B, 3, "domain on white")
+        assertNear(white.icon, 0x7D7D7D, 3, "icon on white")
+        assertNear(white.iconDisabled, 0xC6C6C6, 3, "disabled icon on white")
+        assertNear(colors(0x00FF00).icon, 0x007300, 12, "icon on green")
+        assertNear(colors(0x000000).domainText, 0xCBCBCB, 3, "domain on black")
+        assertNear(colors(0x540000).domainText, 0xECC6C4, 16, "domain on #540000")
+        assertNear(colors(0xFD0200).domainText, 0xFFCFC0, 16, "domain on #FD0200")
+        // 06 §17.5: the hover block is ≈ 4 % darker than a white bar.
+        assertNear(white.buttonHoverFill, 0xF5F5F5, 3, "hover on white")
+    }
+
+    /// 06 §17.4: the theme's hue does not reach the toolbar: a red and a purple theme give the
+    /// same bar for the same page sample.
     func testToolbarIgnoresThemeHue() {
+        let red = ThemeDerivation.palette(for: Theme(id: UUID(), colors: [RGBAColor(hex: 0xE03030)], now: t0), appearance: .light)
+        let purple = ThemeDerivation.palette(for: Theme(id: UUID(), colors: [RGBAColor(hex: 0x8E7CC3)], now: t0), appearance: .light)
+        XCTAssertNotEqual(red.windowBackground, purple.windowBackground)
+        let sample = WebToolbarBackgroundSource.page(RGBAColor(hex: 0x00FE00))
+        XCTAssertEqual(ThemeDerivation.webToolbarColors(appearance: .light, source: sample, panelBackground: red.webPanelBackground),
+                       ThemeDerivation.webToolbarColors(appearance: .light, source: sample, panelBackground: purple.webPanelBackground))
+    }
+
+    /// 06 §17.4: the bar follows the engine's sample of each finished load; a scrollbar sample
+    /// falls back to the neutral; no page is transparent. Split panes each use their own page.
+    func testBarFollowsTheEngineSamplePerPane() async throws {
         let model = makeModel()
-        let red = Theme(id: UUID(), colors: [RGBAColor(hex: 0xE03030)], now: t0)
-        let palette = ThemeDerivation.palette(for: red, appearance: .light)
-        XCTAssertNotEqual(palette.windowBackground, model.windowPalette.windowBackground)
-        XCTAssertEqual(ThemeDerivation.webToolbarColors(appearance: palette.appearance),
-                       model.webToolbarColors(isSplitPane: false))
+        model.toggleWebToolbar()
+        let base = try await selectExample(model)
+        let live = try XCTUnwrap(model.sidebar.liveTab(for: base) as? FakeTab)
+        XCTAssertEqual(model.webToolbarBackgroundSource(for: base), .neutral, "not sampled yet (inferred)")
+        live.simulatePageTopColor(.color(RGBAColor(hex: 0xFD0200)))
+        try await waitUntil { model.webToolbarBackgroundSource(for: base) == .page(RGBAColor(hex: 0xFD0200)) }
+        XCTAssertEqual(model.webToolbarColors(for: base).background, RGBAColor(hex: 0xFD0200))
+        live.simulatePageTopColor(.scrollbar)
+        try await waitUntil { model.webToolbarBackgroundSource(for: base) == .neutral }
+        XCTAssertEqual(model.webToolbarColors(for: base).background, RGBAColor(hex: 0xF3F2F3))
+        XCTAssertEqual(model.webToolbarBackgroundSource(for: nil), .transparent)
+
+        live.simulatePageTopColor(.color(RGBAColor(hex: 0xFBFBFB)))
+        model.addSplitView()
+        await model.sidebar.settleEngineWork()
+        model.dismissCommandBar()
+        let right = try XCTUnwrap(model.selectedTabID)
+        XCTAssertEqual(model.webToolbarBackgroundSource(for: right), .transparent, "a new empty pane")
+        try await waitUntil { model.webToolbarBackgroundSource(for: base) == .page(RGBAColor(hex: 0xFBFBFB)) }
         model.stop()
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<400 {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTFail("condition not met", file: file, line: line)
     }
 
     // MARK: Window layout

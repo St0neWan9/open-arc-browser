@@ -14,6 +14,9 @@ import OpenArcModel
 public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     /// Produces a page title for a URL. Default: the host name (or "New Tab" for nil).
     public typealias TitleProvider = @Sendable (URL) -> String
+    /// The page top color a finished load of a URL reports (plan B45); nil reports nothing, as
+    /// before the first sample.
+    public typealias PageTopColorProvider = @Sendable (URL) -> PageTopColor?
 
     /// A script-opened tab the shell has not adopted or declined yet.
     private struct Pending {
@@ -33,13 +36,16 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     private var clearedData: [ClearedBrowsingData] = []
     private let broadcaster = AsyncBroadcaster<EngineEvent>()
     private let titleProvider: TitleProvider
+    private let pageTopColorProvider: PageTopColorProvider?
     private let zoomMap = FakeZoomMap()
     private let fakeDownloads = FakeDownloads()
     private let fakeExtensions = FakeExtensions()
     private let fakeAdBlocking = FakeAdBlocking()
 
-    public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle) {
+    public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle,
+                pageTopColorProvider: PageTopColorProvider? = nil) {
         self.titleProvider = titleProvider
+        self.pageTopColorProvider = pageTopColorProvider
     }
 
     public static let defaultTitle: TitleProvider = { url in url.host ?? url.absoluteString }
@@ -205,6 +211,7 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
             opener: opener,
             colorScheme: colorScheme,
             titleProvider: titleProvider,
+            pageTopColorProvider: pageTopColorProvider,
             zoomMap: zoomMap
         )
         tab.onSiteZoomChange = { [weak self] source, key, factor in self?.propagateZoom(from: source, key: key, factor: factor) }
@@ -325,6 +332,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private let broadcaster = AsyncBroadcaster<TabEvent>()
     private let dialogBroadcaster = AsyncBroadcaster<EngineDialogRequest>()
     private let titleProvider: FakeEngine.TitleProvider
+    private let pageTopColorProvider: FakeEngine.PageTopColorProvider?
     private let zoomMap: FakeZoomMap
     var onSiteZoomChange: (@Sendable (EngineTabID, FakeZoomMap.Key, Double) -> Void)?
     var onNewTabRequest: (@Sendable (NewTabRequest) -> Void)?
@@ -336,6 +344,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         opener: EngineTabID? = nil,
         colorScheme: WebColorScheme = .light,
         titleProvider: @escaping FakeEngine.TitleProvider,
+        pageTopColorProvider: FakeEngine.PageTopColorProvider? = nil,
         zoomMap: FakeZoomMap = FakeZoomMap()
     ) {
         self.id = id
@@ -344,6 +353,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         self.opener = opener
         self.colorScheme = colorScheme
         self.titleProvider = titleProvider
+        self.pageTopColorProvider = pageTopColorProvider
         self.zoomMap = zoomMap
         let fakeSurface = FakeSurface(tabID: id)
         self.fakeSurface = fakeSurface
@@ -707,6 +717,11 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         update(\.themeColor, color, event: .themeColorChanged(color))
     }
 
+    /// Simulates the engine's sample of the page's top-right color after a load (plan B45).
+    public func simulatePageTopColor(_ color: PageTopColor?) {
+        update(\.pageTopColor, color, event: .pageTopColorChanged(color))
+    }
+
     public func simulateCapture(_ capture: CaptureState) {
         update(\.capture, capture, event: .captureStateChanged(capture))
     }
@@ -926,6 +941,13 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
 
             state.loadState = .idle
             broadcaster.yield(.loadStateChanged(.idle))
+
+            // The engine samples the page's top color once the load finished (plan B45). A
+            // provider answer of nil leaves the previous sample, as a failed copy does.
+            if let color = pageTopColorProvider?(url), color != state.pageTopColor {
+                state.pageTopColor = color
+                broadcaster.yield(.pageTopColorChanged(color))
+            }
             return true
         }
     }

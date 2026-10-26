@@ -223,6 +223,7 @@ final class TabChannel: @unchecked Sendable {
         if old.capture != new.capture { events.append(.captureStateChanged(new.capture)) }
         if old.isFullscreen != new.isFullscreen { events.append(.fullscreenChanged(new.isFullscreen)) }
         if old.themeColor != new.themeColor { events.append(.themeColorChanged(new.themeColor)) }
+        if old.pageTopColor != new.pageTopColor { events.append(.pageTopColorChanged(new.pageTopColor)) }
         if old.loadState != new.loadState { events.append(.loadStateChanged(new.loadState)) }
         return events
     }
@@ -404,6 +405,7 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     func tab(_ tab: OACTab, didChangeZoomFactor zoomFactor: Double) { sync() }
     func tab(_ tab: OACTab, didChangeFullscreen isFullscreen: Bool) { sync() }
     func tab(_ tab: OACTab, didChangeThemeColor color: OACColor, hasThemeColor: Bool) { sync() }
+    func tabDidSamplePageTopColor(_ tab: OACTab) { sync() }
     func tab(_ tab: OACTab, didFinish navigation: OACNavigation) {
         sync()
         scheduleSettleResync()
@@ -657,8 +659,20 @@ extension BrowserTabState {
             capture: CaptureState(rawValue: Int(state.captureState.rawValue)),
             isFullscreen: state.isFullscreen,
             themeColor: state.hasThemeColor
-                ? RGBAColor(red: color.red, green: color.green, blue: color.blue, alpha: color.alpha) : nil
+                ? RGBAColor(red: color.red, green: color.green, blue: color.blue, alpha: color.alpha) : nil,
+            pageTopColor: PageTopColor(kind: state.pageTopColorKind, color: state.pageTopColor)
         )
+    }
+}
+
+extension PageTopColor {
+    /// The bridge's sample (plan B45); nil before the first finished load was sampled.
+    init?(kind: OACPageTopColorKind, color: OACColor) {
+        switch kind {
+        case .color: self = .color(RGBAColor(red: color.red, green: color.green, blue: color.blue, alpha: 1))
+        case .scrollbar: self = .scrollbar
+        default: return nil
+        }
     }
 }
 

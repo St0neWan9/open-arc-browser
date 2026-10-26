@@ -291,7 +291,7 @@ struct WebPanelWithToolbar<Page: View>: View {
 
     var body: some View {
         let height = min(CGFloat(Metrics.WebToolbar.height), size.height)
-        let colors = model.webToolbarColors(isSplitPane: false)
+        let colors = model.webToolbarColors(for: sidebar.selectedTabID)
         VStack(spacing: 0) {
             WebToolbarView(model: model, state: model.webToolbarState(for: sidebar.selectedTabID),
                            items: model.webToolbarItems(role: .page), colors: colors,
@@ -300,7 +300,8 @@ struct WebPanelWithToolbar<Page: View>: View {
             page().frame(width: size.width, height: max(0, size.height - height))
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .background(colors.background.swiftUI)
+        // A transparent bar (no page) shows the panel fill. [06 §17.4] observed.
+        .background(model.windowPalette.webPanelBackground.swiftUI)
     }
 }
 

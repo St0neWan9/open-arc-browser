@@ -9,6 +9,7 @@ import OpenArcModel
 //   [04 §网页工具栏]   = 04-visual-metrics.md, web toolbar table (same capture);
 //   design-tokens.json `Metrics.WebToolbar` and `ThemeDerivation.webToolbarBackground`.
 // Geometry is AX (points, window coordinates); colors are averages of ≥ 5000 pixels (±3 levels).
+// Colors follow E18's rewrite of [06 §17.4] (plan B45): the bar takes the page's top-right color.
 
 extension Metrics {
     public enum WebToolbar {
@@ -82,11 +83,17 @@ extension Metrics {
     }
 }
 
-/// Where the toolbar's background color comes from. Arc 1.170.0 uses only the Space's light / dark
-/// mode ([06 §17.4] observed over 7 pages: not the page's top color, not `theme-color`, not the
-/// theme hue, not View ▸ Appearance). A page-color source can be added here later.
+/// Where a toolbar's background comes from (plan B45). [06 §17.4] observed (E18).
 public enum WebToolbarBackgroundSource: Hashable, Sendable {
-    case spaceMode
+    /// The color the engine sampled at the top-right of the visible page when its last load
+    /// finished, copied exactly: no blend, no theme tint, the same in light and dark Spaces.
+    case page(RGBAColor)
+    /// The Space-mode neutral: the sample landed on a classic scrollbar ([06 §17.4] observed), or
+    /// the page has not been sampled yet (inferred).
+    case neutral
+    /// No page (an empty panel or a new empty split pane): the bar is transparent over the panel
+    /// fill. [06 §17.4] observed the panel color; "transparent" is inferred.
+    case transparent
 }
 
 /// Colors of the web toolbar for one appearance.
@@ -118,70 +125,81 @@ public struct WebToolbarColors: Hashable, Sendable {
 }
 
 extension ThemeDerivation {
-    /// Light toolbar: #FFFFFF. [06 §17.4] observed for a new default-theme Space; some Spaces
-    /// showed #EFEFEF–#F3F3F2 (`webToolbarLightAlt`) and the rule between the two is unknown, so
-    /// the alternative is not used.
-    public static let webToolbarLight = RGBAColor(hex: 0xFFFFFF)
-    public static let webToolbarLightAlt = RGBAColor(hex: 0xF2F3F2)
-    /// Dark toolbar on a single page, and on each split pane. [06 §17.4] observed.
-    public static let webToolbarDark = RGBAColor(hex: 0x3D3E3D)
-    public static let webToolbarDarkSplitPane = RGBAColor(hex: 0x474747)
-    /// Icons: light enabled ≈ #7D7D7D, disabled ≈ #C6C6C6; dark ≈ #C5C5C5–#D3D3D3. [06 §17.4,
-    /// §17.5] observed.
-    public static let webToolbarIconLight = RGBAColor(hex: 0x7D7D7D)
-    public static let webToolbarIconDisabledLight = RGBAColor(hex: 0xC6C6C6)
-    public static let webToolbarIconDark = RGBAColor(hex: 0xCCCCCC)
-    /// Domain text in light ≈ #646464–#6C6C6C. [06 §17.2] observed. Dark: unknown, the icon color.
-    public static let webToolbarDomainLight = RGBAColor(hex: 0x666666)
-    /// Disabled icons sit this far from the background toward the enabled color: light
-    /// (#C6C6C6 − #FFFFFF) / (#7D7D7D − #FFFFFF) ≈ 0.44. Reused for dark. inferred.
+    /// The neutral bar when the sample hits a classic scrollbar: light #F3F2F3, dark #3E3E3E.
+    /// [06 §17.4] observed (E18; E16's #EFEFEF–#F3F3F2 / #3D3E3D were this fallback, inferred).
+    public static let webToolbarFallbackLight = RGBAColor(hex: 0xF3F2F3)
+    public static let webToolbarFallbackDark = RGBAColor(hex: 0x3E3E3E)
+
+    /// The ink switches from translucent black to translucent white when the bar's relative
+    /// luminance falls below this. [06 §17.4]: pure red (≈ 0.21) takes white ink, pure green
+    /// (≈ 0.72) takes black ink, observed; the threshold itself is unknown, so the midpoint of
+    /// that range is used (inferred).
+    public static let webToolbarInkLuminanceThreshold: Double = 0.465
+
+    /// Translucent black ink on light bars. [06 §17.4, §17.5] observed on white: domain text
+    /// ≈ #6B6B6B (≈ 58 % black), icons ≈ #7D7D7D (≈ 51 % black); on green the icons were ≈ #007300
+    /// (≈ 55 % black over the bar), so the ink is translucent, not a fixed gray.
+    public static let webToolbarDarkInkTextOpacity: Double = 0.58
+    public static let webToolbarDarkInkIconOpacity: Double = 0.51
+    /// Translucent white ink on dark bars. [06 §17.4] observed: domain text ≈ #CBCBCB on black
+    /// (≈ 80 % white; ≈ #FFCFC0 on #FD0200 and ≈ #ECC6C4 on #540000 agree). Icons: ≈ #CCCCCC on
+    /// the #3D3E3D fallback (E16, ≈ 74 % white); the red-bar icon reading (≈ #F93833) is thin-glyph
+    /// antialiasing (inferred).
+    public static let webToolbarLightInkTextOpacity: Double = 0.80
+    public static let webToolbarLightInkIconOpacity: Double = 0.74
+    /// Disabled icons sit this far from the bar toward the enabled icon: light (#C6C6C6 − #FFFFFF)
+    /// / (#7D7D7D − #FFFFFF) ≈ 0.44. [06 §17.5] observed on white; the same rule on every bar is
+    /// inferred.
     public static let webToolbarDisabledAmount: Double = 0.44
-    /// Hover: a button block ≈ 4 % darker, the domain pill ≈ 6 % black on white. [06 §17.5]
-    /// observed in light; the dark-mode hover is unknown (white at the same amounts).
+    /// Hover: a button block ≈ 4 % of the ink over the bar, the domain pill ≈ 6 %. [06 §17.5]
+    /// observed on white (#F3F3F3 → #E8E8E8; #EFEFEF on #FFFFFF); with white ink, inferred.
     public static let webToolbarButtonHoverAmount: Double = 0.04
     public static let webToolbarDomainHoverAmount: Double = 0.06
-    /// Separator: ≈ 5 % black in light. [06 §17.2] observed; dark unknown (white 6 %).
-    public static let webToolbarSeparatorOpacityLight: Double = 0.05
-    public static let webToolbarSeparatorOpacityDark: Double = 0.06
+    /// Separator: ≈ 5 % black under a light bar. [06 §17.2] observed; white 6 % under a dark bar,
+    /// inferred.
+    public static let webToolbarSeparatorOpacityDarkInk: Double = 0.05
+    public static let webToolbarSeparatorOpacityLightInk: Double = 0.06
     /// Red of the struck-through lock. [06 §17.2] observed "red"; the value is unknown.
     public static let webToolbarInsecureLock = RGBAColor(hex: 0xE0443E)
 
-    /// Toolbar background. The only input that counts in Arc 1.170.0 is the Space's light / dark
-    /// mode (resolved, so Automatic follows the system); split panes are a lighter gray in dark.
-    /// [06 §17.4] observed. Light split panes were not measured (unknown): the single-page white.
-    public static func webToolbarBackground(
-        appearance: ResolvedAppearance,
-        isSplitPane: Bool = false,
-        source: WebToolbarBackgroundSource = .spaceMode
-    ) -> RGBAColor {
+    /// The bar's own fill. A sampled page color is used as is; `.transparent` is clear (the panel
+    /// fill shows through). [06 §17.4] observed.
+    public static func webToolbarBackground(appearance: ResolvedAppearance, source: WebToolbarBackgroundSource) -> RGBAColor {
         switch source {
-        case .spaceMode:
-            switch appearance {
-            case .light: return webToolbarLight
-            case .dark: return isSplitPane ? webToolbarDarkSplitPane : webToolbarDark
-            }
+        case .page(let color): return RGBAColor(red: color.red, green: color.green, blue: color.blue)
+        case .neutral: return appearance == .dark ? webToolbarFallbackDark : webToolbarFallbackLight
+        case .transparent: return RGBAColor(red: 0, green: 0, blue: 0, alpha: 0)
         }
     }
 
-    /// Every color of the toolbar, derived from its background. [06 §17.4, §17.5].
+    /// Whether a bar of this (opaque) color takes the translucent white ink. [06 §17.4] observed
+    /// on both sides of the range; threshold inferred (`webToolbarInkLuminanceThreshold`).
+    public static func webToolbarUsesLightInk(on bar: RGBAColor) -> Bool {
+        luminance(bar) < webToolbarInkLuminanceThreshold
+    }
+
+    /// Every color of the toolbar. The ink follows what is visible behind it: the bar, or the
+    /// panel fill under a transparent bar. [06 §17.4, §17.5].
     public static func webToolbarColors(
         appearance: ResolvedAppearance,
-        isSplitPane: Bool = false,
-        source: WebToolbarBackgroundSource = .spaceMode
+        source: WebToolbarBackgroundSource,
+        panelBackground: RGBAColor
     ) -> WebToolbarColors {
-        let background = webToolbarBackground(appearance: appearance, isSplitPane: isSplitPane, source: source)
-        let isDark = appearance == .dark
-        let icon = isDark ? webToolbarIconDark : webToolbarIconLight
-        let hoverInk = isDark ? RGBAColor(hex: 0xFFFFFF) : RGBAColor(hex: 0x000000)
+        let background = webToolbarBackground(appearance: appearance, source: source)
+        let visible = source == .transparent ? panelBackground : background
+        let lightInk = webToolbarUsesLightInk(on: visible)
+        let ink = lightInk ? RGBAColor(hex: 0xFFFFFF) : RGBAColor(hex: 0x000000)
+        let icon = mix(visible, ink, amount: lightInk ? webToolbarLightInkIconOpacity : webToolbarDarkInkIconOpacity)
+        let text = mix(visible, ink, amount: lightInk ? webToolbarLightInkTextOpacity : webToolbarDarkInkTextOpacity)
         return WebToolbarColors(
             background: background,
             icon: icon,
-            iconDisabled: isDark ? mix(background, icon, amount: webToolbarDisabledAmount) : webToolbarIconDisabledLight,
-            domainText: isDark ? webToolbarIconDark : webToolbarDomainLight,
-            separator: RGBAColor(red: hoverInk.red, green: hoverInk.green, blue: hoverInk.blue,
-                                 alpha: isDark ? webToolbarSeparatorOpacityDark : webToolbarSeparatorOpacityLight),
-            buttonHoverFill: mix(background, hoverInk, amount: webToolbarButtonHoverAmount),
-            domainHoverFill: mix(background, hoverInk, amount: webToolbarDomainHoverAmount),
+            iconDisabled: mix(visible, icon, amount: webToolbarDisabledAmount),
+            domainText: text,
+            separator: RGBAColor(red: ink.red, green: ink.green, blue: ink.blue,
+                                 alpha: lightInk ? webToolbarSeparatorOpacityLightInk : webToolbarSeparatorOpacityDarkInk),
+            buttonHoverFill: mix(visible, ink, amount: webToolbarButtonHoverAmount),
+            domainHoverFill: mix(visible, ink, amount: webToolbarDomainHoverAmount),
             insecureLock: webToolbarInsecureLock
         )
     }

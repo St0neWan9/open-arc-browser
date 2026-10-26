@@ -73,7 +73,7 @@ struct SplitPaneView: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous)
-        let colors = model.webToolbarColors(isSplitPane: true)
+        let colors = model.webToolbarColors(for: bar.tabID)
         ZStack(alignment: .topLeading) {
             WebToolbarView(model: model, state: toolbar, items: items, colors: colors, size: layout.barFrame.size,
                            siteControls: model.siteControls, settings: model.webToolbar)
@@ -85,7 +85,8 @@ struct SplitPaneView: View {
                 .offset(x: layout.pageFrame.minX, y: layout.pageFrame.minY)
         }
         .frame(width: layout.paneFrame.width, height: layout.paneFrame.height, alignment: .topLeading)
-        .background(colors.background.swiftUI)
+        // A transparent bar (empty pane) shows the panel fill. [06 §17.4] observed.
+        .background(palette.webPanelBackground.swiftUI)
         .clipShape(shape)
         .webPanelEdgeShadow(palette.appearance)
         .overlay {
