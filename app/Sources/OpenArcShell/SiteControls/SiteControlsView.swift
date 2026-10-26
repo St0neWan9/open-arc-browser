@@ -26,6 +26,8 @@ struct SiteControlsURLBoxAccessories: View {
     @ObservedObject var model: SiteControlsModel
     let isHovering: Bool
     let tint: Color
+    /// Palette of the window: the bubble takes its floating-panel tint. [07 §12] observed.
+    let chrome: ThemePalette
     let openSiteControls: () -> Void
 
     var body: some View {
@@ -44,11 +46,17 @@ struct SiteControlsURLBoxAccessories: View {
                 SiteControlsIconButton(symbol: "slider.horizontal.3", label: "Site controls",
                                        id: "openarc.sidebar.siteControlsButton", tint: tint, action: openSiteControls)
                     .onHover { inside in inside ? model.pointerEntered() : model.pointerExited() }
-                    .popover(isPresented: Binding(
-                        get: { model.isPresented },
-                        set: { if !$0 { model.close(.clickOutside) } }
-                    ), arrowEdge: .bottom) {
-                        SiteControlsView(model: model)
+                    // Below the icon with an arrow pointing up at it, 12 pt below the icon,
+                    // centered on it. [07 §12] observed. Our own panel, not a popover (B42).
+                    .floatingBubble(isPresented: model.isPresented) {
+                        FloatingBubbleRequest(
+                            placement: .attached(.below),
+                            style: FloatingBubbleStyle(width: SiteControlsLocalTokens.width, height: nil,
+                                                       cornerRadius: SiteControlsLocalTokens.cornerRadius,
+                                                       tint: chrome.floatingPanelBackground, isDark: chrome.isDark),
+                            content: AnyView(SiteControlsView(model: model).environment(\.colorScheme, chrome.isDark ? .dark : .light)),
+                            onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
+                        )
                     }
             }
             .padding(.trailing, 6)

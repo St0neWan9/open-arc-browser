@@ -361,11 +361,19 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
             let isFirst = appliedPhase == nil
             appliedPhase = phase
             changed = true
-            // Keep the window's center when it grows. Centered on screen when it first opens. inferred.
+            // First opening: top right of the screen's visible area, 20 pt in from its right and
+            // top edges. [07 §12] observed. Later phase changes keep the window's center. inferred.
             let oldFrame = window.frame
             window.setContentSize(size)
             if isFirst {
-                window.center()
+                if let screen = window.screen ?? NSScreen.main {
+                    let height = screen.frame.maxY
+                    let visible = FloatingBubbleLayout.flip(screen.visibleFrame, height: height)
+                    let origin = FloatingBubbleLayout.littleArcOrigin(size: window.frame.size, visible: visible)
+                    window.setFrameOrigin(NSPoint(x: origin.x, y: height - origin.y - window.frame.height))
+                } else {
+                    window.center()
+                }
             } else {
                 var frame = window.frame
                 frame.origin.x = oldFrame.midX - frame.width / 2

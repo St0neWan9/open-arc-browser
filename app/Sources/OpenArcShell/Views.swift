@@ -92,7 +92,7 @@ struct MainWindowContent: View {
         .ignoresSafeArea()
         .animation(ShellMotion.spaceCreateFade, value: model.spaceFlow.isCreating)
         .modifier(SpaceFlowSheets(flow: model.spaceFlow, workspace: sidebar.workspace, palette: model.windowPalette))
-        .overlay(alignment: .bottomLeading) { themeEditorAnchor }
+        .overlay(alignment: .topLeading) { themeEditorAnchor }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.
         .background(WindowAppearanceApplier(appearance: model.isIncognito ? nil : palette.appearance))
     }
@@ -144,25 +144,27 @@ struct MainWindowContent: View {
         }
     }
 
-    /// Invisible anchor at the window's lower left for the Edit Theme bubble. [06 §2] observed:
-    /// the bubble opens from the lower left. It opens to the right of the anchor, over the web panel.
+    /// The Edit Theme bubble (Spaces ▸ Edit Theme…, Space menu ▸ Edit Theme Color…). [07 §12]
+    /// observed: no arrow; left edge 13 pt right of the web panel's left edge, vertically centered
+    /// on the pointer, kept 13 pt inside the window. The anchor only gives the bubble its window.
     private var themeEditorAnchor: some View {
-        Color.clear
+        let systemAppearance = model.controller.systemAppearance
+        return Color.clear
             .frame(width: 1, height: 1)
-            .padding(.leading, 24)
-            .padding(.bottom, 28)
-            .popover(isPresented: Binding(
-                get: { model.spaceFlow.themeEditorSpaceID != nil },
-                set: { if !$0 { model.spaceFlow.closeThemeEditor() } }
-            ), arrowEdge: .trailing) {
-                if let spaceID = model.spaceFlow.themeEditorSpaceID {
-                    ThemeEditorView(theme: Binding(
-                        get: { model.spaceFlow.themeDraft(of: spaceID) },
-                        set: { model.spaceFlow.applyThemeDraft($0, to: spaceID) }
-                    ), systemAppearance: model.controller.systemAppearance)
-                    // Grows from the lower left, where it is anchored. [07 §11] observed. B40.
-                    .themeBubbleMotion(anchor: .bottomLeading)
-                }
+            .floatingBubble(isPresented: model.spaceFlow.themeEditorSpaceID != nil) {
+                let spaceID = model.spaceFlow.themeEditorSpaceID
+                let draft = spaceID.map { model.spaceFlow.themeDraft(of: $0) } ?? SpaceThemeDraft()
+                // The panel's left edge does not depend on the window size (any size wider than the sidebar).
+                let webPanelMinX = model.windowLayout(size: CGSize(width: 4096, height: 4096)).webPanelFrame.minX
+                return FloatingBubbleRequest(
+                    placement: .editTheme(webPanelMinX: webPanelMinX),
+                    style: ThemeEditorView.bubbleStyle(for: draft, systemAppearance: systemAppearance),
+                    content: AnyView(ThemeEditorView(theme: Binding(
+                        get: { spaceID.map { model.spaceFlow.themeDraft(of: $0) } ?? draft },
+                        set: { if let spaceID { model.spaceFlow.applyThemeDraft($0, to: spaceID) } }
+                    ), systemAppearance: systemAppearance, drawsBackground: false)),
+                    onDismiss: { _ in model.spaceFlow.closeThemeEditor() }
+                )
             }
             .allowsHitTesting(false)
     }

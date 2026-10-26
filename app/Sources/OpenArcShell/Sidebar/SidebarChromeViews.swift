@@ -161,7 +161,7 @@ struct SidebarURLBoxView: View {
                 .padding(.leading, textLeading)
             if case .domain = content, let siteControls {
                 // Site Control Center anchor (B13, SiteControls/). [06 §12] observed.
-                SiteControlsURLBoxAccessories(model: siteControls, isHovering: isHovering, tint: palette.primaryText.swiftUI) {
+                SiteControlsURLBoxAccessories(model: siteControls, isHovering: isHovering, tint: palette.primaryText.swiftUI, chrome: palette) {
                     viewModel.requestFromMenu(.showSiteControls)
                 }
             } else if isHovering, case .domain = content {
@@ -437,28 +437,3 @@ struct SidebarDockView: View {
     }
 }
 
-/// Hover card: small white rounded bubble with the title and "Double-click to rename". [06 §12]
-/// observed; fonts on the chrome scale ([07 §3] unknown for this card).
-struct SidebarHoverCardView: View {
-    let title: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title.isEmpty ? "New Tab" : title)
-                .textStyle(Typography.hoverCardTitle, ink: RGBAColor(hex: SidebarLocalTokens.cardTextRGB))
-                .lineLimit(1)
-            Text(SidebarLocalTokens.hoverCardHint)
-                .textStyle(Typography.hoverCardHint, ink: RGBAColor(hex: SidebarLocalTokens.cardTextRGB))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: SidebarLocalTokens.hoverCardCornerRadius)
-                .fill(Color.white)
-                .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-        )
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}

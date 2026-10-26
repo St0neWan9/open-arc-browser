@@ -373,6 +373,9 @@ public enum Metrics {
     public enum LittleArc {
         /// Initial (command-bar-only) window size. [06 §7] observed (≈ 490×330).
         public static let initialSize = Size2D(width: 490, height: 330)
+        /// Opens at the top right of the screen's visible area, this far from its right and top
+        /// edges (not centered). [07 §12] observed (20 / 20).
+        public static let screenMargin: Double = 20
     }
 
     public enum Dialog {
@@ -380,8 +383,9 @@ public enum Metrics {
         public static let newFolderSize = Size2D(width: 450, height: 222)
         /// Delete Space confirmation. [07 §6] observed (450 × 273).
         public static let deleteSpaceSize = Size2D(width: 450, height: 273)
-        /// Corner radius. [07 §6] inferred (≈ 24).
-        public static let cornerRadius: Double = 24
+        /// Corner radius. [07 §12] observed (corner profile of the New Folder sheet fits a
+        /// continuous r = 26, RMS 0.1 pt; the older ≈ 24 of [07 §6] was an estimate).
+        public static let cornerRadius: Double = 26
         /// Content left edge (title x inside the sheet). [07 §6] observed (38).
         public static let contentLeading: Double = 38
         /// Right and bottom margins of the button row. [07 §6] observed (28 / 26.5).
@@ -439,9 +443,59 @@ public enum Metrics {
     }
 
     public enum SiteControls {
-        /// Popover width. [07 §10]: the old 120 is suspected to be a pixel value halved twice;
-        /// not re-measured. inferred (240).
-        public static let popoverWidth: Double = 240
+        /// Visible bubble width. [07 §12] observed (AX content 236 wide; the old 120 of [06 §12]
+        /// was a pixel value halved twice).
+        public static let popoverWidth: Double = 236
+        /// Bubble corner radius. [07 §12] observed (corner profile fits r = 20).
+        public static let cornerRadius: Double = 20
+    }
+
+    /// Floating bubbles drawn by us (theme bubble, Site Control Center, hover card): placement
+    /// relative to their anchor and their chrome. [07 §12].
+    public enum FloatingBubble {
+        /// Gap between the anchor edge and the bubble edge (the arrow spans it). [07 §12] observed:
+        /// 13 for a bubble right of its anchor ("Choose a Theme"), 12 for one below (Site Control
+        /// Center).
+        public static let gapTrailing: Double = 13
+        public static let gapBelow: Double = 12
+        /// Arrow height and base width (soft triangle with concave flanks and a rounded tip).
+        /// [07 §12] observed (height ≈ 10.5; half width ≈ 12.25 one point from the base).
+        public static let arrowHeight: Double = 10.5
+        public static let arrowBaseWidth: Double = 26
+        /// Bubbles stay this far inside the window. [07 §12] observed (Edit Theme… clamps its
+        /// 13 pt frame inset to the window edges); applied to attached bubbles too, inferred.
+        public static let windowMargin: Double = 13
+        /// Edit Theme… (menu or Space menu): no arrow; the bubble's left edge is this far right of
+        /// the web panel's left edge. [07 §12] observed (x 289 with the panel at 276).
+        public static let editThemeLeadingInset: Double = 13
+        /// 1 pt inner rim: white 70 % on a light bubble, white 20 % on a dark one. [07 §12] inferred
+        /// (edge pixels about 60–80 % / 15–25 % toward white).
+        public static let rimWidth: Double = 1
+        public static let rimOpacityLight: Double = 0.7
+        public static let rimOpacityDark: Double = 0.2
+        /// The bubble is translucent: a within-window blur under the theme tint at this opacity.
+        /// [07 §12] observed (blurred page text shows through; the fill shifts 10–25 % toward what
+        /// is behind it); 0.82 inferred. No drop shadow. [07 §12] observed.
+        public static let tintOpacity: Double = 0.82
+    }
+
+    /// Tab-row hover card. [07 §12] observed: a separate floating window placed at the pointer
+    /// (not at the row), fixed once shown; a speech-bubble corner at the top left.
+    public enum HoverCard {
+        /// Card top-left = pointer + this offset (points, y down). [07 §12] observed (11.5, 5.5).
+        public static let pointerOffsetX: Double = 11.5
+        public static let pointerOffsetY: Double = 5.5
+        /// Top-left corner radius (next to the pointer) and the other three. [07 §12] observed
+        /// (corner profiles fit 3.5 and 15.5).
+        public static let pointerCornerRadius: Double = 3.5
+        public static let cornerRadius: Double = 15.5
+        /// Shadow: black, SwiftUI radius, no offset. [07 §12] inferred (≈ 12 % darker at the edge,
+        /// gone ≈ 10 pt out, same below and to the right).
+        public static let shadowOpacity: Double = 0.24
+        public static let shadowRadius: Double = 8
+        /// Inner padding. [07 §12] inferred (card 141.5 × 42.5 around a 13 pt and an 11 pt line).
+        public static let horizontalPadding: Double = 10
+        public static let verticalPadding: Double = 6
     }
 
     public enum ContextMenu {

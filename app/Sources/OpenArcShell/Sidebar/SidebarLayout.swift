@@ -176,14 +176,3 @@ struct SidebarLayout: Equatable {
     }
 }
 
-/// Placement of the hover card (pure, so it can be tested). [06 §12] observed: below the row,
-/// slightly to the left; exact offsets inferred.
-enum SidebarHoverCardPlacement {
-    static func frame(rowFrame: CGRect, containerWidth: CGFloat) -> CGRect {
-        let width = min(SidebarLocalTokens.hoverCardMaxWidth, max(0, rowFrame.width - 2 * SidebarLocalTokens.hoverCardOffsetX))
-        var x = rowFrame.minX + SidebarLocalTokens.hoverCardOffsetX
-        x = min(x, containerWidth - width - 2)
-        x = max(x, 2)
-        return CGRect(x: x, y: rowFrame.maxY + SidebarLocalTokens.hoverCardOffsetY, width: width, height: SidebarLocalTokens.hoverCardHeight)
-    }
-}

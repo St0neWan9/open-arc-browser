@@ -2,13 +2,14 @@ import CoreGraphics
 import OpenArcDesign
 
 // Site Control Center constants the spec does not pin down. The width comes from
-// `Metrics.SiteControls.popoverWidth` ([07 §10]: the old ≈ 120 is suspected to be halved twice;
-// 240 inferred). Fonts come from `Typography` (panel styles, [07 §3] unknown for this bubble).
+// `Metrics.SiteControls.popoverWidth` ([07 §12] observed 236). Fonts come from `Typography` (panel styles, [07 §3] unknown for this bubble).
 // Each value below carries its evidence level (CLAUDE.md "Evidence levels").
 
 enum SiteControlsLocalTokens {
-    /// Bubble width. [07 §10] inferred (240).
+    /// Bubble width. [07 §12] observed (236).
     static let width = CGFloat(Metrics.SiteControls.popoverWidth)
+    /// Bubble corner radius. [07 §12] observed (20).
+    static let cornerRadius = CGFloat(Metrics.SiteControls.cornerRadius)
     /// Inner padding of the bubble. unknown.
     static let padding: CGFloat = 12
     /// Vertical gap between the sections. unknown.

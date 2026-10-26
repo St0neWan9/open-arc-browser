@@ -141,12 +141,19 @@ struct NewSpaceView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("openarc.newSpace.theme")
-        .popover(isPresented: $isThemePopoverShown, arrowEdge: .trailing) {
-            // The bubble opens to the right of the row. [06 §2] observed. Edits go to the draft and
-            // become the new Space's theme on "Create Space".
-            ThemeEditorView(theme: $flow.draftTheme, systemAppearance: flow.systemAppearance)
-                // Grows from the side of the row it opens next to. [07 §11] observed (spring). B40.
-                .themeBubbleMotion(anchor: .leading)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // The bubble opens right of the row with an arrow pointing at it. [07 §12] observed: the
+        // row spans x 14–262 of the 276 pt column and the bubble starts 13 pt right of it, centered
+        // on it. The anchor reaches the observed row edge (our form is inset 28). Edits go to the
+        // draft and become the new Space's theme on "Create Space".
+        .background(Color.clear.floatingBubble(isPresented: isThemePopoverShown) {
+            FloatingBubbleRequest(
+                placement: .attached(.trailing),
+                style: ThemeEditorView.bubbleStyle(for: flow.draftTheme, systemAppearance: flow.systemAppearance),
+                content: AnyView(ThemeEditorView(theme: Binding(get: { flow.draftTheme }, set: { flow.draftTheme = $0 }),
+                                                 systemAppearance: flow.systemAppearance, drawsBackground: false)),
+                onDismiss: { _ in isThemePopoverShown = false }
+            )
+        }.padding(.trailing, -T.themeRowAnchorOutset))
     }
 }
