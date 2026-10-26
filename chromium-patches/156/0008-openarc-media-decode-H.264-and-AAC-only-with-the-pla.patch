@@ -1,0 +1,418 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 23:48:19 -0700
+Subject: [PATCH] openarc: media: decode H.264 and AAC only with the platform
+ decoders
+
+Open Arc's v1 builds ship without patent-encumbered software decoders
+(decision Q6: proprietary_codecs = false). Plan task C18 studies playing
+H.264, HEVC and AAC by handing decoding to macOS (VideoToolbox and
+AudioToolbox) while bundling no software decoder for them.
+
+Upstream ties the two together: proprietary_codecs (needed for MP4/MSE
+demuxing of these formats) requires ffmpeg_branding = "Chrome", whose
+FFmpeg carries the H.264 and AAC decoders, and AudioToolboxAudioDecoder
+only takes xHE-AAC, so plain AAC-LC and HE-AAC can only be decoded by
+FFmpeg. This adds a build argument,
+media_proprietary_decoders_platform_only (default false; every change
+compiles away without it). With it on, on macOS only:
+
+- GN: no FFmpegVideoDecoder (enable_ffmpeg_video_decoders = false), no
+  OpenH264 (media_use_openh264 = false), and ffmpeg_branding must be
+  "Chromium" (the upstream assert is inverted for this mode). Exported as
+  the MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY build flag.
+- AudioToolboxAudioDecoder decodes every AAC profile: MPEG-4 AAC with the
+  esds cookie (macOS works out LC / HE-AAC / HE-AAC v2), USAC for xHE-AAC.
+  ADTS headers that frame an access unit (the MSE MP4 parser prepends
+  them; the ADTS and MPEG-2 TS parsers pass them through) are stripped.
+  Loudness and DRC settings stay xHE-AAC only.
+- GpuMojoMediaClientMac reports {AAC, kUnknown} as supported.
+- supported_types.cc answers H.264 and AAC from what the GPU process
+  reported instead of "always", so canPlayType / isTypeSupported say no
+  when there is no platform decoder (sites then pick VP9 / AV1).
+- FFmpeg glue for src= playback: FFmpeg only demuxes AAC and H.264 here,
+  so an unset AAC sample format becomes planar float (and skips the
+  bytes-per-sample DCHECK) and an unset H.264 pixel format becomes I420,
+  as upstream already does for HEVC; "aac" leaves the FFmpeg decoder
+  allowlist.
+
+Verified on Apple silicon with out/Release_codecs (proprietary_codecs =
+true, ffmpeg_branding = "Chromium", the new argument on): no
+ff_h264/hevc/aac decoders or parsers, no OpenH264 and no
+FFmpegVideoDecoder in OpenArcCore; H.264/AAC and HEVC/AAC MP4 (src=)
+and fMP4 (MSE) all play. Notes: chromium-bridge/CODECS.md in the Open
+Arc repository. Patent licensing questions are left to counsel.
+---
+ media/BUILD.gn                                | 15 +++-
+ media/base/supported_types.cc                 | 13 ++++
+ media/ffmpeg/ffmpeg_common.cc                 | 23 +++++-
+ media/filters/ffmpeg_demuxer.cc               |  8 ++
+ .../mac/audio_toolbox_audio_decoder.cc        | 73 +++++++++++++++++--
+ .../filters/mac/audio_toolbox_audio_decoder.h |  3 +
+ media/media_options.gni                       | 24 +++++-
+ .../services/gpu_mojo_media_client_mac.cc     |  6 ++
+ 8 files changed, 153 insertions(+), 12 deletions(-)
+
+diff --git a/media/BUILD.gn b/media/BUILD.gn
+index 1919962dd18c..be60a9dd3b5a 100644
+--- a/media/BUILD.gn
++++ b/media/BUILD.gn
+@@ -39,6 +39,7 @@ buildflag_header("media_buildflags") {
+     "ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION=$enable_platform_encrypted_dolby_vision",
+     "ENABLE_FFMPEG=$media_use_ffmpeg",
+     "ENABLE_FFMPEG_VIDEO_DECODERS=$enable_ffmpeg_video_decoders",
++    "MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY=$media_proprietary_decoders_platform_only",
+     "ENABLE_PLATFORM_HEVC=$enable_platform_hevc",
+     "ENABLE_HEVC_PARSER_AND_HW_DECODER=$enable_hevc_parser_and_hw_decoder",
+     "ENABLE_HLS_DEMUXER=$enable_hls_demuxer",
+@@ -88,9 +89,17 @@ buildflag_header("media_buildflags") {
+ }
+ 
+ if (proprietary_codecs && media_use_ffmpeg) {
+-  assert(
+-      ffmpeg_branding != "Chromium",
+-      "proprietary codecs and ffmpeg_branding set to Chromium are incompatible")
++  if (media_proprietary_decoders_platform_only) {
++    # Open Arc: the platform decodes H.264 and AAC, so FFmpeg must be the build
++    # without those decoders.
++    assert(ffmpeg_branding == "Chromium",
++           "media_proprietary_decoders_platform_only needs ffmpeg_branding " +
++               "set to Chromium")
++  } else {
++    assert(ffmpeg_branding != "Chromium",
++           "proprietary codecs and ffmpeg_branding set to Chromium are " +
++               "incompatible")
++  }
+ }
+ 
+ # Common configuration for targets in the media directory; these must not be
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index efc7246c8cd3..b83f2d425341 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -294,6 +294,11 @@ bool IsDecoderAV1Supported(const VideoType& type) {
+ }
+ 
+ bool IsDecoderAACSupported(const AudioType& type) {
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++  // Open Arc: there is no bundled AAC decoder, so every AAC profile is
++  // supported only if the platform decoder reported it.
++  return GetSupplementalDecoderAudioTypeCache()->IsProfileSupported(type);
++#else
+   if (type.profile != AudioCodecProfile::kXHE_AAC) {
+     return true;
+   }
+@@ -303,6 +308,7 @@ bool IsDecoderAACSupported(const AudioType& type) {
+ #else
+   return false;
+ #endif
++#endif  // BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
+ }
+ 
+ bool IsDecoderDolbyVisionProfileSupported(const VideoType& type) {
+@@ -447,7 +453,14 @@ bool IsDefaultDecoderSupportedVideoType(const VideoType& type) {
+     case VideoCodec::kTheora:
+       return IsDecoderBuiltInVideoCodec(type.codec);
+     case VideoCodec::kH264:
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++      // Open Arc: there is no bundled H.264 decoder, so H.264 is supported
++      // only for the profiles the platform decoder reported.
++      return GetSupplementalDecoderVideoProfileCache()->IsProfileSupported(
++          type.profile);
++#else
+       return true;
++#endif
+     case VideoCodec::kVP8:
+       return IsDecoderBuiltInVideoCodec(type.codec)
+                  ? true
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index 1eeaafafaf77..b977d5269c9d 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -409,6 +409,16 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
+       sample_format = kSampleFormatMpegHAudio;
+       break;
+ #endif
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++    // Open Arc: FFmpeg has no AAC decoder in this configuration, so it only
++    // demuxes AAC and leaves |sample_fmt| unset. The platform decoder outputs
++    // planar float; any decoder may still output another format.
++    case AudioCodec::kAAC:
++      if (sample_format == kUnknownSampleFormat) {
++        sample_format = kSampleFormatPlanarF32;
++      }
++      break;
++#endif
+ 
+     default:
+       break;
+@@ -479,6 +489,14 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
+     }
+   }
+ #endif
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++  // Open Arc: FFmpeg only demuxes AAC here, so |sample_fmt| is unset and the
++  // sample format above is the platform decoder's (see the switch above).
++  if (codec == AudioCodec::kAAC &&
++      codec_context->sample_fmt == AV_SAMPLE_FMT_NONE) {
++    return true;
++  }
++#endif
+ 
+   // Verify that AudioConfig.bytes_per_channel was calculated correctly for
+   // codecs that have |sample_fmt| set by FFmpeg.
+@@ -1112,7 +1130,10 @@ int32_t HashCodecName(const char* codec_name) {
+ }
+ 
+ const char* GetAllowedAudioDecoders() {
+-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
++  // Open Arc: with MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY, FFmpeg is built
++  // without its AAC decoder; AAC goes to the platform decoder.
++#if BUILDFLAG(USE_PROPRIETARY_CODECS) && \
++    !BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
+ #define EXTRA_CODECS ",aac"
+ #else
+ #define EXTRA_CODECS
+diff --git a/media/filters/ffmpeg_demuxer.cc b/media/filters/ffmpeg_demuxer.cc
+index f9e132f98b0f..cd36ecbe3ab7 100644
+--- a/media/filters/ffmpeg_demuxer.cc
++++ b/media/filters/ffmpeg_demuxer.cc
+@@ -1444,6 +1444,14 @@ void FFmpegDemuxer::OnFindStreamInfoDone(int result) {
+         if (stream->codecpar->format == AV_PIX_FMT_NONE)
+           stream->codecpar->format = AV_PIX_FMT_YUV420P;
+       }
++#endif
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++      // Open Arc: likewise for H.264, which FFmpeg only demuxes here. The
++      // platform decoder reads the real format from the avcC record.
++      if (codec_id == AV_CODEC_ID_H264 &&
++          stream->codecpar->format == AV_PIX_FMT_NONE) {
++        stream->codecpar->format = AV_PIX_FMT_YUV420P;
++      }
+ #endif
+     } else if (codec_type == AVMEDIA_TYPE_SUBTITLE) {
+       stream->discard = AVDISCARD_ALL;
+diff --git a/media/filters/mac/audio_toolbox_audio_decoder.cc b/media/filters/mac/audio_toolbox_audio_decoder.cc
+index 03c8cf1b0eaa..bc012ad70e05 100644
+--- a/media/filters/mac/audio_toolbox_audio_decoder.cc
++++ b/media/filters/mac/audio_toolbox_audio_decoder.cc
+@@ -39,14 +39,48 @@ bool CanUseAudioToolbox(const AudioDecoderConfig& config) {
+       config.codec() == AudioCodec::kAC3) {
+     return true;
+   }
++#endif
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++  // Open Arc: there is no bundled AAC decoder, so AudioToolbox decodes every
++  // AAC profile (LC, HE-AAC v1/v2, xHE-AAC).
++  if (config.codec() == AudioCodec::kAAC) {
++    return true;
++  }
+ #endif
+   // We use AudioToolbox for decoding xHE-AAC content and that's available on
+   // macOS 10.15 or higher.
+   return config.profile() == AudioCodecProfile::kXHE_AAC;
+ }
+ 
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++// Returns the size of the ADTS header that starts `data`, or 0 if `data` is
++// not exactly one ADTS frame. The MP4 stream parser (MSE) prepends ADTS
++// headers to AAC samples that fit in ADTS, and the MPEG-2 TS and ADTS stream
++// parsers pass ADTS frames through; AudioToolbox wants raw access units, with
++// the AudioSpecificConfig given once as the magic cookie. Checking the frame
++// length field keeps a raw access unit from being mistaken for ADTS.
++size_t GetAdtsHeaderSize(base::span<const uint8_t> data) {
++  constexpr size_t kAdtsHeaderSize = 7;
++  if (data.size() < kAdtsHeaderSize || data[0] != 0xFF ||
++      (data[1] & 0xF6) != 0xF0) {
++    return 0;
++  }
++  const size_t frame_length = ((data[3] & 0x03) << 11) | (data[4] << 3) |
++                              ((data[5] & 0xE0) >> 5);
++  if (frame_length != data.size()) {
++    return 0;
++  }
++  // protection_absent == 0 adds a 16-bit CRC.
++  const size_t header_size = (data[1] & 0x01) ? kAdtsHeaderSize : 9;
++  return header_size < data.size() ? header_size : 0;
++}
++#endif  // BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++
+ struct InputData {
+   raw_ptr<DecoderBuffer> buffer = nullptr;
++  // Bytes at the start of `buffer` that are not part of the access unit (an
++  // ADTS header).
++  size_t offset = 0;
+   AudioStreamPacketDescription packet = {};
+ };
+ 
+@@ -67,11 +101,12 @@ OSStatus ProvideInputCallback(AudioConverterRef decoder,
+ 
+   *num_packets = buffer_list->mNumberBuffers = 1;
+   buffer_list->mBuffers[0].mNumberChannels = 0;
+-  buffer_list->mBuffers[0].mDataByteSize = input_data->buffer->size();
++  buffer_list->mBuffers[0].mDataByteSize =
++      input_data->buffer->size() - input_data->offset;
+ 
+   // No const version of this API unfortunately, so we need const_cast().
+-  buffer_list->mBuffers[0].mData =
+-      const_cast<uint8_t*>(base::span(*input_data->buffer).data());
++  buffer_list->mBuffers[0].mData = const_cast<uint8_t*>(
++      base::span(*input_data->buffer).subspan(input_data->offset).data());
+ 
+   if (packets)
+     *packets = &input_data->packet;
+@@ -115,8 +150,8 @@ void AudioToolboxAudioDecoder::Initialize(const AudioDecoderConfig& config,
+                                           const OutputCB& output_cb,
+                                           const WaitingCB& waiting_cb) {
+   if (!CanUseAudioToolbox(config)) {
+-    DLOG(WARNING)
+-        << "Only xHE-AAC/AC3/E-AC3 decoding is supported by this decoder.";
++    DLOG(WARNING) << "Only AAC/AC3/E-AC3 decoding is supported by this "
++                     "decoder.";
+     std::move(init_cb).Run(DecoderStatus::Codes::kUnsupportedCodec);
+     return;
+   }
+@@ -171,7 +206,12 @@ void AudioToolboxAudioDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
+       return;
+     }
+     last_input_timestamp_ = buffer->timestamp();
+-    input_data.packet.mDataByteSize = buffer->size();
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++    if (codec_ == AudioCodec::kAAC) {
++      input_data.offset = GetAdtsHeaderSize(base::span(*buffer));
++    }
++#endif
++    input_data.packet.mDataByteSize = buffer->size() - input_data.offset;
+   }
+ 
+   // Must be filled in each time in case AudioConverterFillComplexBuffer()
+@@ -270,11 +310,27 @@ bool AudioToolboxAudioDecoder::CreateDecoder(const AudioDecoderConfig& config) {
+   AudioStreamBasicDescription input_format = {};
+   std::vector<uint8_t> magic_cookie;
+ 
++  codec_ = config.codec();
+   switch (config.codec()) {
+     case AudioCodec::kAAC: {
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++      // Open Arc: any AAC profile. The AudioSpecificConfig is required: the
++      // MP4 'esds' box, FFmpeg's demuxers and the ADTS / MPEG-2 TS stream
++      // parsers all provide it. macOS fills in the exact format (LC, HE-AAC,
++      // HE-AAC v2, USAC) from the cookie below.
++      if (config.extra_data().empty()) {
++        MEDIA_LOG(ERROR, media_log_)
++            << "AAC without an AudioSpecificConfig is not supported";
++        return false;
++      }
++      input_format.mFormatID = config.profile() == AudioCodecProfile::kXHE_AAC
++                                   ? kAudioFormatMPEGD_USAC
++                                   : kAudioFormatMPEG4AAC;
++#else
+       // Input is xHE-AAC / USAC.
+       CHECK_EQ(config.profile(), AudioCodecProfile::kXHE_AAC);
+       input_format.mFormatID = kAudioFormatMPEGD_USAC;
++#endif
+       magic_cookie = mp4::ESDescriptor::CreateEsds(config.extra_data());
+ 
+       // Have macOS fill in the rest of the input_format for us.
+@@ -424,7 +480,12 @@ bool AudioToolboxAudioDecoder::CreateDecoder(const AudioDecoderConfig& config) {
+           << "AudioConverterSetProperty() failed";
+       return false;
+     }
++  }
+ 
++  // Open Arc: with MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY other AAC profiles
++  // reach this decoder too; the loudness and DRC settings stay xHE-AAC only.
++  if (config.codec() == AudioCodec::kAAC &&
++      config.profile() == AudioCodecProfile::kXHE_AAC) {
+     // macOS doesn't provide a default target loudness. Use the value
+     // recommended by Fraunhofer. AC3/E-AC3 doesn't support set this,
+     // so limit this to xHE-AAC only.
+diff --git a/media/filters/mac/audio_toolbox_audio_decoder.h b/media/filters/mac/audio_toolbox_audio_decoder.h
+index b50c0ca201a9..9d50da23bf77 100644
+--- a/media/filters/mac/audio_toolbox_audio_decoder.h
++++ b/media/filters/mac/audio_toolbox_audio_decoder.h
+@@ -61,6 +61,9 @@ class MEDIA_EXPORT AudioToolboxAudioDecoder : public AudioDecoder {
+ 
+   std::unique_ptr<MediaLog> media_log_;
+ 
++  // Codec of the current configuration.
++  AudioCodec codec_ = AudioCodec::kUnknown;
++
+   // "Converter" for turning encoded samples into raw audio.
+   ScopedAudioConverterRef decoder_;
+ 
+diff --git a/media/media_options.gni b/media/media_options.gni
+index f3313ea46763..c8018400a7e7 100644
+--- a/media/media_options.gni
++++ b/media/media_options.gni
+@@ -21,6 +21,16 @@ is_cast_media_device = is_castos || is_cast_android
+ # feature is compiled.
+ enable_oop_video_decoder = is_chromeos && use_linux_video_acceleration
+ 
++declare_args() {
++  # Open Arc: with `proprietary_codecs`, decode H.264, HEVC and AAC only with
++  # the platform's decoders (VideoToolbox and AudioToolbox on macOS) and build
++  # no bundled software decoder for them: FFmpeg keeps the "Chromium" branding
++  # (no H.264 or AAC decoders), and neither FFmpeg's H.264 video decoder path
++  # nor OpenH264 is built. Demuxing (MP4, MSE, ADTS, MPEG-2 TS) and the
++  # bitstream parsers still come from //media.
++  media_proprietary_decoders_platform_only = false
++}
++
+ declare_args() {
+   # Allows distributions to link pulseaudio directly (DT_NEEDED) instead of
+   # using dlopen. This helps with automated detection of ABI mismatches and
+@@ -56,7 +66,8 @@ declare_args() {
+   # Enable usage of OpenH264 within the media library. Used for software based
+   # encoding of H264 content.
+   media_use_openh264 = true
+-  if (is_ios || (is_android && current_cpu == "arm") || !proprietary_codecs) {
++  if (is_ios || (is_android && current_cpu == "arm") || !proprietary_codecs ||
++      media_proprietary_decoders_platform_only) {
+     media_use_openh264 = false
+   }
+ 
+@@ -243,9 +254,18 @@ declare_args() {
+   # hardware decoders. To do so, you will also need to update ffmpeg build files
+   # in order to define which decoders to build in.
+   enable_ffmpeg_video_decoders =
+-      media_use_ffmpeg && (!is_android || current_cpu != "arm")
++      media_use_ffmpeg && (!is_android || current_cpu != "arm") &&
++      !media_proprietary_decoders_platform_only
+ }
+ 
++assert(!media_proprietary_decoders_platform_only || proprietary_codecs,
++       "media_proprietary_decoders_platform_only needs proprietary_codecs")
++assert(!media_proprietary_decoders_platform_only || is_mac,
++       "media_proprietary_decoders_platform_only is only wired up on macOS")
++assert(!media_proprietary_decoders_platform_only ||
++           (!enable_ffmpeg_video_decoders && !media_use_openh264),
++       "media_proprietary_decoders_platform_only excludes software H.264")
++
+ declare_args() {
+   # Enables the use of library CDMs that implements the interface defined at
+   # media/cdm/api/content_decryption_module.h. If true, the actually library CDM
+diff --git a/media/mojo/services/gpu_mojo_media_client_mac.cc b/media/mojo/services/gpu_mojo_media_client_mac.cc
+index 1d1ec8a5dbba..afd1c6bdbd9f 100644
+--- a/media/mojo/services/gpu_mojo_media_client_mac.cc
++++ b/media/mojo/services/gpu_mojo_media_client_mac.cc
+@@ -11,6 +11,7 @@
+ #include "media/filters/mac/audio_toolbox_audio_decoder.h"
+ #include "media/filters/mac/audio_toolbox_audio_encoder.h"
+ #include "media/gpu/mac/video_toolbox_video_decoder.h"
++#include "media/media_buildflags.h"
+ #include "media/mojo/services/gpu_mojo_media_client.h"
+ 
+ namespace media {
+@@ -32,6 +33,11 @@ class GpuMojoMediaClientMac final : public GpuMojoMediaClient {
+   std::optional<SupportedAudioDecoderConfigs>
+   GetPlatformSupportedAudioDecoderConfigs() final {
+     SupportedAudioDecoderConfigs audio_configs;
++#if BUILDFLAG(MEDIA_PROPRIETARY_DECODERS_PLATFORM_ONLY)
++    // Open Arc: AudioToolbox decodes every AAC profile (LC, HE-AAC v1/v2 map
++    // to kUnknown), since there is no bundled AAC decoder.
++    audio_configs.emplace_back(AudioCodec::kAAC, AudioCodecProfile::kUnknown);
++#endif
+     audio_configs.emplace_back(AudioCodec::kAAC, AudioCodecProfile::kXHE_AAC);
+ #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+     audio_configs.emplace_back(AudioCodec::kAC3, AudioCodecProfile::kUnknown);
