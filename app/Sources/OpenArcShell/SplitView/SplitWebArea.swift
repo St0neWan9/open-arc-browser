@@ -88,6 +88,7 @@ struct SplitPaneView: View {
         .frame(width: layout.paneFrame.width, height: layout.paneFrame.height, alignment: .topLeading)
         .background(palette.controlFill.swiftUI)
         .clipShape(shape)
+        .webPanelEdgeShadow(palette.appearance)
         .overlay {
             if isFocused {
                 shape

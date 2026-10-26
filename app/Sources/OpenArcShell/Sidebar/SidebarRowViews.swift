@@ -13,19 +13,33 @@ import OpenArcDesign
 struct SidebarRowFrame<Content: View>: View {
     let fill: Color
     var depth: Int = 0
+    /// Split preview while a tab is dragged over the row's middle band: a gray-violet block on the
+    /// pointer's side, the row content moved to the other side. [06 §15.2] observed.
+    var splitPreview: SplitSide? = nil
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         let layout = SidebarLayout()
         let fillFrame = layout.rowFillFrame
+        let radius = CGFloat(Metrics.Sidebar.selectedRowCornerRadius)
+        let block = (fillFrame.width * SidebarLocalTokens.splitPreviewWidthFraction).rounded()
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: CGFloat(Metrics.Sidebar.selectedRowCornerRadius), style: .continuous)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(fill)
                 .frame(width: fillFrame.width, height: fillFrame.height)
                 .offset(x: fillFrame.minX, y: fillFrame.minY)
+            if let splitPreview {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(RGBAColor(hex: SidebarLocalTokens.splitPreviewRGB).swiftUI)
+                    .frame(width: block, height: fillFrame.height)
+                    .offset(x: splitPreview == .leading ? fillFrame.minX : fillFrame.maxX - block, y: fillFrame.minY)
+                    .accessibilityHidden(true)
+            }
             HStack(spacing: 0) { content() }
-                .padding(.leading, layout.rowIconLeading + CGFloat(depth) * SidebarLocalTokens.folderIndent)
-                .padding(.trailing, layout.width - fillFrame.maxX + SidebarLocalTokens.rowAccessoryTrailingPadding)
+                .padding(.leading, layout.rowIconLeading + CGFloat(depth) * SidebarLocalTokens.folderIndent
+                         + (splitPreview == .leading ? block : 0))
+                .padding(.trailing, layout.width - fillFrame.maxX + SidebarLocalTokens.rowAccessoryTrailingPadding
+                         + (splitPreview == .trailing ? block : 0))
                 .frame(width: layout.width, height: layout.rowButtonHeight, alignment: .leading)
         }
         .frame(width: layout.width, height: layout.rowHeight, alignment: .topLeading)
@@ -56,7 +70,7 @@ struct SidebarTabRowView: View {
         let iconSize = SidebarLocalTokens.rowIconSize
         let style = Typography.tabRowTitle
 
-        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth) {
+        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth, splitPreview: viewModel.splitPreviewSide(for: tab.id)) {
             Group {
                 if live?.isLoading == true {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
@@ -106,7 +120,7 @@ struct SidebarTabRowView: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { viewModel.beginRename(tab.id) })
         .onTapGesture { viewModel.selectTab(tab.id) }
         .contextMenu { SidebarTabMenu(viewModel: viewModel, tab: tab, kind: area == .pinned ? .pinned : .today) }
-        .sidebarRowInteraction(viewModel: viewModel, id: tab.id, dragItem: .tab(tab.id))
+        .sidebarRowInteraction(viewModel: viewModel, id: tab.id)
         // Like the reference's outline row: a 41 pt row holding the icon cell and the title line.
         .accessibilityElement(children: .contain)
         .accessibilityLabel(tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle)
@@ -187,7 +201,7 @@ struct SidebarSplitGroupRowView: View {
         }
         .onHover { isHovering = $0 }
         .onTapGesture { viewModel.selectSplitGroup(group.layoutID) }
-        .sidebarRowInteraction(viewModel: viewModel, id: group.layoutID, dragItem: .splitGroup(group.layoutID))
+        .sidebarRowInteraction(viewModel: viewModel, id: group.layoutID)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("openarc.sidebar.splitGroup.\(group.layoutID.uuidString)")
@@ -295,7 +309,7 @@ struct SidebarFolderRowView: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { viewModel.beginRename(folder.id) })
         .onTapGesture { viewModel.toggleFolder(folder.id) }
         .contextMenu { SidebarFolderMenu(viewModel: viewModel, folder: folder) }
-        .sidebarRowInteraction(viewModel: viewModel, id: folder.id, dragItem: .folder(folder.id))
+        .sidebarRowInteraction(viewModel: viewModel, id: folder.id)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("openarc.sidebar.folder.\(folder.id.uuidString)")
     }
@@ -338,12 +352,6 @@ struct SidebarDividerRowView: View {
         .frame(width: layout.width, height: CGFloat(s.dividerRowHeight), alignment: .leading)
         .contentShape(Rectangle())
         .sidebarDropRegion(.divider)
-        .overlay(alignment: .top) {
-            if viewModel.dropTarget == .pinnedAreaEnd {
-                Capsule().fill(palette.commandBarSelection.swiftUI).frame(height: SidebarLocalTokens.dropIndicatorThickness)
-                    .padding(.horizontal, layout.horizontalInset)
-            }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.divider")
     }
@@ -376,15 +384,6 @@ struct SidebarNewTabRowView: View {
         .foregroundStyle(ink)
         .onHover { isHovering = $0 }
         .onTapGesture { viewModel.newTabRowClicked() }
-        .overlay(alignment: .bottom) {
-            // Insertion line for "end of Today" when Today is empty. Look unknown.
-            if viewModel.dropTarget == .todayAreaEnd {
-                Capsule().fill(palette.commandBarSelection.swiftUI)
-                    .frame(height: SidebarLocalTokens.dropIndicatorThickness)
-                    .padding(.horizontal, SidebarLayout().horizontalInset)
-                    .allowsHitTesting(false)
-            }
-        }
         .sidebarDropRegion(.newTabRow)
         // Like the reference row: an element holding the icon and the title.
         .accessibilityElement(children: .contain)

@@ -92,8 +92,15 @@ public final class SidebarViewModel: ObservableObject {
     var countsAsVisibleWindow = true
     /// Seconds before the hover card shows. [06 §12] observed ≈ 0.5.
     var hoverDelay: Double = Motion.hoverCardDelay
-    /// Seconds a drag must hover over a dock icon before the sidebar switches to that Space. inferred.
+    /// Seconds a drag must hover over a dock icon before the sidebar switches to that Space.
+    /// [06 §15.6] observed: within 1 s.
     var dockSwitchDelay: Double = SidebarLocalTokens.dockSwitchDelay
+    /// Seconds a drag must rest at the sidebar's left / right edge before the previous / next
+    /// Space is shown. [06 §15.6] observed (≈ 0.5–1.5 s / ≈ 0.8 s).
+    var edgeSwitchLeftDelay: Double = SidebarLocalTokens.edgeSwitchLeftDelay
+    var edgeSwitchRightDelay: Double = SidebarLocalTokens.edgeSwitchRightDelay
+    /// Seconds a drag must stay in an auto-scroll band before the list scrolls. [06 §15.8] observed.
+    var autoScrollDwell: Double = SidebarLocalTokens.autoScrollDwell
     /// Poll interval of the drag watchdog (see `beginDrag`).
     var dragWatchInterval: Double = SidebarLocalTokens.dragWatchInterval
     /// Seconds between two auto-scroll steps while a drag hovers an edge band of the list. inferred.
@@ -128,8 +135,14 @@ public final class SidebarViewModel: ObservableObject {
     private var autoScrollTask: Task<Void, Never>?
     /// Visible list area of the last drag update (sidebar root space).
     private var autoScrollViewport: CGRect = .null
+    /// Seconds the pointer has been in the current auto-scroll band.
+    private var autoScrollTimeInBand: Double = 0
     private var dockHoverTask: Task<Void, Never>?
     private var dockHoverSpaceID: UUID?
+    private var edgeSwitchTask: Task<Void, Never>?
+    /// Edge (-1 left, +1 right) the drag pointer rests at; it stays set after the switch fired, so
+    /// one stay at the edge switches once. inferred.
+    private(set) var edgeSwitchDirection: Int?
 
     /// A window's sidebar on the shared controller. A stale or missing Space id falls back to the
     /// first live Space.
@@ -418,12 +431,17 @@ public final class SidebarViewModel: ObservableObject {
         }
     }
 
-    /// "—" on a split-group row in the pinned area: unloads every member's page, as the single
-    /// pinned row does (see `unloadPinnedTab`). inferred.
+    /// "—" on a split-group row in the pinned area: unloads every member's page and resets it to
+    /// its pinned URL, as the single pinned row does ([06 §16.1] observed for a single row; the
+    /// group case is inferred).
     public func unloadPinnedSplitGroup(_ layoutID: UUID) {
         guard let group = snapshot.splitGroup(layoutID: layoutID) else { return }
         let next = isGroupSelected(group) ? neighborRow(of: group) : nil
         let wasSelected = isGroupSelected(group)
+        let stamp = now()
+        mutate { state in
+            try group.sidebarOrder.reduce(state) { try TreeOps.resetTabToPinnedURL($0, id: $1, now: stamp) }
+        }
         group.sidebarOrder.forEach(closeLive)
         if wasSelected {
             selectedTabID = nil
@@ -574,6 +592,13 @@ public final class SidebarViewModel: ObservableObject {
         if requestHandler != nil { request(.openCommandBar(.newTab)) } else { newTab() }
     }
 
+    /// ⌘W / "Archive Tab" on the selected tab: archives a Today tab, unloads a pinned tab or a
+    /// favorite and keeps it ([06 §16.1] observed for pinned tabs: same result as "—").
+    public func closeOrUnloadTab(_ id: UUID) {
+        guard let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
+        if case .today = tab.location { closeTab(id) } else { unloadPinnedTab(id) }
+    }
+
     /// Archives a tab (⌘W / ✕ on a Today row). [05 §window and app entry points] observed.
     public func closeTab(_ id: UUID) {
         guard workspace.tabs[id].map({ !$0.meta.isTombstone }) == true else { return }
@@ -622,10 +647,14 @@ public final class SidebarViewModel: ObservableObject {
         return restoreArchived(item.id)
     }
 
-    /// "—" on a pinned row. [06 §12] observed that the pinned row shows "—" where Today rows show
-    /// "✕", described as "unpin / collapse". The text is ambiguous; this implements "collapse":
-    /// the live page is unloaded and the pin stays. Unpinning is a menu item ("Remove Pin").
+    /// "—" on a pinned row, and ⌘W on a pinned tab. [06 §16.1] observed: the pin stays in place,
+    /// the page is unloaded (back history gone) and the tab goes back to its pinned URL, so the
+    /// next click opens the pinned page again; selection moves to a neighbor row. Unpinning is a
+    /// menu item ("Remove Pin"). Favorites use the same path (inferred, not observed).
     public func unloadPinnedTab(_ id: UUID) {
+        guard let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
+        // Back to the pinned URL (no-op when already there or when there is none).
+        if tab.pinnedURL != nil { mutate { try TreeOps.resetTabToPinnedURL($0, id: id, now: now()) } }
         guard liveTab(for: id) != nil || selectedTabID == id else { return }
         let next = selectedTabID == id ? neighbor(of: id) : nil
         closeLive(id)
@@ -882,10 +911,10 @@ public final class SidebarViewModel: ObservableObject {
 
     // MARK: - Drag and drop
 
-    /// Starts an in-app drag. `isSessionActive` is polled by a watchdog and must return whether the
-    /// drag is still going (the view passes "primary mouse button is down"). SwiftUI gives no callback
-    /// when a drag is cancelled (released outside every drop target, or Esc), so without the watchdog
-    /// `draggingItem` would stay set. Tests omit it and call `endDrag()` themselves.
+    /// Starts an in-app drag. The AppKit drag source (`SidebarDragSourceView`) reports the end of
+    /// the session itself (`dragSessionEnded`), including Esc and a release outside every target.
+    /// `isSessionActive`, when given, is polled by a watchdog as a fallback and must return whether
+    /// the drag is still going. Tests omit it and call `endDrag()` themselves.
     func beginDrag(_ item: SidebarDragItem, isSessionActive: (@MainActor () -> Bool)? = nil) {
         endDrag()
         draggingItem = item
@@ -909,10 +938,37 @@ public final class SidebarViewModel: ObservableObject {
         }
     }
 
+    /// Mouse-down on an item, before any drag: a tab or split group is selected at once (and its
+    /// page comes to the front). [06 §15.1] observed. Folders act on click only (toggle).
+    func pressSelect(_ item: SidebarDragItem) {
+        guard draggingItem == nil, renamingItemID == nil else { return }
+        switch item {
+        case .tab(let id):
+            if selectedTabID != id { selectTab(id) }
+        case .splitGroup(let id):
+            selectSplitGroup(id)
+        case .folder:
+            break
+        }
+    }
+
+    /// Whether a press on `item` may turn into a drag (not while it is being renamed: the press
+    /// then selects text).
+    func canStartDrag(_ item: SidebarDragItem) -> Bool {
+        renamingItemID != item.id && draggingItem == nil
+    }
+
     /// An external drag (a link from another app) entered the sidebar.
     func beginExternalDrag() {
         guard draggingItem == nil, !isDraggingExternalURL else { return }
         isDraggingExternalURL = true
+    }
+
+    /// The AppKit drag session ended: after a drop (already applied), a release outside every
+    /// target, or Esc. [06 §15.9] observed: Esc removes the indicator at once and a later release
+    /// changes nothing. The session never switches the Space back. [06 §15.6] observed.
+    func dragSessionEnded() {
+        endDrag()
     }
 
     /// Ends any drag and clears all drag feedback. A cancelled drag changes nothing in the workspace.
@@ -920,6 +976,7 @@ public final class SidebarViewModel: ObservableObject {
         dragWatchTask?.cancel()
         dragWatchTask = nil
         cancelDockHover()
+        cancelEdgeSwitch()
         stopAutoScroll()
         lastDragPointer = nil
         draggingItem = nil
@@ -928,6 +985,21 @@ public final class SidebarViewModel: ObservableObject {
     }
 
     private var isDragActive: Bool { draggingItem != nil || isDraggingExternalURL }
+
+    /// Whether the current drag can form a split on a tab row's middle band: a single tab that is
+    /// not a favorite, or a link from outside. [06 §15.2] observed for tabs, [06 §15.7] for links.
+    var dragAllowsSplit: Bool {
+        if isDraggingExternalURL { return true }
+        guard case .tab(let id)? = draggingItem, let tab = workspace.tabs[id] else { return false }
+        if case .favorite = tab.location { return false }
+        return true
+    }
+
+    /// The side of the split preview drawn on row `id`, if the drop target is its middle band.
+    func splitPreviewSide(for id: UUID) -> SplitSide? {
+        if case .row(id, .split(let side))? = dropTarget { return side }
+        return nil
+    }
 
     /// The plan for the current drag over `target`, or nil. For an external URL the plan is computed
     /// for a scratch tab opened at the top of Today, so the same rules apply as for a tab move.
@@ -952,14 +1024,20 @@ public final class SidebarViewModel: ObservableObject {
     }
 
     /// Hit-tests `point` and updates the indicator in one step. Returns whether the drop is accepted.
+    /// Also drives the edge Space switch and the auto-scroll, which do not depend on a target.
     @discardableResult
     func updateDropTarget(at point: CGPoint, in geometry: SidebarDropGeometry) -> Bool {
         if isDragActive { lastDragPointer = point }
-        guard let target = SidebarDropHitTester.target(at: point, in: geometry) else {
-            clearDropTarget()
-            return false
+        updateEdgeSwitch(x: point.x, sidebarWidth: geometry.width)
+        let accepted: Bool
+        if let target = SidebarDropHitTester.target(at: point, in: geometry, allowsSplit: dragAllowsSplit) {
+            accepted = updateDropTarget(target)
+        } else {
+            // No target here (e.g. the dead zone above "+ New Tab", [06 §15.4]): no indicator.
+            if dropTarget != nil { dropTarget = nil }
+            cancelDockHover()
+            accepted = false
         }
-        let accepted = updateDropTarget(target)
         updateAutoScroll(pointer: point, viewport: geometry.list)
         return accepted
     }
@@ -978,28 +1056,33 @@ public final class SidebarViewModel: ObservableObject {
         let accepted = dropPlan(for: target) != nil
         let new: SidebarDropTarget? = accepted ? target : nil
         if dropTarget != new { dropTarget = new }
-        trackDockHover(new)
+        // Hovering a dot switches the Space even when a drop there would change nothing (the item
+        // already lives in that Space): the switch is for placing it inside. [06 §15.6] observed.
+        trackDockHover(target)
         return accepted
     }
 
+    /// The drag left the sidebar: no indicator, no pending Space switch, no scrolling.
     func clearDropTarget() {
         if dropTarget != nil { dropTarget = nil }
         cancelDockHover()
+        cancelEdgeSwitch()
         stopAutoScroll()
     }
 
     // MARK: Auto-scroll while dragging
 
     /// Starts or stops the auto-scroll loop for a drag pointer at `pointer` over the list area
-    /// `viewport` (both in the sidebar root space). Not in the spec; inferred (see `SidebarAutoScroll`).
+    /// `viewport` (both in the sidebar root space). [06 §15.8] (see `SidebarAutoScroll`).
     func updateAutoScroll(pointer: CGPoint, viewport: CGRect) {
         autoScrollViewport = viewport
         guard isDragActive, let metrics = listScroller?.metrics,
-              SidebarAutoScroll.velocity(pointerY: pointer.y, viewport: viewport, metrics: metrics) != 0 else {
+              SidebarAutoScroll.edge(pointerY: pointer.y, viewport: viewport, metrics: metrics) != nil else {
             stopAutoScroll()
             return
         }
         guard autoScrollTask == nil else { return }
+        autoScrollTimeInBand = 0
         let interval = autoScrollTickInterval
         autoScrollTask = Task { [weak self] in
             let clock = ContinuousClock()
@@ -1021,16 +1104,22 @@ public final class SidebarViewModel: ObservableObject {
 
     /// One auto-scroll step of `elapsed` seconds for the last drag pointer. Returns false when the
     /// list should stop scrolling (pointer out of the bands, content end reached, drag over).
+    /// During the dwell ([06 §15.8] ≈ 0.3–0.5 s) the step keeps the loop alive without scrolling.
     @discardableResult
     func autoScrollStep(elapsed: Double) -> Bool {
         guard isDragActive, let pointer = lastDragPointer, let scroller = listScroller,
-              let metrics = scroller.metrics else {
+              let metrics = scroller.metrics,
+              SidebarAutoScroll.edge(pointerY: pointer.y, viewport: autoScrollViewport, metrics: metrics) != nil else {
             autoScrollVelocity = 0
             return false
         }
-        let velocity = SidebarAutoScroll.velocity(pointerY: pointer.y, viewport: autoScrollViewport, metrics: metrics)
+        autoScrollTimeInBand += max(0, elapsed)
+        let velocity = SidebarAutoScroll.velocity(
+            pointerY: pointer.y, viewport: autoScrollViewport, metrics: metrics,
+            timeInBand: autoScrollTimeInBand, dwell: autoScrollDwell
+        )
         autoScrollVelocity = velocity
-        guard velocity != 0 else { return false }
+        guard velocity != 0 else { return true }
         let offset = SidebarAutoScroll.offset(after: elapsed, velocity: velocity, from: metrics)
         if offset != metrics.offset { scroller.scroll(toOffset: offset) }
         return true
@@ -1040,6 +1129,7 @@ public final class SidebarViewModel: ObservableObject {
         autoScrollTask?.cancel()
         autoScrollTask = nil
         autoScrollVelocity = 0
+        autoScrollTimeInBand = 0
     }
 
     /// Applies the in-app drop. Returns whether the workspace changed.
@@ -1047,28 +1137,76 @@ public final class SidebarViewModel: ObservableObject {
     func performDrop(on target: SidebarDropTarget) -> Bool {
         defer { endDrag() }
         guard let plan = dropPlan(for: target) else { return false }
-        return apply(plan)
+        let layoutID: UUID? = plan.action.needsLayoutID ? makeID() : nil
+        let stamp = now()
+        guard mutate({ try SidebarDropPlanner.apply(plan, to: $0, layoutID: layoutID, now: stamp) }) else { return false }
+        finishDrop(plan, target: target, droppedTabID: nil)
+        return true
     }
 
     /// Applies a link dropped from outside: opens a tab for `url` at the dropped position and
-    /// selects it. Position rules are the ones of a tab move; behavior inferred ([06 §12] covers
-    /// only in-app drags). Returns the new tab's id, or nil if the target does not accept it.
+    /// selects it. Position rules are the ones of a tab move. [06 §15.7] observed: on an insertion
+    /// line the link opens there as a Today tab; on a row's middle band the split preview shows (the
+    /// result of that drop is inferred: a split with the new tab). Returns the new tab's id, or nil
+    /// if the target does not accept it.
     @discardableResult
     func performURLDrop(_ url: URL, on target: SidebarDropTarget) -> UUID? {
         defer { endDrag() }
         guard let spaceID = selectedSpaceID, let plan = dropPlan(for: target) else { return nil }
         let id = makeID()
+        let layoutID: UUID? = plan.action.needsLayoutID ? makeID() : nil
         let title = url.host ?? url.absoluteString
         // One mutation: either the tab is opened at the dropped position or nothing changes.
         let stamp = now()
         guard mutate({ ws in
             let opened = try TreeOps.openTab(ws, id: id, spaceID: spaceID, url: url, title: title, now: stamp)
-            return try Self.applying(plan, tabID: id, to: opened, now: stamp)
+            return try SidebarDropPlanner.apply(plan, to: opened, newTabID: id, layoutID: layoutID, now: stamp)
         }) else { return nil }
         // Dropped on a dock icon: the tab lives in another Space, so show that Space.
         if let space = workspace.tabs[id]?.location.spaceID, space != selectedSpaceID { selectedSpaceID = space }
         selectTab(id)
         return id
+    }
+
+    /// A sidebar tab dropped on the web panel, on `side` of the pane showing `targetTabID`.
+    /// [06 §15.7] observed: the two form a split with the dropped tab on the pointer's side; a
+    /// pinned tab stays where it is and a new split row appears in Today (a copy of the pinned page
+    /// is opened, inferred). The dropped page becomes the focused pane (as for a row drop, [06 §15.2]).
+    @discardableResult
+    func performWebPanelDrop(onTab targetTabID: UUID, side: SplitSide) -> Bool {
+        defer { endDrag() }
+        guard case .tab(let id)? = draggingItem, let spaceID = selectedSpaceID,
+              let action = SidebarDropPlanner.webPanelAction(tabID: id, targetTabID: targetTabID, side: side, spaceID: spaceID, workspace: workspace)
+        else { return false }
+        let plan = SidebarDropPlan(action: action)
+        let copyID: UUID? = action.needsCopyID ? makeID() : nil
+        let layoutID = makeID()
+        // The copy shows the page as it is now (live URL), else the stored one.
+        let stamp = now()
+        let liveURL = action.needsCopyID ? linkURL(for: id) : nil
+        guard mutate({ ws in
+            try SidebarDropPlanner.apply(plan, to: ws, newTabID: copyID, layoutID: layoutID, copyURL: liveURL, now: stamp)
+        }) else { return false }
+        selectTab(copyID ?? id)
+        return true
+    }
+
+    /// Selection after a drop. A split drop focuses the dropped tab ([06 §15.2] observed). A drop on
+    /// a dock dot leaves the window on that Space with the moved tab NOT selected ([06 §15.6] observed).
+    private func finishDrop(_ plan: SidebarDropPlan, target: SidebarDropTarget, droppedTabID: UUID?) {
+        switch plan.action {
+        case .splitTab(let id, _, _, _):
+            selectTab(droppedTabID ?? id)
+        case .splitCopy:
+            break
+        case .moveTab, .moveTabs, .moveFolder, .moveSplitLayout:
+            guard case .dockSpace(let spaceID) = target else { return }
+            if let selected = selectedTabID, workspace.tabs[selected]?.location.spaceID == spaceID {
+                selectedTabID = nil
+                for (space, tab) in lastSelectedTab where tab == selected { lastSelectedTab[space] = nil }
+            }
+            selectSpace(spaceID)
+        }
     }
 
     /// Placeholder tab used only to compute plans for external drops. Never stored.
@@ -1078,34 +1216,43 @@ public final class SidebarViewModel: ObservableObject {
         try TreeOps.openTab(workspace, id: Self.scratchTabID, spaceID: spaceID, url: nil, title: "", now: now())
     }
 
-    /// Runs a plan through `TreeOps`.
-    private func apply(_ plan: SidebarDropPlan) -> Bool {
-        let stamp = now()
-        return mutate { try Self.applying(plan, tabID: nil, to: $0, now: stamp) }
+    // MARK: Edge Space switch while dragging
+
+    /// Starts (or keeps) the timer that shows the previous / next Space while the drag pointer
+    /// rests at the sidebar's left / right edge. [06 §15.6] observed. Leaving the edge cancels it;
+    /// it fires once per stay (inferred). It does not wrap around the dock (inferred).
+    func updateEdgeSwitch(x: CGFloat, sidebarWidth: CGFloat) {
+        guard isDragActive, let direction = SidebarEdgeSwitch.direction(x: x, sidebarWidth: sidebarWidth) else {
+            cancelEdgeSwitch()
+            return
+        }
+        guard edgeSwitchDirection != direction else { return }
+        cancelEdgeSwitch()
+        edgeSwitchDirection = direction
+        let delay = direction < 0 ? edgeSwitchLeftDelay : edgeSwitchRightDelay
+        edgeSwitchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.edgeSwitchDirection == direction, self.isDragActive else { return }
+            self.edgeSwitchTask = nil
+            guard let id = self.adjacentSpaceID(direction) else { return }
+            self.dropTarget = nil
+            self.cancelDockHover()
+            self.selectSpace(id)
+        }
     }
 
-    /// Pure: the workspace after `plan`. `tabID` replaces the id of a tab move (external drops).
-    /// A folder the tab is dropped into is expanded. [06 §12] observed.
-    private static func applying(_ plan: SidebarDropPlan, tabID: UUID?, to ws: WorkspaceState, now: Date) throws -> WorkspaceState {
-        var result: WorkspaceState
-        switch plan.action {
-        case .moveTab(let id, let location, let position):
-            result = try TreeOps.moveTab(ws, id: tabID ?? id, to: location, position: position, now: now)
-        case .moveFolder(let id, let space, let parent, let position):
-            result = try TreeOps.moveFolder(ws, id: id, toSpace: space, parentFolderID: parent, position: position, now: now)
-        case .moveTabs(let ids, let location, let position):
-            // A split group moves as a unit: every member lands next to the others in one mutation.
-            result = ws
-            for step in SidebarDropPlanner.moveSteps(ids: ids, position: position) {
-                result = try TreeOps.moveTab(result, id: step.id, to: location, position: step.position, now: now)
-            }
-        case .moveSplitLayout(let id, let space, let position):
-            result = try TreeOps.moveSplitLayout(ws, layoutID: id, toSpaceID: space, position: position, now: now)
-        }
-        if let folderID = plan.expandFolderID, result.folders[folderID]?.isExpanded == false {
-            result = try TreeOps.setFolderExpanded(result, id: folderID, isExpanded: true, now: now)
-        }
-        return result
+    private func cancelEdgeSwitch() {
+        edgeSwitchTask?.cancel()
+        edgeSwitchTask = nil
+        edgeSwitchDirection = nil
+    }
+
+    /// The Space before (-1) or after (+1) the current one in dock order, without wrapping.
+    private func adjacentSpaceID(_ direction: Int) -> UUID? {
+        let spaces = dockSpaces
+        guard let index = spaces.firstIndex(where: { $0.id == selectedSpaceID }) else { return nil }
+        let next = index + direction
+        return spaces.indices.contains(next) ? spaces[next].id : nil
     }
 
     // MARK: Dock hover while dragging

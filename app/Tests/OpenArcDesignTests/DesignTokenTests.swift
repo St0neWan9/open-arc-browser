@@ -202,4 +202,18 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertLessThan(ThemeDerivation.luminance(dark.windowBackground), ThemeDerivation.luminance(ThemeDerivation.lightWindow(color)))
         XCTAssertEqual(dark.windowBackground.alpha, color.alpha)
     }
+
+    /// [07 §7.1] E14: the web panel edge shadow per appearance (calibrated against Arc on white
+    /// and black pages), and no border.
+    func testWebPanelEdgeShadowMatchesE14() {
+        let light = Metrics.WebPanel.shadow(.light)
+        XCTAssertEqual(light, Metrics.PanelShadow(opacity: 0.24, radius: 3.4, offsetY: 1))
+        let dark = Metrics.WebPanel.shadow(.dark)
+        XCTAssertEqual(dark, Metrics.PanelShadow(opacity: 0.25, radius: 3.5, offsetY: 1))
+        XCTAssertEqual(light.offsetX, 0)
+        XCTAssertGreaterThanOrEqual(dark.opacity, light.opacity, "[07 §7.1] slightly stronger in a dark Space")
+        XCTAssertGreaterThan(light.opacity, 0.18, "B41: stronger than the B32 round-1 value")
+        XCTAssertEqual(Metrics.WebPanel.borderWidth, 0, "[07 §7.1] observed: no hairline or inner stroke")
+        XCTAssertEqual(Metrics.WebPanel.cornerRadius, 6, "[07 §7.1] observed corner profile")
+    }
 }

@@ -372,6 +372,14 @@ public enum SplitAxis: String, Codable, Hashable, Sendable {
     case vertical
 }
 
+/// Which side of a pane a new pane goes to. Horizontal splits: leading = left, trailing = right.
+/// 06 §15 observed: a tab dropped on a row's middle band, or on the web panel, lands on the
+/// side of the pointer.
+public enum SplitSide: String, Codable, Hashable, Sendable {
+    case leading
+    case trailing
+}
+
 /// Split layout tree. Leaves are tabs; inner nodes are weighted splits.
 public indirect enum SplitNode: Codable, Hashable, Sendable {
     case pane(tabID: UUID)

@@ -72,6 +72,7 @@ struct LittleArcBrowsingView: View {
                      crashed: model.page.isCrashed ? CrashedPageState(reload: { model.reloadOrStop() }) : nil)
                 .environment(\.dialogCenter, model.dialogs)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
+                .webPanelEdgeShadow(palette.appearance)
                 .padding([.horizontal, .bottom], LittleArcTokens.pageInset)
         }
         .background(palette.windowBackground.swiftUI)

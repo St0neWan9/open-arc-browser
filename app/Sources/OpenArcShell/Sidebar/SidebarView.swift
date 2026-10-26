@@ -67,7 +67,15 @@ public struct SidebarView: View {
             .id(viewModel.selectedSpaceID)
             .transition(.opacity)
 
+            dropIndicator(layout: layout)
+
             hoverCard(layout: layout)
+
+            // Starts drags past the per-axis threshold and selects on press. [06 §15.1] observed.
+            // Transparent to clicks (it only watches the mouse events).
+            SidebarDragSourceHost(viewModel: viewModel, items: dragSourceItems(snapshot, layout: layout))
+                .frame(width: layout.width, height: layout.windowSize.height)
+                .allowsHitTesting(false)
         }
         .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
         .coordinateSpace(name: SidebarCoordinateSpace.root)
@@ -99,8 +107,30 @@ public struct SidebarView: View {
             dockSpaceIDs: viewModel.dockSpaces.map(\.id),
             rowFrames: rowFrames,
             regions: regions,
-            rowSpacing: layout.rowSpacing
+            width: layout.width
         )
+    }
+
+    private func dragSourceItems(_ snapshot: SidebarSnapshot, layout: SidebarLayout) -> [SidebarDragSourceItem] {
+        let favoriteSlots = viewModel.isIncognito ? [] : layout.favoriteSlotFrames(count: snapshot.favorites.count)
+        return SidebarDragSourceItem.make(
+            snapshot: snapshot,
+            rowFrames: rowFrames,
+            listViewport: regions[.list] ?? .null,
+            favoriteSlots: favoriteSlots,
+            accessoryWidth: layout.width - layout.rowFillFrame.maxX + SidebarLocalTokens.rowAccessoryTrailingPadding + SidebarLocalTokens.rowAccessoryButtonSize
+        )
+    }
+
+    /// The single insertion line of the current drop target, clipped to the list. [06 §15.2] observed.
+    @ViewBuilder
+    private func dropIndicator(layout: SidebarLayout) -> some View {
+        let geometry = dropGeometry(viewModel.snapshot, layout: layout)
+        let contentTrailing = layout.width - layout.horizontalInset - SidebarLocalTokens.dropIndicatorTrailingInset
+        if let line = SidebarDropIndicatorLine.make(for: viewModel.dropTarget, in: geometry, contentTrailing: contentTrailing),
+           geometry.list.isNull || (line.y >= geometry.list.minY - 1 && line.y <= geometry.list.maxY + 1) {
+            SidebarDropIndicatorView(line: line, color: viewModel.palette.dropIndicatorColor.swiftUI)
+        }
     }
 
     @ViewBuilder

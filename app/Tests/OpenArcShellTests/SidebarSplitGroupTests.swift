@@ -193,7 +193,7 @@ final class SidebarSplitGroupTests: XCTestCase {
         XCTAssertEqual(plan(f, .splitGroup(layoutID), .row(f.pinnedTab, .below))?.action,
                        .moveTabs(ids: [f.today2, f.today1], to: pinnedTop, position: .after(f.pinnedTab)))
         let into = plan(f, .splitGroup(layoutID), .row(f.folderC, .into))
-        XCTAssertEqual(into?.action, .moveTabs(ids: [f.today2, f.today1], to: .pinned(spaceID: f.home, folderID: f.folderC), position: .last))
+        XCTAssertEqual(into?.action, .moveTabs(ids: [f.today2, f.today1], to: .pinned(spaceID: f.home, folderID: f.folderC), position: .first))
         XCTAssertEqual(into?.expandFolderID, f.folderC)
     }
 
@@ -347,7 +347,7 @@ final class SidebarSplitGroupTests: XCTestCase {
         let top = layout.listTop
         regions[.list] = CGRect(x: 0, y: top, width: layout.contentWidth, height: layout.dockFrame.minY - top)
         regions[.favorites] = layout.favoritesFrame
-        return (SidebarDropGeometry.make(snapshot: snap, dockSpaceIDs: [], rowFrames: rowFrames, regions: regions, rowSpacing: layout.rowSpacing), snap)
+        return (SidebarDropGeometry.make(snapshot: snap, dockSpaceIDs: [], rowFrames: rowFrames, regions: regions, width: layout.width), snap)
     }
 
     /// The group row is one entry of the hit-test geometry: tab-style halves, no "into" band, and the
@@ -359,11 +359,12 @@ final class SidebarSplitGroupTests: XCTestCase {
         XCTAssertTrue(rows.contains(layoutID))
         XCTAssertFalse(rows.contains(f.today1))
         XCTAssertFalse(rows.contains(f.today2))
-        let entry = g.entries.first { $0.kind == .row(layoutID, allowsInto: false) }
+        let entry = g.entries.first { $0.kind == .row(layoutID, style: .halves) }
         XCTAssertNotNil(entry, "no into band on a group row")
         let frame = entry!.frame
         let x = frame.minX + 20
-        XCTAssertEqual(SidebarDropHitTester.target(at: CGPoint(x: x, y: frame.minY + 2), in: g), .row(layoutID, .above))
+        // Upper half: the slot above the group (reported as "below today3", the row above it).
+        XCTAssertEqual(SidebarDropHitTester.target(at: CGPoint(x: x, y: frame.minY + 2), in: g), .row(f.today3, .below))
         XCTAssertEqual(SidebarDropHitTester.target(at: CGPoint(x: x, y: frame.midY), in: g), .row(layoutID, .below))
         XCTAssertEqual(SidebarDropHitTester.target(at: CGPoint(x: x, y: frame.maxY - 2), in: g), .row(layoutID, .below))
     }
@@ -373,12 +374,12 @@ final class SidebarSplitGroupTests: XCTestCase {
         let f = todaySplit()
         let (vm, _) = makeSidebarViewModel(f)
         let (g, _) = geometry(f)
-        let frame = g.entries.first { $0.kind == .row(layoutID, allowsInto: false) }!.frame
+        let frame = g.entries.first { $0.kind == .row(layoutID, style: .halves) }!.frame
         vm.beginDrag(.tab(f.pinnedTab))
-        XCTAssertTrue(vm.updateDropTarget(at: CGPoint(x: frame.minX + 20, y: frame.minY + 3), in: g))
-        XCTAssertEqual(vm.dropTarget, .row(layoutID, .above))
+        XCTAssertTrue(vm.updateDropTarget(at: CGPoint(x: frame.minX + 20, y: frame.maxY - 3), in: g))
+        XCTAssertEqual(vm.dropTarget, .row(layoutID, .below))
         vm.beginDrag(.splitGroup(layoutID))
-        XCTAssertFalse(vm.updateDropTarget(at: CGPoint(x: frame.minX + 20, y: frame.minY + 3), in: g), "onto itself")
+        XCTAssertFalse(vm.updateDropTarget(at: CGPoint(x: frame.minX + 20, y: frame.maxY - 3), in: g), "onto itself")
         XCTAssertNil(vm.dropTarget)
         vm.stop()
     }

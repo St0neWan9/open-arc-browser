@@ -246,8 +246,42 @@ public enum Metrics {
         public static let insetBottom: Double = 10
         /// The panel's left edge touches the sidebar area (x 276). [07 §1] observed.
         public static let insetLeading: Double = 0
-        /// Panel corner radius. [07 §10] inferred (≈ 6).
+        /// Panel corner radius. [07 §10] inferred (≈ 6); [07 §7.1] observed: Arc's corner inset
+        /// profile on a white page matches a continuous-corner radius 6 within ±0.3 px per row.
         public static let cornerRadius: Double = 6
+
+        /// Edge shadow of every web content surface: the main panel, split panes, the Little Arc
+        /// page and the Library's content panel. [07 §7.1] observed: same on white and black pages,
+        /// no hairline or inner stroke, slightly stronger in a dark Space.
+        public static func shadow(_ appearance: ResolvedAppearance) -> PanelShadow {
+            appearance == .dark ? shadowDark : shadowLight
+        }
+
+        /// SwiftUI `.shadow` values (black; `radius` is SwiftUI's blur radius, not a Gaussian
+        /// sigma). [07 §7.1] inferred: calibrated on screen against Arc's light-Space profile
+        /// (Gaussian fit: black 21.5 %, sigma 3.0 pt, y + 1, no spread), residual ≤ 0.8 % alpha.
+        public static let shadowLight = PanelShadow(opacity: 0.24, radius: 3.4, offsetY: 1)
+        /// Dark Space. [07 §7.1] inferred (Gaussian fit: black 24 %, sigma 3.15 pt, y + 0.75),
+        /// residual ≤ 0.7 % alpha.
+        public static let shadowDark = PanelShadow(opacity: 0.25, radius: 3.5, offsetY: 1)
+
+        /// Arc draws no border or inner stroke on the panel. [07 §7.1] observed (the first pixel
+        /// inside the edge is already page white / black).
+        public static let borderWidth: Double = 0
+    }
+
+    /// A black drop shadow, in SwiftUI `.shadow` terms.
+    public struct PanelShadow: Hashable, Sendable {
+        public var opacity: Double
+        public var radius: Double
+        public var offsetX: Double
+        public var offsetY: Double
+        public init(opacity: Double, radius: Double, offsetX: Double = 0, offsetY: Double) {
+            self.opacity = opacity
+            self.radius = radius
+            self.offsetX = offsetX
+            self.offsetY = offsetY
+        }
     }
 
     // MARK: Split view

@@ -2,7 +2,7 @@ import XCTest
 import OpenArcModel
 @testable import OpenArcShell
 
-/// Drop-target decisions. Spec: [06 §12] hover and drag results (observed).
+/// Drop-target decisions. Spec: [06 §12] hover and drag results, [06 §15] drag details (observed).
 final class SidebarDropPlannerTests: XCTestCase {
     private let f = SidebarFixture()
 
@@ -10,7 +10,8 @@ final class SidebarDropPlannerTests: XCTestCase {
         SidebarDropPlanner.plan(item: item, target: target, workspace: f.ws, spaceID: f.home, profileID: f.profile)
     }
 
-    /// [06 §12]: a Today tab dragged above the first pinned row becomes pinned, before the folders.
+    /// [06 §12], [06 §15.4]: a Today tab dropped on the Space-name row (or above the first pinned
+    /// row) becomes the first pinned item, before the folders.
     func testTodayTabAboveFirstPinnedRowPinsAtTop() {
         let p = plan(.tab(f.today1), .pinnedAreaTop)
         XCTAssertEqual(p?.action, .moveTab(id: f.today1, to: .pinned(spaceID: f.home, folderID: nil), position: .first))
@@ -21,10 +22,13 @@ final class SidebarDropPlannerTests: XCTestCase {
     }
 
     /// [06 §12]: a pinned tab dropped on a folder row goes inside, and the folder expands.
-    func testPinnedTabOntoFolderMovesInside() {
+    /// [06 §15.3] observed: it becomes the folder's FIRST child (changed from `.last`).
+    func testPinnedTabOntoFolderMovesInsideFirst() {
         let p = plan(.tab(f.pinnedTab), .row(f.folderC, .into))
-        XCTAssertEqual(p?.action, .moveTab(id: f.pinnedTab, to: .pinned(spaceID: f.home, folderID: f.folderC), position: .last))
+        XCTAssertEqual(p?.action, .moveTab(id: f.pinnedTab, to: .pinned(spaceID: f.home, folderID: f.folderC), position: .first))
         XCTAssertEqual(p?.expandFolderID, f.folderC)
+        let q = plan(.tab(f.today1), .row(f.folderA, .into))
+        XCTAssertEqual(q?.action, .moveTab(id: f.today1, to: .pinned(spaceID: f.home, folderID: f.folderA), position: .first))
     }
 
     /// [06 §12]: a folder cannot move into itself or its descendants.
@@ -39,7 +43,7 @@ final class SidebarDropPlannerTests: XCTestCase {
     /// Legal folder moves are allowed: into a sibling folder, or before another top-level folder.
     func testFolderMovesIntoSiblingAndReorders() {
         XCTAssertEqual(plan(.folder(f.folderC), .row(f.folderA, .into))?.action,
-                       .moveFolder(id: f.folderC, toSpace: f.home, parent: f.folderA, position: .last))
+                       .moveFolder(id: f.folderC, toSpace: f.home, parent: f.folderA, position: .first))
         XCTAssertEqual(plan(.folder(f.folderC), .row(f.folderA, .above))?.action,
                        .moveFolder(id: f.folderC, toSpace: f.home, parent: nil, position: .before(f.folderA)))
     }
@@ -84,20 +88,40 @@ final class SidebarDropPlannerTests: XCTestCase {
                        .moveTab(id: f.fav2, to: .favorite(profileID: f.profile), position: .before(f.fav1)))
     }
 
-    /// Zone mapping: folder rows have an "into" middle band, tab rows split in half.
+    /// Zone mapping on a 41 pt row. [06 §15.2] observed: tab rows insert in ≈ 10 pt at each edge
+    /// and split in the middle ≈ 20 pt by the pointer's half; [06 §15.3] observed: collapsed folders
+    /// ≈ 11 pt above / ≈ 8 pt below / into, expanded folders with children halves.
     func testZones() {
-        XCTAssertEqual(SidebarDropZone.zone(forY: 2, rowHeight: 36, allowsInto: true), .above)
-        XCTAssertEqual(SidebarDropZone.zone(forY: 18, rowHeight: 36, allowsInto: true), .into)
-        XCTAssertEqual(SidebarDropZone.zone(forY: 34, rowHeight: 36, allowsInto: true), .below)
-        XCTAssertEqual(SidebarDropZone.zone(forY: 10, rowHeight: 36, allowsInto: false), .above)
-        XCTAssertEqual(SidebarDropZone.zone(forY: 20, rowHeight: 36, allowsInto: false), .below)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 2, rowHeight: 41, style: .folder), .above)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 10.9, rowHeight: 41, style: .folder), .above)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 11, rowHeight: 41, style: .folder), .into)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 32.9, rowHeight: 41, style: .folder), .into)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 33, rowHeight: 41, style: .folder), .below)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 20, rowHeight: 41, style: .halves), .above)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 21, rowHeight: 41, style: .halves), .below)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 10, x: 30, rowWidth: 276, rowHeight: 41, style: .tab), .above)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 11, x: 30, rowWidth: 276, rowHeight: 41, style: .tab), .split(.leading))
+        XCTAssertEqual(SidebarDropZone.zone(forY: 30, x: 200, rowWidth: 276, rowHeight: 41, style: .tab), .split(.trailing))
+        XCTAssertEqual(SidebarDropZone.zone(forY: 31, x: 30, rowWidth: 276, rowHeight: 41, style: .tab), .below)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 15, x: 30, rowWidth: 276, rowHeight: 41, style: .tab, allowsSplit: false), .above)
+        XCTAssertEqual(SidebarDropZone.zone(forY: 25, x: 30, rowWidth: 276, rowHeight: 41, style: .tab, allowsSplit: false), .below)
+    }
+
+    /// [06 §15.2] observed: a tab dropped on a row's middle band forms a split with that row's tab.
+    func testSplitPlans() {
+        XCTAssertEqual(plan(.tab(f.today1), .row(f.pinnedTab, .split(.leading)))?.action,
+                       .splitTab(id: f.today1, target: f.pinnedTab, side: .leading, moveNextToTarget: true))
+        XCTAssertNil(plan(.tab(f.today1), .row(f.fav1, .split(.leading))), "favorites are not rows")
+        // A stray split zone on a folder row means "into".
+        XCTAssertEqual(plan(.tab(f.today1), .row(f.folderC, .split(.leading)))?.action,
+                       .moveTab(id: f.today1, to: .pinned(spaceID: f.home, folderID: f.folderC), position: .first))
     }
 
     /// Every plan the planner produces must be accepted by TreeOps (no plan the model rejects).
     func testEveryPlanAppliesCleanly() throws {
         let targets: [SidebarDropTarget] = [.pinnedAreaTop, .pinnedAreaEnd, .todayAreaEnd, .favoriteGap(0), .favoriteGap(1), .favoriteGap(2), .dockSpace(f.work)]
             + [f.folderA, f.folderB, f.folderC, f.pinnedTab, f.inFolderTab, f.deepTab, f.today1, f.today2]
-                .flatMap { id in [SidebarDropZone.above, .into, .below].map { SidebarDropTarget.row(id, $0) } }
+                .flatMap { id in [SidebarDropZone.above, .into, .below, .split(.leading), .split(.trailing)].map { SidebarDropTarget.row(id, $0) } }
         var count = 0
         for item in f.allDraggables {
             for target in targets {
@@ -112,7 +136,10 @@ final class SidebarDropPlannerTests: XCTestCase {
                     XCTAssertNoThrow(try SidebarDropPlanner.moveSteps(ids: ids, position: pos).reduce(f.ws) { try TreeOps.moveTab($0, id: $1.id, to: loc, position: $1.position, now: f.now) }, "\(item) on \(target)")
                 case .moveSplitLayout(let id, let space, let pos):
                     XCTAssertNoThrow(try TreeOps.moveSplitLayout(f.ws, layoutID: id, toSpaceID: space, position: pos, now: f.now), "\(item) on \(target)")
+                case .splitTab, .splitCopy:
+                    break
                 }
+                XCTAssertNoThrow(try SidebarDropPlanner.apply(p, to: f.ws, newTabID: p.action.needsCopyID ? SidebarFixture.id(7_000) : nil, layoutID: SidebarFixture.id(7_001), now: f.now), "\(item) on \(target)")
             }
         }
         XCTAssertGreaterThan(count, 50)

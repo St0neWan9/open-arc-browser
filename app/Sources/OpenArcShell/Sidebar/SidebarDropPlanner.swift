@@ -4,7 +4,7 @@ import OpenArcModel
 
 // Drop-target decisions for the sidebar. Everything here is a pure function of the dragged item,
 // the hovered target and the workspace; the view model applies the resulting plan through
-// `TreeOps`. Spec: [06 §12] "Hover and drag results".
+// `TreeOps`. Spec: [06 §12] "Hover and drag results", [06 §15] drag-and-drop details (E9).
 
 /// What is being dragged.
 enum SidebarDragItem: Hashable {
@@ -23,34 +23,75 @@ enum SidebarDragItem: Hashable {
 
 /// Where inside a row the pointer is.
 enum SidebarDropZone: Hashable {
+    /// Insert before the row (the line sits on the row's top edge).
     case above
-    /// Only meaningful on folder rows: drop into the folder.
+    /// Only on collapsed or empty folder rows: drop into the folder (first position).
     case into
+    /// Insert after the row (the line sits on the row's bottom edge).
     case below
+    /// Middle band of a plain tab row: form a split with that tab, the dropped tab on `side`
+    /// (the pointer's half of the row). [06 §15.2] observed.
+    case split(SplitSide)
 
-    /// Zone for a pointer at `y` (row-relative). Folder rows have a middle "into" band; tab rows
-    /// split in half. The band size is unknown ([06 §12] only shows the "into" result).
-    static func zone(forY y: CGFloat, rowHeight: CGFloat, allowsInto: Bool) -> SidebarDropZone {
+    /// Zone for a pointer at row-relative `y` (and `x`) in a row of `style`.
+    ///
+    /// - `.tab`: the top `tabRowAboveBand` and bottom `tabRowBelowBand` insert; the middle band
+    ///   (≈ 20 pt) is a split target when `allowsSplit`, else the row splits in half.
+    ///   [06 §15.2] observed (≈ 21 pt around each boundary inserts, ≈ 20 pt in the middle splits).
+    /// - `.folder` (collapsed or empty): top ≈ 11 pt above, bottom ≈ 8 pt below, middle into.
+    ///   [06 §15.3] observed.
+    /// - `.halves` (expanded folder with children, split-group row): upper half above, lower half
+    ///   below. [06 §15.3] observed for the folder; inferred for the group row.
+    static func zone(
+        forY y: CGFloat,
+        x: CGFloat = 0,
+        rowWidth: CGFloat = 0,
+        rowHeight: CGFloat,
+        style: SidebarRowDropStyle,
+        allowsSplit: Bool = true
+    ) -> SidebarDropZone {
         guard rowHeight > 0 else { return .below }
-        let t = y / rowHeight
-        if allowsInto {
-            if t < SidebarLocalTokens.dropEdgeBand { return .above }
-            if t > 1 - SidebarLocalTokens.dropEdgeBand { return .below }
+        let halves: SidebarDropZone = y < rowHeight / 2 ? .above : .below
+        switch style {
+        case .halves:
+            return halves
+        case .folder:
+            let top = SidebarLocalTokens.folderRowAboveBand, bottom = SidebarLocalTokens.folderRowBelowBand
+            guard rowHeight > top + bottom else { return halves }
+            if y < top { return .above }
+            if y >= rowHeight - bottom { return .below }
             return .into
+        case .tab:
+            let top = SidebarLocalTokens.tabRowAboveBand, bottom = SidebarLocalTokens.tabRowBelowBand
+            guard rowHeight > top + bottom else { return halves }
+            if y < top { return .above }
+            if y >= rowHeight - bottom { return .below }
+            guard allowsSplit else { return halves }
+            return .split(x < rowWidth / 2 ? .leading : .trailing)
         }
-        return t < 0.5 ? .above : .below
     }
+}
+
+/// How a row divides into drop bands (see `SidebarDropZone.zone`).
+enum SidebarRowDropStyle: Hashable {
+    /// A plain tab row: insert bands at the edges, split band in the middle.
+    case tab
+    /// A collapsed (or empty) folder row: insert bands at the edges, "into" in the middle.
+    case folder
+    /// Upper half above, lower half below (expanded folder with children, split-group row).
+    case halves
 }
 
 /// What the pointer is over.
 enum SidebarDropTarget: Hashable {
     /// A tab or folder row (pinned or Today).
     case row(UUID, SidebarDropZone)
-    /// Above the first pinned row.
+    /// The Space-name row above the pinned area: the item becomes the first pinned item.
+    /// [06 §15.4] observed.
     case pinnedAreaTop
-    /// Below the last pinned row, including the divider and an empty pinned area.
+    /// End of an empty pinned area (the divider when no pinned row exists).
     case pinnedAreaEnd
-    /// Below the last Today row, including the "+ New Tab" row.
+    /// End of Today when Today has no rows (lower half of "+ New Tab", the space below it).
     case todayAreaEnd
     /// A gap in the favorites block (0...count).
     case favoriteGap(Int)
@@ -67,11 +108,33 @@ struct SidebarDropPlan: Equatable {
         case moveFolder(id: UUID, toSpace: UUID, parent: UUID?, position: InsertPosition)
         /// Moves a whole split group (its member tabs and the layout itself) into another Space's Today area.
         case moveSplitLayout(id: UUID, toSpace: UUID, position: InsertPosition)
+        /// Forms a split of tab `id` with `target`, the dropped tab on `side`; with
+        /// `moveNextToTarget` it also moves next to the target row. [06 §15.2] observed (row
+        /// middle band), [06 §15.7] observed (web panel).
+        case splitTab(id: UUID, target: UUID, side: SplitSide, moveNextToTarget: Bool)
+        /// Opens a copy of `source` (a pinned tab or favorite, which stays where it is) in Space
+        /// `spaceID` and splits it with `target`. [06 §15.7] observed for a pinned tab dropped on
+        /// the web panel ("the pinned original stays; Today gets a new split row").
+        case splitCopy(source: UUID, target: UUID, side: SplitSide, spaceID: UUID)
+
+        /// Whether applying the action creates a split layout (it needs a fresh layout id).
+        var needsLayoutID: Bool {
+            switch self {
+            case .splitTab, .splitCopy: return true
+            case .moveTab, .moveTabs, .moveFolder, .moveSplitLayout: return false
+            }
+        }
+
+        /// Whether applying the action opens a new tab (it needs a fresh tab id).
+        var needsCopyID: Bool {
+            if case .splitCopy = self { return true }
+            return false
+        }
     }
 
     var action: Action
-    /// Folder that must be expanded after the drop. [06 §12] observed: dropping into a folder
-    /// expands it and indents the tab.
+    /// Folder that must be expanded after the drop. [06 §12], [06 §15.3] observed: dropping into
+    /// a folder expands it and indents the tab.
     var expandFolderID: UUID?
 }
 
@@ -125,8 +188,8 @@ enum SidebarDropPlanner {
             return planForRow(item: item, rowID: rowID, zone: zone, env: env)
 
         case .pinnedAreaTop:
-            // [06 §12] observed: a Today tab dragged above the first pinned row becomes a pinned
-            // tab placed before the folders.
+            // [06 §15.4] observed: dropped on the Space-name row, the tab becomes the FIRST pinned
+            // item, before every pinned tab and folder (as above the first pinned row, [06 §12]).
             return placement(item, in: .pinned(spaceID: spaceID, folderID: nil), position: .first, env: env)
 
         case .pinnedAreaEnd:
@@ -150,8 +213,9 @@ enum SidebarDropPlanner {
             return SidebarDropPlan(action: .moveTab(id: id, to: .favorite(profileID: profileID), position: position))
 
         case .dockSpace(let targetSpaceID):
-            // Dropping on a dock icon moves the item to that space (cross-space move,
-            // [06 §12] lists it as untested; behavior inferred). Favorites are shared.
+            // [06 §15.6] observed: dropped on a Space dot, the tab moves to that Space's Today
+            // (the position is unknown: the target was empty; the top is inferred, like a new tab
+            // [06 §13]). Favorites are shared.
             guard let space = ws.spaces[targetSpaceID], !space.meta.isTombstone else { return nil }
             switch item {
             case .tab(let id):
@@ -169,6 +233,76 @@ enum SidebarDropPlanner {
                 return SidebarDropPlan(action: .moveSplitLayout(id: id, toSpace: targetSpaceID, position: .first))
             }
         }
+    }
+
+    // MARK: Web panel
+
+    /// The action for a sidebar tab dropped on the web panel, on `side` of the pane that shows
+    /// `targetTabID`. [06 §15.7] observed: the two form a split, the dropped tab on the pointer's
+    /// side; a pinned tab stays and a new split row appears in Today. A favorite is treated like a
+    /// pinned tab (inferred). A Today tab joins the target and moves next to it when the target is
+    /// in Today (inferred: the group row then sits where the target was).
+    static func webPanelAction(tabID: UUID, targetTabID: UUID, side: SplitSide, spaceID: UUID, workspace ws: WorkspaceState) -> SidebarDropPlan.Action? {
+        guard tabID != targetTabID,
+              let tab = ws.tabs[tabID], !tab.meta.isTombstone,
+              let target = ws.tabs[targetTabID], !target.meta.isTombstone else { return nil }
+        switch tab.location {
+        case .pinned, .favorite:
+            return .splitCopy(source: tabID, target: targetTabID, side: side, spaceID: spaceID)
+        case .today:
+            let nextToTarget: Bool = if case .today = target.location { true } else { false }
+            return .splitTab(id: tabID, target: targetTabID, side: side, moveNextToTarget: nextToTarget)
+        }
+    }
+
+    // MARK: Applying
+
+    /// Pure: the workspace after `plan`, through `TreeOps`.
+    ///
+    /// - `newTabID`: for an external link, the id of the tab opened for it (it replaces the
+    ///   scratch id of a tab move or split); for `.splitCopy`, the id of the copy.
+    /// - `layoutID`: id of the split layout a split action creates (see `needsLayoutID`).
+    /// - `copyURL`: page address of a `.splitCopy` (the live URL), else the stored one.
+    /// A folder the tab is dropped into is expanded. [06 §12], [06 §15.3] observed.
+    static func apply(
+        _ plan: SidebarDropPlan,
+        to ws: WorkspaceState,
+        newTabID: UUID? = nil,
+        layoutID: UUID? = nil,
+        copyURL: URL? = nil,
+        now: Date
+    ) throws -> WorkspaceState {
+        var result: WorkspaceState
+        switch plan.action {
+        case .moveTab(let id, let location, let position):
+            result = try TreeOps.moveTab(ws, id: newTabID ?? id, to: location, position: position, now: now)
+        case .moveFolder(let id, let space, let parent, let position):
+            result = try TreeOps.moveFolder(ws, id: id, toSpace: space, parentFolderID: parent, position: position, now: now)
+        case .moveTabs(let ids, let location, let position):
+            // A split group moves as a unit: every member lands next to the others in one mutation.
+            result = ws
+            for step in moveSteps(ids: ids, position: position) {
+                result = try TreeOps.moveTab(result, id: step.id, to: location, position: step.position, now: now)
+            }
+        case .moveSplitLayout(let id, let space, let position):
+            result = try TreeOps.moveSplitLayout(ws, layoutID: id, toSpaceID: space, position: position, now: now)
+        case .splitTab(let id, let target, let side, let moveNextToTarget):
+            guard let layoutID else { throw TreeError.notFound(target) }
+            result = try TreeOps.splitTab(ws, layoutID: layoutID, tabID: newTabID ?? id, targetTabID: target,
+                                          side: side, moveNextToTarget: moveNextToTarget, now: now)
+        case .splitCopy(let source, let target, let side, let spaceID):
+            guard let layoutID, let copyID = newTabID else { throw TreeError.notFound(source) }
+            guard let original = ws.tabs[source], !original.meta.isTombstone else { throw TreeError.notFound(source) }
+            let opened = try TreeOps.openTab(ws, id: copyID, spaceID: spaceID, url: copyURL ?? original.url,
+                                             title: original.displayTitle, now: now)
+            let nextToTarget: Bool = if case .today = opened.tabs[target]?.location { true } else { false }
+            result = try TreeOps.splitTab(opened, layoutID: layoutID, tabID: copyID, targetTabID: target,
+                                          side: side, moveNextToTarget: nextToTarget, now: now)
+        }
+        if let folderID = plan.expandFolderID, result.folders[folderID]?.isExpanded == false {
+            result = try TreeOps.setFolderExpanded(result, id: folderID, isExpanded: true, now: now)
+        }
+        return result
     }
 
     // MARK: Rows
@@ -195,10 +329,11 @@ enum SidebarDropPlanner {
         if let folder = ws.folders[rowID], !folder.meta.isTombstone {
             let spaceID = folder.spaceID
             switch zone {
-            case .into:
-                // [06 §12] observed: onto a folder row → inside, folder expands.
-                // Position inside the folder (end) is inferred.
-                var plan = placement(item, in: .pinned(spaceID: spaceID, folderID: folder.id), position: .last, env: env)
+            case .into, .split:
+                // [06 §12] observed: onto a folder row → inside, folder expands. [06 §15.3]
+                // observed: the tab becomes the folder's FIRST child (no spring-loading: a
+                // collapsed folder only expands on the drop).
+                var plan = placement(item, in: .pinned(spaceID: spaceID, folderID: folder.id), position: .first, env: env)
                 plan?.expandFolderID = folder.id
                 return plan
             case .above:
@@ -213,12 +348,18 @@ enum SidebarDropPlanner {
         }
 
         guard let row = ws.tabs[rowID], !row.meta.isTombstone else { return nil }
-        let position: InsertPosition = zone == .above ? .before(row.id) : .after(row.id)
-        switch row.location {
-        case .favorite:
-            return nil
-        case .pinned, .today:
-            return placement(item, in: row.location, position: position, env: env)
+        if case .favorite = row.location { return nil }
+        switch zone {
+        case .split(let side):
+            // [06 §15.2] observed: only a single tab forms a split; a folder or a split group has
+            // no split band (the hit-tester gives them halves; refused here as well).
+            guard case .tab(let id) = item, let tab = ws.tabs[id] else { return nil }
+            if case .favorite = tab.location { return nil }
+            return SidebarDropPlan(action: .splitTab(id: id, target: row.id, side: side, moveNextToTarget: true))
+        case .above:
+            return placement(item, in: row.location, position: .before(row.id), env: env)
+        case .into, .below:
+            return placement(item, in: row.location, position: .after(row.id), env: env)
         }
     }
 
@@ -273,5 +414,37 @@ enum SidebarDropPlanner {
             if let parent, ws.folder(parent, isWithin: id) { return nil }
             return SidebarDropPlan(action: .moveFolder(id: id, toSpace: spaceID, parent: parent, position: position))
         }
+    }
+}
+
+/// Space switching at the sidebar's left and right edges while dragging. [06 §15.6] observed:
+/// x < ≈ 20 pt goes to the previous Space, the right edge (fires 4 pt from the edge, not 20 pt) to
+/// the next one.
+enum SidebarEdgeSwitch {
+    /// -1 (previous Space), +1 (next Space), or nil away from both edges.
+    static func direction(
+        x: CGFloat,
+        sidebarWidth: CGFloat,
+        leftBand: CGFloat = SidebarLocalTokens.edgeSwitchLeftBand,
+        rightBand: CGFloat = SidebarLocalTokens.edgeSwitchRightBand
+    ) -> Int? {
+        guard sidebarWidth > leftBand + rightBand, x >= 0, x <= sidebarWidth else { return nil }
+        if x < leftBand { return -1 }
+        if x > sidebarWidth - rightBand { return 1 }
+        return nil
+    }
+}
+
+/// Where a sidebar tab dropped on the web panel goes: the pane under the pointer and the half of
+/// that pane the pointer is in. [06 §15.7] observed (left half of the content area → left pane).
+enum SidebarWebPanelDrop {
+    struct Pane: Equatable {
+        var tabID: UUID
+        var frame: CGRect
+    }
+
+    static func target(at point: CGPoint, panes: [Pane]) -> (tabID: UUID, side: SplitSide)? {
+        guard let pane = panes.first(where: { $0.frame.contains(point) }) else { return nil }
+        return (pane.tabID, point.x < pane.frame.midX ? .leading : .trailing)
     }
 }

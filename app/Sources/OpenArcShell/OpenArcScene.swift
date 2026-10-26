@@ -228,7 +228,7 @@ struct ShellCommands: Commands {
 
         CommandMenu("Tabs") {
             Group {
-                Button("Archive Tab") { if let id = model.selectedTabID { model.sidebar.closeTab(id) } }
+                Button("Archive Tab") { if let id = model.selectedTabID { model.sidebar.closeOrUnloadTab(id) } }
                     .keyboardShortcut("w", modifiers: .command)
                     .disabled(model.selectedTabID == nil)
                 Button("Pin/Unpin Tab") { if let id = model.selectedTabID { model.sidebar.togglePin(id) } }

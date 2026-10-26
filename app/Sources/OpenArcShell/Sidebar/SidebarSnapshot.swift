@@ -167,6 +167,12 @@ struct SidebarSnapshot: Equatable {
         }
     }
 
+    /// Whether the pinned rows right after folder `folderID` are its (visible) children.
+    func hasVisibleChildren(folderID: UUID) -> Bool {
+        guard let index = pinned.firstIndex(where: { $0.id == folderID }), index + 1 < pinned.count else { return false }
+        return pinned[index + 1].depth > pinned[index].depth
+    }
+
     /// The split-group row with this layout id, if shown.
     func splitGroup(layoutID: UUID) -> SidebarSplitGroup? {
         for item in pinned + today {
