@@ -96,8 +96,13 @@ public final class ShellModel: ObservableObject {
         )
         self.spaceFlow = SpaceFlowModel(sidebar: sidebar, now: controller.now, makeID: controller.makeID)
         self.library = LibraryModel(sidebar: sidebar, now: controller.now)
-        // Fake site settings until the Chromium bridge provides them (plan C12 / C14 / C16).
-        self.siteControls = SiteControlsModel(sidebar: sidebar, provider: FakeSiteSettingsProvider(), pasteboard: SystemPasteboardWriter())
+        // The engine's ad blocker (C16) over fake site settings until the bridge provides the
+        // rest (plan C12 / C14).
+        self.siteControls = SiteControlsModel(
+            sidebar: sidebar,
+            provider: EngineSiteSettingsProvider(adBlocking: controller.dependencies.engine.adBlocking, base: FakeSiteSettingsProvider()),
+            pasteboard: SystemPasteboardWriter()
+        )
         self.findBar = FindBarModel(sidebar: sidebar)
         self.sidebarPeek = SidebarPeekController(isPinned: window.isSidebarVisible)
         sidebar.requestHandler = { [weak self] request in self?.handle(request) }

@@ -11,7 +11,8 @@
 //   apply(.developerMode)                 -> -setDeveloperModeEnabled:forOrigin:
 //   apply(.automaticPictureInPicture)     -> -setAutomaticPictureInPictureAllowed:forOrigin:
 //   apply(.zoom(percent:))                -> -setZoomFactor:forOrigin:
-//   apply(.adBlocking)                    -> -setAdBlockingEnabled:forOrigin:  (plan C16)
+//   apply(.adBlocking)                    -> -setAdBlockingEnabled:forOrigin:  (plan C16; read back
+//                                            with -isAdBlockingEnabledForOrigin:)
 //   apply(.clearSiteData)                 -> -clearDataForOrigin:completionHandler:
 //   runExtensionAction(...)               -> -[OACExtensions runActionOfExtension:onTab:] (C14)
 // `profileID` in the Swift protocol picks the `OACProfile`, whose `siteSettings` this is.
@@ -53,7 +54,9 @@ OAC_EXPORT NS_SWIFT_SENDABLE
 @property (nonatomic, readonly) double zoomFactor;
 /// Cookies stored for the site and its subdomains (`cookieCount`).
 @property (nonatomic, readonly) NSInteger cookieCount;
-/// nil while the engine has no ad blocker (`isAdBlockingOn`, plan C16).
+/// Ad blocking on this site (`isAdBlockingOn`, plan C16): NO when the site is on the allow list,
+/// else the global switch (`OACApplication.adBlockingEnabled`). nil when the framework has no
+/// filter ruleset.
 @property (nonatomic, readonly, copy, nullable) NSNumber *adBlockingEnabled;
 
 - (OACPermissionDecision)decisionForPermission:(OACPermissionKind)kind NS_SWIFT_NAME(decision(for:));
@@ -87,8 +90,12 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 - (void)setAutomaticPictureInPictureAllowed:(BOOL)allowed forOrigin:(OACOrigin *)origin;
 /// Stores the zoom for the origin's host; open tabs on it follow. 1.0 removes the entry.
 - (BOOL)setZoomFactor:(double)zoomFactor forOrigin:(OACOrigin *)origin error:(NSError **)error;
-/// Plan C16. Fails silently (no-op) while the engine has no ad blocker.
+/// Plan C16. NO puts the origin's site on the ad blocker's allow list (Chromium's "ads" content
+/// setting, per profile; off-the-record profiles inherit it); YES removes it again. Open tabs on
+/// the site follow at their next page load.
 - (void)setAdBlockingEnabled:(BOOL)enabled forOrigin:(OACOrigin *)origin;
+/// Plan C16. NO when the origin is on the allow list; the global switch does not affect it.
+- (BOOL)isAdBlockingEnabledForOrigin:(OACOrigin *)origin NS_SWIFT_NAME(isAdBlockingEnabled(forOrigin:));
 /// Removes cookies, storage, cache and stored permissions of the origin's site (eTLD+1).
 - (void)clearDataForOrigin:(OACOrigin *)origin completionHandler:(void (^)(void))completionHandler;
 

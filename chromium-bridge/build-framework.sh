@@ -15,6 +15,11 @@
 #      args.gn must list it in root_extra_deps, see chromium-patches/README.md §Building).
 #      With --universal, the same in OUT_DIR_x64, whose args.gn is OUT_DIR's with
 #      target_cpu = "x64".
+#   1b. chromium-bridge/build-adblock-ruleset.sh: downloads EasyList + EasyPrivacy into
+#      app/.build/adblock/ and installs the converted ruleset into the framework's
+#      Resources/AdBlock/ (plan C16; ninja does not know these files, so this runs after every
+#      build). Set OPENARC_SKIP_ADBLOCK=1 to skip it (offline; the ad blocker then matches nothing
+#      unless an earlier ruleset was already indexed in the profile directory).
 #   2. Check each framework: install name, exported symbols (OAC* and OACChildProcessMain only),
 #      headers in sync with chromium-bridge/include, module map, the helper apps (plan C10).
 #   3. --universal: merge the two frameworks with Chromium's
@@ -58,6 +63,9 @@ build_and_check() {
     if [ $build -eq 1 ]; then
         echo "==> ninja -C $out openarc_framework" >&2
         "$SRC/third_party/ninja/ninja" -C "$SRC/$out" openarc_framework >&2
+    fi
+    if [ "${OPENARC_SKIP_ADBLOCK:-0}" != 1 ]; then
+        "$HERE/build-adblock-ruleset.sh" "$SRC" "$out" "$SRC/$out/OpenArcCore.framework" >&2
     fi
     [ -d "$framework" ] || { echo "build-framework.sh: missing $framework" >&2; exit 1; }
     # The unbundled helper of C8 must not linger in an incremental build directory.

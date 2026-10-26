@@ -19,6 +19,8 @@ public final class LibraryModel: ObservableObject {
     /// Space column being dragged by its handle on the Spaces board.
     @Published var draggingSpaceID: UUID?
     @Published public private(set) var lastError: Error?
+    /// Library ▸ Downloads (C12): the current profile's downloads from the engine.
+    public let downloads: LibraryDownloads
 
     /// Calendar for the date groups of Archived Tabs. Settable so tests can fix the time zone.
     public var calendar: Calendar = .current
@@ -34,6 +36,7 @@ public final class LibraryModel: ObservableObject {
     init(sidebar: SidebarViewModel, now: @escaping () -> Date) {
         self.sidebar = sidebar
         self.now = now
+        self.downloads = LibraryDownloads(engine: sidebar.controller.dependencies.engine.downloads)
     }
 
     public var isActive: Bool { section != nil }
@@ -50,6 +53,7 @@ public final class LibraryModel: ObservableObject {
     /// Shows the Library on `section`.
     public func open(_ section: LibrarySection) {
         self.section = section
+        if section == .downloads { downloads.observe(profileID: sidebar.currentProfileID) }
         guard lastSection != section else { return }
         lastSection = section
         onPersistentStateChange?()

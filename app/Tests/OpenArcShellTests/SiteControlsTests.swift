@@ -1,6 +1,7 @@
 import XCTest
 import OpenArcModel
 import OpenArcEngine
+import OpenArcSyncAPI
 @testable import OpenArcShell
 
 /// Site Control Center and URL box copy link. [06 §12] observed: hovering the URL box shows copy
@@ -202,5 +203,87 @@ final class SiteControlsTests: XCTestCase {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTFail("condition not met", file: file, line: line)
+    }
+}
+
+/// Plan C16: the Site Control Center's ad blocking row is backed by the engine's ad blocker
+/// (`BrowserEngine.adBlocking`). inferred: the spec records no such row ([00 §A] "广告拦截":
+/// settings toggle known, blocking UI not captured).
+@MainActor
+final class SiteControlsAdBlockingTests: XCTestCase {
+    private var engine: FakeEngine!
+    private var model: ShellModel!
+    private let site = SiteOrigin(scheme: "https", host: "example.com")
+
+    override func setUp() async throws {
+        engine = FakeEngine()
+        model = ShellModel(
+            dependencies: AppDependencies(engine: engine, sync: DisabledSyncStore()),
+            workspace: .demo(now: Date(timeIntervalSince1970: 0)),
+            now: { Date(timeIntervalSince1970: 0) }
+        )
+        model.siteControls.pointerLeaveGrace = 0
+        let id = try XCTUnwrap(model.workspace.tabs.values.first { $0.url?.host == "example.com" }?.id)
+        try await model.activate(tabID: id)
+    }
+
+    override func tearDown() async throws {
+        model.stop()
+        model = nil
+    }
+
+    private func adBlockingRow() -> String? {
+        model.siteControls.settingRows.first { $0.kind == .adBlocking }?.status
+    }
+
+    func testRowShowsAndTogglesTheSitesAllowListEntry() async throws {
+        let sc = model.siteControls
+        sc.present()
+        await sc.settle()
+        XCTAssertEqual(adBlockingRow(), "On")
+        sc.activate(.adBlocking)
+        await sc.settle()
+        XCTAssertEqual(adBlockingRow(), "Off")
+        let profile = try XCTUnwrap(model.sidebar.currentProfileID)
+        let siteOn = await engine.adBlocking.isEnabled(forOrigin: site, profileID: profile)
+        XCTAssertFalse(siteOn)
+        sc.activate(.adBlocking)
+        await sc.settle()
+        XCTAssertEqual(adBlockingRow(), "On")
+        XCTAssertEqual(engine.fakeAdBlockingService.changes, ["site:example.com:off", "site:example.com:on"])
+    }
+
+    func testGlobalSwitchOffShowsOffAndTurningTheRowOnRestoresIt() async {
+        await engine.adBlocking.setEnabled(false)
+        let sc = model.siteControls
+        sc.present()
+        await sc.settle()
+        XCTAssertEqual(adBlockingRow(), "Off")
+        sc.activate(.adBlocking)
+        await sc.settle()
+        XCTAssertEqual(adBlockingRow(), "On")
+        let global = await engine.adBlocking.isEnabled()
+        XCTAssertTrue(global)
+    }
+
+    func testNoRowWithoutARuleset() async {
+        engine.fakeAdBlockingService.simulateRuleset(nil)
+        let sc = model.siteControls
+        sc.present()
+        await sc.settle()
+        XCTAssertNil(adBlockingRow())
+    }
+
+    /// Settings ▸ Advanced: the global switch reads and writes the engine.
+    func testSettingsSwitchDrivesTheEngine() async {
+        let settings = SettingsModel(shell: model)
+        await settings.loadAdBlocking()
+        XCTAssertEqual(settings.adBlockingRulesetVersion, "fake-ruleset")
+        XCTAssertTrue(settings.isAdBlockingOn)
+        await settings.setAdBlocking(false)
+        XCTAssertFalse(settings.isAdBlockingOn)
+        let global = await engine.adBlocking.isEnabled()
+        XCTAssertFalse(global)
+        XCTAssertEqual(SettingsCatalog.control("advanced.adBlocking").kind, .toggle(defaultValue: true))
     }
 }

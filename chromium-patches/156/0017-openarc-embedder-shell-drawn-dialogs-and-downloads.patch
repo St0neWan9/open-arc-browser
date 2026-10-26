@@ -1,0 +1,2529 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 04:14:35 -0700
+Subject: [PATCH] openarc: embedder: shell-drawn dialogs and downloads
+
+Plan C12 (shell-drawn dialogs: JavaScript alert/confirm/prompt,
+permission prompts, HTTP auth, file chooser, external protocol,
+downloads; acceptance: each dialog has a SwiftUI view, behavior from
+Chromium). Until now only JavaScript dialogs reached the shell; the rest
+got default answers (permissions dismissed, no HTTP-auth prompt, no file
+chooser, external apps never launched, downloads cancelled because
+OACProfile.downloads was a stub).
+
+//chrome's controllers still decide when to ask and what to remember;
+the bridge replaces only their Views UI with OACDialogDelegate requests:
+
+- Permissions: PermissionRequestManager's prompt view is the bridge's
+  (openarc::DialogHost, registered at engine start). One
+  OACPermissionRequest per prompt group (camera + microphone together);
+  allow / allow this time / deny / dismiss map to Accept, AcceptThisTime,
+  Deny and Dismiss, so Chrome stores decisions, one-time grants and its
+  embargo as usual. supportsAllowingOnce follows Chrome's own rule
+  (PermissionUtil::DoesSupportTemporaryGrants). getUserMedia reaches the
+  manager through MediaCaptureDevicesDispatcher (the tab's
+  WebContentsDelegate). The view withdraws its request when the manager
+  destroys it (navigation, tab closed).
+- HTTP auth: ChromeContentBrowserClient::CreateHttpAuthCoordinator is
+  overridden so Chrome's flow (extensions, LoginTabHelper for main-frame
+  401/407 with its blank page and reload, password manager hookup) uses
+  a LoginHandler whose view is an OACAuthenticationRequest.
+- File chooser: the tab's WebContentsDelegate::RunFileChooser makes an
+  OACFileChooserRequest (accept types as UTIs; folder upload enumerated
+  by Chrome's FileSelectHelper).
+- External protocol: ExternalProtocolHandler's embedder dialog hook (the
+  previous patch) makes an OACExternalProtocolRequest; "Open" sets the
+  block state when remembered and launches through Chrome. The tab gets
+  Chrome's ExternalProtocolObserver so a user gesture permits the next
+  launch, as a Browser tab's features do.
+- Downloads: OACProfile.downloads is the profile's DownloadManager with
+  //chrome's ChromeDownloadManagerDelegate (history, target paths,
+  dangerous-file checks); items, observers with coalesced progress,
+  pause / resume / cancel / keep or discard / remove, download location
+  and "ask where to save". SAVE_TO_DISK opens become downloads.
+
+Not done here: client certificate selection (continues without a
+certificate, as before).
+---
+ openarc/BUILD.gn                              |  17 +
+ openarc/bridge/oac_application.mm             |   4 +
+ openarc/bridge/oac_dialog_requests.mm         | 815 ++++++++++++++++++
+ openarc/bridge/oac_dialog_requests_internal.h |  44 +
+ openarc/bridge/oac_downloads.mm               | 513 +++++++++++
+ openarc/bridge/oac_downloads_internal.h       |  18 +
+ openarc/bridge/oac_profile.mm                 |  14 +-
+ openarc/bridge/oac_requests.mm                |  95 +-
+ openarc/bridge/oac_requests_internal.h        |  25 +
+ openarc/bridge/oac_tab.mm                     | 106 ++-
+ openarc/bridge/oac_tab_internal.h             |   7 +
+ .../public/OpenArcCore/OACDialogDelegate.h    |  19 +-
+ .../bridge/public/OpenArcCore/OACDownloads.h  |  11 +-
+ .../browser/openarc_content_browser_client.h  |  43 +-
+ .../browser/openarc_content_browser_client.mm | 108 ++-
+ openarc/browser/openarc_dialog_host.cc        |  80 ++
+ openarc/browser/openarc_dialog_host.h         |  66 ++
+ openarc/browser/openarc_tab_helpers.mm        |  61 +-
+ 18 files changed, 1876 insertions(+), 170 deletions(-)
+ create mode 100644 openarc/bridge/oac_dialog_requests.mm
+ create mode 100644 openarc/bridge/oac_dialog_requests_internal.h
+ create mode 100644 openarc/bridge/oac_downloads.mm
+ create mode 100644 openarc/bridge/oac_downloads_internal.h
+ create mode 100644 openarc/browser/openarc_dialog_host.cc
+ create mode 100644 openarc/browser/openarc_dialog_host.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index c8e0c76b875d..fe4f797b90f1 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -77,6 +77,8 @@ source_set("embedder") {
+     "browser/openarc_browser_main_extra_parts.mm",
+     "browser/openarc_content_browser_client.h",
+     "browser/openarc_content_browser_client.mm",
++    "browser/openarc_dialog_host.cc",
++    "browser/openarc_dialog_host.h",
+     "browser/openarc_tab_helpers.h",
+     "browser/openarc_tab_helpers.mm",
+     "browser/openarc_tab_preferences.h",
+@@ -116,6 +118,7 @@ source_set("embedder") {
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:tab_helpers",
+     "//chrome/browser/ui:tab_helpers_impl",
++    "//chrome/browser/ui/login",
+     "//components/os_crypt/common:keychain_password_mac",
+     "//components/permissions",
+     "//components/prefs",
+@@ -140,6 +143,10 @@ source_set("bridge") {
+               "bridge/oac_application.mm",
+               "bridge/oac_application_internal.h",
+               "bridge/oac_browser_application.mm",
++              "bridge/oac_dialog_requests.mm",
++              "bridge/oac_dialog_requests_internal.h",
++              "bridge/oac_downloads.mm",
++              "bridge/oac_downloads_internal.h",
+               "bridge/oac_profile.mm",
+               "bridge/oac_profile_internal.h",
+               "bridge/oac_requests.mm",
+@@ -154,6 +161,15 @@ source_set("bridge") {
+     "//base",
+     "//chrome/browser/browsing_data:constants",
+     "//chrome/browser/download",
++    "//chrome/browser:file_select_helper",
++    "//chrome/browser/external_protocol",
++    "//chrome/browser/media/webrtc",
++    "//chrome/browser/ui/login",
++    "//components/content_settings/core/common",
++    "//components/download/content/public",
++    "//components/download/public/common:public",
++    "//components/permissions",
++    "//net/traffic_annotation",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/profiles:profile_manager",
+     "//chrome/browser/profiles:profile_util",
+@@ -180,6 +196,7 @@ source_set("bridge") {
+     "AppKit.framework",
+     "CoreGraphics.framework",
+     "Foundation.framework",
++    "UniformTypeIdentifiers.framework",
+   ]
+ }
+ 
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 441be7419cad..4ed7b745239f 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -36,6 +36,7 @@
+ #include "content/public/app/content_main.h"
+ #include "content/public/app/content_main_runner.h"
+ #include "openarc/app/openarc_main_delegate.h"
++#import "openarc/bridge/oac_dialog_requests_internal.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/common/openarc_paths.h"
+ 
+@@ -270,6 +271,9 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+       _configuration.crashDumpDirectory
+           ? base::apple::NSURLToFilePath(_configuration.crashDumpDirectory)
+           : base::FilePath());
++  // Shell-drawn prompts (plan C12): the bridge's views for //chrome's
++  // permission, HTTP auth and external protocol controllers.
++  openarc::InstallBridgeDialogHost();
+   g_engine->main_runner = content::ContentMainRunner::Create();
+   content::ContentMainParams params(g_engine->main_delegate.get());
+   params.argc = static_cast<int>(g_engine->argv.size());
+diff --git a/openarc/bridge/oac_dialog_requests.mm b/openarc/bridge/oac_dialog_requests.mm
+new file mode 100644
+index 000000000000..a2cbaa7d8f17
+--- /dev/null
++++ b/openarc/bridge/oac_dialog_requests.mm
+@@ -0,0 +1,815 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The shell-drawn prompts of OACDialogDelegate.h other than JavaScript dialogs
++// (plan C12): permission prompts, HTTP authentication, file choosers and
++// external protocols. //chrome's controllers decide when to ask and what to
++// remember; the classes here are their views, and each turns its prompt into
++// an OACDialogRequest for the tab's dialog delegate.
++
++#import "openarc/bridge/oac_dialog_requests_internal.h"
++
++#import <AppKit/AppKit.h>
++#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <variant>
++#include <vector>
++
++#include "base/apple/foundation_util.h"
++#include "base/check.h"
++#include "base/files/file_path.h"
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/types/optional_util.h"
++#include "chrome/browser/external_protocol/external_protocol_handler.h"
++#include "chrome/browser/file_select_helper.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/login/login_handler.h"
++#include "chrome/common/pref_names.h"
++#include "components/permissions/permission_prompt.h"
++#include "components/permissions/permission_request.h"
++#include "components/permissions/permission_uma_constants.h"
++#include "components/permissions/permission_util.h"
++#include "components/permissions/request_type.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/file_select_listener.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/weak_document_ptr.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/apple/url_conversions.h"
++#include "net/base/auth.h"
++#include "net/base/mime_util.h"
++#include "services/network/public/cpp/is_potentially_trustworthy.h"
++#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
++#include "url/gurl.h"
++#include "url/url_util.h"
++#include "url/origin.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_requests_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++#include "openarc/browser/openarc_dialog_host.h"
++
++// MARK: - Request classes
++
++@implementation OACAuthenticationRequest {
++  NSString* _realm;
++  NSString* _challengerHostPort;
++  BOOL _isProxyChallenge;
++  BOOL _isInsecureConnection;
++  NSString* _suggestedUsername;
++  base::OnceCallback<void(NSString*, NSString*)> _proceed;
++  base::OnceClosure _cancel;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                      realm:(NSString*)realm
++         challengerHostPort:(NSString*)challengerHostPort
++           isProxyChallenge:(BOOL)isProxyChallenge
++       isInsecureConnection:(BOOL)isInsecureConnection
++          suggestedUsername:(NSString*)suggestedUsername
++                    proceed:(base::OnceCallback<void(NSString*, NSString*)>)
++                                proceed
++                     cancel:(base::OnceClosure)cancel {
++  if ((self = [super initWithTab:tab origin:origin isFromSubframe:NO])) {
++    _realm = [realm copy];
++    _challengerHostPort = [challengerHostPort copy];
++    _isProxyChallenge = isProxyChallenge;
++    _isInsecureConnection = isInsecureConnection;
++    _suggestedUsername = [suggestedUsername copy];
++    _proceed = std::move(proceed);
++    _cancel = std::move(cancel);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (NSString*)realm {
++  return _realm;
++}
++- (NSString*)challengerHostPort {
++  return _challengerHostPort;
++}
++- (BOOL)isProxyChallenge {
++  return _isProxyChallenge;
++}
++- (BOOL)isInsecureConnection {
++  return _isInsecureConnection;
++}
++- (NSString*)suggestedUsername {
++  return _suggestedUsername;
++}
++
++- (void)proceedWithUsername:(NSString*)username password:(NSString*)password {
++  if (![self markFinished]) {
++    return;
++  }
++  _cancel.Reset();
++  if (_proceed) {
++    std::move(_proceed).Run(username ?: @"", password ?: @"");
++  }
++}
++
++- (void)cancel {
++  if (![self markFinished]) {
++    return;
++  }
++  _proceed.Reset();
++  if (_cancel) {
++    std::move(_cancel).Run();
++  }
++}
++
++@end
++
++@implementation OACPermissionRequest {
++  NSArray<NSNumber*>* _kinds;
++  BOOL _hasUserGesture;
++  BOOL _supportsAllowingOnce;
++  base::OnceCallback<void(openarc::PermissionAnswer)> _answer;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++             isFromSubframe:(BOOL)isFromSubframe
++                      kinds:(NSArray<NSNumber*>*)kinds
++             hasUserGesture:(BOOL)hasUserGesture
++       supportsAllowingOnce:(BOOL)supportsAllowingOnce
++                     answer:(base::OnceCallback<void(openarc::PermissionAnswer)>)
++                                answer {
++  if ((self = [super initWithTab:tab
++                           origin:origin
++                   isFromSubframe:isFromSubframe])) {
++    _kinds = [kinds copy];
++    _hasUserGesture = hasUserGesture;
++    _supportsAllowingOnce = supportsAllowingOnce;
++    _answer = std::move(answer);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (NSArray<NSNumber*>*)kinds {
++  return _kinds;
++}
++- (BOOL)hasUserGesture {
++  return _hasUserGesture;
++}
++- (BOOL)supportsAllowingOnce {
++  return _supportsAllowingOnce;
++}
++
++- (void)answer:(openarc::PermissionAnswer)answer {
++  if (![self markFinished]) {
++    return;
++  }
++  if (_answer) {
++    std::move(_answer).Run(answer);
++  }
++}
++
++- (void)allowRemembering:(BOOL)remember {
++  [self answer:remember || !_supportsAllowingOnce
++                   ? openarc::PermissionAnswer::kAllow
++                   : openarc::PermissionAnswer::kAllowThisTime];
++}
++
++- (void)denyRemembering:(BOOL)remember {
++  [self answer:openarc::PermissionAnswer::kDeny];
++}
++
++- (void)dismiss {
++  [self answer:openarc::PermissionAnswer::kDismiss];
++}
++
++- (void)cancel {
++  [self dismiss];
++}
++
++@end
++
++@implementation OACFileChooserRequest {
++  OACFileChooserMode _mode;
++  NSArray<NSString*>* _acceptedTypeIdentifiers;
++  NSURL* _defaultURL;
++  BOOL _wantsCapture;
++  base::OnceCallback<void(NSArray<NSURL*>*)> _select;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++             isFromSubframe:(BOOL)isFromSubframe
++                       mode:(OACFileChooserMode)mode
++    acceptedTypeIdentifiers:(NSArray<NSString*>*)acceptedTypeIdentifiers
++                 defaultURL:(NSURL*)defaultURL
++               wantsCapture:(BOOL)wantsCapture
++                     select:(base::OnceCallback<void(NSArray<NSURL*>*)>)select {
++  if ((self = [super initWithTab:tab
++                           origin:origin
++                   isFromSubframe:isFromSubframe])) {
++    _mode = mode;
++    _acceptedTypeIdentifiers = [acceptedTypeIdentifiers copy];
++    _defaultURL = [defaultURL copy];
++    _wantsCapture = wantsCapture;
++    _select = std::move(select);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (OACFileChooserMode)mode {
++  return _mode;
++}
++- (NSArray<NSString*>*)acceptedTypeIdentifiers {
++  return _acceptedTypeIdentifiers;
++}
++- (NSURL*)defaultURL {
++  return _defaultURL;
++}
++- (BOOL)wantsCapture {
++  return _wantsCapture;
++}
++
++- (void)selectURLs:(NSArray<NSURL*>*)fileURLs {
++  if (![self markFinished]) {
++    return;
++  }
++  if (_select) {
++    std::move(_select).Run(fileURLs ?: @[]);
++  }
++}
++
++- (void)cancel {
++  // An empty selection is a cancel (FileSelectListener::FileSelectionCanceled).
++  [self selectURLs:@[]];
++}
++
++@end
++
++@implementation OACExternalProtocolRequest {
++  NSURL* _URL;
++  NSString* _handlerApplicationName;
++  NSURL* _handlerApplicationURL;
++  BOOL _hasUserGesture;
++  BOOL _canRememberForOrigin;
++  base::OnceCallback<void(bool)> _open;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                       origin:(OACOrigin*)origin
++                          URL:(NSURL*)URL
++       handlerApplicationName:(NSString*)handlerApplicationName
++        handlerApplicationURL:(NSURL*)handlerApplicationURL
++               hasUserGesture:(BOOL)hasUserGesture
++         canRememberForOrigin:(BOOL)canRememberForOrigin
++                         open:(base::OnceCallback<void(bool)>)open {
++  if ((self = [super initWithTab:tab origin:origin isFromSubframe:NO])) {
++    _URL = [URL copy];
++    _handlerApplicationName = [handlerApplicationName copy];
++    _handlerApplicationURL = [handlerApplicationURL copy];
++    _hasUserGesture = hasUserGesture;
++    _canRememberForOrigin = canRememberForOrigin;
++    _open = std::move(open);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (NSURL*)URL {
++  return _URL;
++}
++- (NSString*)handlerApplicationName {
++  return _handlerApplicationName;
++}
++- (NSURL*)handlerApplicationURL {
++  return _handlerApplicationURL;
++}
++- (BOOL)hasUserGesture {
++  return _hasUserGesture;
++}
++- (BOOL)canRememberForOrigin {
++  return _canRememberForOrigin;
++}
++
++- (void)openRememberingForOrigin:(BOOL)rememberForOrigin {
++  if (![self markFinished]) {
++    return;
++  }
++  if (_open) {
++    std::move(_open).Run(rememberForOrigin && _canRememberForOrigin);
++  }
++}
++
++- (void)cancel {
++  // Blocking needs no action: Chrome's dialog only launches on acceptance.
++  [self markFinished];
++  _open.Reset();
++}
++
++@end
++
++// MARK: - Chromium views
++
++namespace openarc {
++
++namespace {
++
++// OACPermissionKind for a permission request type; nullopt for types the shell
++// has no prompt for.
++std::optional<OACPermissionKind> PermissionKindFor(
++    permissions::RequestType type) {
++  using permissions::RequestType;
++  switch (type) {
++    case RequestType::kCameraStream:
++      return OACPermissionKindCamera;
++    case RequestType::kMicStream:
++      return OACPermissionKindMicrophone;
++    case RequestType::kGeolocation:
++      return OACPermissionKindLocation;
++    case RequestType::kNotifications:
++      return OACPermissionKindNotifications;
++    case RequestType::kClipboard:
++      return OACPermissionKindClipboardRead;
++    case RequestType::kMidiSysex:
++      return OACPermissionKindMIDI;
++    case RequestType::kStorageAccess:
++    case RequestType::kTopLevelStorageAccess:
++      return OACPermissionKindStorageAccess;
++    case RequestType::kMultipleDownloads:
++      return OACPermissionKindMultipleDownloads;
++    case RequestType::kLocalFonts:
++      return OACPermissionKindLocalFonts;
++    case RequestType::kWindowManagement:
++      return OACPermissionKindWindowManagement;
++    case RequestType::kIdleDetection:
++      return OACPermissionKindIdleDetection;
++    default:
++      return std::nullopt;
++  }
++}
++
++// PermissionRequestManager's prompt view: one OACPermissionRequest for the
++// current group of requests (camera and microphone of one getUserMedia call
++// come together). Destroying the view (navigation, tab closed, the manager
++// re-prioritized) withdraws the request.
++class ShellPermissionPrompt : public permissions::PermissionPrompt {
++ public:
++  ShellPermissionPrompt(OACTab* tab, Delegate* delegate)
++      : delegate_(delegate->GetWeakPtr()) {
++    NSMutableArray<NSNumber*>* kinds = [NSMutableArray array];
++    bool supports_once = true;
++    for (const auto& request : delegate->Requests()) {
++      std::optional<OACPermissionKind> kind =
++          PermissionKindFor(request->request_type());
++      if (!kind) {
++        continue;
++      }
++      if (![kinds containsObject:@(*kind)]) {
++        [kinds addObject:@(*kind)];
++      }
++      std::optional<ContentSettingsType> setting =
++          permissions::RequestTypeToContentSettingsType(
++              request->request_type());
++      if (!setting ||
++          !permissions::PermissionUtil::DoesSupportTemporaryGrants(*setting)) {
++        supports_once = false;
++      }
++    }
++    const bool has_gesture =
++        !delegate->Requests().empty() &&
++        delegate->Requests()[0]->GetGestureType() ==
++            permissions::PermissionRequestGestureType::GESTURE;
++    const GURL requesting = delegate->GetRequestingOrigin();
++    const GURL embedding = delegate->GetEmbeddingOrigin();
++    base::WeakPtr<ShellPermissionPrompt> weak_this =
++        weak_factory_.GetWeakPtr();
++    if (kinds.count == 0) {
++      // Nothing the shell can ask about (for example a protocol handler
++      // registration): dismissed, as before C12.
++      Answer(PermissionAnswer::kDismiss);
++      return;
++    }
++    request_ = [[OACPermissionRequest alloc]
++                 initWithTab:tab
++                      origin:OACOriginFromURLOrigin(
++                                 url::Origin::Create(requesting))
++              isFromSubframe:url::Origin::Create(requesting) !=
++                             url::Origin::Create(embedding)
++                       kinds:kinds
++              hasUserGesture:has_gesture
++        supportsAllowingOnce:supports_once
++                      answer:base::BindOnce(
++                                 [](base::WeakPtr<ShellPermissionPrompt> self,
++                                    PermissionAnswer answer) {
++                                   if (self) {
++                                     self->Answer(answer);
++                                   }
++                                 },
++                                 weak_this)];
++    OACPermissionRequest* request = request_;
++    OACPresentDialogRequest(
++        tab, request, @selector(tab:requestPermission:),
++        ^BOOL(id<OACDialogDelegate> dialog_delegate, OACTab* owner) {
++          return [dialog_delegate tab:owner requestPermission:request];
++        });
++  }
++  ShellPermissionPrompt(const ShellPermissionPrompt&) = delete;
++  ShellPermissionPrompt& operator=(const ShellPermissionPrompt&) = delete;
++  ~ShellPermissionPrompt() override {
++    // The manager destroys its view when the requests are finalized, which
++    // includes the answer above (the request is finished by then).
++    [request_ withdrawByEngine];
++  }
++
++  // permissions::PermissionPrompt:
++  bool UpdateAnchor() override { return true; }
++  TabSwitchingBehavior GetTabSwitchingBehavior() override {
++    // The shell keeps a queue per tab and shows it when the tab is shown.
++    return TabSwitchingBehavior::kKeepPromptAlive;
++  }
++  permissions::PermissionPromptDisposition GetPromptDisposition()
++      const override {
++    return permissions::PermissionPromptDisposition::ANCHORED_BUBBLE;
++  }
++  bool IsAskPrompt() const override { return false; }
++  std::optional<gfx::Rect> GetViewBoundsInScreen() const override {
++    return std::nullopt;
++  }
++  std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
++      const override {
++    return {};
++  }
++  std::optional<permissions::feature_params::PermissionElementPromptPosition>
++  GetPromptPosition() const override {
++    return std::nullopt;
++  }
++
++ private:
++  // Answers from a fresh task: the manager may destroy this view while it
++  // handles the answer, and the shell's call must return first.
++  void Answer(PermissionAnswer answer) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](base::WeakPtr<Delegate> delegate, PermissionAnswer answer) {
++              if (!delegate || delegate->Requests().empty()) {
++                return;
++              }
++              switch (answer) {
++                case PermissionAnswer::kAllow:
++                  delegate->Accept(std::monostate());
++                  break;
++                case PermissionAnswer::kAllowThisTime:
++                  delegate->AcceptThisTime(std::monostate());
++                  break;
++                case PermissionAnswer::kDeny:
++                  delegate->Deny(std::monostate());
++                  break;
++                case PermissionAnswer::kDismiss:
++                  delegate->Dismiss(std::monostate());
++                  break;
++              }
++            },
++            delegate_, answer));
++  }
++
++  base::WeakPtr<Delegate> delegate_;
++  OACPermissionRequest* __strong request_ = nil;
++  base::WeakPtrFactory<ShellPermissionPrompt> weak_factory_{this};
++};
++
++// Chrome's LoginHandler (password manager hookup, "auth supplied" fan-out to
++// other prompts for the same realm) with an OACAuthenticationRequest as its
++// view.
++class ShellLoginHandler : public LoginHandler {
++ public:
++  ShellLoginHandler(
++      OACTab* tab,
++      const net::AuthChallengeInfo& auth_info,
++      content::WebContents* web_contents,
++      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
++      : LoginHandler(auth_info, web_contents, std::move(auth_required_callback)),
++        tab_(tab) {}
++  ShellLoginHandler(const ShellLoginHandler&) = delete;
++  ShellLoginHandler& operator=(const ShellLoginHandler&) = delete;
++  ~ShellLoginHandler() override { CloseDialog(); }
++
++ protected:
++  // LoginHandler:
++  bool BuildViewImpl(const std::u16string& authority,
++                     const std::u16string& explanation,
++                     LoginModelData* login_model_data) override {
++    OACTab* tab = tab_;
++    if (!tab || tab.isClosed) {
++      return false;
++    }
++    const net::AuthChallengeInfo& info = auth_info();
++    const GURL challenger = info.challenger.GetURL();
++    base::WeakPtr<LoginHandler> weak_this = GetWeakPtr();
++    request_ = [[OACAuthenticationRequest alloc]
++                   initWithTab:tab
++                        origin:OACOriginFromURLOrigin(
++                                   url::Origin::Create(challenger))
++                         realm:base::SysUTF8ToNSString(info.realm)
++            challengerHostPort:base::SysUTF8ToNSString(
++                                   info.challenger.port() ==
++                                           url::DefaultPortForScheme(
++                                               info.challenger.scheme())
++                                       ? info.challenger.host()
++                                       : info.challenger.host() + ":" +
++                                             base::NumberToString(
++                                                 info.challenger.port()))
++              isProxyChallenge:info.is_proxy
++          isInsecureConnection:!network::IsUrlPotentiallyTrustworthy(
++                                   challenger)
++             suggestedUsername:nil
++                       proceed:base::BindOnce(
++                                   [](base::WeakPtr<LoginHandler> handler,
++                                      NSString* username, NSString* password) {
++                                     if (handler) {
++                                       handler->SetAuth(
++                                           base::SysNSStringToUTF16(username),
++                                           base::SysNSStringToUTF16(password));
++                                     }
++                                   },
++                                   weak_this)
++                        cancel:base::BindOnce(
++                                   [](base::WeakPtr<LoginHandler> handler) {
++                                     if (handler) {
++                                       handler->CancelAuth(
++                                           /*notify_others=*/true);
++                                     }
++                                   },
++                                   weak_this)];
++    OACAuthenticationRequest* request = request_;
++    OACPresentDialogRequest(
++        tab, request, @selector(tab:requestAuthentication:),
++        ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++          return [delegate tab:owner requestAuthentication:request];
++        });
++    return true;
++  }
++
++  void CloseDialog() override {
++    // Called when the auth is handled here or elsewhere (another prompt for
++    // the same realm got credentials, the request went away).
++    [request_ withdrawByEngine];
++    request_ = nil;
++  }
++
++ private:
++  __weak OACTab* tab_;
++  OACAuthenticationRequest* __strong request_ = nil;
++};
++
++// The DialogHost the embedder calls into (openarc_dialog_host.h).
++class BridgeDialogHost : public DialogHost {
++ public:
++  std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
++      content::WebContents* web_contents,
++      permissions::PermissionPrompt::Delegate* delegate) override {
++    OACTab* tab = OACTabForWebContents(web_contents);
++    if (!tab || tab.isClosed) {
++      return CreateDismissingPermissionPrompt(web_contents, delegate);
++    }
++    return std::make_unique<ShellPermissionPrompt>(tab, delegate);
++  }
++
++  std::unique_ptr<LoginHandler> CreateLoginHandler(
++      const net::AuthChallengeInfo& auth_info,
++      content::WebContents* web_contents,
++      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
++      override {
++    return std::make_unique<ShellLoginHandler>(
++        OACTabForWebContents(web_contents), auth_info, web_contents,
++        std::move(auth_required_callback));
++  }
++};
++
++// ExternalProtocolHandler's embedder dialog (an Open Arc patch to //chrome).
++void RunExternalProtocolDialog(
++    const GURL& url,
++    content::WebContents* web_contents,
++    bool has_user_gesture,
++    const std::optional<url::Origin>& initiating_origin,
++    content::WeakDocumentPtr initiator_document,
++    const std::u16string& program_name) {
++  OACTab* tab = OACTabForWebContents(web_contents);
++  if (!tab || tab.isClosed) {
++    return;  // Blocked, as when Chrome's dialog is cancelled.
++  }
++  Profile* profile =
++      Profile::FromBrowserContext(web_contents->GetBrowserContext());
++  const bool can_remember =
++      profile->GetPrefs()->GetBoolean(
++          prefs::kExternalProtocolDialogShowAlwaysOpenCheckbox) &&
++      ExternalProtocolHandler::MayRememberAllowDecisionsForThisOrigin(
++          base::OptionalToPtr(initiating_origin));
++  NSURL* ns_url = net::NSURLWithGURL(url);
++  NSURL* app_url =
++      ns_url ? [NSWorkspace.sharedWorkspace URLForApplicationToOpenURL:ns_url]
++             : nil;
++  base::WeakPtr<content::WebContents> weak_contents =
++      web_contents->GetWeakPtr();
++  OACExternalProtocolRequest* request = [[OACExternalProtocolRequest alloc]
++               initWithTab:tab
++                    origin:initiating_origin
++                               ? OACOriginFromURLOrigin(*initiating_origin)
++                               : nil
++                       URL:ns_url ?: [NSURL URLWithString:@"about:blank"]
++      handlerApplicationName:base::SysUTF16ToNSString(program_name)
++       handlerApplicationURL:app_url
++              hasUserGesture:has_user_gesture
++        canRememberForOrigin:can_remember
++                        open:base::BindOnce(
++                                 [](base::WeakPtr<content::WebContents> contents,
++                                    GURL url,
++                                    std::optional<url::Origin> origin,
++                                    content::WeakDocumentPtr document,
++                                    bool remember) {
++                                   if (!contents) {
++                                     return;
++                                   }
++                                   if (remember && origin) {
++                                     ExternalProtocolHandler::SetBlockState(
++                                         url.GetScheme(), *origin,
++                                         ExternalProtocolHandler::DONT_BLOCK,
++                                         Profile::FromBrowserContext(
++                                             contents->GetBrowserContext()));
++                                   }
++                                   ExternalProtocolHandler::
++                                       LaunchUrlWithoutSecurityCheck(
++                                           url, contents.get(),
++                                           std::move(document));
++                                 },
++                                 weak_contents, url, initiating_origin,
++                                 std::move(initiator_document))];
++  OACPresentDialogRequest(
++      tab, request, @selector(tab:openExternalProtocol:),
++      ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++        return [delegate tab:owner openExternalProtocol:request];
++      });
++}
++
++// Uniform type identifiers for the `accept` attribute: MIME types
++// ("image/png", "image/*") and extensions (".pdf"). Unknown entries are
++// dropped; if nothing is left the panel accepts any file, as Chrome's does
++// when it has no file types.
++NSArray<NSString*>* TypeIdentifiersForAccept(
++    const std::vector<std::u16string>& accept_types) {
++  NSMutableOrderedSet<NSString*>* identifiers = [NSMutableOrderedSet orderedSet];
++  for (const std::u16string& accept : accept_types) {
++    NSString* value = base::SysUTF16ToNSString(accept).lowercaseString;
++    if (value.length == 0) {
++      continue;
++    }
++    if ([value hasPrefix:@"."]) {
++      UTType* type =
++          [UTType typeWithFilenameExtension:[value substringFromIndex:1]];
++      if (type) {
++        [identifiers addObject:type.identifier];
++      }
++      continue;
++    }
++    if ([value hasSuffix:@"/*"]) {
++      NSString* top = [value substringToIndex:value.length - 2];
++      UTType* type = [top isEqualToString:@"image"]   ? UTTypeImage
++                     : [top isEqualToString:@"audio"] ? UTTypeAudio
++                     : [top isEqualToString:@"video"] ? UTTypeMovie
++                     : [top isEqualToString:@"text"]  ? UTTypeText
++                                                      : nil;
++      if (type) {
++        [identifiers addObject:type.identifier];
++      }
++      continue;
++    }
++    UTType* type = [UTType typeWithMIMEType:value];
++    if (type) {
++      [identifiers addObject:type.identifier];
++      continue;
++    }
++    // A MIME type macOS does not know: its extensions, as Chrome does.
++    std::vector<base::FilePath::StringType> extensions;
++    net::GetExtensionsForMimeType(base::SysNSStringToUTF8(value), &extensions);
++    for (const auto& extension : extensions) {
++      UTType* by_extension = [UTType
++          typeWithFilenameExtension:base::SysUTF8ToNSString(extension)];
++      if (by_extension) {
++        [identifiers addObject:by_extension.identifier];
++      }
++    }
++  }
++  return identifiers.array;
++}
++
++// Hands the files the user chose (none: cancelled) to the page.
++void AnswerFileChooser(scoped_refptr<content::FileSelectListener> listener,
++                       base::WeakPtr<content::WebContents> contents,
++                       blink::mojom::FileChooserParams::Mode mode,
++                       NSArray<NSURL*>* urls) {
++  if (urls.count == 0) {
++    listener->FileSelectionCanceled();
++    return;
++  }
++  if (mode == blink::mojom::FileChooserParams::Mode::kUploadFolder) {
++    // <input webkitdirectory>: Chrome's helper lists the folder's files.
++    if (!contents) {
++      listener->FileSelectionCanceled();
++      return;
++    }
++    FileSelectHelper::EnumerateDirectory(
++        contents.get(), std::move(listener),
++        base::apple::NSURLToFilePath(urls.firstObject));
++    return;
++  }
++  std::vector<blink::mojom::FileChooserFileInfoPtr> files;
++  for (NSURL* url in urls) {
++    files.push_back(blink::mojom::FileChooserFileInfo::NewNativeFile(
++        blink::mojom::NativeFileInfo::New(base::apple::NSURLToFilePath(url),
++                                          std::u16string(),
++                                          std::vector<std::u16string>())));
++  }
++  listener->FileSelected(std::move(files), base::FilePath(), mode);
++}
++
++}  // namespace
++
++void InstallBridgeDialogHost() {
++  static BridgeDialogHost* host = new BridgeDialogHost();
++  DialogHost::Set(host);
++  ExternalProtocolHandler::SetEmbedderDialogRunner(&RunExternalProtocolDialog);
++}
++
++void RunShellFileChooser(OACTab* tab,
++                         content::RenderFrameHost* render_frame_host,
++                         scoped_refptr<content::FileSelectListener> listener,
++                         const blink::mojom::FileChooserParams& params) {
++  using Mode = blink::mojom::FileChooserParams::Mode;
++  OACFileChooserMode mode = OACFileChooserModeOpen;
++  switch (params.mode) {
++    case Mode::kOpen:
++      mode = OACFileChooserModeOpen;
++      break;
++    case Mode::kOpenMultiple:
++      mode = OACFileChooserModeOpenMultiple;
++      break;
++    case Mode::kUploadFolder:
++    case Mode::kOpenDirectory:
++      mode = OACFileChooserModeOpenFolder;
++      break;
++    case Mode::kSave:
++      mode = OACFileChooserModeSave;
++      break;
++  }
++  NSURL* default_url = nil;
++  if (!params.default_file_name.empty()) {
++    default_url = [NSURL
++        fileURLWithPath:base::apple::FilePathToNSString(params.default_file_name)];
++  }
++  content::WebContents* web_contents =
++      content::WebContents::FromRenderFrameHost(render_frame_host);
++  base::WeakPtr<content::WebContents> weak_contents =
++      web_contents->GetWeakPtr();
++  const Mode chooser_mode = params.mode;
++  OACFileChooserRequest* request = [[OACFileChooserRequest alloc]
++                  initWithTab:tab
++                       origin:OACOriginFromURLOrigin(
++                                  render_frame_host->GetLastCommittedOrigin())
++               isFromSubframe:render_frame_host->GetParentOrOuterDocument() !=
++                              nullptr
++                         mode:mode
++      acceptedTypeIdentifiers:TypeIdentifiersForAccept(params.accept_types)
++                   defaultURL:default_url
++                 wantsCapture:params.use_media_capture
++                       select:base::BindOnce(&AnswerFileChooser,
++                                             std::move(listener), weak_contents,
++                                             chooser_mode)];
++  OACPresentDialogRequest(
++      tab, request, @selector(tab:runFileChooser:),
++      ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++        return [delegate tab:owner runFileChooser:request];
++      });
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/oac_dialog_requests_internal.h b/openarc/bridge/oac_dialog_requests_internal.h
+new file mode 100644
+index 000000000000..4f2316c6393a
+--- /dev/null
++++ b/openarc/bridge/oac_dialog_requests_internal.h
+@@ -0,0 +1,44 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_DIALOG_REQUESTS_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_DIALOG_REQUESTS_INTERNAL_H_
++
++#import <OpenArcCore/OACDialogDelegate.h>
++
++#include "base/memory/scoped_refptr.h"
++
++namespace blink::mojom {
++class FileChooserParams;
++}
++
++namespace content {
++class FileSelectListener;
++class RenderFrameHost;
++}  // namespace content
++
++namespace openarc {
++
++// The answer of an OACPermissionRequest, in PermissionRequestManager's terms.
++enum class PermissionAnswer {
++  kAllow,
++  kAllowThisTime,
++  kDeny,
++  kDismiss,
++};
++
++// Registers the bridge's prompt views with the embedder (DialogHost) and
++// //chrome (ExternalProtocolHandler's embedder dialog). Called once when the
++// engine starts, before any tab exists.
++void InstallBridgeDialogHost();
++
++// The tab's WebContentsDelegate::RunFileChooser: an OACFileChooserRequest.
++void RunShellFileChooser(OACTab* tab,
++                         content::RenderFrameHost* render_frame_host,
++                         scoped_refptr<content::FileSelectListener> listener,
++                         const blink::mojom::FileChooserParams& params);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BRIDGE_OAC_DIALOG_REQUESTS_INTERNAL_H_
+diff --git a/openarc/bridge/oac_downloads.mm b/openarc/bridge/oac_downloads.mm
+new file mode 100644
+index 000000000000..064fddaa9f25
+--- /dev/null
++++ b/openarc/bridge/oac_downloads.mm
+@@ -0,0 +1,513 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// OACDownloads (OACDownloads.h, plan C12): a profile's downloads, from the
++// profile's content::DownloadManager with //chrome's download manager delegate
++// (DownloadCoreService: history-backed list, target paths, dangerous and
++// insecure download checks). Chrome's download bubble never shows: it needs a
++// Browser window.
++
++#import "openarc/bridge/oac_downloads_internal.h"
++
++#include <algorithm>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/apple/foundation_util.h"
++#include "base/check.h"
++#include "base/memory/raw_ptr.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/time/time.h"
++#include "chrome/browser/download/download_core_service.h"
++#include "chrome/browser/download/download_core_service_factory.h"
++#include "chrome/browser/download/download_item_model.h"
++#include "chrome/browser/download/download_prefs.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "components/download/content/public/all_download_item_notifier.h"
++#include "components/download/public/common/download_item.h"
++#include "components/download/public/common/download_url_parameters.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/download_manager.h"
++#include "net/base/apple/url_conversions.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++
++@interface OACDownloadItem ()
++- (instancetype)initWithItem:(download::DownloadItem*)item
++              isOffTheRecord:(BOOL)isOffTheRecord;
++@end
++
++@implementation OACDownloadItem {
++  NSString* _identifier;
++  NSURL* _sourceURL;
++  NSURL* _referrerURL;
++  NSURL* _fileURL;
++  NSString* _suggestedFilename;
++  NSString* _MIMEType;
++  OACDownloadState _state;
++  int64_t _receivedBytes;
++  int64_t _totalBytes;
++  NSDate* _startDate;
++  NSDate* _endDate;
++  BOOL _isOffTheRecord;
++  NSString* _warningText;
++}
++
++- (instancetype)initWithItem:(download::DownloadItem*)item
++              isOffTheRecord:(BOOL)isOffTheRecord {
++  if ((self = [super init])) {
++    _identifier = base::SysUTF8ToNSString(item->GetGuid());
++    _sourceURL = net::NSURLWithGURL(item->GetURL()) ?: [NSURL URLWithString:@"about:blank"];
++    _referrerURL = item->GetReferrerUrl().is_valid()
++                       ? net::NSURLWithGURL(item->GetReferrerUrl())
++                       : nil;
++    const base::FilePath& target = item->GetTargetFilePath();
++    _fileURL = target.empty() ? nil : base::apple::FilePathToNSURL(target);
++    _suggestedFilename =
++        base::SysUTF8ToNSString(item->GetFileNameToReportUser().value());
++    const std::string mime = item->GetMimeType();
++    _MIMEType = mime.empty() ? nil : base::SysUTF8ToNSString(mime);
++    DownloadItemModel model(item);
++    const bool needs_confirmation =
++        item->GetState() == download::DownloadItem::IN_PROGRESS &&
++        (item->IsDangerous() || item->IsInsecure());
++    switch (item->GetState()) {
++      case download::DownloadItem::IN_PROGRESS:
++        _state = needs_confirmation ? OACDownloadStateNeedsConfirmation
++                 : item->IsPaused() ? OACDownloadStatePaused
++                                    : OACDownloadStateInProgress;
++        break;
++      case download::DownloadItem::COMPLETE:
++        _state = OACDownloadStateComplete;
++        break;
++      case download::DownloadItem::CANCELLED:
++        _state = OACDownloadStateCancelled;
++        break;
++      case download::DownloadItem::INTERRUPTED:
++      default:
++        _state = OACDownloadStateInterrupted;
++        break;
++    }
++    if (needs_confirmation) {
++      size_t offset = 0;
++      _warningText = base::SysUTF16ToNSString(model.GetWarningText(
++          item->GetFileNameToReportUser().LossyDisplayName(), &offset));
++    }
++    _receivedBytes = item->GetReceivedBytes();
++    _totalBytes = item->GetTotalBytes() > 0 ? item->GetTotalBytes() : -1;
++    _startDate = item->GetStartTime().ToNSDate();
++    _endDate = item->IsDone() && !item->GetEndTime().is_null()
++                   ? item->GetEndTime().ToNSDate()
++                   : nil;
++    _isOffTheRecord = isOffTheRecord;
++  }
++  return self;
++}
++
++- (id)copyWithZone:(NSZone*)zone {
++  return self;  // Immutable.
++}
++
++- (NSString*)identifier {
++  return _identifier;
++}
++- (NSURL*)sourceURL {
++  return _sourceURL;
++}
++- (NSURL*)referrerURL {
++  return _referrerURL;
++}
++- (NSURL*)fileURL {
++  return _fileURL;
++}
++- (NSString*)suggestedFilename {
++  return _suggestedFilename;
++}
++- (NSString*)MIMEType {
++  return _MIMEType;
++}
++- (OACDownloadState)state {
++  return _state;
++}
++- (int64_t)receivedBytes {
++  return _receivedBytes;
++}
++- (int64_t)totalBytes {
++  return _totalBytes;
++}
++- (NSDate*)startDate {
++  return _startDate;
++}
++- (NSDate*)endDate {
++  return _endDate;
++}
++- (BOOL)isOffTheRecord {
++  return _isOffTheRecord;
++}
++- (NSString*)warningText {
++  return _warningText;
++}
++
++@end
++
++@interface OACDownloads ()
++- (void)itemCreated:(download::DownloadItem*)item;
++- (void)itemUpdated:(download::DownloadItem*)item;
++- (void)itemRemoved:(download::DownloadItem*)item;
++@end
++
++namespace {
++
++// Items the Library lists: not Save Page As internals, not transient
++// downloads (extension installs, background fetches).
++bool IsListed(const download::DownloadItem* item) {
++  return !item->IsTemporary() && !item->IsTransient() &&
++         !item->IsSavePackageDownload();
++}
++
++// Forwards the manager's item notifications to the OACDownloads.
++class DownloadsObserverBridge
++    : public download::AllDownloadItemNotifier::Observer {
++ public:
++  DownloadsObserverBridge(OACDownloads* owner, content::DownloadManager* manager)
++      : owner_(owner), notifier_(manager, this) {}
++
++  content::DownloadManager* manager() const { return notifier_.GetManager(); }
++
++  // download::AllDownloadItemNotifier::Observer:
++  void OnDownloadCreated(content::DownloadManager* manager,
++                         download::DownloadItem* item) override {
++    [owner_ itemCreated:item];
++  }
++  void OnDownloadUpdated(content::DownloadManager* manager,
++                         download::DownloadItem* item) override {
++    [owner_ itemUpdated:item];
++  }
++  void OnDownloadRemoved(content::DownloadManager* manager,
++                         download::DownloadItem* item) override {
++    [owner_ itemRemoved:item];
++  }
++
++ private:
++  __weak OACDownloads* owner_;
++  download::AllDownloadItemNotifier notifier_;
++};
++
++// At most this many progress updates per second and item (OACDownloads.h).
++constexpr base::TimeDelta kUpdateInterval = base::Milliseconds(250);
++
++}  // namespace
++
++@implementation OACDownloads {
++  __weak OACProfile* _profile;
++  std::unique_ptr<DownloadsObserverBridge> _bridge;
++  NSHashTable<id<OACDownloadsObserver>>* _observers;
++  // Last update sent per item, for coalescing progress.
++  NSMutableDictionary<NSString*, NSNumber*>* _lastUpdate;
++  // State last sent per item, so state changes are never coalesced away.
++  NSMutableDictionary<NSString*, NSNumber*>* _lastState;
++  NSMutableSet<NSString*>* _pendingFlush;
++}
++
++- (instancetype)initWithProfile:(OACProfile*)profile {
++  if ((self = [super init])) {
++    _profile = profile;
++    _observers = [NSHashTable weakObjectsHashTable];
++    _lastUpdate = [NSMutableDictionary dictionary];
++    _lastState = [NSMutableDictionary dictionary];
++    _pendingFlush = [NSMutableSet set];
++    Profile* chrome_profile = profile.chromeProfile;
++    if (chrome_profile) {
++      // Creates //chrome's download manager delegate (and loads the history
++      // of an on-disk profile) if no download happened yet.
++      DownloadCoreServiceFactory::GetForBrowserContext(chrome_profile)
++          ->GetDownloadManagerDelegate();
++      _bridge = std::make_unique<DownloadsObserverBridge>(
++          self, chrome_profile->GetDownloadManager());
++      // Items that exist already (history) are known: their updates are
++      // updates, not additions.
++      download::SimpleDownloadManager::DownloadVector existing;
++      chrome_profile->GetDownloadManager()->GetAllDownloads(&existing);
++      for (download::DownloadItem* item : existing) {
++        if (IsListed(item)) {
++          _lastState[base::SysUTF8ToNSString(item->GetGuid())] =
++              @([self snapshot:item].state);
++        }
++      }
++    }
++  }
++  return self;
++}
++
++- (void)invalidate {
++  _bridge.reset();
++}
++
++- (OACProfile*)profile {
++  return _profile;
++}
++
++- (Profile*)chromeProfile {
++  OACProfile* profile = _profile;
++  return profile.valid ? profile.chromeProfile : nullptr;
++}
++
++- (content::DownloadManager*)manager {
++  return _bridge ? _bridge->manager() : nullptr;
++}
++
++- (download::DownloadItem*)itemWithIdentifier:(NSString*)identifier {
++  content::DownloadManager* manager = self.manager;
++  return manager ? manager->GetDownloadByGuid(base::SysNSStringToUTF8(identifier))
++                 : nullptr;
++}
++
++- (OACDownloadItem*)snapshot:(download::DownloadItem*)item {
++  OACProfile* profile = _profile;
++  return [[OACDownloadItem alloc] initWithItem:item
++                                isOffTheRecord:profile.isOffTheRecord];
++}
++
++// MARK: Settings
++
++- (NSURL*)defaultDirectory {
++  Profile* profile = self.chromeProfile;
++  if (!profile) {
++    return nil;
++  }
++  return base::apple::FilePathToNSURL(
++      DownloadPrefs::FromBrowserContext(profile)->DownloadPath());
++}
++
++- (void)setDefaultDirectory:(NSURL*)defaultDirectory {
++  Profile* profile = self.chromeProfile;
++  if (profile && defaultDirectory.isFileURL) {
++    DownloadPrefs::FromBrowserContext(profile)->SetDownloadPath(
++        base::apple::NSURLToFilePath(defaultDirectory));
++  }
++}
++
++- (BOOL)promptsForLocation {
++  Profile* profile = self.chromeProfile;
++  return profile && DownloadPrefs::FromBrowserContext(profile)->PromptForDownload();
++}
++
++- (void)setPromptsForLocation:(BOOL)promptsForLocation {
++  if (Profile* profile = self.chromeProfile) {
++    profile->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
++                                    promptsForLocation);
++  }
++}
++
++// MARK: Items
++
++- (NSArray<OACDownloadItem*>*)items {
++  content::DownloadManager* manager = self.manager;
++  if (!manager) {
++    return @[];
++  }
++  download::SimpleDownloadManager::DownloadVector all;
++  manager->GetAllDownloads(&all);
++  std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) {
++    return a->GetStartTime() > b->GetStartTime();
++  });
++  NSMutableArray<OACDownloadItem*>* items = [NSMutableArray array];
++  for (download::DownloadItem* item : all) {
++    if (IsListed(item)) {
++      [items addObject:[self snapshot:item]];
++    }
++  }
++  return items;
++}
++
++- (void)pauseItemWithIdentifier:(NSString*)identifier {
++  if (auto* item = [self itemWithIdentifier:identifier]) {
++    item->Pause();
++  }
++}
++
++- (void)resumeItemWithIdentifier:(NSString*)identifier {
++  if (auto* item = [self itemWithIdentifier:identifier]) {
++    if (item->CanResume()) {
++      item->Resume(/*user_resume=*/true);
++    }
++  }
++}
++
++- (void)cancelItemWithIdentifier:(NSString*)identifier {
++  if (auto* item = [self itemWithIdentifier:identifier]) {
++    item->Cancel(/*user_cancel=*/true);
++  }
++}
++
++- (void)confirmItemWithIdentifier:(NSString*)identifier keep:(BOOL)keep {
++  auto* item = [self itemWithIdentifier:identifier];
++  if (!item) {
++    return;
++  }
++  if (!keep) {
++    // Discard, as Chrome's warning does: removes the partial file and the entry.
++    item->Remove();
++    return;
++  }
++  if (item->IsInsecure()) {
++    item->ValidateInsecureDownload();
++  } else if (item->IsDangerous()) {
++    item->ValidateDangerousDownload();
++  }
++}
++
++- (void)removeItemWithIdentifier:(NSString*)identifier {
++  if (auto* item = [self itemWithIdentifier:identifier]) {
++    if (!item->IsDone()) {
++      item->Cancel(/*user_cancel=*/true);
++    }
++    item->Remove();
++  }
++}
++
++- (void)downloadURL:(NSURL*)url {
++  content::DownloadManager* manager = self.manager;
++  const GURL gurl = net::GURLWithNSURL(url);
++  if (!manager || !gurl.is_valid()) {
++    return;
++  }
++  auto params = std::make_unique<download::DownloadUrlParameters>(
++      gurl, net::DefineNetworkTrafficAnnotation("openarc_download_url", R"(
++        semantics {
++          sender: "Open Arc download"
++          description: "Downloads a URL the user chose to save."
++          trigger: "The user chooses to download a link or file."
++          data: "None."
++          destination: WEBSITE
++        }
++        policy {
++          cookies_allowed: YES
++          cookies_store: "user"
++          setting: "None."
++          policy_exception_justification: "Not implemented."
++        })"));
++  manager->DownloadUrl(std::move(params));
++}
++
++// MARK: Observers
++
++- (void)addObserver:(id<OACDownloadsObserver>)observer {
++  [_observers addObject:observer];
++}
++
++- (void)removeObserver:(id<OACDownloadsObserver>)observer {
++  [_observers removeObject:observer];
++}
++
++// Delivers from a posted task (OACDefines.h threading contract).
++- (void)notify:(void (^)(id<OACDownloadsObserver> observer))body
++      selector:(SEL)selector {
++  NSArray<id<OACDownloadsObserver>>* observers = _observers.allObjects;
++  if (observers.count == 0) {
++    return;
++  }
++  OACPostToMainThread(^{
++    for (id<OACDownloadsObserver> observer in observers) {
++      if ([observer respondsToSelector:selector]) {
++        body(observer);
++      }
++    }
++  });
++}
++
++- (void)itemCreated:(download::DownloadItem*)item {
++  if (!IsListed(item)) {
++    return;
++  }
++  OACDownloadItem* snapshot = [self snapshot:item];
++  _lastUpdate[snapshot.identifier] = @(base::TimeTicks::Now().since_origin().InMillisecondsF());
++  _lastState[snapshot.identifier] = @(snapshot.state);
++  __weak OACDownloads* weakSelf = self;
++  [self notify:^(id<OACDownloadsObserver> observer) {
++    OACDownloads* downloads = weakSelf;
++    if (downloads) {
++      [observer downloads:downloads didAddItem:snapshot];
++    }
++  }
++      selector:@selector(downloads:didAddItem:)];
++}
++
++- (void)itemUpdated:(download::DownloadItem*)item {
++  if (!IsListed(item)) {
++    return;
++  }
++  NSString* identifier = base::SysUTF8ToNSString(item->GetGuid());
++  if (!_lastState[identifier]) {
++    // Listed only now (the target was decided): an addition.
++    [self itemCreated:item];
++    return;
++  }
++  OACDownloadItem* snapshot = [self snapshot:item];
++  const double now = base::TimeTicks::Now().since_origin().InMillisecondsF();
++  const BOOL stateChanged = _lastState[identifier].integerValue != snapshot.state;
++  if (!stateChanged &&
++      now - _lastUpdate[identifier].doubleValue <
++          kUpdateInterval.InMillisecondsF()) {
++    // Coalesce: one trailing update after the interval.
++    if (![_pendingFlush containsObject:identifier]) {
++      [_pendingFlush addObject:identifier];
++      __weak OACDownloads* weakSelf = self;
++      dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
++                                   kUpdateInterval.InNanoseconds()),
++                     dispatch_get_main_queue(), ^{
++                       OACDownloads* downloads = weakSelf;
++                       if (!downloads) {
++                         return;
++                       }
++                       [downloads->_pendingFlush removeObject:identifier];
++                       if (auto* current =
++                               [downloads itemWithIdentifier:identifier]) {
++                         [downloads sendUpdate:current];
++                       }
++                     });
++    }
++    return;
++  }
++  [self sendUpdate:item];
++}
++
++- (void)sendUpdate:(download::DownloadItem*)item {
++  OACDownloadItem* snapshot = [self snapshot:item];
++  _lastUpdate[snapshot.identifier] =
++      @(base::TimeTicks::Now().since_origin().InMillisecondsF());
++  _lastState[snapshot.identifier] = @(snapshot.state);
++  __weak OACDownloads* weakSelf = self;
++  [self notify:^(id<OACDownloadsObserver> observer) {
++    OACDownloads* downloads = weakSelf;
++    if (downloads) {
++      [observer downloads:downloads didUpdateItem:snapshot];
++    }
++  }
++      selector:@selector(downloads:didUpdateItem:)];
++}
++
++- (void)itemRemoved:(download::DownloadItem*)item {
++  NSString* identifier = base::SysUTF8ToNSString(item->GetGuid());
++  if (!_lastState[identifier]) {
++    return;
++  }
++  [_lastState removeObjectForKey:identifier];
++  [_lastUpdate removeObjectForKey:identifier];
++  __weak OACDownloads* weakSelf = self;
++  [self notify:^(id<OACDownloadsObserver> observer) {
++    OACDownloads* downloads = weakSelf;
++    if (downloads) {
++      [observer downloads:downloads didRemoveItemWithIdentifier:identifier];
++    }
++  }
++      selector:@selector(downloads:didRemoveItemWithIdentifier:)];
++}
++
++@end
+diff --git a/openarc/bridge/oac_downloads_internal.h b/openarc/bridge/oac_downloads_internal.h
+new file mode 100644
+index 000000000000..820504d1d4b1
+--- /dev/null
++++ b/openarc/bridge/oac_downloads_internal.h
+@@ -0,0 +1,18 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_DOWNLOADS_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_DOWNLOADS_INTERNAL_H_
++
++#import <OpenArcCore/OACDownloads.h>
++
++@interface OACDownloads ()
++// The downloads of |profile| (on disk or off the record). Starts observing its
++// download manager right away.
++- (instancetype)initWithProfile:(OACProfile*)profile;
++// The profile went away: stops observing.
++- (void)invalidate;
++@end
++
++#endif  // OPENARC_BRIDGE_OAC_DOWNLOADS_INTERNAL_H_
+diff --git a/openarc/bridge/oac_profile.mm b/openarc/bridge/oac_profile.mm
+index 21e5d537c9e7..49b07e0ba2cc 100644
+--- a/openarc/bridge/oac_profile.mm
++++ b/openarc/bridge/oac_profile.mm
+@@ -18,6 +18,7 @@
+ #include "content/public/browser/browsing_data_remover.h"
+ 
+ #import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_downloads_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ 
+ namespace {
+@@ -93,13 +94,14 @@ uint64_t RemoveMask(OACBrowsingDataTypes types) {
+ // ProfileManager in <userDataDirectory>/<UUID>. Its off-the-record variant is
+ // Chrome's primary OTR profile of that Profile: OACApplication destroys it
+ // after the last off-the-record tab closed (-destroyOffTheRecordContext), and
+-// the next incognito tab gets a fresh one. Site settings, downloads and
+-// extensions surfaces come with C12 and C14.
++// the next incognito tab gets a fresh one. Downloads since C12; the extensions
++// surface comes with C14.
+ @implementation OACProfile {
+   NSUUID* _identifier;
+   NSURL* _dataDirectory;
+   __weak OACProfile* _originalProfile;
+   OACProfile* _offTheRecordProfile;
++  OACDownloads* _downloads;
+   base::WeakPtr<Profile> _profile;
+   // Keeps an on-disk profile loaded while the shell may use it (Chrome
+   // otherwise unloads a profile that has no browser window).
+@@ -154,6 +156,8 @@ - (Profile*)chromeProfile {
+ }
+ 
+ - (void)invalidate {
++  [_downloads invalidate];
++  _downloads = nil;
+   _valid = NO;
+   [_offTheRecordProfile invalidate];
+   _offTheRecordProfile = nil;
+@@ -224,8 +228,10 @@ - (OACSiteSettings*)siteSettings {
+ }
+ 
+ - (OACDownloads*)downloads {
+-  CHECK(false) << "OACProfile.downloads is not implemented yet (plan C12)";
+-  return nil;
++  if (!_downloads) {
++    _downloads = [[OACDownloads alloc] initWithProfile:self];
++  }
++  return _downloads;
+ }
+ 
+ - (OACExtensions*)extensions {
+diff --git a/openarc/bridge/oac_requests.mm b/openarc/bridge/oac_requests.mm
+index 8a594608bfd5..161364135cd7 100644
+--- a/openarc/bridge/oac_requests.mm
++++ b/openarc/bridge/oac_requests.mm
+@@ -2,12 +2,10 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-// OACNewTabRequest (OACTabDelegate.h) and the JavaScript dialog part of
+-// OACDialogDelegate.h. The other dialog kinds (HTTP auth, permissions, file
+-// chooser, external protocol) get default answers until plan C12 routes them
+-// to the shell: OpenArcContentBrowserClient installs no login delegate and
+-// launches no external app, and the tab's permission prompt dismisses every
+-// request (openarc_tab_helpers.mm).
++// OACNewTabRequest (OACTabDelegate.h), the base of every dialog request and
++// the JavaScript dialogs of OACDialogDelegate.h. The other dialog kinds (HTTP
++// auth, permissions, file chooser, external protocol) are in
++// oac_dialog_requests.mm (plan C12).
+ 
+ #import "openarc/bridge/oac_requests_internal.h"
+ 
+@@ -137,6 +135,16 @@ - (void)decline {
+ 
+ // MARK: - Dialog requests
+ 
++OACOrigin* OACOriginFromURLOrigin(const url::Origin& origin) {
++  if (origin.opaque() || origin.host().empty()) {
++    return nil;
++  }
++  return [[OACOrigin alloc]
++      initWithScheme:base::SysUTF8ToNSString(origin.scheme())
++                host:base::SysUTF8ToNSString(origin.host())
++                port:@(origin.port())];
++}
++
+ @implementation OACDialogRequest {
+  @protected
+   __weak OACTab* _tab;
+@@ -173,8 +181,50 @@ - (void)cancel {
+   _finished = YES;
+ }
+ 
++- (BOOL)markFinished {
++  if (_finished) {
++    return NO;
++  }
++  _finished = YES;
++  return YES;
++}
++
++- (void)withdrawByEngine {
++  if (![self markFinished]) {
++    return;
++  }
++  OACTab* tab = _tab;
++  id<OACDialogDelegate> delegate = tab.dialogDelegate;
++  if (tab &&
++      [delegate respondsToSelector:@selector(tab:didCancelDialogRequest:)]) {
++    OACPostToMainThread(^{
++      [delegate tab:tab didCancelDialogRequest:self];
++    });
++  }
++}
++
+ @end
+ 
++void OACPresentDialogRequest(
++    OACTab* tab,
++    OACDialogRequest* request,
++    SEL selector,
++    BOOL (^ask)(id<OACDialogDelegate> delegate, OACTab* tab)) {
++  __weak OACTab* weak_tab = tab;
++  OACPostToMainThread(^{
++    OACTab* strong_tab = weak_tab;
++    id<OACDialogDelegate> delegate = strong_tab.dialogDelegate;
++    BOOL presented = NO;
++    if (strong_tab && !strong_tab.isClosed && !request.isFinished &&
++        [delegate respondsToSelector:selector]) {
++      presented = ask(delegate, strong_tab);
++    }
++    if (!presented) {
++      [request cancel];
++    }
++  });
++}
++
+ @implementation OACJavaScriptDialogRequest {
+   OACJavaScriptDialogKind _kind;
+   NSString* _message;
+@@ -274,17 +324,7 @@ - (void)cancelByEngine {
+ namespace {
+ 
+ OACOrigin* OriginOfFrame(content::RenderFrameHost* frame) {
+-  if (!frame) {
+-    return nil;
+-  }
+-  const url::Origin& origin = frame->GetLastCommittedOrigin();
+-  if (origin.opaque() || origin.host().empty()) {
+-    return nil;
+-  }
+-  return [[OACOrigin alloc]
+-      initWithScheme:base::SysUTF8ToNSString(origin.scheme())
+-                host:base::SysUTF8ToNSString(origin.host())
+-                port:@(origin.port())];
++  return frame ? OACOriginFromURLOrigin(frame->GetLastCommittedOrigin()) : nil;
+ }
+ 
+ bool IsFromSubframe(content::RenderFrameHost* frame) {
+@@ -394,22 +434,11 @@ bool IsFromSubframe(content::RenderFrameHost* frame) {
+ 
+ void TabJavaScriptDialogManager::Present(OACJavaScriptDialogRequest* request) {
+   [pending_ addObject:request];
+-  __weak OACTab* weak_tab = tab_;
+-  // From a posted task, never re-entrantly (OACDefines.h). The block keeps the
+-  // request alive until the delegate decided; with no delegate, or when it
+-  // returns NO, the request is answered with its default right away.
+-  OACPostToMainThread(^{
+-    OACTab* tab = weak_tab;
+-    id<OACDialogDelegate> delegate = tab.dialogDelegate;
+-    BOOL presented = NO;
+-    if (tab && !tab.isClosed && !request.isFinished &&
+-        [delegate respondsToSelector:@selector(tab:runJavaScriptDialog:)]) {
+-      presented = [delegate tab:tab runJavaScriptDialog:request];
+-    }
+-    if (!presented) {
+-      [request cancel];
+-    }
+-  });
++  OACPresentDialogRequest(
++      tab_, request, @selector(tab:runJavaScriptDialog:),
++      ^BOOL(id<OACDialogDelegate> delegate, OACTab* tab) {
++        return [delegate tab:tab runJavaScriptDialog:request];
++      });
+ }
+ 
+ }  // namespace openarc
+diff --git a/openarc/bridge/oac_requests_internal.h b/openarc/bridge/oac_requests_internal.h
+index 21f871b3ecbb..d8edf1113ce8 100644
+--- a/openarc/bridge/oac_requests_internal.h
++++ b/openarc/bridge/oac_requests_internal.h
+@@ -17,6 +17,13 @@ namespace content {
+ class WebContents;
+ }
+ 
++namespace url {
++class Origin;
++}
++
++// |origin| as an OACOrigin; nil for opaque origins and origins without a host.
++OACOrigin* OACOriginFromURLOrigin(const url::Origin& origin);
++
+ @interface OACNewTabRequest ()
+ // A URL request: the shell creates the tab itself.
+ - (instancetype)initWithOpener:(OACTab*)opener
+@@ -41,8 +48,26 @@ class WebContents;
+ - (instancetype)initWithTab:(OACTab*)tab
+                      origin:(OACOrigin*)origin
+              isFromSubframe:(BOOL)isFromSubframe;
++// Marks the request answered. Returns NO when it already was answered or
++// withdrawn; the caller then ignores the answer.
++- (BOOL)markFinished;
++// The engine withdrew the unanswered request (the prompt went away, the tab
++// navigated or closed): marks it finished without answering and tells the
++// tab's dialog delegate (-tab:didCancelDialogRequest:) from a posted task.
++- (void)withdrawByEngine;
+ @end
+ 
++// Hands |request| to |tab|'s dialog delegate from a posted task (never
++// re-entrantly; OACDefines.h). |ask| calls the delegate's method for the
++// request's kind. With no delegate, a delegate that does not implement the
++// method, or one that returns NO, the request gets its default answer.
++// The block keeps |request| alive until the delegate decided.
++void OACPresentDialogRequest(
++    OACTab* tab,
++    OACDialogRequest* request,
++    SEL selector,
++    BOOL (^ask)(id<OACDialogDelegate> delegate, OACTab* tab));
++
+ @interface OACJavaScriptDialogRequest ()
+ - (instancetype)initWithTab:(OACTab*)tab
+                      origin:(OACOrigin*)origin
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 95059438721b..692e4f0c6c98 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -52,11 +52,21 @@
+ #include "ui/gfx/image/image_skia_operations.h"
+ #include "url/gurl.h"
+ #include "url/url_constants.h"
++#include "chrome/browser/external_protocol/external_protocol_observer.h"
++#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
++#include "chrome/browser/file_select_helper.h"
++#include "content/public/browser/download_manager.h"
++#include "content/public/browser/download_request_utils.h"
++#include "content/public/browser/file_select_listener.h"
++#include "content/public/browser/media_stream_request.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
+ 
+ #import <OpenArcCore/OACProfile.h>
+ #import <OpenArcCore/OACTabDelegate.h>
+ 
+ #import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_dialog_requests_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
+@@ -142,7 +152,12 @@ - (void)webContentsDidRequestNewTab:(OACNewTabRequest*)request;
+                              public favicon::FaviconDriverObserver {
+  public:
+   TabWebContentsBridge(OACTab* tab, content::WebContents* web_contents)
+-      : content::WebContentsObserver(web_contents), tab_(tab) {
++      : content::WebContentsObserver(web_contents),
++        tab_(tab),
++        // A user gesture in the page permits the next external protocol
++        // launch (Chrome attaches this through a Browser tab's features).
++        external_protocol_observer_(
++            std::make_unique<ExternalProtocolObserver>(web_contents)) {
+     web_contents->SetDelegate(this);
+     favicon_driver_ =
+         favicon::ContentFaviconDriver::FromWebContents(web_contents);
+@@ -234,6 +249,43 @@ void FindReply(content::WebContents* web_contents,
+     return [tab_ javaScriptDialogManager];
+   }
+ 
++  // <input type=file> (plan C12): an OACFileChooserRequest. Chrome's
++  // FileSelectHelper would show its own panel anchored to a Browser window.
++  void RunFileChooser(content::RenderFrameHost* render_frame_host,
++                      scoped_refptr<content::FileSelectListener> listener,
++                      const blink::mojom::FileChooserParams& params) override {
++    OACTab* tab = tab_;
++    if (!tab || tab.isClosed) {
++      listener->FileSelectionCanceled();
++      return;
++    }
++    openarc::RunShellFileChooser(tab, render_frame_host, std::move(listener),
++                                 params);
++  }
++  // A folder dropped on <input webkitdirectory>: Chrome lists its files.
++  void EnumerateDirectory(content::WebContents* web_contents,
++                          scoped_refptr<content::FileSelectListener> listener,
++                          const base::FilePath& path) override {
++    FileSelectHelper::EnumerateDirectory(web_contents, std::move(listener),
++                                         path);
++  }
++
++  // getUserMedia: //chrome's dispatcher checks the content settings and asks
++  // through PermissionRequestManager, whose prompt is the shell's.
++  void RequestMediaAccessPermission(
++      content::WebContents* web_contents,
++      const content::MediaStreamRequest& request,
++      content::MediaResponseCallback callback) override {
++    MediaCaptureDevicesDispatcher::GetInstance()->ProcessMediaAccessRequest(
++        web_contents, request, std::move(callback), /*extension=*/nullptr);
++  }
++  bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
++                                  const url::Origin& security_origin,
++                                  blink::mojom::MediaStreamType type) override {
++    return MediaCaptureDevicesDispatcher::GetInstance()
++        ->CheckMediaAccessPermission(render_frame_host, security_origin, type);
++  }
++
+   // Navigations that leave the current tab (⌘-click, target=_blank without an
+   // opener, view-source) become URL requests; the shell decides where the new
+   // tab goes. Current-tab navigations just navigate.
+@@ -253,9 +305,33 @@ void FindReply(content::WebContents* web_contents,
+       }
+       return source;
+     }
+-    if (params.disposition == WindowOpenDisposition::SAVE_TO_DISK ||
+-        params.disposition == WindowOpenDisposition::IGNORE_ACTION) {
+-      return nullptr;  // TODO(C12): downloads.
++    if (params.disposition == WindowOpenDisposition::SAVE_TO_DISK) {
++      // "Download Linked File" and other save-to-disk opens: a download in
++      // the tab's profile (OACDownloads lists it).
++      std::unique_ptr<download::DownloadUrlParameters> download =
++          content::DownloadRequestUtils::CreateDownloadForWebContentsMainFrame(
++              source, params.url,
++              net::DefineNetworkTrafficAnnotation("openarc_save_to_disk", R"(
++                semantics {
++                  sender: "Open Arc download"
++                  description: "Downloads a link the user chose to save."
++                  trigger: "The user saves a link to disk."
++                  data: "None."
++                  destination: WEBSITE
++                }
++                policy {
++                  cookies_allowed: YES
++                  cookies_store: "user"
++                  setting: "None."
++                  policy_exception_justification: "Not implemented."
++                })"));
++      download->set_referrer(params.referrer.url);
++      source->GetBrowserContext()->GetDownloadManager()->DownloadUrl(
++          std::move(download));
++      return nullptr;
++    }
++    if (params.disposition == WindowOpenDisposition::IGNORE_ACTION) {
++      return nullptr;
+     }
+     OACTab* tab = tab_;
+     if (!tab) {
+@@ -306,6 +382,7 @@ void FindReply(content::WebContents* web_contents,
+  private:
+   __weak OACTab* tab_;
+   raw_ptr<favicon::ContentFaviconDriver> favicon_driver_ = nullptr;
++  std::unique_ptr<ExternalProtocolObserver> external_protocol_observer_;
+ };
+ 
+ }  // namespace openarc
+@@ -567,8 +644,8 @@ - (void)setDelegate:(id<OACTabDelegate>)delegate {
+ }
+ 
+ - (void)setDialogDelegate:(id<OACDialogDelegate>)dialogDelegate {
+-  // JavaScript dialogs go through it now (plan C8); the other request kinds
+-  // come with plan C12.
++  // Every request kind of OACDialogDelegate.h goes through it (plans C8,
++  // C12).
+   _dialogDelegate = dialogDelegate;
+ }
+ 
+@@ -592,6 +669,10 @@ - (void)noteJavaScriptDialogShown {
+   return _dialogManager.get();
+ }
+ 
++- (content::WebContents*)webContents {
++  return _closed ? nullptr : _webContents.get();
++}
++
+ - (OACColorScheme)preferredColorScheme {
+   return _preferredColorScheme;
+ }
+@@ -1294,3 +1375,16 @@ - (void)closeRunningUnloadHandlers {
+ }
+ 
+ @end
++
++OACTab* OACTabForWebContents(content::WebContents* web_contents) {
++  if (!web_contents) {
++    return nil;
++  }
++  content::WebContents* outermost = web_contents->GetOutermostWebContents();
++  for (OACTab* tab in LiveTabs().objectEnumerator) {
++    if (tab.webContents == web_contents || tab.webContents == outermost) {
++      return tab;
++    }
++  }
++  return nil;
++}
+diff --git a/openarc/bridge/oac_tab_internal.h b/openarc/bridge/oac_tab_internal.h
+index d7392ee32d4e..496ffcc9b79e 100644
+--- a/openarc/bridge/oac_tab_internal.h
++++ b/openarc/bridge/oac_tab_internal.h
+@@ -53,10 +53,17 @@ struct OACTabStateFields {
+                     (std::unique_ptr<content::WebContents>)webContents
+                              identifier:(NSUUID*)identifier
+                                 profile:(OACProfile*)profile;
++// The tab's WebContents; nullptr after -close.
++@property(nonatomic, readonly) content::WebContents* webContents;
+ // JavaScript dialog bookkeeping (OACJavaScriptDialogRequest).
+ @property(nonatomic) BOOL suppressesJavaScriptDialogs;
+ @property(nonatomic, readonly) NSInteger javaScriptDialogCount;
+ - (void)noteJavaScriptDialogShown;
+ @end
+ 
++// The live tab that shows |web_contents| (or its outermost WebContents), or
++// nil: script-opened windows before adoption and Chrome's own background
++// WebContents have none.
++OACTab* OACTabForWebContents(content::WebContents* web_contents);
++
+ #endif  // OPENARC_BRIDGE_OAC_TAB_INTERNAL_H_
+diff --git a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+index 2ff3c26e24c8..c8a69ef1720b 100644
+--- a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+@@ -27,6 +27,14 @@
+ //   right away.
+ //
+ // The look of every one of these dialogs is not in docs/arc-spec (unknown); C12 designs them.
++//
++// As built in C12: JavaScript dialogs come from the tab's JavaScriptDialogManager; permission
++// prompts from `permissions::PermissionRequestManager` (its prompt view is the bridge's;
++// getUserMedia reaches it through `MediaCaptureDevicesDispatcher`); HTTP auth from //chrome's
++// HTTP auth flow (`LoginTabHelper` / `LoginHandler`, our view); file choosers from the tab's
++// `WebContentsDelegate::RunFileChooser` (`<input type=file>`; the File System Access pickers keep
++// Chromium's native macOS panel); external protocols from `ExternalProtocolHandler` after its
++// policy decided to ask.
+ 
+ #import <OpenArcCore/OACDefines.h>
+ #import <OpenArcCore/OACTab.h>
+@@ -96,7 +104,8 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ @property (nonatomic, readonly, copy) NSString *realm;
+ /// The server or proxy host and port that asks.
+ @property (nonatomic, readonly, copy) NSString *challengerHostPort;
+-@property (nonatomic, readonly) BOOL isProxy;
++/// A proxy asks (407), not the server. (Not `isProxy`, which is NSObject's.)
++@property (nonatomic, readonly) BOOL isProxyChallenge;
+ /// The connection is not encrypted (show a warning in the dialog).
+ @property (nonatomic, readonly) BOOL isInsecureConnection;
+ @property (nonatomic, readonly, copy, nullable) NSString *suggestedUsername;
+@@ -133,11 +142,14 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ @property (nonatomic, readonly, copy) NSArray<NSNumber *> *kinds NS_REFINED_FOR_SWIFT;
+ /// The request comes from a user gesture (prompts without one may be shown quietly).
+ @property (nonatomic, readonly) BOOL hasUserGesture;
++/// Every kind supports a one-time grant (Chromium's "Allow this time": camera, microphone,
++/// location). NO: `allowRemembering:NO` stores "allow" like YES does.
++@property (nonatomic, readonly) BOOL supportsAllowingOnce;
+ 
+ /// Allow. `remember` NO: allow this time only (until the page is closed); YES: store "allow" for
+ /// the origin in the profile's site settings.
+ - (void)allowRemembering:(BOOL)remember NS_SWIFT_NAME(allow(remembering:));
+-/// Block. `remember` YES stores "block" for the origin.
++/// Block. Chromium stores "block" for the origin either way (its prompt has no one-time block).
+ - (void)denyRemembering:(BOOL)remember NS_SWIFT_NAME(deny(remembering:));
+ /// Closed without a decision (Chromium counts dismissals toward its auto-block heuristic).
+ - (void)dismiss;
+@@ -181,6 +193,9 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ /// Bundle URL of that app, for its icon.
+ @property (nonatomic, readonly, copy, nullable) NSURL *handlerApplicationURL;
+ @property (nonatomic, readonly) BOOL hasUserGesture;
++/// Chromium may remember "always allow" for this origin (a potentially trustworthy origin, and the
++/// policy allows the checkbox). NO: `rememberForOrigin` is ignored.
++@property (nonatomic, readonly) BOOL canRememberForOrigin;
+ 
+ /// Opens the URL in the handler app. `rememberForOrigin` stores "always allow" for this scheme on
+ /// the requesting origin.
+diff --git a/openarc/bridge/public/OpenArcCore/OACDownloads.h b/openarc/bridge/public/OpenArcCore/OACDownloads.h
+index e50da99e767f..5da0bee122cc 100644
+--- a/openarc/bridge/public/OpenArcCore/OACDownloads.h
++++ b/openarc/bridge/public/OpenArcCore/OACDownloads.h
+@@ -15,8 +15,12 @@
+ // Downloads): the shell sets `defaultDirectory`; the bridge never asks where to save unless
+ // `promptsForLocation` is YES.
+ //
+-// Skeleton: the shape is fixed enough for the Library list; the dangerous-download flow and the
+-// "ask where to save" dialog are settled in C12.
++// As built in C12: the profile's `content::DownloadManager` with //chrome's
++// `ChromeDownloadManagerDelegate` (history-backed list, target paths, dangerous and insecure
++// download checks, "ask where to save" through Chromium's native save panel when
++// `promptsForLocation` is YES; Chrome turns that on for off-the-record profiles). Chrome's bubble
++// never shows (it needs a Browser window). Items that are temporary or transient (Save Page As
++// internals, extension downloads) are not listed.
+ 
+ #import <OpenArcCore/OACDefines.h>
+ 
+@@ -55,6 +59,9 @@ OAC_EXPORT NS_SWIFT_SENDABLE
+ @property (nonatomic, readonly, copy, nullable) NSDate *endDate;
+ /// Started from an off-the-record profile (kept in memory only).
+ @property (nonatomic, readonly) BOOL isOffTheRecord;
++/// For `OACDownloadStateNeedsConfirmation`: why ("This type of file can harm your computer",
++/// "insecure download"), Chromium's wording. nil otherwise.
++@property (nonatomic, readonly, copy, nullable) NSString *warningText;
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;
+ @end
+diff --git a/openarc/browser/openarc_content_browser_client.h b/openarc/browser/openarc_content_browser_client.h
+index 92cc91072cc4..7c7cba277872 100644
+--- a/openarc/browser/openarc_content_browser_client.h
++++ b/openarc/browser/openarc_content_browser_client.h
+@@ -15,10 +15,11 @@
+ namespace openarc {
+ 
+ // //chrome's browser client (decision Q7) with the hooks that would show
+-// Chrome's own UI redirected: no Chrome context menus, no Chrome HTTP-auth,
+-// client-certificate or external-protocol dialogs (plan C12 turns those into
+-// shell requests through OACDialogDelegate; until then they get default
+-// answers), the shell's per-tab color scheme, and our helper apps.
++// Chrome's own UI redirected: no Chrome context menus, HTTP auth prompts drawn
++// by the shell (plan C12; external protocol prompts reach the shell through
++// ExternalProtocolHandler's embedder hook, permission prompts through the
++// tab's PermissionRequestManager), no client-certificate picker yet, the
++// shell's per-tab color scheme, and our helper apps.
+ class OpenArcContentBrowserClient : public ChromeContentBrowserClient {
+  public:
+   OpenArcContentBrowserClient();
+@@ -47,34 +48,12 @@ class OpenArcContentBrowserClient : public ChromeContentBrowserClient {
+       net::SSLCertRequestInfo* cert_request_info,
+       net::ClientCertIdentityList client_certs,
+       std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
+-  std::unique_ptr<content::LoginDelegate> CreateLoginDelegate(
+-      const net::AuthChallengeInfo& auth_info,
+-      content::WebContents* web_contents,
+-      content::BrowserContext* browser_context,
+-      const content::GlobalRequestID& request_id,
+-      bool is_request_for_primary_main_frame_navigation,
+-      bool is_request_for_navigation,
+-      const GURL& url,
+-      scoped_refptr<net::HttpResponseHeaders> response_headers,
+-      bool first_auth_attempt,
+-      content::GuestPageHolder* guest,
+-      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
+-      override;
+-  bool HandleExternalProtocol(
+-      const GURL& url,
+-      content::WebContents::Getter web_contents_getter,
+-      content::FrameTreeNodeId frame_tree_node_id,
+-      content::NavigationUIData* navigation_data,
+-      bool is_primary_main_frame,
+-      bool is_in_fenced_frame_tree,
+-      network::mojom::WebSandboxFlags sandbox_flags,
+-      ui::PageTransition page_transition,
+-      bool has_user_gesture,
+-      const std::optional<url::Origin>& initiating_origin,
+-      content::RenderFrameHost* initiator_document,
+-      const net::IsolationInfo& isolation_info,
+-      mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory)
+-      override;
++
++ protected:
++  // ChromeContentBrowserClient: Chrome's HTTP auth flow (extensions, password
++  // manager, LoginTabHelper for main-frame challenges) with the shell's prompt
++  // as the login view (plan C12).
++  std::unique_ptr<HttpAuthCoordinator> CreateHttpAuthCoordinator() override;
+ };
+ 
+ }  // namespace openarc
+diff --git a/openarc/browser/openarc_content_browser_client.mm b/openarc/browser/openarc_content_browser_client.mm
+index 3158b379b7f6..16fe70e39fc8 100644
+--- a/openarc/browser/openarc_content_browser_client.mm
++++ b/openarc/browser/openarc_content_browser_client.mm
+@@ -11,9 +11,14 @@
+ #include "chrome/browser/child_process_host_flags.h"
+ #include "chrome/browser/chrome_browser_main.h"
+ #include "chrome/browser/chrome_browser_main_extra_parts.h"
++#include "chrome/browser/ui/login/http_auth_coordinator.h"
++#include "chrome/browser/ui/login/login_handler.h"
++#include "chrome/browser/ui/login/login_tab_helper.h"
+ #include "content/public/browser/child_process_host.h"
+ #include "content/public/browser/client_certificate_delegate.h"
+ #include "content/public/browser/login_delegate.h"
++#include "net/base/auth.h"
++#include "net/http/http_response_headers.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_view_delegate.h"
+ #include "net/ssl/client_cert_identity.h"
+@@ -21,6 +26,7 @@
+ #include "net/cert/x509_certificate.h"
+ #include "openarc/app/openarc_helpers.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
++#include "openarc/browser/openarc_dialog_host.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ #include "openarc/common/openarc_paths.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+@@ -49,6 +55,64 @@ bool ApplyTabColorScheme(content::WebContents* web_contents,
+   return changed;
+ }
+ 
++// Chrome's LoginTabHelper (main-frame 401/407: blank page, prompt, reload with
++// the credentials) with the shell's login view.
++class ShellLoginTabHelper : public LoginTabHelper {
++ public:
++  explicit ShellLoginTabHelper(content::WebContents* web_contents)
++      : LoginTabHelper(web_contents) {}
++
++ protected:
++  std::unique_ptr<LoginHandler> CreateLoginHandler(
++      const net::AuthChallengeInfo& auth_info,
++      content::WebContents* web_contents,
++      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
++      override {
++    return CreateShellLoginHandler(auth_info, web_contents,
++                                   std::move(auth_required_callback));
++  }
++
++ private:
++  static std::unique_ptr<LoginHandler> CreateShellLoginHandler(
++      const net::AuthChallengeInfo& auth_info,
++      content::WebContents* web_contents,
++      content::LoginDelegate::LoginAuthRequiredCallback callback) {
++    DialogHost* host = DialogHost::Get();
++    CHECK(host) << "the bridge registers its DialogHost before any tab";
++    return host->CreateLoginHandler(auth_info, web_contents,
++                                    std::move(callback));
++  }
++};
++
++// Chrome's HTTP auth flow with the shell's login view, for subframes and
++// subresources (LoginHandler) and for main frames (LoginTabHelper).
++class ShellHttpAuthCoordinator : public HttpAuthCoordinator {
++ public:
++  void CreateLoginTabHelper(content::WebContents* web_contents) override {
++    if (!LoginTabHelper::FromWebContents(web_contents)) {
++      web_contents->SetUserData(
++          LoginTabHelper::UserDataKey(),
++          std::make_unique<ShellLoginTabHelper>(web_contents));
++    }
++  }
++
++  std::unique_ptr<content::LoginDelegate> CreateLoginDelegateFromLoginHandler(
++      content::WebContents* web_contents,
++      const net::AuthChallengeInfo& auth_info,
++      const content::GlobalRequestID& request_id,
++      const GURL& url,
++      scoped_refptr<net::HttpResponseHeaders> response_headers,
++      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
++      override {
++    DialogHost* host = DialogHost::Get();
++    CHECK(host) << "the bridge registers its DialogHost before any tab";
++    std::unique_ptr<LoginHandler> handler = host->CreateLoginHandler(
++        auth_info, web_contents, std::move(auth_required_callback));
++    handler->ShowLoginPrompt(url);
++    return handler;
++  }
++};
++
+ }  // namespace
+ 
+ OpenArcContentBrowserClient::OpenArcContentBrowserClient() = default;
+@@ -117,49 +181,15 @@ bool ApplyTabColorScheme(content::WebContents* web_contents,
+     net::SSLCertRequestInfo* cert_request_info,
+     net::ClientCertIdentityList client_certs,
+     std::unique_ptr<content::ClientCertificateDelegate> delegate) {
+-  // TODO(C12): a client-certificate request through OACDialogDelegate.
+-  // Chrome's picker needs a Browser window; continue without a certificate.
++  // Not in plan C12's list: Chrome's picker needs a Browser window; continue
++  // without a certificate (follow-up in the plan).
+   delegate->ContinueWithCertificate(nullptr, nullptr);
+   return base::DoNothing();
+ }
+ 
+-std::unique_ptr<content::LoginDelegate>
+-OpenArcContentBrowserClient::CreateLoginDelegate(
+-    const net::AuthChallengeInfo& auth_info,
+-    content::WebContents* web_contents,
+-    content::BrowserContext* browser_context,
+-    const content::GlobalRequestID& request_id,
+-    bool is_request_for_primary_main_frame_navigation,
+-    bool is_request_for_navigation,
+-    const GURL& url,
+-    scoped_refptr<net::HttpResponseHeaders> response_headers,
+-    bool first_auth_attempt,
+-    content::GuestPageHolder* guest,
+-    content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
+-  // TODO(C12): OACHTTPAuthenticationRequest. Chrome's login prompt is a tab
+-  // modal dialog of a Browser window; without one, no credentials (content
+-  // cancels the challenge and shows the 401 page).
+-  return nullptr;
+-}
+-
+-bool OpenArcContentBrowserClient::HandleExternalProtocol(
+-    const GURL& url,
+-    content::WebContents::Getter web_contents_getter,
+-    content::FrameTreeNodeId frame_tree_node_id,
+-    content::NavigationUIData* navigation_data,
+-    bool is_primary_main_frame,
+-    bool is_in_fenced_frame_tree,
+-    network::mojom::WebSandboxFlags sandbox_flags,
+-    ui::PageTransition page_transition,
+-    bool has_user_gesture,
+-    const std::optional<url::Origin>& initiating_origin,
+-    content::RenderFrameHost* initiator_document,
+-    const net::IsolationInfo& isolation_info,
+-    mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) {
+-  // TODO(C12): OACExternalProtocolRequest. Chrome's handler asks with a
+-  // Browser-anchored dialog; until the shell asks, external apps are not
+-  // launched and the navigation is dropped silently.
+-  return true;
++std::unique_ptr<HttpAuthCoordinator>
++OpenArcContentBrowserClient::CreateHttpAuthCoordinator() {
++  return std::make_unique<ShellHttpAuthCoordinator>();
+ }
+ 
+ }  // namespace openarc
+diff --git a/openarc/browser/openarc_dialog_host.cc b/openarc/browser/openarc_dialog_host.cc
+new file mode 100644
+index 000000000000..2076afca5e5c
+--- /dev/null
++++ b/openarc/browser/openarc_dialog_host.cc
+@@ -0,0 +1,80 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_dialog_host.h"
++
++#include <optional>
++#include <variant>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/single_thread_task_runner.h"
++#include "components/permissions/permission_uma_constants.h"
++
++namespace openarc {
++
++namespace {
++
++DialogHost* g_dialog_host = nullptr;
++
++class DismissingPermissionPrompt : public permissions::PermissionPrompt {
++ public:
++  explicit DismissingPermissionPrompt(Delegate* delegate) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(
++                       [](base::WeakPtr<Delegate> delegate) {
++                         if (delegate && !delegate->Requests().empty()) {
++                           delegate->Dismiss(std::monostate());
++                         }
++                       },
++                       delegate->GetWeakPtr()));
++  }
++  DismissingPermissionPrompt(const DismissingPermissionPrompt&) = delete;
++  DismissingPermissionPrompt& operator=(const DismissingPermissionPrompt&) =
++      delete;
++  ~DismissingPermissionPrompt() override = default;
++
++  // permissions::PermissionPrompt:
++  bool UpdateAnchor() override { return true; }
++  TabSwitchingBehavior GetTabSwitchingBehavior() override {
++    return TabSwitchingBehavior::kKeepPromptAlive;
++  }
++  permissions::PermissionPromptDisposition GetPromptDisposition()
++      const override {
++    return permissions::PermissionPromptDisposition::NONE_VISIBLE;
++  }
++  bool IsAskPrompt() const override { return false; }
++  std::optional<gfx::Rect> GetViewBoundsInScreen() const override {
++    return std::nullopt;
++  }
++  std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
++      const override {
++    return {};
++  }
++  std::optional<permissions::feature_params::PermissionElementPromptPosition>
++  GetPromptPosition() const override {
++    return std::nullopt;
++  }
++};
++
++}  // namespace
++
++// static
++void DialogHost::Set(DialogHost* host) {
++  g_dialog_host = host;
++}
++
++// static
++DialogHost* DialogHost::Get() {
++  return g_dialog_host;
++}
++
++std::unique_ptr<permissions::PermissionPrompt> CreateDismissingPermissionPrompt(
++    content::WebContents* web_contents,
++    permissions::PermissionPrompt::Delegate* delegate) {
++  return std::make_unique<DismissingPermissionPrompt>(delegate);
++}
++
++}  // namespace openarc
+diff --git a/openarc/browser/openarc_dialog_host.h b/openarc/browser/openarc_dialog_host.h
+new file mode 100644
+index 000000000000..52bcbdd57837
+--- /dev/null
++++ b/openarc/browser/openarc_dialog_host.h
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_DIALOG_HOST_H_
++#define OPENARC_BROWSER_OPENARC_DIALOG_HOST_H_
++
++#include <memory>
++
++#include "components/permissions/permission_prompt.h"
++#include "content/public/browser/login_delegate.h"
++
++class LoginHandler;
++
++namespace content {
++class WebContents;
++}
++
++namespace net {
++class AuthChallengeInfo;
++}
++
++namespace openarc {
++
++// Where //chrome's prompt controllers hand their prompts to the shell (plan
++// C12). Chrome draws these with Views anchored to a Browser window; we keep the
++// controllers (PermissionRequestManager, the HTTP auth flow with its
++// LoginTabHelper) and replace only the UI. The embedder cannot see the
++// Objective-C bridge (the bridge depends on it), so the bridge registers its
++// implementation here when the engine starts; each method turns the prompt
++// into an OACDialogDelegate request of the tab. (External protocol prompts go
++// to the bridge directly, through ExternalProtocolHandler's embedder hook.)
++class DialogHost {
++ public:
++  // Not owned. Set once before content starts; nullptr clears it.
++  static void Set(DialogHost* host);
++  // The registered host, or nullptr.
++  static DialogHost* Get();
++
++  // The view of a PermissionRequestManager prompt. Never returns nullptr.
++  virtual std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
++      content::WebContents* web_contents,
++      permissions::PermissionPrompt::Delegate* delegate) = 0;
++
++  // The HTTP authentication prompt (Chrome's LoginHandler with our view).
++  virtual std::unique_ptr<LoginHandler> CreateLoginHandler(
++      const net::AuthChallengeInfo& auth_info,
++      content::WebContents* web_contents,
++      content::LoginDelegate::LoginAuthRequiredCallback
++          auth_required_callback) = 0;
++
++ protected:
++  virtual ~DialogHost() = default;
++};
++
++// A permission prompt nobody sees: it dismisses the requests as soon as it is
++// shown (the page sees "denied", no decision is stored). Used when no tab of
++// the shell owns the WebContents, or for request types the shell has no
++// prompt for.
++std::unique_ptr<permissions::PermissionPrompt> CreateDismissingPermissionPrompt(
++    content::WebContents* web_contents,
++    permissions::PermissionPrompt::Delegate* delegate);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_DIALOG_HOST_H_
+diff --git a/openarc/browser/openarc_tab_helpers.mm b/openarc/browser/openarc_tab_helpers.mm
+index 2ce571ab3b74..0241b892cbec 100644
+--- a/openarc/browser/openarc_tab_helpers.mm
++++ b/openarc/browser/openarc_tab_helpers.mm
+@@ -5,70 +5,27 @@
+ #include "openarc/browser/openarc_tab_helpers.h"
+ 
+ #include <memory>
+-#include <optional>
+-#include <variant>
+-#include <vector>
+ 
+ #include "base/functional/bind.h"
+-#include "base/memory/weak_ptr.h"
+-#include "base/task/single_thread_task_runner.h"
+ #include "chrome/browser/ui/tab_helpers.h"
+ #include "components/permissions/permission_prompt.h"
+ #include "components/permissions/permission_request_manager.h"
+-#include "components/permissions/permission_uma_constants.h"
+ #include "content/public/browser/web_contents.h"
++#include "openarc/browser/openarc_dialog_host.h"
+ 
+ namespace openarc {
+ 
+ namespace {
+ 
+-// A permission prompt nobody sees: it dismisses the request as soon as it is
+-// shown. Dismissing (not denying) stores no decision for the site.
+-// TODO(C12): ask the shell through OACDialogDelegate instead.
+-class DismissingPermissionPrompt : public permissions::PermissionPrompt {
+- public:
+-  explicit DismissingPermissionPrompt(Delegate* delegate) {
+-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+-        FROM_HERE, base::BindOnce(
+-                       [](base::WeakPtr<Delegate> delegate) {
+-                         if (delegate && !delegate->Requests().empty()) {
+-                           delegate->Dismiss(std::monostate());
+-                         }
+-                       },
+-                       delegate->GetWeakPtr()));
+-  }
+-  DismissingPermissionPrompt(const DismissingPermissionPrompt&) = delete;
+-  DismissingPermissionPrompt& operator=(const DismissingPermissionPrompt&) =
+-      delete;
+-  ~DismissingPermissionPrompt() override = default;
+-
+-  // permissions::PermissionPrompt:
+-  bool UpdateAnchor() override { return true; }
+-  TabSwitchingBehavior GetTabSwitchingBehavior() override {
+-    return TabSwitchingBehavior::kKeepPromptAlive;
+-  }
+-  permissions::PermissionPromptDisposition GetPromptDisposition()
+-      const override {
+-    return permissions::PermissionPromptDisposition::NONE_VISIBLE;
+-  }
+-  bool IsAskPrompt() const override { return false; }
+-  std::optional<gfx::Rect> GetViewBoundsInScreen() const override {
+-    return std::nullopt;
+-  }
+-  std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
+-      const override {
+-    return {};
+-  }
+-  std::optional<permissions::feature_params::PermissionElementPromptPosition>
+-  GetPromptPosition() const override {
+-    return std::nullopt;
+-  }
+-};
+-
+-std::unique_ptr<permissions::PermissionPrompt> CreateDismissingPrompt(
++// The prompt view of PermissionRequestManager: the shell's prompt through the
++// bridge (plan C12), or a dismissing one when no bridge is registered.
++std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
+     content::WebContents* web_contents,
+     permissions::PermissionPrompt::Delegate* delegate) {
+-  return std::make_unique<DismissingPermissionPrompt>(delegate);
++  if (DialogHost* host = DialogHost::Get()) {
++    return host->CreatePermissionPrompt(web_contents, delegate);
++  }
++  return CreateDismissingPermissionPrompt(web_contents, delegate);
+ }
+ 
+ }  // namespace
+@@ -81,7 +38,7 @@ TabSwitchingBehavior GetTabSwitchingBehavior() override {
+     // The setter is named for tests; it is the only way to choose the prompt
+     // view without a Browser.
+     manager->set_view_factory_for_testing(
+-        base::BindRepeating(&CreateDismissingPrompt));
++        base::BindRepeating(&CreatePermissionPrompt));
+   }
+ }
+ 

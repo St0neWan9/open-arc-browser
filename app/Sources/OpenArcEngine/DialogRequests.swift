@@ -174,17 +174,22 @@ public struct PermissionPrompt: Identifiable, Hashable, Sendable {
     /// In the engine's display order; never empty.
     public let kinds: [SitePermissionKind]
     public let hasUserGesture: Bool
+    /// Every kind supports a one-time grant (Chromium: camera, microphone, location). When false,
+    /// `.allow(remember: false)` is stored like `.allow(remember: true)`, so the prompt offers no
+    /// "this time" choice.
+    public let supportsAllowingOnce: Bool
     public let reply: DialogReply<PermissionReply>
 
     public init(
         id: UUID, origin: SiteOrigin?, isFromSubframe: Bool = false, kinds: [SitePermissionKind],
-        hasUserGesture: Bool = true, reply: DialogReply<PermissionReply>
+        hasUserGesture: Bool = true, supportsAllowingOnce: Bool = true, reply: DialogReply<PermissionReply>
     ) {
         self.id = id
         self.origin = origin
         self.isFromSubframe = isFromSubframe
         self.kinds = kinds
         self.hasUserGesture = hasUserGesture
+        self.supportsAllowingOnce = supportsAllowingOnce
         self.reply = reply
     }
 }
@@ -193,6 +198,8 @@ public struct PermissionPrompt: Identifiable, Hashable, Sendable {
 public enum PermissionReply: Hashable, Sendable {
     /// `remember` false: this time only (until the page closes); true: stored for the origin.
     case allow(remember: Bool)
+    /// Chromium stores "block" for the origin whatever `remember` says (its prompt has no one-time
+    /// block).
     case deny(remember: Bool)
     case dismiss
 }
@@ -251,11 +258,15 @@ public struct ExternalProtocolRequest: Identifiable, Hashable, Sendable {
     /// Bundle URL of that app, for its icon.
     public let handlerApplicationURL: URL?
     public let hasUserGesture: Bool
+    /// The engine may remember "always allow" for the origin (Chromium: a potentially trustworthy
+    /// origin, and the policy allows it). When false the dialog offers no checkbox.
+    public let canRememberForOrigin: Bool
     public let reply: DialogReply<ExternalProtocolReply>
 
     public init(
         id: UUID, origin: SiteOrigin?, isFromSubframe: Bool = false, url: URL, handlerApplicationName: String?,
-        handlerApplicationURL: URL? = nil, hasUserGesture: Bool = true, reply: DialogReply<ExternalProtocolReply>
+        handlerApplicationURL: URL? = nil, hasUserGesture: Bool = true, canRememberForOrigin: Bool = true,
+        reply: DialogReply<ExternalProtocolReply>
     ) {
         self.id = id
         self.origin = origin
@@ -264,6 +275,7 @@ public struct ExternalProtocolRequest: Identifiable, Hashable, Sendable {
         self.handlerApplicationName = handlerApplicationName
         self.handlerApplicationURL = handlerApplicationURL
         self.hasUserGesture = hasUserGesture
+        self.canRememberForOrigin = canRememberForOrigin
         self.reply = reply
     }
 }

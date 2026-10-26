@@ -417,6 +417,18 @@ struct AdvancedPane: View {
                 CatalogButton(id: "advanced.resetTranslatePrompts")
                 CatalogButton(id: "advanced.exportData")
             }
+            // Plan C16: the engine's ad blocker; hidden when the engine has no filter ruleset.
+            if let version = model.adBlockingRulesetVersion {
+                Section {
+                    Toggle(SettingsCatalog.control("advanced.adBlocking").label, isOn: Binding(
+                        get: { model.isAdBlockingOn },
+                        set: { isOn in Task { await model.setAdBlocking(isOn) } }
+                    ))
+                } footer: {
+                    Text("Filter lists: EasyList and EasyPrivacy (\(version)). Sites can be allowed one by one in the site controls.")
+                        .foregroundStyle(.secondary)
+                }
+            }
             // Plan D7: automatic updates (Sparkle). Not in [03 §Advanced]; our addition.
             UpdateSettingsSection(model: model.updates)
             Section("Crash Reports") {
@@ -427,6 +439,7 @@ struct AdvancedPane: View {
             }
         }
         .formStyle(.grouped)
+        .task { await model.loadAdBlocking() }
     }
 }
 

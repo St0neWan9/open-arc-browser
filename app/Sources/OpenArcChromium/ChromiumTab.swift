@@ -413,37 +413,137 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
 
     // MARK: OACDialogDelegate
 
-    /// alert(), confirm(), prompt() and beforeunload go to the shell's dialog stream. With no
-    /// subscriber the bridge answers with the default right away. The other request kinds (HTTP
-    /// auth, permissions, file chooser, external protocol) are not delivered by the bridge yet:
-    /// content answers them with their defaults. TODO(C12).
+    /// Every request kind of `OACDialogDelegate` goes to the shell's dialog stream (plans C8, C12).
+    /// With no subscriber the bridge answers with the request's default right away.
     func tab(_ tab: OACTab, runJavaScriptDialog request: OACJavaScriptDialogRequest) -> Bool {
+        deliver(request, default: JavaScriptDialogReply.dismissed, answer: { request, answer in
+            if answer.accepted {
+                request.accept(promptText: answer.promptText, suppressFurtherDialogs: answer.suppressFurtherDialogs)
+            } else {
+                request.dismiss(suppressFurtherDialogs: answer.suppressFurtherDialogs)
+            }
+        }, make: { id, reply in
+            .javaScript(JavaScriptDialog(
+                id: id,
+                origin: request.origin.map(SiteOrigin.init(bridge:)),
+                isFromSubframe: request.isFromSubframe,
+                kind: JavaScriptDialog.Kind(request.kind),
+                message: request.message,
+                defaultPromptText: request.defaultPromptText,
+                isReload: request.isReload,
+                showsSuppressOption: request.showsSuppressOption,
+                reply: reply
+            ))
+        })
+    }
+
+    func tab(_ tab: OACTab, requestAuthentication request: OACAuthenticationRequest) -> Bool {
+        deliver(request, default: AuthenticationReply.cancel, answer: { request, answer in
+            switch answer {
+            case .proceed(let username, let password): request.proceed(withUsername: username, password: password)
+            case .cancel: request.cancel()
+            }
+        }, make: { id, reply in
+            .authentication(AuthenticationChallenge(
+                id: id,
+                origin: request.origin.map(SiteOrigin.init(bridge:)),
+                isFromSubframe: request.isFromSubframe,
+                realm: request.realm,
+                challengerHostPort: request.challengerHostPort,
+                isProxy: request.isProxyChallenge,
+                isInsecureConnection: request.isInsecureConnection,
+                suggestedUsername: request.suggestedUsername,
+                reply: reply
+            ))
+        })
+    }
+
+    func tab(_ tab: OACTab, requestPermission request: OACPermissionRequest) -> Bool {
+        let kinds = request.permissionKinds
+        guard !kinds.isEmpty else { return false }
+        return deliver(request, default: PermissionReply.dismiss, answer: { request, answer in
+            switch answer {
+            case .allow(let remember): request.allow(remembering: remember)
+            case .deny(let remember): request.deny(remembering: remember)
+            case .dismiss: request.dismiss()
+            }
+        }, make: { id, reply in
+            .permission(PermissionPrompt(
+                id: id,
+                origin: request.origin.map(SiteOrigin.init(bridge:)),
+                isFromSubframe: request.isFromSubframe,
+                kinds: kinds,
+                hasUserGesture: request.hasUserGesture,
+                supportsAllowingOnce: request.supportsAllowingOnce,
+                reply: reply
+            ))
+        })
+    }
+
+    func tab(_ tab: OACTab, runFileChooser request: OACFileChooserRequest) -> Bool {
+        deliver(request, default: FileChooserReply.cancel, answer: { request, answer in
+            switch answer {
+            case .select(let urls): request.select(urls)
+            case .cancel: request.cancel()
+            }
+        }, make: { id, reply in
+            .fileChooser(FileChooserRequest(
+                id: id,
+                origin: request.origin.map(SiteOrigin.init(bridge:)),
+                isFromSubframe: request.isFromSubframe,
+                mode: FileChooserRequest.Mode(request.mode),
+                acceptedTypeIdentifiers: request.acceptedTypeIdentifiers,
+                defaultURL: request.defaultURL,
+                reply: reply
+            ))
+        })
+    }
+
+    func tab(_ tab: OACTab, openExternalProtocol request: OACExternalProtocolRequest) -> Bool {
+        deliver(request, default: ExternalProtocolReply.block, answer: { request, answer in
+            switch answer {
+            case .open(let remember): request.open(rememberingForOrigin: remember)
+            case .block: request.cancel()
+            }
+        }, make: { id, reply in
+            .externalProtocol(ExternalProtocolRequest(
+                id: id,
+                origin: request.origin.map(SiteOrigin.init(bridge:)),
+                isFromSubframe: request.isFromSubframe,
+                url: request.url,
+                handlerApplicationName: request.handlerApplicationName,
+                handlerApplicationURL: request.handlerApplicationURL,
+                hasUserGesture: request.hasUserGesture,
+                canRememberForOrigin: request.canRememberForOrigin,
+                reply: reply
+            ))
+        })
+    }
+
+    /// Wraps a bridge request in an `EngineDialogRequest` with a single-shot reply and yields it.
+    /// The reply holds the bridge request until answered (answering on the main actor); the
+    /// outstanding table holds the reply weakly, so a request the shell dropped still gets its
+    /// default answer from the reply's deinit. Returns false (the bridge answers with its default)
+    /// when nobody listens.
+    private func deliver<Request: OACDialogRequest, Answer: Sendable>(
+        _ request: Request,
+        default defaultAnswer: Answer,
+        answer apply: @escaping @MainActor (Request, Answer) -> Void,
+        make: (UUID, DialogReply<Answer>) -> EngineDialogRequest
+    ) -> Bool {
         guard channel.dialogs.subscriberCount > 0 else { return false }
         let id = UUID()
         let key = ObjectIdentifier(request)
-        let reply = DialogReply<JavaScriptDialogReply>(default: .dismissed) { [weak self] answer in
+        // The bridge request is main-actor bound; the reply may be answered from any thread.
+        let box = MainActorBox(request)
+        let reply = DialogReply<Answer>(default: defaultAnswer) { [weak self] answer in
             ChromiumTabCore.onMain {
                 self?.outstandingDialogs.removeValue(forKey: key)
-                if answer.accepted {
-                    request.accept(promptText: answer.promptText, suppressFurtherDialogs: answer.suppressFurtherDialogs)
-                } else {
-                    request.dismiss(suppressFurtherDialogs: answer.suppressFurtherDialogs)
-                }
+                apply(box.value, answer)
             }
         }
         outstandingDialogs[key] = (id, { [weak reply] in reply?.withdraw() })
-        let dialog = JavaScriptDialog(
-            id: id,
-            origin: request.origin.map(SiteOrigin.init(bridge:)),
-            isFromSubframe: request.isFromSubframe,
-            kind: JavaScriptDialog.Kind(request.kind),
-            message: request.message,
-            defaultPromptText: request.defaultPromptText,
-            isReload: request.isReload,
-            showsSuppressOption: request.showsSuppressOption,
-            reply: reply
-        )
-        channel.dialogs.yield(.javaScript(dialog))
+        channel.dialogs.yield(make(id, reply))
         return true
     }
 
@@ -539,6 +639,53 @@ extension SecurityLevel {
 extension SiteOrigin {
     init(bridge origin: OACOrigin) {
         self.init(scheme: origin.scheme, host: origin.host, port: origin.port?.intValue)
+    }
+}
+
+/// Carries a main-actor object through a `@Sendable` closure; read only on the main actor.
+final class MainActorBox<Value: AnyObject>: @unchecked Sendable {
+    // @unchecked: `value` is immutable and only dereferenced inside `MainActor` code
+    // (`ChromiumTabCore.onMain`).
+    let value: Value
+    init(_ value: Value) { self.value = value }
+}
+
+extension OACPermissionRequest {
+    /// The prompt's kinds that the engine protocol knows, in the bridge's order.
+    var permissionKinds: [SitePermissionKind] {
+        __kinds.compactMap { OACPermissionKind(rawValue: $0.intValue).flatMap(SitePermissionKind.init) }
+    }
+}
+
+extension SitePermissionKind {
+    init?(_ kind: OACPermissionKind) {
+        switch kind {
+        case .camera: self = .camera
+        case .microphone: self = .microphone
+        case .location: self = .location
+        case .notifications: self = .notifications
+        case .clipboardRead: self = .clipboardRead
+        case .MIDI: self = .midi
+        case .storageAccess: self = .storageAccess
+        case .screenWakeLock: self = .screenWakeLock
+        case .multipleDownloads: self = .multipleDownloads
+        case .localFonts: self = .localFonts
+        case .windowManagement: self = .windowManagement
+        case .idleDetection: self = .idleDetection
+        case .protectedMedia: self = .protectedMedia
+        @unknown default: return nil
+        }
+    }
+}
+
+extension FileChooserRequest.Mode {
+    init(_ mode: OACFileChooserMode) {
+        switch mode {
+        case .openMultiple: self = .openMultiple
+        case .openFolder: self = .openFolder
+        case .save: self = .save
+        default: self = .open
+        }
     }
 }
 

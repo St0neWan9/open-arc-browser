@@ -1,10 +1,11 @@
 import Foundation
 import OpenArcModel
 
-// Downloads and extensions skeletons (chromium-bridge/SWIFT_PROTOCOL_CHANGES.md §8, §9; bridge:
-// OACDownloads.h, OACExtensions.h). Shapes only: the Library's Downloads section ([06 §8]
-// observed: "Search Downloads…", "Filter", empty state "Nothing here yet!") and the Site Control
-// Center's extension rows (C14) will read them. Fake implementations live in FakeServices.swift.
+// Downloads (plan C12) and the extensions skeleton (chromium-bridge/SWIFT_PROTOCOL_CHANGES.md §8,
+// §9; bridge: OACDownloads.h, OACExtensions.h). The Library's Downloads section ([06 §8] observed:
+// "Search Downloads…", "Filter", empty state "Nothing here yet!") lists the downloads; the Site
+// Control Center's extension rows (C14) will read the extensions. Fake implementations live in
+// FakeServices.swift.
 
 // MARK: - Downloads
 
@@ -32,12 +33,14 @@ public struct DownloadItem: Identifiable, Hashable, Sendable {
     public var startDate: Date
     public var endDate: Date?
     public var isOffTheRecord: Bool
+    /// For `.needsConfirmation`: why, in the engine's words. nil otherwise.
+    public var warningText: String?
 
     public init(
         id: String, profileID: Profile.ID, sourceURL: URL, referrerURL: URL? = nil, fileURL: URL? = nil,
         suggestedFilename: String, mimeType: String? = nil, state: DownloadState = .inProgress,
         receivedBytes: Int64 = 0, totalBytes: Int64 = -1, startDate: Date, endDate: Date? = nil,
-        isOffTheRecord: Bool = false
+        isOffTheRecord: Bool = false, warningText: String? = nil
     ) {
         self.id = id
         self.profileID = profileID
@@ -52,6 +55,7 @@ public struct DownloadItem: Identifiable, Hashable, Sendable {
         self.startDate = startDate
         self.endDate = endDate
         self.isOffTheRecord = isOffTheRecord
+        self.warningText = warningText
     }
 }
 
@@ -137,4 +141,43 @@ public protocol EngineExtensions: AnyObject, Sendable {
     func uninstall(_ extensionID: String, profileID: Profile.ID) async
     /// Changes for one profile. Every call returns a new stream.
     func events(profileID: Profile.ID) -> AsyncStream<ExtensionEvent>
+}
+
+// MARK: - Ad blocking (plan C16)
+
+/// The engine's built-in ad blocker (bridge: `OACApplication.adBlockingEnabled`,
+/// `-[OACSiteSettings setAdBlockingEnabled:forOrigin:]`, `OACTab.blockedAdCount`).
+///
+/// Chromium's own subresource filter with EasyList + EasyPrivacy (chromium-bridge/README.md §Ad
+/// blocking). A global switch for the whole app plus a per-site allow list per profile;
+/// off-the-record contexts inherit their profile's list. Changes apply to each tab's next page
+/// load. The spec records the feature (a settings switch) but not its surfaces: everything here is
+/// inferred ([00 §A 内核继承] "广告拦截": settings toggle known, blocking UI not captured).
+public protocol EngineAdBlocking: AnyObject, Sendable {
+    /// Version of the filter ruleset in use; nil when the engine has none (the blocker then
+    /// matches nothing and the shell hides its controls).
+    func rulesetVersion() async -> String?
+    /// The global switch (Settings). Default on.
+    func isEnabled() async -> Bool
+    func setEnabled(_ enabled: Bool) async
+    /// False when the site is on the profile's allow list. Independent of the global switch.
+    func isEnabled(forOrigin origin: SiteOrigin, profileID: Profile.ID) async -> Bool
+    /// False puts the site on the profile's allow list; true removes it.
+    func setEnabled(_ enabled: Bool, forOrigin origin: SiteOrigin, profileID: Profile.ID) async
+    /// Loads the blocker kept from loading on the tab's current page (0 after each new page, and
+    /// for unknown tabs).
+    func blockedCount(tabID: EngineTabID) async -> Int
+}
+
+/// An engine without an ad blocker: no ruleset, switches do nothing. The default for engines that
+/// do not provide one (test doubles).
+public final class UnavailableAdBlocking: EngineAdBlocking {
+    public static let shared = UnavailableAdBlocking()
+    public init() {}
+    public func rulesetVersion() async -> String? { nil }
+    public func isEnabled() async -> Bool { false }
+    public func setEnabled(_ enabled: Bool) async {}
+    public func isEnabled(forOrigin origin: SiteOrigin, profileID: Profile.ID) async -> Bool { true }
+    public func setEnabled(_ enabled: Bool, forOrigin origin: SiteOrigin, profileID: Profile.ID) async {}
+    public func blockedCount(tabID: EngineTabID) async -> Int { 0 }
 }

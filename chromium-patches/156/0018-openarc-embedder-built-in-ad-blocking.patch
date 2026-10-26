@@ -1,0 +1,1093 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 05:01:30 -0700
+Subject: [PATCH] openarc: embedder: built-in ad blocking
+
+Plan C16. Ad blocking on Chromium's own subresource filter
+(//components/subresource_filter), the engine behind Chrome's Better Ads
+enforcement, without the Chrome Web Store, extensions or Google's ruleset
+component:
+
+- openarc/browser/openarc_ad_blocker.{h,mm}: AdBlocker hands the
+  EasyList + EasyPrivacy ruleset (converted at build time with
+  ruleset_converter and shipped in the framework's Resources/AdBlock, see
+  chromium-bridge/build-adblock-ruleset.sh in the Open Arc repository) to
+  Chrome's RulesetService, which indexes it once per version and publishes
+  it to every renderer. --openarc-ad-block-ruleset=<dir> loads another
+  ruleset directory (the entry point of the planned updater, TODO in the
+  header). The global switch is the Local State pref
+  openarc.ad_blocking.enabled (default on); the per-site allow list is
+  Chrome's ADS content setting.
+- AdBlockTabHelper, attached with Chrome's tab helpers: forces the
+  filter's activation (DevtoolsInteractionTracker, the switch DevTools'
+  Page.setAdBlockingEnabled uses) from the global switch before every
+  main-frame navigation, since Chrome only activates it on pages Safe
+  Browsing lists, and counts the loads it blocked on the current page from
+  the filter's console messages.
+- OpenArcBrowserMainExtraParts registers the pref and loads the ruleset
+  (PostBrowserStart).
+- Bridge: OACApplication.adBlockingEnabled / adBlockingRulesetVersion,
+  OACSiteSettings (first implementation: ad blocking and zoom; the other
+  settings stay no-ops until C12), -setAdBlockingEnabled:forOrigin: /
+  -isAdBlockingEnabledForOrigin:, OACTab.blockedAdCount.
+
+Without it, the subresource filter stays in Chrome's dry-run/ad-tagging
+mode and blocks nothing (Safe Browsing is off in Open Arc).
+---
+ openarc/BUILD.gn                              |  14 +-
+ openarc/bridge/oac_application.mm             |  25 ++
+ openarc/bridge/oac_profile.mm                 |  12 +-
+ openarc/bridge/oac_site_settings.mm           | 247 +++++++++++++++++
+ openarc/bridge/oac_site_settings_internal.h   |  15 +
+ openarc/bridge/oac_tab.mm                     |  10 +
+ .../public/OpenArcCore/OACApplication.h       |  12 +
+ .../public/OpenArcCore/OACSiteSettings.h      |  13 +-
+ openarc/bridge/public/OpenArcCore/OACTab.h    |   6 +
+ openarc/browser/openarc_ad_blocker.h          | 163 +++++++++++
+ openarc/browser/openarc_ad_blocker.mm         | 259 ++++++++++++++++++
+ .../openarc_browser_main_extra_parts.h        |   3 +
+ .../openarc_browser_main_extra_parts.mm       |  10 +
+ openarc/browser/openarc_tab_helpers.mm        |   4 +
+ 14 files changed, 784 insertions(+), 9 deletions(-)
+ create mode 100644 openarc/bridge/oac_site_settings.mm
+ create mode 100644 openarc/bridge/oac_site_settings_internal.h
+ create mode 100644 openarc/browser/openarc_ad_blocker.h
+ create mode 100644 openarc/browser/openarc_ad_blocker.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index fe4f797b90f1..43f68fb386ef 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -73,6 +73,8 @@ source_set("embedder") {
+     "//chrome/app/startup_timestamps.h",
+     "app/openarc_main_delegate.h",
+     "app/openarc_main_delegate.mm",
++    "browser/openarc_ad_blocker.h",
++    "browser/openarc_ad_blocker.mm",
+     "browser/openarc_browser_main_extra_parts.h",
+     "browser/openarc_browser_main_extra_parts.mm",
+     "browser/openarc_content_browser_client.h",
+@@ -114,16 +116,22 @@ source_set("embedder") {
+     ":helper_names",
+     "//base",
+     "//build:branding_buildflags",
++    "//chrome/browser:browser_process",
+     "//chrome/browser:child_process_host_flags",
++    "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:tab_helpers",
+     "//chrome/browser/ui:tab_helpers_impl",
+     "//chrome/browser/ui/login",
++    "//components/content_settings/core/browser",
++    "//components/content_settings/core/common",
+     "//components/os_crypt/common:keychain_password_mac",
+     "//components/permissions",
+     "//components/prefs",
+     "//components/safe_browsing/core/common:safe_browsing_prefs",
+     "//components/signin/public/base",
++    "//components/subresource_filter/content/browser",
++    "//components/subresource_filter/core/browser",
+     "//content/public/browser",
+     "//content/public/common",
+     "//third_party/blink/public/common",
+@@ -151,6 +159,8 @@ source_set("bridge") {
+               "bridge/oac_profile_internal.h",
+               "bridge/oac_requests.mm",
+               "bridge/oac_requests_internal.h",
++              "bridge/oac_site_settings.mm",
++              "bridge/oac_site_settings_internal.h",
+               "bridge/oac_tab.mm",
+               "bridge/oac_tab_internal.h",
+               "bridge/oac_values.mm",
+@@ -161,15 +171,15 @@ source_set("bridge") {
+     "//base",
+     "//chrome/browser/browsing_data:constants",
+     "//chrome/browser/download",
+-    "//chrome/browser:file_select_helper",
+     "//chrome/browser/external_protocol",
+     "//chrome/browser/media/webrtc",
+     "//chrome/browser/ui/login",
+     "//components/content_settings/core/common",
+     "//components/download/content/public",
+     "//components/download/public/common:public",
+-    "//components/permissions",
++    "//chrome/browser:file_select_helper",
+     "//net/traffic_annotation",
++    "//components/permissions",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/profiles:profile_manager",
+     "//chrome/browser/profiles:profile_util",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 4ed7b745239f..c564ecfc6549 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -37,6 +37,7 @@
+ #include "content/public/app/content_main_runner.h"
+ #include "openarc/app/openarc_main_delegate.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
++#include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/common/openarc_paths.h"
+ 
+@@ -576,6 +577,30 @@ - (void)removeDeletedProfileAtPath:(const base::FilePath&)path
+       }));
+ }
+ 
++// MARK: Ad blocking (plan C16)
++
++- (BOOL)isAdBlockingEnabled {
++  CHECK(NSThread.isMainThread);
++  return _state == OACApplicationStateRunning &&
++         openarc::AdBlocker::Get().IsEnabled();
++}
++
++- (void)setAdBlockingEnabled:(BOOL)enabled {
++  CHECK(NSThread.isMainThread);
++  if (_state == OACApplicationStateRunning) {
++    openarc::AdBlocker::Get().SetEnabled(enabled);
++  }
++}
++
++- (NSString*)adBlockingRulesetVersion {
++  CHECK(NSThread.isMainThread);
++  if (_state != OACApplicationStateRunning) {
++    return nil;
++  }
++  const std::string version = openarc::AdBlocker::Get().RulesetVersion();
++  return version.empty() ? nil : base::SysUTF8ToNSString(version);
++}
++
+ // MARK: Tabs
+ 
+ - (void)registerTab:(OACTab*)tab {
+diff --git a/openarc/bridge/oac_profile.mm b/openarc/bridge/oac_profile.mm
+index 49b07e0ba2cc..6782a6fc0881 100644
+--- a/openarc/bridge/oac_profile.mm
++++ b/openarc/bridge/oac_profile.mm
+@@ -20,6 +20,7 @@
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_downloads_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_site_settings_internal.h"
+ 
+ namespace {
+ 
+@@ -101,6 +102,7 @@ @implementation OACProfile {
+   NSURL* _dataDirectory;
+   __weak OACProfile* _originalProfile;
+   OACProfile* _offTheRecordProfile;
++  OACSiteSettings* _siteSettings;
+   OACDownloads* _downloads;
+   base::WeakPtr<Profile> _profile;
+   // Keeps an on-disk profile loaded while the shell may use it (Chrome
+@@ -221,10 +223,12 @@ - (BOOL)hasOffTheRecordProfile {
+ }
+ 
+ - (OACSiteSettings*)siteSettings {
+-  // C12 / B13: OACSiteSettings is not implemented yet. The non-null contract
+-  // of the header cannot be kept, so calling this is a programming error.
+-  CHECK(false) << "OACProfile.siteSettings is not implemented yet (plan C12)";
+-  return nil;
++  // Ad blocking and zoom are real (plan C16); the rest of the Site Control
++  // Center's settings come with C12 (oac_site_settings.mm).
++  if (!_siteSettings) {
++    _siteSettings = [[OACSiteSettings alloc] initWithProfile:self];
++  }
++  return _siteSettings;
+ }
+ 
+ - (OACDownloads*)downloads {
+diff --git a/openarc/bridge/oac_site_settings.mm b/openarc/bridge/oac_site_settings.mm
+new file mode 100644
+index 000000000000..7d5858afc913
+--- /dev/null
++++ b/openarc/bridge/oac_site_settings.mm
+@@ -0,0 +1,247 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// OACSiteSettings (OACSiteSettings.h): one per OACProfile.
++//
++// Implemented so far: ad blocking (plan C16, Chromium's "ads" content
++// setting) and zoom (HostZoomMap). Permission decisions, Developer Mode,
++// automatic Picture in Picture, the cookie count, clearing a site and the
++// stored-origins list come with plan C12; until then they report Chromium's
++// defaults and their setters do nothing.
++
++#import <OpenArcCore/OACSiteSettings.h>
++
++#include <cmath>
++#include <string>
++
++#include "base/check.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/sys_string_conversions.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/host_zoom_map.h"
++#include "openarc/browser/openarc_ad_blocker.h"
++#include "third_party/blink/public/common/page/page_zoom.h"
++#include "url/gurl.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_site_settings_internal.h"
++
++namespace {
++
++GURL URLForOrigin(OACOrigin* origin) {
++  std::string spec = base::SysNSStringToUTF8(origin.scheme) + "://" +
++                     base::SysNSStringToUTF8(origin.host);
++  if (origin.port) {
++    spec += ":" + base::NumberToString(origin.port.integerValue);
++  }
++  return GURL(spec + "/");
++}
++
++}  // namespace
++
++@implementation OACSiteSettingsState {
++  NSDictionary<NSNumber*, NSNumber*>* _permissionDecisions;
++  BOOL _developerModeEnabled;
++  BOOL _automaticPictureInPictureAllowed;
++  double _zoomFactor;
++  NSInteger _cookieCount;
++  NSNumber* _adBlockingEnabled;
++}
++
++- (instancetype)initWithZoomFactor:(double)zoomFactor
++                 adBlockingEnabled:(NSNumber*)adBlockingEnabled {
++  if ((self = [super init])) {
++    _permissionDecisions = @{};
++    // [06 §12] observed defaults: Developer Mode Off, Automatic
++    // Picture-In-Picture Allowed.
++    _developerModeEnabled = NO;
++    _automaticPictureInPictureAllowed = YES;
++    _zoomFactor = zoomFactor;
++    _cookieCount = 0;
++    _adBlockingEnabled = [adBlockingEnabled copy];
++  }
++  return self;
++}
++
++- (NSDictionary<NSNumber*, NSNumber*>*)permissionDecisions {
++  return _permissionDecisions;
++}
++
++- (BOOL)isDeveloperModeEnabled {
++  return _developerModeEnabled;
++}
++
++- (BOOL)isAutomaticPictureInPictureAllowed {
++  return _automaticPictureInPictureAllowed;
++}
++
++- (double)zoomFactor {
++  return _zoomFactor;
++}
++
++- (NSInteger)cookieCount {
++  return _cookieCount;
++}
++
++- (NSNumber*)adBlockingEnabled {
++  return _adBlockingEnabled;
++}
++
++- (OACPermissionDecision)decisionForPermission:(OACPermissionKind)kind {
++  NSNumber* decision = _permissionDecisions[@(kind)];
++  return decision ? static_cast<OACPermissionDecision>(decision.integerValue)
++                  : OACPermissionDecisionAsk;
++}
++
++- (id)copyWithZone:(NSZone*)zone {
++  return self;
++}
++
++@end
++
++@implementation OACSiteSettings {
++  __weak OACProfile* _profile;
++  NSHashTable<id<OACSiteSettingsObserver>>* _observers;
++}
++
++- (instancetype)initWithProfile:(OACProfile*)profile {
++  if ((self = [super init])) {
++    _profile = profile;
++    _observers = [NSHashTable weakObjectsHashTable];
++  }
++  return self;
++}
++
++- (OACProfile*)profile {
++  return _profile;
++}
++
++- (Profile*)chromeProfile {
++  return _profile.chromeProfile;
++}
++
++- (void)settingsForOrigin:(OACOrigin*)origin
++        completionHandler:(void (^)(OACSiteSettingsState* state))handler {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  const GURL url = URLForOrigin(origin);
++  double zoom_factor = 1.0;
++  NSNumber* ad_blocking = nil;
++  if (profile) {
++    zoom_factor = blink::ZoomLevelToZoomFactor(
++        content::HostZoomMap::GetDefaultForBrowserContext(profile)
++            ->GetZoomLevelForHostAndScheme(std::string(url.scheme()),
++                                           std::string(url.host())));
++    openarc::AdBlocker& blocker = openarc::AdBlocker::Get();
++    if (blocker.IsAvailable()) {
++      ad_blocking = @(blocker.IsEnabled() &&
++                      openarc::AdBlocker::IsEnabledForSite(profile, url));
++    }
++  }
++  OACSiteSettingsState* state =
++      [[OACSiteSettingsState alloc] initWithZoomFactor:zoom_factor
++                                     adBlockingEnabled:ad_blocking];
++  OACPostToMainThread(^{
++    handler(state);
++  });
++}
++
++- (void)setDecision:(OACPermissionDecision)decision
++      forPermission:(OACPermissionKind)kind
++             origin:(OACOrigin*)origin {
++  // TODO(C12): the permission manager.
++}
++
++- (void)setDeveloperModeEnabled:(BOOL)enabled forOrigin:(OACOrigin*)origin {
++  // TODO(C12): our own website setting.
++}
++
++- (void)setAutomaticPictureInPictureAllowed:(BOOL)allowed
++                                  forOrigin:(OACOrigin*)origin {
++  // TODO(C12): the auto-PiP content setting.
++}
++
++- (BOOL)setZoomFactor:(double)zoomFactor
++            forOrigin:(OACOrigin*)origin
++                error:(NSError**)error {
++  CHECK(NSThread.isMainThread);
++  if (!std::isfinite(zoomFactor) || zoomFactor < 0.25 || zoomFactor > 5.0) {
++    if (error) {
++      *error = OACMakeError(OACErrorInvalidArgument,
++                            @"Zoom factor out of range (0.25...5).");
++    }
++    return NO;
++  }
++  Profile* profile = self.chromeProfile;
++  if (!profile) {
++    if (error) {
++      *error = OACMakeError(OACErrorProfileUnavailable,
++                            @"The profile is gone.");
++    }
++    return NO;
++  }
++  const GURL url = URLForOrigin(origin);
++  content::HostZoomMap::GetDefaultForBrowserContext(profile)
++      ->SetZoomLevelForHostAndScheme(std::string(url.scheme()),
++                                     std::string(url.host()),
++                                     blink::ZoomFactorToZoomLevel(zoomFactor));
++  [self notifyChangeForOrigin:origin];
++  return YES;
++}
++
++- (void)setAdBlockingEnabled:(BOOL)enabled forOrigin:(OACOrigin*)origin {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  if (!profile) {
++    return;
++  }
++  openarc::AdBlocker::SetEnabledForSite(profile, URLForOrigin(origin),
++                                        enabled);
++  [self notifyChangeForOrigin:origin];
++}
++
++- (BOOL)isAdBlockingEnabledForOrigin:(OACOrigin*)origin {
++  CHECK(NSThread.isMainThread);
++  return openarc::AdBlocker::IsEnabledForSite(self.chromeProfile,
++                                              URLForOrigin(origin));
++}
++
++- (void)clearDataForOrigin:(OACOrigin*)origin
++         completionHandler:(void (^)(void))completionHandler {
++  // TODO(C12): BrowsingDataRemover filtered to the site.
++  OACPostToMainThread(completionHandler);
++}
++
++- (void)originsWithStoredSettingsWithCompletionHandler:
++    (void (^)(NSArray<OACOrigin*>* origins))completionHandler {
++  // TODO(C12).
++  OACPostToMainThread(^{
++    completionHandler(@[]);
++  });
++}
++
++- (void)addObserver:(id<OACSiteSettingsObserver>)observer {
++  [_observers addObject:observer];
++}
++
++- (void)removeObserver:(id<OACSiteSettingsObserver>)observer {
++  [_observers removeObject:observer];
++}
++
++- (void)notifyChangeForOrigin:(OACOrigin*)origin {
++  __weak OACSiteSettings* weakSelf = self;
++  OACPostToMainThread(^{
++    OACSiteSettings* settings = weakSelf;
++    if (!settings) {
++      return;
++    }
++    for (id<OACSiteSettingsObserver> observer in settings->_observers
++             .allObjects) {
++      [observer siteSettings:settings didChangeForOrigin:origin];
++    }
++  });
++}
++
++@end
+diff --git a/openarc/bridge/oac_site_settings_internal.h b/openarc/bridge/oac_site_settings_internal.h
+new file mode 100644
+index 000000000000..2b85ce635afd
+--- /dev/null
++++ b/openarc/bridge/oac_site_settings_internal.h
+@@ -0,0 +1,15 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_SITE_SETTINGS_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_SITE_SETTINGS_INTERNAL_H_
++
++#import <OpenArcCore/OACSiteSettings.h>
++
++@interface OACSiteSettings ()
++// The profile's settings; |profile| owns the object and is held weakly.
++- (instancetype)initWithProfile:(OACProfile*)profile;
++@end
++
++#endif  // OPENARC_BRIDGE_OAC_SITE_SETTINGS_INTERNAL_H_
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 692e4f0c6c98..3a02ed318d77 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -70,6 +70,7 @@
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
++#include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_tab_helpers.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ 
+@@ -1342,6 +1343,15 @@ - (void)exitFullscreen {
+ 
+ // MARK: Lifetime
+ 
++- (NSInteger)blockedAdCount {
++  if (_closed || !_webContents) {
++    return 0;
++  }
++  const openarc::AdBlockTabHelper* helper =
++      openarc::AdBlockTabHelper::FromWebContents(_webContents.get());
++  return helper ? helper->blocked_count() : 0;
++}
++
+ - (void)close {
+   if (_closed) {
+     return;
+diff --git a/openarc/bridge/public/OpenArcCore/OACApplication.h b/openarc/bridge/public/OpenArcCore/OACApplication.h
+index 475f7d73396b..69dd4d97fe25 100644
+--- a/openarc/bridge/public/OpenArcCore/OACApplication.h
++++ b/openarc/bridge/public/OpenArcCore/OACApplication.h
+@@ -126,6 +126,18 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+                   completionHandler:(void (^)(NSError *_Nullable error))completionHandler
+     NS_SWIFT_NAME(deleteProfile(identifier:completionHandler:));
+ 
++// MARK: Ad blocking (plan C16)
++
++/// The built-in ad blocker's global switch, for every profile (Settings). Stored in Chromium's
++/// Local State, so it survives restarts; default YES. A change applies to each tab's next page
++/// load (the page on screen keeps its filter until reloaded). Sites can opt out one by one with
++/// `-[OACSiteSettings setAdBlockingEnabled:forOrigin:]`. NO before the engine started.
++@property (nonatomic, getter=isAdBlockingEnabled) BOOL adBlockingEnabled;
++/// Content version of the filter ruleset in use (EasyList + EasyPrivacy, built with the
++/// framework), or nil when the framework carries none and nothing was indexed before: the
++/// blocker then matches nothing.
++@property (nonatomic, readonly, copy, nullable) NSString *adBlockingRulesetVersion;
++
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;
+ @end
+diff --git a/openarc/bridge/public/OpenArcCore/OACSiteSettings.h b/openarc/bridge/public/OpenArcCore/OACSiteSettings.h
+index 15e5c5abedad..19ffcd9fbc73 100644
+--- a/openarc/bridge/public/OpenArcCore/OACSiteSettings.h
++++ b/openarc/bridge/public/OpenArcCore/OACSiteSettings.h
+@@ -11,7 +11,8 @@
+ //   apply(.developerMode)                 -> -setDeveloperModeEnabled:forOrigin:
+ //   apply(.automaticPictureInPicture)     -> -setAutomaticPictureInPictureAllowed:forOrigin:
+ //   apply(.zoom(percent:))                -> -setZoomFactor:forOrigin:
+-//   apply(.adBlocking)                    -> -setAdBlockingEnabled:forOrigin:  (plan C16)
++//   apply(.adBlocking)                    -> -setAdBlockingEnabled:forOrigin:  (plan C16; read back
++//                                            with -isAdBlockingEnabledForOrigin:)
+ //   apply(.clearSiteData)                 -> -clearDataForOrigin:completionHandler:
+ //   runExtensionAction(...)               -> -[OACExtensions runActionOfExtension:onTab:] (C14)
+ // `profileID` in the Swift protocol picks the `OACProfile`, whose `siteSettings` this is.
+@@ -53,7 +54,9 @@ OAC_EXPORT NS_SWIFT_SENDABLE
+ @property (nonatomic, readonly) double zoomFactor;
+ /// Cookies stored for the site and its subdomains (`cookieCount`).
+ @property (nonatomic, readonly) NSInteger cookieCount;
+-/// nil while the engine has no ad blocker (`isAdBlockingOn`, plan C16).
++/// Ad blocking on this site (`isAdBlockingOn`, plan C16): NO when the site is on the allow list,
++/// else the global switch (`OACApplication.adBlockingEnabled`). nil when the framework has no
++/// filter ruleset.
+ @property (nonatomic, readonly, copy, nullable) NSNumber *adBlockingEnabled;
+ 
+ - (OACPermissionDecision)decisionForPermission:(OACPermissionKind)kind NS_SWIFT_NAME(decision(for:));
+@@ -87,8 +90,12 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ - (void)setAutomaticPictureInPictureAllowed:(BOOL)allowed forOrigin:(OACOrigin *)origin;
+ /// Stores the zoom for the origin's host; open tabs on it follow. 1.0 removes the entry.
+ - (BOOL)setZoomFactor:(double)zoomFactor forOrigin:(OACOrigin *)origin error:(NSError **)error;
+-/// Plan C16. Fails silently (no-op) while the engine has no ad blocker.
++/// Plan C16. NO puts the origin's site on the ad blocker's allow list (Chromium's "ads" content
++/// setting, per profile; off-the-record profiles inherit it); YES removes it again. Open tabs on
++/// the site follow at their next page load.
+ - (void)setAdBlockingEnabled:(BOOL)enabled forOrigin:(OACOrigin *)origin;
++/// Plan C16. NO when the origin is on the allow list; the global switch does not affect it.
++- (BOOL)isAdBlockingEnabledForOrigin:(OACOrigin *)origin NS_SWIFT_NAME(isAdBlockingEnabled(forOrigin:));
+ /// Removes cookies, storage, cache and stored permissions of the origin's site (eTLD+1).
+ - (void)clearDataForOrigin:(OACOrigin *)origin completionHandler:(void (^)(void))completionHandler;
+ 
+diff --git a/openarc/bridge/public/OpenArcCore/OACTab.h b/openarc/bridge/public/OpenArcCore/OACTab.h
+index 8910539e3041..bdeee63dd534 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTab.h
++++ b/openarc/bridge/public/OpenArcCore/OACTab.h
+@@ -290,6 +290,12 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ /// Leaves HTML fullscreen (Escape is handled by the page view itself).
+ - (void)exitFullscreen;
+ 
++// MARK: Ad blocking (plan C16)
++
++/// Subresources and frames the built-in ad blocker kept from loading on the current page (all
++/// frames); 0 after each new page. Read on demand, no change callback.
++@property (nonatomic, readonly) NSInteger blockedAdCount;
++
+ // MARK: Lifetime (`BrowserEngine.closeTab`)
+ 
+ /// Closes the tab immediately, without beforeunload handlers. Idempotent.
+diff --git a/openarc/browser/openarc_ad_blocker.h b/openarc/browser/openarc_ad_blocker.h
+new file mode 100644
+index 000000000000..d58dec17e57d
+--- /dev/null
++++ b/openarc/browser/openarc_ad_blocker.h
+@@ -0,0 +1,163 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_AD_BLOCKER_H_
++#define OPENARC_BROWSER_OPENARC_AD_BLOCKER_H_
++
++#include <string>
++
++#include "base/files/file_path.h"
++#include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "url/gurl.h"
++
++class PrefService;
++class Profile;
++
++namespace openarc {
++
++// Built-in ad blocking (plan C16) on Chromium's own subresource filter
++// (//components/subresource_filter), the engine Chrome uses for its Better Ads
++// enforcement. Why this engine, and not declarativeNetRequest: it needs no
++// extension system, no Chrome Web Store and no Google ruleset component: we
++// hand it a ruleset ourselves, it indexes it once into its memory-mapped
++// flatbuffer format, shares it with every renderer, and filters subresources
++// in Blink and subframe navigations in the browser process.
++//
++// The pieces:
++// - Ruleset. EasyList + EasyPrivacy, converted at build time with Chromium's
++//   ruleset_converter into the "unindexed ruleset" format
++//   (chromium-bridge/build-adblock-ruleset.sh) and shipped in the framework's
++//   Resources/AdBlock/ (ruleset.pb, ruleset.version, ATTRIBUTION). At startup
++//   it goes to Chrome's RulesetService, which indexes it once per version into
++//   <user data dir>/Subresource Filter/Indexed Rules and publishes it. The
++//   Google component that would normally supply it stays off
++//   (--disable-component-update).
++// - Activation. Chrome activates the filter only on pages Safe Browsing lists
++//   (off here, no Google API keys). We force activation per tab through the
++//   filter's own forced-activation hook (DevtoolsInteractionTracker, the same
++//   switch DevTools' "Page.setAdBlockingEnabled" uses), re-asserted before
++//   every main-frame navigation, from the global on/off setting.
++// - Per-site allow list. Chrome's ADS content setting: ALLOW for an origin
++//   turns the filter off there (ProfileInteractionManager honours it), per
++//   profile, and incognito inherits it.
++// - Global on/off. A Local State pref (kEnabledPref, default on), so it holds
++//   for every profile of the app and survives restarts; Settings reads and
++//   writes it through OACApplication.adBlockingEnabled.
++//
++// TODO(C16 updater): fetch newer rulesets from our static host instead of
++// waiting for an app update. Design: a daily BEST_EFFORT task reads a small
++// manifest (version, SHA-256, size) from kRulesetUpdateManifestURL (empty
++// until the host exists, which keeps the updater off), downloads the
++// unindexed ruleset over HTTPS into <user data dir>/Open Arc Ad Block/<version>/
++// when the version differs, checks the hash, and calls LoadRuleset() with it.
++// RulesetService then indexes and publishes it without a restart. The bundled
++// ruleset stays the fallback. A Settings switch ("Update filter lists
++// automatically") comes with it. Until then, --openarc-ad-block-ruleset=<dir>
++// (a directory with ruleset.pb and ruleset.version) loads a ruleset from disk,
++// the same entry point the updater will use.
++class AdBlocker {
++ public:
++  // Where the updater will read its manifest; empty keeps it off. See the
++  // TODO above.
++  static constexpr char kRulesetUpdateManifestURL[] = "";
++  // Local State pref holding the global switch.
++  static constexpr char kEnabledPref[] = "openarc.ad_blocking.enabled";
++  // Development switch: load the ruleset from this directory instead of the
++  // framework's Resources/AdBlock.
++  static constexpr char kRulesetDirectorySwitch[] = "openarc-ad-block-ruleset";
++
++  AdBlocker(const AdBlocker&) = delete;
++  AdBlocker& operator=(const AdBlocker&) = delete;
++
++  // The browser process's instance (UI thread only).
++  static AdBlocker& Get();
++
++  // Registers the global pref on Local State. Called once Local State exists
++  // (OpenArcBrowserMainExtraParts::PostEarlyInitialization).
++  void Initialize(PrefService* local_state);
++  // Called before Local State goes away (PostMainMessageLoopRun).
++  void Shutdown();
++  // Hands the bundled ruleset (or --openarc-ad-block-ruleset) to Chrome's
++  // RulesetService. Called after the service exists (PostBrowserStart).
++  void LoadBundledRuleset();
++  // Hands the unindexed ruleset in |directory| (ruleset.pb, ruleset.version,
++  // ATTRIBUTION) to the RulesetService, after reading its version in the
++  // background. A version it already indexed is not indexed again. Returns
++  // false when there is no RulesetService.
++  bool LoadRuleset(const base::FilePath& directory);
++  // A ruleset was supplied or an indexed one is on disk.
++  bool IsAvailable() const;
++  // The content version of the newest ruleset ("" when none).
++  std::string RulesetVersion() const;
++
++  bool IsEnabled() const;
++  void SetEnabled(bool enabled);
++
++  // The per-site switch for the origin of |url| in |profile| (its original
++  // profile's setting for an off-the-record one, which inherits it). True
++  // unless the site is on the allow list.
++  static bool IsEnabledForSite(Profile* profile, const GURL& url);
++  static void SetEnabledForSite(Profile* profile, const GURL& url,
++                                bool enabled);
++
++ private:
++  friend class base::NoDestructor<AdBlocker>;
++  AdBlocker();
++  ~AdBlocker();
++
++  raw_ptr<PrefService> local_state_ = nullptr;
++  std::string supplied_version_;
++};
++
++// Per tab: forces the subresource filter's activation from the global switch
++// before each main-frame navigation, and counts the subresources and frames
++// the filter blocked on the current page (plan C16, "blocked count per tab").
++//
++// The count comes from the console messages the filter writes for every
++// blocked load once activation is "enabled" (Blink's subresource filter and
++// the browser's child-frame throttle both start them with the same fixed
++// text, kBlockedMessagePrefix); the filter keeps no other per-page count a
++// browser-side observer can read. A Chromium rebase that changes the text
++// shows up as a zero count, never as wrong blocking.
++class AdBlockTabHelper : public content::WebContentsObserver,
++                         public content::WebContentsUserData<AdBlockTabHelper> {
++ public:
++  static constexpr char16_t kBlockedMessagePrefix[] =
++      u"Chrome blocked resource ";
++
++  AdBlockTabHelper(const AdBlockTabHelper&) = delete;
++  AdBlockTabHelper& operator=(const AdBlockTabHelper&) = delete;
++  ~AdBlockTabHelper() override;
++
++  // Loads blocked on the current page of the primary frame tree.
++  int blocked_count() const { return blocked_count_; }
++
++  // content::WebContentsObserver:
++  void DidStartNavigation(content::NavigationHandle* handle) override;
++  void DidFinishNavigation(content::NavigationHandle* handle) override;
++  void OnDidAddMessageToConsole(
++      content::RenderFrameHost* source_frame,
++      blink::mojom::ConsoleMessageLevel log_level,
++      const std::u16string& message,
++      int32_t line_no,
++      const std::u16string& source_id,
++      const std::optional<std::u16string>& untrusted_stack_trace) override;
++
++ private:
++  friend class content::WebContentsUserData<AdBlockTabHelper>;
++  explicit AdBlockTabHelper(content::WebContents* web_contents);
++
++  void ApplyActivation();
++
++  int blocked_count_ = 0;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_AD_BLOCKER_H_
+diff --git a/openarc/browser/openarc_ad_blocker.mm b/openarc/browser/openarc_ad_blocker.mm
+new file mode 100644
+index 000000000000..6bb70c425efe
+--- /dev/null
++++ b/openarc/browser/openarc_ad_blocker.mm
+@@ -0,0 +1,259 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_ad_blocker.h"
++
++#include <optional>
++#include <string>
++
++#include "base/check.h"
++#include "base/command_line.h"
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_util.h"
++#include "base/functional/bind.h"
++#include "base/task/thread_pool.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/pref_service.h"
++#include "components/content_settings/core/browser/host_content_settings_map.h"
++#include "components/content_settings/core/common/content_settings.h"
++#include "components/content_settings/core/common/content_settings_types.h"
++#include "components/subresource_filter/content/browser/devtools_interaction_tracker.h"
++#include "components/subresource_filter/content/browser/ruleset_service.h"
++#include "components/subresource_filter/core/browser/ruleset_version.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/page.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "openarc/common/openarc_paths.h"
++
++namespace openarc {
++
++namespace {
++
++// Files of a ruleset directory (chromium-bridge/build-adblock-ruleset.sh).
++constexpr char kRulesetFile[] = "ruleset.pb";
++constexpr char kVersionFile[] = "ruleset.version";
++constexpr char kAttributionFile[] = "ATTRIBUTION";
++
++// Framework-relative location of the bundled ruleset.
++base::FilePath BundledRulesetDirectory() {
++  return GetFrameworkVersionDirectory().Append("Resources").Append("AdBlock");
++}
++
++subresource_filter::RulesetService* RulesetService() {
++  return g_browser_process
++             ? g_browser_process->subresource_filter_ruleset_service()
++             : nullptr;
++}
++
++HostContentSettingsMap* SettingsMap(Profile* profile) {
++  return profile ? HostContentSettingsMapFactory::GetForProfile(profile)
++                 : nullptr;
++}
++
++}  // namespace
++
++// static
++AdBlocker& AdBlocker::Get() {
++  static base::NoDestructor<AdBlocker> instance;
++  return *instance;
++}
++
++AdBlocker::AdBlocker() = default;
++AdBlocker::~AdBlocker() = default;
++
++void AdBlocker::Initialize(PrefService* local_state) {
++  CHECK(local_state);
++  local_state_ = local_state;
++  // Chrome registers its Local State prefs in one central list we do not
++  // patch; this one is ours, registered on the live registry before anything
++  // reads it. Unknown keys already in Local State are kept until then, so the
++  // stored choice survives restarts.
++  auto* registry =
++      static_cast<PrefRegistrySimple*>(local_state->DeprecatedGetPrefRegistry());
++  if (!local_state->FindPreference(kEnabledPref)) {
++    registry->RegisterBooleanPref(kEnabledPref, true);
++  }
++}
++
++void AdBlocker::Shutdown() {
++  local_state_ = nullptr;
++}
++
++void AdBlocker::LoadBundledRuleset() {
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  // A framework built without the lists (build-adblock-ruleset.sh not run)
++  // has no Resources/AdBlock: the filter then has nothing to match, unless an
++  // earlier ruleset is still indexed in the user data directory.
++  LoadRuleset(command_line.HasSwitch(kRulesetDirectorySwitch)
++                  ? command_line.GetSwitchValuePath(kRulesetDirectorySwitch)
++                  : BundledRulesetDirectory());
++}
++
++namespace {
++
++// Reads a ruleset directory's version on a thread that may block; "" when the
++// directory does not hold a ruleset.
++std::string ReadRulesetVersion(const base::FilePath& directory) {
++  std::string version;
++  if (!base::PathExists(directory.Append(kRulesetFile)) ||
++      !base::ReadFileToString(directory.Append(kVersionFile), &version)) {
++    return std::string();
++  }
++  return std::string(base::TrimWhitespaceASCII(version, base::TRIM_ALL));
++}
++
++}  // namespace
++
++bool AdBlocker::LoadRuleset(const base::FilePath& directory) {
++  if (!RulesetService()) {
++    return false;
++  }
++  // The version file is read off the UI thread; the service then indexes the
++  // ruleset (once per version, on its own background sequence) and publishes
++  // it to every renderer. A version already indexed is used as is.
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&ReadRulesetVersion, directory),
++      base::BindOnce(
++          [](const base::FilePath& directory, const std::string& version) {
++            subresource_filter::RulesetService* service = RulesetService();
++            if (version.empty()) {
++              LOG(WARNING) << "OpenArc: no ad blocking ruleset in "
++                           << directory;
++              return;
++            }
++            if (!service) {
++              return;
++            }
++            subresource_filter::UnindexedRulesetInfo info;
++            info.content_version = version;
++            info.ruleset_path = directory.Append(kRulesetFile);
++            // Copied next to the indexed ruleset: the lists' license travels
++            // with them.
++            info.license_path = directory.Append(kAttributionFile);
++            service->IndexAndStoreAndPublishRulesetIfNeeded(info);
++            AdBlocker::Get().supplied_version_ = version;
++          },
++          directory));
++  return true;
++}
++
++bool AdBlocker::IsAvailable() const {
++  return !RulesetVersion().empty();
++}
++
++std::string AdBlocker::RulesetVersion() const {
++  if (!supplied_version_.empty()) {
++    return supplied_version_;
++  }
++  subresource_filter::RulesetService* service = RulesetService();
++  if (!service) {
++    return std::string();
++  }
++  subresource_filter::IndexedRulesetVersion indexed =
++      service->GetMostRecentlyIndexedVersion();
++  return indexed.IsValid() ? indexed.content_version : std::string();
++}
++
++bool AdBlocker::IsEnabled() const {
++  return local_state_ ? local_state_->GetBoolean(kEnabledPref) : true;
++}
++
++void AdBlocker::SetEnabled(bool enabled) {
++  // Read by every tab's AdBlockTabHelper at its next main-frame navigation;
++  // the page on screen keeps its filter until it is reloaded.
++  if (local_state_) {
++    local_state_->SetBoolean(kEnabledPref, enabled);
++  }
++}
++
++// static
++bool AdBlocker::IsEnabledForSite(Profile* profile, const GURL& url) {
++  HostContentSettingsMap* map = SettingsMap(profile);
++  if (!map || !url.is_valid()) {
++    return true;
++  }
++  // ADS: BLOCK (the default) = ads are blocked; ALLOW = the site is on the
++  // allow list.
++  return map->GetContentSetting(url, GURL(), ContentSettingsType::ADS) !=
++         CONTENT_SETTING_ALLOW;
++}
++
++// static
++void AdBlocker::SetEnabledForSite(Profile* profile,
++                                  const GURL& url,
++                                  bool enabled) {
++  HostContentSettingsMap* map = SettingsMap(profile);
++  if (!map || !url.is_valid()) {
++    return;
++  }
++  // Enabling removes the exception, so the site follows the default again.
++  map->SetContentSettingDefaultScope(
++      url, GURL(), ContentSettingsType::ADS,
++      enabled ? CONTENT_SETTING_DEFAULT : CONTENT_SETTING_ALLOW);
++}
++
++// AdBlockTabHelper ------------------------------------------------------------
++
++AdBlockTabHelper::AdBlockTabHelper(content::WebContents* web_contents)
++    : content::WebContentsObserver(web_contents),
++      content::WebContentsUserData<AdBlockTabHelper>(*web_contents) {
++  ApplyActivation();
++}
++
++AdBlockTabHelper::~AdBlockTabHelper() = default;
++
++void AdBlockTabHelper::ApplyActivation() {
++  // The subresource filter's forced activation (DevTools' switch): every page
++  // load activates the filter at level "enabled" whatever Safe Browsing says;
++  // the ADS allow list still turns it off per site
++  // (ProfileInteractionManager::OnPageActivationComputed).
++  subresource_filter::DevtoolsInteractionTracker::CreateForWebContents(
++      web_contents());
++  subresource_filter::DevtoolsInteractionTracker::FromWebContents(
++      web_contents())
++      ->ToggleForceActivation(AdBlocker::Get().IsEnabled());
++}
++
++void AdBlockTabHelper::DidStartNavigation(content::NavigationHandle* handle) {
++  // Activation is computed when the main-frame response arrives
++  // (SafeBrowsingPageActivationThrottle::WillProcessResponse), so the switch
++  // read here applies to this navigation.
++  if (handle->IsInPrimaryMainFrame() && !handle->IsSameDocument()) {
++    ApplyActivation();
++  }
++}
++
++void AdBlockTabHelper::DidFinishNavigation(content::NavigationHandle* handle) {
++  if (handle->IsInPrimaryMainFrame() && handle->HasCommitted() &&
++      !handle->IsSameDocument()) {
++    blocked_count_ = 0;
++  }
++}
++
++void AdBlockTabHelper::OnDidAddMessageToConsole(
++    content::RenderFrameHost* source_frame,
++    blink::mojom::ConsoleMessageLevel log_level,
++    const std::u16string& message,
++    int32_t line_no,
++    const std::u16string& source_id,
++    const std::optional<std::u16string>& untrusted_stack_trace) {
++  if (!source_frame || !source_frame->GetPage().IsPrimary()) {
++    return;
++  }
++  if (base::StartsWith(message, kBlockedMessagePrefix)) {
++    ++blocked_count_;
++  }
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(AdBlockTabHelper);
++
++}  // namespace openarc
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.h b/openarc/browser/openarc_browser_main_extra_parts.h
+index d26bd5f70d18..d3dec129d3fa 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.h
++++ b/openarc/browser/openarc_browser_main_extra_parts.h
+@@ -18,6 +18,8 @@ namespace openarc {
+ // - Open Arc's defaults for every profile: Safe Browsing off (no Google API
+ //   keys), browser sign-in off (sync is our own CloudKit sync of the
+ //   workspace; Chrome sync is never set up), background mode off;
++// - hands the bundled ad blocking ruleset to Chrome's RulesetService (plan
++//   C16, openarc_ad_blocker.h);
+ // - runs the bridge's callback before Chrome tears profiles down, so every
+ //   OACTab closes its WebContents while its profile is still alive.
+ class OpenArcBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
+@@ -38,6 +40,7 @@ class OpenArcBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
+   // ChromeBrowserMainExtraParts:
+   void PostEarlyInitialization() override;
+   void PostProfileInit(Profile* profile, bool is_initial_profile) override;
++  void PostBrowserStart() override;
+   void PostMainMessageLoopRun() override;
+ 
+  private:
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.mm b/openarc/browser/openarc_browser_main_extra_parts.mm
+index 977a80f871b0..230040e2bb62 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.mm
++++ b/openarc/browser/openarc_browser_main_extra_parts.mm
+@@ -15,6 +15,7 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+ #include "components/signin/public/base/signin_pref_names.h"
++#include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/common/openarc_paths.h"
+ 
+ namespace openarc {
+@@ -61,6 +62,8 @@
+   if (PrefService* local_state = g_browser_process->local_state()) {
+     local_state->SetDefaultPrefValue(prefs::kBackgroundModeEnabled,
+                                      base::Value(false));
++    // The ad blocker's global switch (plan C16).
++    AdBlocker::Get().Initialize(local_state);
+   }
+ }
+ 
+@@ -72,7 +75,14 @@
+   prefs->SetDefaultPrefValue(prefs::kSigninAllowed, base::Value(false));
+ }
+ 
++void OpenArcBrowserMainExtraParts::PostBrowserStart() {
++  // Chrome created its RulesetService in PreBrowserStart (it publishes an
++  // already indexed ruleset at once); give it ours (plan C16).
++  AdBlocker::Get().LoadBundledRuleset();
++}
++
+ void OpenArcBrowserMainExtraParts::PostMainMessageLoopRun() {
++  AdBlocker::Get().Shutdown();
+   if (will_destroy_profiles_) {
+     std::move(will_destroy_profiles_).Run();
+   }
+diff --git a/openarc/browser/openarc_tab_helpers.mm b/openarc/browser/openarc_tab_helpers.mm
+index 0241b892cbec..edb0154564d3 100644
+--- a/openarc/browser/openarc_tab_helpers.mm
++++ b/openarc/browser/openarc_tab_helpers.mm
+@@ -11,6 +11,7 @@
+ #include "components/permissions/permission_prompt.h"
+ #include "components/permissions/permission_request_manager.h"
+ #include "content/public/browser/web_contents.h"
++#include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_dialog_host.h"
+ 
+ namespace openarc {
+@@ -33,6 +34,9 @@
+ // static
+ void TabHelpersAccess::AttachTabHelpers(content::WebContents* web_contents) {
+   TabHelpers::AttachTabHelpers(web_contents);
++  // Built-in ad blocking (plan C16): forced activation of Chrome's subresource
++  // filter, which TabHelpers just attached, and the per-page blocked count.
++  AdBlockTabHelper::CreateForWebContents(web_contents);
+   if (auto* manager = permissions::PermissionRequestManager::FromWebContents(
+           web_contents)) {
+     // The setter is named for tests; it is the only way to choose the prompt

@@ -27,6 +27,14 @@
 //   right away.
 //
 // The look of every one of these dialogs is not in docs/arc-spec (unknown); C12 designs them.
+//
+// As built in C12: JavaScript dialogs come from the tab's JavaScriptDialogManager; permission
+// prompts from `permissions::PermissionRequestManager` (its prompt view is the bridge's;
+// getUserMedia reaches it through `MediaCaptureDevicesDispatcher`); HTTP auth from //chrome's
+// HTTP auth flow (`LoginTabHelper` / `LoginHandler`, our view); file choosers from the tab's
+// `WebContentsDelegate::RunFileChooser` (`<input type=file>`; the File System Access pickers keep
+// Chromium's native macOS panel); external protocols from `ExternalProtocolHandler` after its
+// policy decided to ask.
 
 #import <OpenArcCore/OACDefines.h>
 #import <OpenArcCore/OACTab.h>
@@ -96,7 +104,8 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 @property (nonatomic, readonly, copy) NSString *realm;
 /// The server or proxy host and port that asks.
 @property (nonatomic, readonly, copy) NSString *challengerHostPort;
-@property (nonatomic, readonly) BOOL isProxy;
+/// A proxy asks (407), not the server. (Not `isProxy`, which is NSObject's.)
+@property (nonatomic, readonly) BOOL isProxyChallenge;
 /// The connection is not encrypted (show a warning in the dialog).
 @property (nonatomic, readonly) BOOL isInsecureConnection;
 @property (nonatomic, readonly, copy, nullable) NSString *suggestedUsername;
@@ -133,11 +142,14 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 @property (nonatomic, readonly, copy) NSArray<NSNumber *> *kinds NS_REFINED_FOR_SWIFT;
 /// The request comes from a user gesture (prompts without one may be shown quietly).
 @property (nonatomic, readonly) BOOL hasUserGesture;
+/// Every kind supports a one-time grant (Chromium's "Allow this time": camera, microphone,
+/// location). NO: `allowRemembering:NO` stores "allow" like YES does.
+@property (nonatomic, readonly) BOOL supportsAllowingOnce;
 
 /// Allow. `remember` NO: allow this time only (until the page is closed); YES: store "allow" for
 /// the origin in the profile's site settings.
 - (void)allowRemembering:(BOOL)remember NS_SWIFT_NAME(allow(remembering:));
-/// Block. `remember` YES stores "block" for the origin.
+/// Block. Chromium stores "block" for the origin either way (its prompt has no one-time block).
 - (void)denyRemembering:(BOOL)remember NS_SWIFT_NAME(deny(remembering:));
 /// Closed without a decision (Chromium counts dismissals toward its auto-block heuristic).
 - (void)dismiss;
@@ -181,6 +193,9 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// Bundle URL of that app, for its icon.
 @property (nonatomic, readonly, copy, nullable) NSURL *handlerApplicationURL;
 @property (nonatomic, readonly) BOOL hasUserGesture;
+/// Chromium may remember "always allow" for this origin (a potentially trustworthy origin, and the
+/// policy allows the checkbox). NO: `rememberForOrigin` is ignored.
+@property (nonatomic, readonly) BOOL canRememberForOrigin;
 
 /// Opens the URL in the handler app. `rememberForOrigin` stores "always allow" for this scheme on
 /// the requesting origin.

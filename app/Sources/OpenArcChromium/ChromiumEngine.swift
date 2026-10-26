@@ -16,7 +16,8 @@ import OpenArcCore
 // link, find results, crash, close requests), new-tab requests (plain URL requests and
 // script-opened windows as `PendingTabToken`s), NSView hosting, preferred color scheme, zoom, find,
 // edit commands, selected text, snapshots, view source, exit fullscreen, the beforeunload close
-// path, JavaScript dialogs (alert / confirm / prompt / beforeunload).
+// path, shell-drawn dialogs (C12: JavaScript alert / confirm / prompt / beforeunload, permission
+// prompts, HTTP auth, file chooser, external protocol), downloads (C12).
 //
 // Profiles (C11): one on-disk Chromium profile per model Profile at `<user data dir>/<UUID>`
 // (cookies, storage, cache, HTTP auth cache, permissions, history, favicons, service workers and
@@ -29,9 +30,9 @@ import OpenArcCore
 // Not supported yet (the bridge has no implementation):
 // - `savePage(to:)` throws `EngineError.unsupported` (C15).
 // - `print()` and `showDevTools(_:)` do nothing (C15).
-// - HTTP auth, permission, file chooser and external protocol prompts never reach the shell:
-//   content answers them with their defaults (cancel / deny) until plan C12.
-// - Downloads and extensions are empty services (C12, C14).
+// - Extensions are an empty service (C14).
+// - Downloads list the on-disk profile only; downloads of incognito windows are not listed (C12
+//   follow-up).
 // - Capture state stays empty (C9).
 
 /// The Chromium engine. Create it on the main actor at launch; it starts Chromium's browser process
@@ -39,8 +40,10 @@ import OpenArcCore
 public final class ChromiumEngine: BrowserEngine {
     /// `"Chromium <version>"`, for Settings ▸ About.
     public let engineVersion: String
-    public let downloads: any EngineDownloads = UnsupportedDownloads()
+    public let downloads: any EngineDownloads
     public let extensions: any EngineExtensions = UnsupportedExtensions()
+    /// Chromium's subresource filter with the bundled EasyList + EasyPrivacy ruleset (plan C16).
+    public let adBlocking: any EngineAdBlocking
 
     private let core: ChromiumEngineCore
     private let broadcaster: AsyncBroadcaster<EngineEvent>
@@ -63,6 +66,8 @@ public final class ChromiumEngine: BrowserEngine {
             broadcaster: broadcaster
         )
         engineVersion = "Chromium " + OACApplication.shared.chromiumVersion
+        downloads = ChromiumDownloads(core: core)
+        adBlocking = ChromiumAdBlocking(core: core)
         core.startAtLaunch()
     }
 
@@ -176,6 +181,19 @@ final class ChromiumEngineCore {
         @unknown default:
             throw EngineError.shuttingDown
         }
+    }
+
+    /// The on-disk profile's site settings (its off-the-record profile inherits the ad blocking
+    /// allow list). nil when the profile cannot be loaded.
+    func siteSettings(_ id: Profile.ID) async -> OACSiteSettings? {
+        guard !isShutDown, let profile = try? await profile(id, offTheRecord: false) else { return nil }
+        return profile.siteSettings
+    }
+
+    /// The profile's downloads (C12). nil when the profile cannot be loaded.
+    func downloads(_ id: Profile.ID) async -> OACDownloads? {
+        guard !isShutDown, let profile = try? await profile(id, offTheRecord: false) else { return nil }
+        return profile.downloads
     }
 
     private func profile(_ id: Profile.ID, offTheRecord: Bool) async throws -> OACProfile {
