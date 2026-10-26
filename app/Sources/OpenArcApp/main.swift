@@ -11,7 +11,8 @@ import OpenArcChromium
 // xcframework (the default; `OPENARC_ENGINE=fake` selects FakeEngine for development), and keeps the workspace on disk (`WorkspaceStore`, overridable with `OPENARC_DATA_DIR`). Sync is
 // disabled unless `OPENARC_SYNC=cloudkit` is set (D5); without the iCloud entitlement (D4) the
 // CloudKit store then reports itself as not configured instead of starting. Updates use Sparkle
-// (D7, `SparkleUpdateChecker`) once the Info.plist carries a real EdDSA public key.
+// (D7, `SparkleUpdateChecker`) once the Info.plist carries a real EdDSA public key. Crash reports
+// stay local (D8, decision Q8): Chromium's Crashpad writes them to `<app data dir>/Crash Reports`.
 
 struct OpenArcApp: App {
     /// Receives links and files opened from other apps (`application(_:open:)`, D2).
@@ -41,6 +42,12 @@ struct OpenArcApp: App {
             externalOpenInbox: appDelegate.inbox,
             termination: appDelegate.termination
         )
+        .commands {
+            // Development build with OPENARC_DEBUG_CRASH=1 only (plan D8).
+            if CrashReportLocation.isDebugCrashMenuEnabled() {
+                DebugCrashCommands()
+            }
+        }
     }
 }
 
@@ -50,7 +57,13 @@ extension OpenArcApp {
     /// build has no Chromium.
     static var chromiumEngineFactory: ((URL) -> any BrowserEngine)? {
         #if canImport(OpenArcChromium)
-        return { directory in MainActor.assumeIsolated { ChromiumEngine(userDataDirectory: directory) } }
+        // Crash reports (plan D8) go to the folder Settings ▸ Advanced reveals,
+        // `<app data dir>/Crash Reports`, for the app process and every Chromium helper.
+        return { directory in
+            MainActor.assumeIsolated {
+                ChromiumEngine(userDataDirectory: directory, crashReportsDirectory: CrashReportLocation.directory())
+            }
+        }
         #else
         return nil
         #endif

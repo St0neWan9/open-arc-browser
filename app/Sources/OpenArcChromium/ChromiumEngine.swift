@@ -40,13 +40,18 @@ public final class ChromiumEngine: BrowserEngine {
 
     /// - Parameters:
     ///   - userDataDirectory: Chromium's user data directory, `<app data dir>/Chromium`.
+    ///   - crashReportsDirectory: the Crashpad database for local crash reports (plan D8, decision
+    ///     Q8: never uploaded), `<app data dir>/Crash Reports` in the app. It covers the browser
+    ///     process (which is the app process, so Swift crashes too, once the engine started) and
+    ///     every helper. nil: `<userDataDirectory>/Crashpad`.
     ///   - additionalSwitches: extra Chromium switches (development only).
     @MainActor
-    public init(userDataDirectory: URL, additionalSwitches: [String] = []) {
+    public init(userDataDirectory: URL, crashReportsDirectory: URL? = nil, additionalSwitches: [String] = []) {
         let broadcaster = AsyncBroadcaster<EngineEvent>()
         self.broadcaster = broadcaster
         self.core = ChromiumEngineCore(
             userDataDirectory: userDataDirectory,
+            crashReportsDirectory: crashReportsDirectory,
             additionalSwitches: additionalSwitches,
             broadcaster: broadcaster
         )
@@ -106,6 +111,7 @@ public final class ChromiumEngine: BrowserEngine {
 @MainActor
 final class ChromiumEngineCore {
     private let userDataDirectory: URL
+    private let crashReportsDirectory: URL?
     private let additionalSwitches: [String]
     private let broadcaster: AsyncBroadcaster<EngineEvent>
     private(set) var tabs: [EngineTabID: ChromiumTab] = [:]
@@ -113,8 +119,12 @@ final class ChromiumEngineCore {
     private var isShutDown = false
     private var launchObserver: NSObjectProtocol?
 
-    init(userDataDirectory: URL, additionalSwitches: [String], broadcaster: AsyncBroadcaster<EngineEvent>) {
+    init(
+        userDataDirectory: URL, crashReportsDirectory: URL?, additionalSwitches: [String],
+        broadcaster: AsyncBroadcaster<EngineEvent>
+    ) {
         self.userDataDirectory = userDataDirectory
+        self.crashReportsDirectory = crashReportsDirectory
         self.additionalSwitches = additionalSwitches
         self.broadcaster = broadcaster
     }
@@ -146,6 +156,7 @@ final class ChromiumEngineCore {
         case .notStarted:
             guard !isShutDown else { throw EngineError.shuttingDown }
             let configuration = OACApplicationConfiguration(userDataDirectory: userDataDirectory)
+            configuration.crashDumpDirectory = crashReportsDirectory
             configuration.additionalSwitches = additionalSwitches
             do {
                 try app.start(configuration: configuration)
