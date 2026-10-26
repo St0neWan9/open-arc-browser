@@ -185,3 +185,13 @@ Recommendation: (a) for v1 (no shell changes), revisit after C9 if hop latency s
 **Status: applied (C7b).** `EngineError` gained `profileUnavailable`, `invalidURL`, `shuttingDown`, `invalidArgument`, `requestFinished` and `engineFailure(String)`.
 
 `EngineError` has `tabNotFound`, `tabClosed`, `duplicateTabID`, `snapshotUnavailable`. The bridge adds `notStarted`, `profileUnavailable`, `invalidURL`, `shuttingDown`, `invalidArgument`, `requestFinished` (`OACErrorCode` in `OACDefines.h`). Proposal: add the cases the shell reacts to (`profileUnavailable`, `invalidURL`, `shuttingDown`) and map the rest to a generic `engineFailure(String)`.
+
+## C9 requests (bridge, for C6b / C9b)
+
+Found while wiring engine events end to end in the shell (plan C9). The Swift side already works against the current protocol; these make it cleaner or richer.
+
+1. **Favicon change is never reported (bug).** `-[OACTab faviconDownload:URL:bitmaps:]` writes `_fields.faviconURL` / `_fields.faviconPNGData` and then calls `webContentsDidChangeState`, whose `refreshState` takes its "before" snapshot from `_fields`, which already holds the new icon. So `tab:didChangeFaviconURL:pngData:` is never sent, and the icon only shows up in `OACTab.state`. Fix: keep the downloaded icon in separate ivars that `refreshState` copies into `_fields` (like the other fields), or snapshot `previous` before assigning. Also clear the icon on a cross-document primary-page commit so a new site never inherits the old icon. **Swift workaround in place:** `ChromiumTabCore` re-reads `OACTab.state` 0.3 / 1 / 2.5 / 6 / 15 s after every load stop and navigation finish, on adoption and when the surface becomes visible (`settleResyncDelays`). Remove it after the fix.
+2. **Favicon quality (C6b).** The bridge decodes only the first `kFavicon` candidate at 32 px. With `//chrome`, use `favicon::ContentFaviconDriver` (history-backed, best size, touch icons, cached across launches) and report its image.
+3. **Crash reason (§7, still P3).** `renderProcessGone` carries no reason; the shell's crash page could say "out of memory" vs "crashed" with `OACRenderProcessTermination` passed through (`TabEvent.renderProcessGone(RenderProcessGoneReason)`, a protocol change for Opus).
+4. **Crash recovery event (P3).** `BrowserTabState.isCrashed` goes back to false on reload, but no event says so; the shell clears its flag when a load starts. A `crashRecovered` / `isCrashed` field event would make that explicit.
+5. **Audio:** no request. `OnAudioStateChanged` / `IsCurrentlyAudible` / `IsAudioMuted` / `SetAudioMuted` are wired and verified in the app (speaker icon on the row, Mute in the context menu).

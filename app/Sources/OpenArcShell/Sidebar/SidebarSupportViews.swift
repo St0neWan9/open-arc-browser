@@ -29,7 +29,8 @@ enum SidebarPasteboard {
 
 // MARK: - Icons
 
-/// Favicon of a tab: engine PNG data if present, else a generic globe.
+/// Favicon of a tab: PNG data (live engine icon or the favicon cache, C9) if present, else a
+/// placeholder.
 struct SidebarFaviconView: View {
     /// What stands in for a missing favicon.
     enum Placeholder {
@@ -41,14 +42,14 @@ struct SidebarFaviconView: View {
         case roundedSquare
     }
 
-    let live: SidebarTabLiveState?
+    let pngData: Data?
     let size: CGFloat
     let tint: Color
     var placeholder: Placeholder = .globe
 
     var body: some View {
         Group {
-            if let data = live?.favicon?.pngData, let image = NSImage(data: data) {
+            if let image = SidebarFaviconView.image(pngData) {
                 Image(nsImage: image).resizable().interpolation(.high)
             } else {
                 switch placeholder {
@@ -62,6 +63,20 @@ struct SidebarFaviconView: View {
             }
         }
         .frame(width: size, height: size)
+    }
+
+    /// Decoded images by their bytes, so a row does not decode its PNG on every render.
+    @MainActor private static var decoded: [Data: NSImage] = [:]
+
+    @MainActor
+    static func image(_ data: Data?) -> NSImage? {
+        guard let data, !data.isEmpty else { return nil }
+        if let image = decoded[data] { return image }
+        guard let image = NSImage(data: data) else { return nil }
+        // Small icons; a few hundred distinct ones at most in practice (inferred). Bounded anyway.
+        if decoded.count > 512 { decoded.removeAll() }
+        decoded[data] = image
+        return image
     }
 }
 

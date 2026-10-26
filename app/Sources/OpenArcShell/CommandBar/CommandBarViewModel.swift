@@ -36,6 +36,9 @@ public final class CommandBarViewModel: ObservableObject {
     public var onAction: ((CommandBarAction) -> Void)?
     /// Called when the bar must close.
     public var onDismiss: (() -> Void)?
+    /// PNG bytes of a site row's favicon (C9): installed by the window from its favicon cache;
+    /// nil (or a nil result) keeps the placeholder glyph.
+    public var faviconProvider: ((CommandBarResult) -> Data?)?
 
     public private(set) var currentSpaceID: UUID?
     public private(set) var currentTabID: UUID?

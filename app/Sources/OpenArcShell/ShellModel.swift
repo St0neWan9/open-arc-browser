@@ -107,6 +107,9 @@ public final class ShellModel: ObservableObject {
         commandBar.onDismiss = { [weak self] in self?.dismissCommandBar() }
         paneCommandBar.onAction = { [weak self] action in self?.perform(action) }
         paneCommandBar.onDismiss = { [weak self] in self?.dismissCommandBar() }
+        let favicons: (CommandBarResult) -> Data? = { [weak controller] result in controller?.commandBarFavicon(for: result) }
+        commandBar.faviconProvider = favicons
+        paneCommandBar.faviconProvider = favicons
         // Menu enablement (split items, back/forward) reads sidebar state through this model.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

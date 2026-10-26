@@ -229,6 +229,15 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     /// Withdraws an outstanding dialog request, by the bridge request's identity. Weak toward the
     /// reply, so a request the shell dropped still gets its default answer.
     private var outstandingDialogs: [ObjectIdentifier: (id: UUID, withdraw: () -> Void)] = [:]
+    /// Re-reads the bridge state a few times after a load settles (see `scheduleSettleResync`).
+    private var settleResync: Task<Void, Never>?
+
+    /// Delays (seconds after the load settled) of the follow-up state reads. C9 workaround for a
+    /// bridge bug: `-[OACTab faviconDownload:…]` stores the decoded icon before taking the
+    /// "before" snapshot, so `tab:didChangeFaviconURL:pngData:` is never sent and the icon only
+    /// reaches `OACTab.state`. Reading the state again picks it up. Remove when the bridge fix
+    /// (chromium-bridge/SWIFT_PROTOCOL_CHANGES.md, "C9 requests") lands.
+    static let settleResyncDelays: [Double] = [0.3, 1, 2.5, 6, 15]
 
     init(tab: OACTab, id: EngineTabID, channel: TabChannel, engine: ChromiumEngineCore, colorScheme: WebColorScheme) {
         self.tab = tab
@@ -239,6 +248,9 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         tab.delegate = self
         tab.dialogDelegate = self
         tab.preferredColorScheme = OACColorScheme(colorScheme)
+        // An adopted tab may have finished loading before this wrapper existed: no load event will
+        // come to trigger the follow-up reads, so start them now.
+        scheduleSettleResync()
     }
 
     // MARK: Commands
@@ -297,6 +309,8 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     }
 
     private func finish() {
+        settleResync?.cancel()
+        settleResync = nil
         for entry in outstandingDialogs.values { entry.withdraw() }
         outstandingDialogs.removeAll()
         channel.finish()
@@ -311,11 +325,34 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         channel.update(to: BrowserTabState(tab.state))
     }
 
+    /// Reads the bridge state again at `settleResyncDelays` after a load stopped or a navigation
+    /// finished, so state the bridge changed without a delegate call (the favicon) still arrives.
+    /// A newer load restarts the schedule. Bounded: at most five cheap reads per load.
+    private func scheduleSettleResync() {
+        settleResync?.cancel()
+        settleResync = Task { @MainActor [weak self] in
+            var elapsed = 0.0
+            for delay in ChromiumTabCore.settleResyncDelays {
+                try? await Task.sleep(nanoseconds: UInt64((delay - elapsed) * 1_000_000_000))
+                elapsed = delay
+                guard !Task.isCancelled, let self else { return }
+                self.sync()
+            }
+        }
+    }
+
     // MARK: Hosting
 
     var nativeView: AnyObject? { tab?.nativeView }
 
-    func setVisible(_ visible: Bool) { tab?.setVisible(visible) }
+    func setVisible(_ visible: Bool) {
+        tab?.setVisible(visible)
+        // Pick up state the bridge changed without telling (see `settleResyncDelays`).
+        if visible {
+            sync()
+            scheduleSettleResync()
+        }
+    }
 
     func setFocused(_ focused: Bool) { tab?.setFocused(focused) }
 
@@ -323,7 +360,10 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
 
     func tab(_ tab: OACTab, didChangeURL url: URL?) { sync() }
     func tab(_ tab: OACTab, didChangeTitle title: String) { sync() }
-    func tab(_ tab: OACTab, didChangeLoading isLoading: Bool, progress: Double) { sync() }
+    func tab(_ tab: OACTab, didChangeLoading isLoading: Bool, progress: Double) {
+        sync()
+        if !isLoading { scheduleSettleResync() }
+    }
     func tab(_ tab: OACTab, didChangeFaviconURL faviconURL: URL?, pngData: Data?) { sync() }
     func tab(_ tab: OACTab, didChangeCanGoBack canGoBack: Bool, canGoForward: Bool) { sync() }
     func tab(_ tab: OACTab, didChange audioState: OACAudioState) { sync() }
@@ -331,7 +371,10 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     func tab(_ tab: OACTab, didChangeZoomFactor zoomFactor: Double) { sync() }
     func tab(_ tab: OACTab, didChangeFullscreen isFullscreen: Bool) { sync() }
     func tab(_ tab: OACTab, didChangeThemeColor color: OACColor, hasThemeColor: Bool) { sync() }
-    func tab(_ tab: OACTab, didFinish navigation: OACNavigation) { sync() }
+    func tab(_ tab: OACTab, didFinish navigation: OACNavigation) {
+        sync()
+        scheduleSettleResync()
+    }
 
     func tab(_ tab: OACTab, renderProcessDidTerminate reason: OACRenderProcessTermination) {
         sync()

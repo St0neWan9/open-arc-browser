@@ -328,7 +328,8 @@ public enum CommandBarResultKind: Hashable, Sendable {
     }
 }
 
-/// Placeholder icon family for a row (real favicons come later).
+/// Icon family for a row. `.site` rows draw the page's favicon when the window's favicon cache
+/// has one (`CommandBarViewModel.faviconProvider`, C9), else a placeholder glyph.
 public enum CommandBarIconHint: Hashable, Sendable {
     case site(faviconURL: URL?)
     case pinned

@@ -99,6 +99,14 @@ public final class LibraryModel: ObservableObject {
     // MARK: Spaces board
 
     /// One column per live space, in dock order. [06 §8] observed.
+    /// Cached favicon of an archived item (C9): its favicon URL, else its site.
+    func faviconImage(for item: ArchiveItem) -> Data? {
+        sidebar.controller.faviconImage(iconURL: item.faviconURL, pageURL: item.url)
+    }
+
+    /// Favicon of a tab on the Spaces board (C9).
+    func faviconImage(forTab id: UUID) -> Data? { sidebar.faviconImage(for: id) }
+
     var boardColumns: [LibraryBoardColumn] { LibraryBoard.columns(in: sidebar.workspace, systemAppearance: sidebar.controller.systemAppearance) }
 
     /// Moves a space with the column drag handle. [06 §8] observed (handle); `TreeOps.moveSpace`.

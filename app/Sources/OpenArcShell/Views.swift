@@ -121,7 +121,8 @@ struct MainWindowContent: View {
             SplitWebArea(model: model, sidebar: sidebar, layout: splitLayout, size: layout.webPanelFrame.size, palette: palette)
                 .offset(x: layout.webPanelFrame.minX, y: layout.webPanelFrame.minY)
         } else {
-            WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground)
+            WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground,
+                     crashed: model.crashedPageState(for: sidebar.selectedTabID))
                 .frame(width: layout.webPanelFrame.width, height: layout.webPanelFrame.height)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
                 .shadow(color: .black.opacity(ShellLocalTokens.webPanelShadowOpacity),
@@ -189,6 +190,8 @@ struct WebPanel: View {
     /// [07 §8.1] (E12) in light and dark. With no tab the panel is just this color, with no text
     /// (B32 round 1 observed: Arc's empty panel is blank).
     var background: RGBAColor = RGBAColor(hex: 0xFFFFFF)
+    /// Set while the tab's renderer is gone: the crash page covers the surface (C9).
+    var crashed: CrashedPageState? = nil
     @Environment(\.dialogCenter) private var dialogCenter
     @Environment(\.windowDrawnPermissionTab) private var windowDrawnPermissionTab
 
@@ -198,6 +201,7 @@ struct WebPanel: View {
             if let tab {
                 SurfaceHostRepresentable(surface: tab.surface, panelColor: background)
                     .id(tab.id)
+                if let crashed { CrashedPageView(state: crashed, panelColor: background) }
                 if let findBar { FindBarOverlay(host: findBar) }
                 if let dialogCenter {
                     TabDialogOverlay(center: dialogCenter, tabID: tab.id, windowDrawnPermissionTab: windowDrawnPermissionTab)

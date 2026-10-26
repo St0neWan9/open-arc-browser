@@ -605,6 +605,41 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         update(\.isFullscreen, on, event: .fullscreenChanged(on))
     }
 
+    /// Simulates the favicon arriving (Chromium sends PNG bytes, C9).
+    public func simulateFavicon(_ favicon: Favicon?) {
+        update(\.favicon, favicon, event: .faviconChanged(favicon))
+    }
+
+    /// Simulates load progress (FakeEngine navigations are instantaneous otherwise).
+    public func simulateLoadState(_ loadState: LoadState) {
+        update(\.loadState, loadState, event: .loadStateChanged(loadState))
+    }
+
+    /// Simulates a navigation that commits without a page load: a same-document navigation
+    /// (fragment, `history.pushState`) or the final URL of a server redirect. The URL becomes a new
+    /// history entry; the title changes when given.
+    public func simulateURLChange(_ url: URL, title: String? = nil) {
+        lock.withLock {
+            guard !isClosed else { return }
+            history.removeSubrange((historyIndex + 1)...)
+            history.append(url)
+            historyIndex = history.count - 1
+            state.url = url
+            broadcaster.yield(.urlChanged(url))
+            state.committedURL = url
+            broadcaster.yield(.committedURLChanged(url))
+            if let title, title != state.title {
+                state.title = title
+                broadcaster.yield(.titleChanged(title))
+            }
+            let navigation = NavigationState(canGoBack: historyIndex > 0, canGoForward: false)
+            if navigation != state.navigation {
+                state.navigation = navigation
+                broadcaster.yield(.navigationStateChanged(navigation))
+            }
+        }
+    }
+
     public func simulateThemeColor(_ color: RGBAColor?) {
         update(\.themeColor, color, event: .themeColorChanged(color))
     }

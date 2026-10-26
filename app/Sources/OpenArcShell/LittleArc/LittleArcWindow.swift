@@ -68,7 +68,8 @@ struct LittleArcBrowsingView: View {
         VStack(spacing: 0) {
             LittleArcTopBar(model: model, palette: palette)
                 .frame(height: LittleArcTokens.topBarHeight)
-            WebPanel(tab: model.liveTab, background: palette.webPanelBackground)
+            WebPanel(tab: model.liveTab, background: palette.webPanelBackground,
+                     crashed: model.page.isCrashed ? CrashedPageState(reload: { model.reloadOrStop() }) : nil)
                 .environment(\.dialogCenter, model.dialogs)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
                 .padding([.horizontal, .bottom], LittleArcTokens.pageInset)
