@@ -99,6 +99,7 @@ public final class LittleArcModel: ObservableObject {
             presentation: .littleArc
         )
         commandBar.onAction = { [weak self] action in self?.handle(action) }
+        commandBar.faviconProvider = { [weak shell] result in shell?.controller.commandBarFavicon(for: result) }
         commandBar.onDismiss = { [weak self] in self?.close() }
         colorSchemeObservation = shell.controller.colorSchemeInputsChanged.sink { [weak self] in
             MainActor.assumeIsolated { self?.syncColorScheme() }

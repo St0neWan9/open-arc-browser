@@ -218,6 +218,9 @@ struct SidebarTabLiveState: Equatable {
     var isLoading = false
     var progress: Double = 1
     var favicon: Favicon?
+    /// The page the favicon arrived for (committed URL then). The bridge keeps the old icon across a
+    /// navigation until the new page's icon arrives, so `currentFavicon` checks the site. C9.
+    var faviconPageURL: URL?
     var canGoBack = false
     var canGoForward = false
     var isCrashed = false
@@ -243,6 +246,7 @@ struct SidebarTabLiveState: Equatable {
         isLoading = snapshot.loadState.isLoading
         progress = snapshot.loadState.progress
         favicon = snapshot.favicon
+        faviconPageURL = snapshot.favicon == nil ? nil : (snapshot.committedURL ?? snapshot.url)
         canGoBack = snapshot.navigation.canGoBack
         canGoForward = snapshot.navigation.canGoForward
         isCrashed = snapshot.isCrashed
@@ -254,6 +258,14 @@ struct SidebarTabLiveState: Equatable {
         capture = snapshot.capture
         isFullscreen = snapshot.isFullscreen
         themeColor = snapshot.themeColor
+    }
+
+    /// The favicon if it belongs to the site now shown (inferred: an icon of the previous site must
+    /// not stay on the row after a cross-site navigation). C9.
+    var currentFavicon: Favicon? {
+        guard let favicon else { return nil }
+        guard let page = committedURL ?? url, let iconPage = faviconPageURL else { return favicon }
+        return FaviconCache.isSameSite(page, iconPage) ? favicon : nil
     }
 
     /// Pure reducer for engine events.
@@ -268,8 +280,13 @@ struct SidebarTabLiveState: Equatable {
         case .loadStateChanged(let l):
             isLoading = l.isLoading
             progress = l.progress
+            // A new load (the crash page's Reload) brings up a new renderer. No event reports
+            // `BrowserTabState.isCrashed` going back to false, so the load start clears it. C9.
+            if l.isLoading { isCrashed = false }
         case .faviconChanged(let f):
             favicon = f
+            // `committedURLChanged` comes before `faviconChanged` in one update (TabChannel order).
+            faviconPageURL = f == nil ? nil : (committedURL ?? url)
         case .audioStateChanged(let a):
             isAudible = a.isAudible
             isMuted = a.isMuted

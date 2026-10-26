@@ -81,6 +81,9 @@ public final class WorkspaceController: ObservableObject {
     private var eventTasks: [UUID: Task<Void, Never>] = [:]
     /// Dialog requests of every live tab of this controller, queued per tab (C7b).
     public let dialogs = DialogCenter()
+    /// Favicon images seen from the engine (C9, WorkspaceController+Favicons.swift). On disk next to
+    /// the workspace file; memory only for an incognito controller or without persistence.
+    public let favicons: FaviconCache
     /// State of page-initiated tabs and engine-event observation (C7b, WorkspaceController+PageRequests.swift).
     let pageRequests = PageRequestState()
     private var engineWork: [Task<Void, Never>] = []
@@ -154,6 +157,7 @@ public final class WorkspaceController: ObservableObject {
         self.autoArchiveTicker = autoArchiveTicker
         self.isOffTheRecord = false
         self.systemAppearance = dependencies.systemAppearance.current
+        self.favicons = dependencies.persistence.map { FaviconCache(dataDirectory: $0.directory) } ?? FaviconCache(directory: nil)
         // With a persistence store, a workspace read from disk replaces the caller's default. First
         // launch, a recovered corrupt file or a refused file keep the default. [B2]
         let persistence = dependencies.persistence
@@ -209,6 +213,7 @@ public final class WorkspaceController: ObservableObject {
         self.autoArchiveTicker = parent.autoArchiveTicker
         self.isOffTheRecord = true
         self.parent = parent
+        self.favicons = FaviconCache(directory: nil)
         let stamp = parent.now()
         let profileID = parent.currentProfileID ?? parent.makeID()
         let themeID = parent.makeID(), spaceID = parent.makeID()
@@ -435,6 +440,7 @@ public final class WorkspaceController: ObservableObject {
         syncWebColorScheme(of: id)
         dialogs.observe(live)
         liveStates[id] = SidebarTabLiveState(snapshot: await live.currentState())
+        rememberFavicon(of: id)
         syncContent(id)
         let stream = live.events()
         eventTasks[id] = Task { [weak self] in
@@ -451,7 +457,10 @@ public final class WorkspaceController: ObservableObject {
         state.apply(event)
         liveStates[id] = state
         switch event {
-        case .urlChanged, .titleChanged, .faviconChanged, .snapshot: syncContent(id)
+        case .faviconChanged, .snapshot:
+            rememberFavicon(of: id)
+            syncContent(id)
+        case .urlChanged, .titleChanged: syncContent(id)
         case .closeRequested: pageRequestedClose(id)
         default: break
         }
@@ -462,7 +471,7 @@ public final class WorkspaceController: ObservableObject {
         guard let live = liveStates[id], let node = workspace.tabs[id], !node.meta.isTombstone else { return }
         let title = live.title.isEmpty ? node.title : live.title
         let url = live.url ?? node.url
-        let favicon = live.favicon?.url ?? node.faviconURL
+        let favicon = Self.faviconURLToStore(live: live, storedURL: node.url, storedFaviconURL: node.faviconURL)
         guard url != node.url || title != node.title || favicon != node.faviconURL else { return }
         let stamp = now()
         try? mutate(origin: nil) { try TreeOps.updateTabContent($0, id: id, url: url, title: title, faviconURL: favicon, now: stamp) }

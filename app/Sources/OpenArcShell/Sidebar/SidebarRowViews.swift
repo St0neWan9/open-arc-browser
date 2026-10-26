@@ -61,7 +61,7 @@ struct SidebarTabRowView: View {
                 if live?.isLoading == true {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
                 } else {
-                    SidebarFaviconView(live: live, size: iconSize, tint: placeholderTint(isSelected: isSelected, palette: palette), placeholder: .roundedSquare)
+                    SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: iconSize, tint: placeholderTint(isSelected: isSelected, palette: palette), placeholder: .roundedSquare)
                 }
             }
             .frame(width: iconSize, height: iconSize)
@@ -201,7 +201,7 @@ struct SidebarSplitGroupRowView: View {
                 if live?.isLoading == true {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
                 } else {
-                    SidebarFaviconView(live: live, size: iconSize, tint: textColor.opacity(0.3), placeholder: .roundedSquare)
+                    SidebarFaviconView(pngData: viewModel.faviconImage(for: member.id), size: iconSize, tint: textColor.opacity(0.3), placeholder: .roundedSquare)
                 }
             }
             .frame(width: iconSize, height: iconSize)

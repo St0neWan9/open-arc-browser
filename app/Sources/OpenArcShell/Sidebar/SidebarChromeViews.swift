@@ -250,7 +250,7 @@ struct SidebarFavoriteCell: View {
         let palette = viewModel.palette
         let isSelected = viewModel.isSelected(tab.id)
         let radius = CGFloat(Metrics.Sidebar.favoritesCornerRadius)
-        SidebarFaviconView(live: viewModel.liveState(for: tab.id), size: SidebarLocalTokens.favoriteIconSize,
+        SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: SidebarLocalTokens.favoriteIconSize,
                            tint: palette.ink(\.faviconPlaceholder).swiftUI, placeholder: .roundedSquare)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.controlFill.swiftUI))

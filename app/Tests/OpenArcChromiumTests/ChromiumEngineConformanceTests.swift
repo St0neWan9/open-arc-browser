@@ -27,7 +27,7 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // --no-sandbox: the helpers' seatbelt profile only lets them read inside the main bundle
         // (Open Arc.app, which embeds the framework), and under xctest the framework lives
         // outside it. The app run checks the sandboxed path (plan C8 report).
-        let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: ["--no-sandbox"])
+        let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"])
         XCTAssertTrue(engine.engineVersion.hasPrefix("Chromium "))
 
         // Creating a tab starts the engine and loads the page.
@@ -61,6 +61,36 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         XCTAssertEqual(dialog.message, "hello")
         XCTAssertTrue(dialog.reply.send(JavaScriptDialogReply(accepted: true)))
         try await waitForState(tab) { $0.title == "Done" }
+
+        // C9: the favicon's PNG reaches the tab state (the bridge decodes it; the wrapper re-reads
+        // the state after the load settles, see `ChromiumTabCore.settleResyncDelays`).
+        let pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        let iconPage = try XCTUnwrap(URL(string: "data:text/html,<title>Icon</title><link rel=icon href='data:image/png;base64,\(pixel)'>icon"))
+        try await tab.load(iconPage)
+        try await waitForState(tab) { $0.title == "Icon" && $0.favicon?.pngData?.isEmpty == false }
+
+        // C9: audio from the page is reported, and mute reaches the engine.
+        let tone = "<title>Tone</title><script>const c=new AudioContext();const o=c.createOscillator();const g=c.createGain();"
+            + "g.gain.value=0.01;o.connect(g);g.connect(c.destination);o.start();</script>tone"
+        let tonePage = try XCTUnwrap(URL(string: "data:text/html," + (tone.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")))
+        try await tab.load(tonePage)
+        try await waitForState(tab) { $0.audio.isAudible }
+        await tab.setMuted(true)
+        try await waitForState(tab) { $0.audio.isMuted }
+        await tab.setMuted(false)
+
+        // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
+        // the page back in a new renderer.
+        let crashEvents = tab.events()
+        try await tab.load(try XCTUnwrap(URL(string: "chrome://crash")))
+        let gone = try await withTimeout(seconds: 20) { () -> Bool in
+            for await event in crashEvents { if case .renderProcessGone = event { return true } }
+            return false
+        }
+        XCTAssertTrue(gone)
+        try await waitForState(tab) { $0.isCrashed }
+        try await tab.load(first)
+        try await waitForState(tab) { !$0.isCrashed && $0.title == "First" }
 
         // Closing ends the tab's stream; shutdown makes new tabs fail.
         await engine.closeTab(tab.id)

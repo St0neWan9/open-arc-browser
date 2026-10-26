@@ -53,7 +53,8 @@ struct LibraryView: View {
             SplitWebArea(model: model, sidebar: sidebar, layout: splitLayout, size: frame.size, palette: palette)
                 .offset(x: frame.minX, y: frame.minY)
         } else {
-            WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground)
+            WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground,
+                     crashed: model.crashedPageState(for: sidebar.selectedTabID))
                 .frame(width: frame.width, height: frame.height)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
                 .offset(x: frame.minX, y: frame.minY)
@@ -223,7 +224,7 @@ struct LibraryArchiveList: View {
                         .textStyle(Typography.libraryGroupHeader, ink: palette.chromeInk)
                         .padding(.top, 6)
                     ForEach(group.items, id: \.id) { item in
-                        LibraryArchiveRow(item: item, textColor: text, secondary: palette.secondaryText.swiftUI) {
+                        LibraryArchiveRow(item: item, iconData: library.faviconImage(for: item), textColor: text, secondary: palette.secondaryText.swiftUI) {
                             library.restore(item.id)
                         }
                     }
@@ -236,6 +237,8 @@ struct LibraryArchiveList: View {
 
 struct LibraryArchiveRow: View {
     let item: ArchiveItem
+    /// Cached favicon of the archived page (C9); nil draws the globe.
+    var iconData: Data?
     let textColor: Color
     let secondary: Color
     let onRestore: () -> Void
@@ -244,7 +247,7 @@ struct LibraryArchiveRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            SidebarFaviconView(live: nil, size: LibraryLocalTokens.archiveRowIconSize, tint: textColor.opacity(0.7))
+            SidebarFaviconView(pngData: iconData, size: LibraryLocalTokens.archiveRowIconSize, tint: textColor.opacity(0.7))
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.title.isEmpty ? "Untitled" : item.title)
                     .font(Typography.libraryRowTitle.font)

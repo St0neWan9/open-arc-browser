@@ -159,6 +159,7 @@ public struct CommandBarView: View {
                             presentation: viewModel.presentation,
                             isSelected: index == viewModel.selectedIndex,
                             colors: CommandBarRowColors(palette: palette),
+                            favicon: viewModel.faviconProvider?(result),
                             onClick: {
                                 viewModel.select(index: index)
                                 if let action = viewModel.activate(at: index) { viewModel.onAction?(action) }
@@ -207,6 +208,8 @@ struct CommandBarRow: View {
     let presentation: CommandBarPresentation
     let isSelected: Bool
     let colors: CommandBarRowColors
+    /// The page's favicon for site rows (C9); nil draws the placeholder glyph.
+    var favicon: Data? = nil
     let onClick: () -> Void
 
     var body: some View {
@@ -266,13 +269,20 @@ struct CommandBarRow: View {
         }
     }
 
-    /// Placeholder icons (SF Symbols); real favicons come later. 16 × 16 box. [07 §5, §9] observed.
+    /// The site's favicon when known (C9), else a placeholder glyph (SF Symbols). 16 × 16 box.
+    /// [07 §5, §9] observed the box.
+    @ViewBuilder
     private func icon(tint: Color) -> some View {
         let size = Metrics.CommandBar.resultIconSize
-        return Image(systemName: symbolName)
-            .font(.system(size: CommandBarStyle.rowIconPointSize, weight: .medium))
-            .foregroundStyle(tint)
-            .frame(width: size, height: size)
+        if let image = SidebarFaviconView.image(favicon) {
+            Image(nsImage: image).resizable().interpolation(.high)
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: symbolName)
+                .font(.system(size: CommandBarStyle.rowIconPointSize, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: size, height: size)
+        }
     }
 
     private var symbolName: String {

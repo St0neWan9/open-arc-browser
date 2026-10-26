@@ -27,7 +27,8 @@ struct SplitWebArea: View {
                     layout: SplitPaneBarLayout(paneFrame: CGRect(origin: .zero, size: pane.frame.size)),
                     isFocused: showsRing && pane.tabID == sidebar.selectedTabID,
                     palette: palette,
-                    actions: SplitPaneBarActions(model: model, tabID: pane.tabID)
+                    actions: SplitPaneBarActions(model: model, tabID: pane.tabID),
+                    crashed: model.crashedPageState(for: pane.tabID)
                 )
                 .frame(width: pane.frame.width, height: pane.frame.height)
                 .offset(x: pane.frame.minX, y: pane.frame.minY)
@@ -71,6 +72,8 @@ struct SplitPaneView: View {
     let isFocused: Bool
     let palette: ThemePalette
     let actions: SplitPaneBarActions
+    /// Set while the pane's renderer is gone (C9).
+    var crashed: CrashedPageState? = nil
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous)
@@ -78,7 +81,7 @@ struct SplitPaneView: View {
             SplitPaneBarView(bar: bar, layout: layout, palette: palette, actions: actions)
                 .frame(width: layout.barFrame.width, height: layout.barFrame.height)
                 .offset(x: layout.barFrame.minX, y: layout.barFrame.minY)
-            WebPanel(tab: tab, findBar: findBar, background: palette.webPanelBackground)
+            WebPanel(tab: tab, findBar: findBar, background: palette.webPanelBackground, crashed: crashed)
                 .frame(width: layout.pageFrame.width, height: layout.pageFrame.height)
                 .offset(x: layout.pageFrame.minX, y: layout.pageFrame.minY)
         }

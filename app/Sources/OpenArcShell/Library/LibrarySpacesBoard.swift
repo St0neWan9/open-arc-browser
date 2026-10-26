@@ -52,6 +52,15 @@ struct LibraryBoardColumnView: View {
     @ObservedObject var library: LibraryModel
     let column: LibraryBoardColumn
 
+    /// A tab row's favicon; split groups show their first member's. C9.
+    private func iconData(_ item: SidebarItemModel) -> Data? {
+        switch item.kind {
+        case .tab(let tab): return library.faviconImage(forTab: tab.id)
+        case .splitGroup(let group): return group.members.first.flatMap { library.faviconImage(forTab: $0.id) }
+        case .folder: return nil
+        }
+    }
+
     var body: some View {
         let palette = column.palette
         let text = palette.primaryText.swiftUI
@@ -59,11 +68,11 @@ struct LibraryBoardColumnView: View {
             header(text: text)
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: SidebarLayout().rowSpacing) {
-                    ForEach(column.pinned) { LibraryBoardRow(item: $0, palette: palette) }
+                    ForEach(column.pinned) { LibraryBoardRow(item: $0, palette: palette, iconData: iconData($0)) }
                     if !column.pinned.isEmpty || !column.today.isEmpty {
                         Rectangle().fill(text.opacity(0.15)).frame(height: SidebarLocalTokens.separatorThickness)
                     }
-                    ForEach(column.today) { LibraryBoardRow(item: $0, palette: palette) }
+                    ForEach(column.today) { LibraryBoardRow(item: $0, palette: palette, iconData: iconData($0)) }
                 }
                 .padding(.horizontal, CGFloat(Metrics.Sidebar.addressFieldHorizontalInset))
             }
@@ -157,6 +166,8 @@ struct LibraryBoardDropDelegate: DropDelegate {
 struct LibraryBoardRow: View {
     let item: SidebarItemModel
     let palette: ThemePalette
+    /// The tab's favicon (C9); nil draws the globe.
+    var iconData: Data?
 
     private let layout = SidebarLayout()
 
@@ -197,7 +208,7 @@ struct LibraryBoardRow: View {
             Image(systemName: folder.isExpanded ? "folder" : "folder.fill")
                 .resizable().scaledToFit().foregroundStyle(text.opacity(0.8))
         case .tab, .splitGroup:
-            SidebarFaviconView(live: nil, size: SidebarLocalTokens.rowIconSize, tint: text.opacity(0.7))
+            SidebarFaviconView(pngData: iconData, size: SidebarLocalTokens.rowIconSize, tint: text.opacity(0.7))
         }
     }
 }

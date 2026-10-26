@@ -225,6 +225,9 @@ public final class SidebarViewModel: ObservableObject {
 
     func liveState(for id: UUID) -> SidebarTabLiveState? { controller.liveState(for: id) }
 
+    /// PNG bytes of tab `id`'s favicon (live or cached), nil for the placeholder. C9.
+    func faviconImage(for id: UUID) -> Data? { controller.faviconImage(for: id) }
+
     /// An incognito window's sidebar: no favorites, dock or Space menus. inferred.
     var isIncognito: Bool { controller.isOffTheRecord }
 

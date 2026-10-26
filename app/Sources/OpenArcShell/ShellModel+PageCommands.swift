@@ -10,6 +10,18 @@ extension ShellModel {
     /// The selected tab's live state, for menu enablement.
     var selectedPageState: SidebarTabLiveState? { sidebar.selectedLiveState }
 
+    /// The crash page of tab `tabID`'s panel, while its renderer is gone (C9); nil otherwise.
+    func crashedPageState(for tabID: UUID?) -> CrashedPageState? {
+        guard let tabID, sidebar.liveState(for: tabID)?.isCrashed == true else { return nil }
+        return CrashedPageState(reload: { [weak self] in self?.reloadCrashedPage(tabID) })
+    }
+
+    /// The crash page's Reload: reloads tab `tabID` in a new renderer (C9, own design).
+    public func reloadCrashedPage(_ tabID: UUID) {
+        guard let live = sidebar.liveTab(for: tabID) else { return }
+        controller.enqueueTabCommand(live) { try? await $0.reload() }
+    }
+
     /// View ▸ Force Refresh the Page (⇧⌘R): reload bypassing the cache.
     public func forceReload() {
         runOnSelectedPage { try await $0.reload(bypassingCache: true) }
