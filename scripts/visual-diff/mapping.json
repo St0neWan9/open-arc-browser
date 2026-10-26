@@ -1,0 +1,749 @@
+{
+  "_comment": [
+    "Element mapping for scripts/visual-diff.sh (see README.md for the matcher reference).",
+    "Each entry pairs a matcher on the reference side ('arc') with one on our side ('openarc').",
+    "Arc identifiers appear here ONLY to locate Arc's elements in its accessibility tree; never reuse",
+    "them as names in app/Sources (clean-room rule). Entries are resolved in file order, so an entry",
+    "can only refer (within/above/below/inside/relativeTo/origin) to entries listed before it.",
+    "The Arc dump is redacted before matching: text matchers on the arc side only see strings in",
+    "privacy.allowText, and identifiers only as kept by privacy.identifierRules."
+  ],
+  "privacy": {
+    "allowText": [
+      "Hide sidebar",
+      "Show sidebar",
+      "Go back",
+      "Go forward",
+      "Reload this page",
+      "Stop loading this page",
+      "Clear",
+      "↓ Clear",
+      "New Tab",
+      "+ New Tab",
+      "New Space",
+      "Create Space",
+      "More",
+      "Tabs"
+    ],
+    "identifierRules": [
+      {
+        "regex": "^(commandBarPlaceholderTextField|commandBarTextField|commandBarSuggestions|sidebarFavoritesCollectionView|sidebarSpaceName|sidebarSpaceEditButton|sidebarAllTabList|sidebarPlusButton|spaceCreationCreateSpaceButton)$",
+        "keep": "full"
+      },
+      {
+        "regex": "^(SidebarDockItem-).+",
+        "keep": "prefix"
+      },
+      {
+        "regex": "^(bigBrowserWindow-).+",
+        "keep": "prefix"
+      }
+    ]
+  },
+  "windowIdentifier": {
+    "_comment": "Regex on the window's AXIdentifier that selects the browser window (skips Settings and other windows).",
+    "arc": "^bigBrowserWindow-",
+    "openarc": "^browser-"
+  },
+  "entries": [
+    {
+      "name": "trafficLight.close",
+      "group": "toolbar",
+      "arc": {
+        "role": "AXButton",
+        "subrole": "AXCloseButton",
+        "depth": [
+          1,
+          1
+        ]
+      },
+      "openarc": {
+        "role": "AXButton",
+        "subrole": "AXCloseButton",
+        "depth": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "name": "trafficLight.minimize",
+      "group": "toolbar",
+      "arc": {
+        "role": "AXButton",
+        "subrole": "AXMinimizeButton",
+        "depth": [
+          1,
+          1
+        ]
+      },
+      "openarc": {
+        "role": "AXButton",
+        "subrole": "AXMinimizeButton",
+        "depth": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "name": "trafficLight.zoom",
+      "group": "toolbar",
+      "arc": {
+        "role": "AXButton",
+        "subrole": "AXFullScreenButton|AXZoomButton",
+        "depth": [
+          1,
+          1
+        ]
+      },
+      "openarc": {
+        "role": "AXButton",
+        "subrole": "AXFullScreenButton|AXZoomButton",
+        "depth": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "name": "toolbar.hideSidebar",
+      "group": "toolbar",
+      "arc": {
+        "role": "AXButton",
+        "description": "^(Hide|Show) sidebar$"
+      },
+      "openarc": {
+        "role": "AXButton",
+        "identifier": "^openarc\\.sidebar\\.hideButton$"
+      }
+    },
+    {
+      "name": "toolbar.back",
+      "group": "toolbar",
+      "arc": {
+        "role": "AXButton",
+        "description": "^Go back$"
+      },
+      "openarc": {
+        "role": "AXButton",
+        "identifier": "^openarc\\.sidebar\\.backButton$"
+      }
+    },
+    {
+      "name": "toolbar.forward",
+      "group": "toolbar",
+      "arc": {
+        "role": "AXButton",
+        "description": "^Go forward$"
+      },
+      "openarc": {
+        "role": "AXButton",
+        "identifier": "^openarc\\.sidebar\\.forwardButton$"
+      }
+    },
+    {
+      "name": "toolbar.reload",
+      "group": "toolbar",
+      "arc": {
+        "role": "AXButton",
+        "description": "^(Reload this page|Stop loading this page)$"
+      },
+      "openarc": {
+        "role": "AXButton",
+        "identifier": "^openarc\\.sidebar\\.reloadButton$"
+      }
+    },
+    {
+      "name": "urlBox",
+      "group": "urlBox",
+      "note": "Both sides: the 18 pt text line of the box. Arc's starts at x 20, or at x 41 when a page icon sits at x 14 (a loaded page); ours has no page icon yet, so x is not compared.",
+      "arc": {
+        "identifier": "^commandBarPlaceholderTextField$"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.urlBox\\.text$"
+      },
+      "compare": [
+        "y",
+        "h",
+        "cy"
+      ]
+    },
+    {
+      "name": "urlBox.pageIcon",
+      "group": "urlBox",
+      "optional": true,
+      "note": "Arc shows a 24 pt page icon button at (14, 52) inside the box for a loaded page; we have none yet (no favicons from the fake engine).",
+      "arc": {
+        "role": "AXButton",
+        "depth": [
+          1,
+          1
+        ],
+        "frame": {
+          "x": [
+            8,
+            30
+          ],
+          "y": [
+            46,
+            82
+          ],
+          "w": [
+            16,
+            30
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.urlBox\\.pageIcon$"
+      }
+    },
+    {
+      "name": "favorites.collection",
+      "group": "favorites",
+      "anchorOnly": true,
+      "arc": {
+        "identifier": "^sidebarFavoritesCollectionView$"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.favorites$"
+      }
+    },
+    {
+      "name": "favorites.block",
+      "group": "favorites",
+      "note": "Arc: the section inside the favorites collection (x 8–268); ours: the favorites container (the same span).",
+      "arc": {
+        "role": "AXList",
+        "subrole": "AXSectionList",
+        "within": "favorites.collection"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.favorites$"
+      }
+    },
+    {
+      "name": "spaceName",
+      "group": "spaceName",
+      "compare": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "note": "The name line: from x 41 after a Space icon (13 without one) to x 259, 18 tall (07 §4). Compare with a Space that has an icon on both sides.",
+      "arc": {
+        "role": "AXStaticText",
+        "identifier": "^sidebarSpaceName$"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.spaceName$"
+      }
+    },
+    {
+      "name": "spaceName.moreButton",
+      "group": "spaceName",
+      "compare": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "note": "Both keep the More button in the AX tree as a 2 × 26 strip at (261, 150) until hovered.",
+      "arc": {
+        "identifier": "^sidebarSpaceEditButton$"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.spaceMoreButton$"
+      }
+    },
+    {
+      "name": "spaceIcon",
+      "group": "spaceName",
+      "optional": true,
+      "note": "The 26 pt Space icon at (13, 150); absent when the Space has no icon.",
+      "arc": {
+        "role": "AXImage",
+        "frame": {
+          "x": [
+            8,
+            20
+          ],
+          "y": [
+            145,
+            160
+          ],
+          "w": [
+            20,
+            32
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.spaceIcon$"
+      }
+    },
+    {
+      "name": "tabList",
+      "group": "rows",
+      "arc": {
+        "role": "AXScrollArea",
+        "contains": "^sidebarAllTabList$",
+        "pick": "smallest"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.tabList$"
+      }
+    },
+    {
+      "name": "divider",
+      "group": "rows",
+      "compare": [
+        "y",
+        "h",
+        "cy"
+      ],
+      "note": "Arc: the 17 pt outline row between the pinned area and Today; ours: the 17 pt divider row (full width on both sides; Arc's rows are 268 wide while its scroller shows).",
+      "arc": {
+        "role": "AXRow",
+        "subrole": "AXOutlineRow",
+        "within": "tabList",
+        "frame": {
+          "h": [
+            8,
+            30
+          ],
+          "y": [
+            182,
+            100000
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.divider$"
+      }
+    },
+    {
+      "name": "divider.clear",
+      "group": "rows",
+      "optional": true,
+      "note": "Arc shows Clear only while the sidebar is hovered, so it is usually absent on the Arc side.",
+      "arc": {
+        "title": "^(↓ )?Clear$"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.clearButton$"
+      }
+    },
+    {
+      "name": "newTabRow",
+      "group": "rows",
+      "compare": [
+        "x",
+        "h"
+      ],
+      "note": "Vertical center relative to the divider: both place New Tab right below the divider (top of Today). When Today is empty there is no divider on either side and the row follows the pinned rows; then only the row's own geometry (via newTabRow.icon / .title) is compared.",
+      "arc": {
+        "role": "AXRow",
+        "subrole": "AXOutlineRow",
+        "within": "tabList",
+        "has": {
+          "value": "^New Tab$"
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.newTabRow$"
+      }
+    },
+    {
+      "name": "pinnedRow",
+      "group": "rows",
+      "kind": "sequence",
+      "origin": "tabList",
+      "compare": [
+        "h"
+      ],
+      "note": "Pinned rows (above New Tab) by order. Both report the full 41 pt row. The lists may be scrolled differently (the reference often is), so only the height is compared; row internals are compared on the first visible row (row.*).",
+      "arc": {
+        "role": "AXRow",
+        "subrole": "AXOutlineRow",
+        "within": "tabList",
+        "above": "newTabRow",
+        "frame": {
+          "h": [
+            30,
+            60
+          ]
+        },
+        "lacks": {
+          "value": "^New Tab$"
+        },
+        "pick": "all"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.(row|splitGroup|folder)\\.[0-9A-Fa-f-]{36}$",
+        "above": "newTabRow",
+        "pick": "all"
+      }
+    },
+    {
+      "name": "newTabRow.icon",
+      "group": "rows",
+      "note": "The 18 pt '+' cell of the New Tab row (x 17). Position relative to its row.",
+      "compare": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "arc": {
+        "role": "AXImage",
+        "description": "^New Tab$",
+        "within": "tabList"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.newTabRow\\.icon$"
+      },
+      "origin": "newTabRow"
+    },
+    {
+      "name": "newTabRow.title",
+      "group": "rows",
+      "note": "The New Tab title line (x 43, 19 pt tall); width follows the text. Position relative to its row.",
+      "compare": [
+        "x",
+        "y",
+        "h"
+      ],
+      "arc": {
+        "role": "AXStaticText",
+        "value": "^New Tab$",
+        "within": "tabList"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.newTabRow\\.title$"
+      },
+      "origin": "newTabRow"
+    },
+    {
+      "name": "todayRow",
+      "group": "rows",
+      "kind": "sequence",
+      "origin": "divider",
+      "compare": [
+        "h"
+      ],
+      "note": "Today rows (below New Tab) by order; only the 41 pt height is compared (scroll positions differ).",
+      "arc": {
+        "role": "AXRow",
+        "subrole": "AXOutlineRow",
+        "within": "tabList",
+        "below": "newTabRow",
+        "frame": {
+          "h": [
+            30,
+            60
+          ]
+        },
+        "lacks": {
+          "value": "^New Tab$"
+        },
+        "pick": "all"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.(row|splitGroup|folder)\\.[0-9A-Fa-f-]{36}$",
+        "below": "newTabRow",
+        "pick": "all"
+      }
+    },
+    {
+      "name": "row",
+      "group": "rows",
+      "compare": [
+        "h"
+      ],
+      "note": "The first visible tab row (the reference's rows are 268 wide while its scroller shows, ours 276).",
+      "arc": {
+        "role": "AXRow",
+        "subrole": "AXOutlineRow",
+        "within": "tabList",
+        "frame": {
+          "h": [
+            30,
+            60
+          ]
+        },
+        "has": {
+          "role": "AXStaticText"
+        },
+        "lacks": {
+          "value": "^New Tab$"
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.row\\.[0-9A-Fa-f-]{36}$"
+      }
+    },
+    {
+      "name": "row.icon",
+      "group": "rows",
+      "origin": "row",
+      "note": "Favicon cell: 18 × 18 at x 17, 11 pt below the row top (07 §4).",
+      "arc": {
+        "role": "AXImage",
+        "within": "row"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.row\\.icon$",
+        "within": "row"
+      }
+    },
+    {
+      "name": "row.title",
+      "group": "rows",
+      "origin": "row",
+      "compare": [
+        "x",
+        "y",
+        "h"
+      ],
+      "note": "Title line: x 43, 19 tall (07 §3, §4); its width follows the text or the row.",
+      "arc": {
+        "role": "AXStaticText",
+        "within": "row",
+        "frame": {
+          "h": [
+            15,
+            25
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.row\\.title$",
+        "within": "row"
+      }
+    },
+    {
+      "name": "dock",
+      "group": "dock",
+      "compare": [
+        "cy"
+      ],
+      "note": "Arc's dock list (x 42–234) excludes the home button and the plus; ours is the dock band, so only the vertical center is compared.",
+      "arc": {
+        "role": "AXScrollArea",
+        "contains": "^SidebarDockItem-",
+        "pick": "smallest"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.dock$"
+      }
+    },
+    {
+      "name": "dock.home",
+      "group": "dock",
+      "note": "The button left of the dock items (Home / Library).",
+      "arc": {
+        "role": "AXButton",
+        "depth": [
+          2,
+          2
+        ],
+        "below": "tabList",
+        "frame": {
+          "x": [
+            0,
+            30
+          ],
+          "w": [
+            20,
+            40
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.dock\\.home$"
+      }
+    },
+    {
+      "name": "dock.item",
+      "group": "dock",
+      "kind": "sequence",
+      "arc": {
+        "role": "AXButton",
+        "identifier": "^SidebarDockItem-",
+        "pick": "all"
+      },
+      "openarc": {
+        "role": "AXButton",
+        "identifier": "^openarc\\.sidebar\\.dock\\.(?!plus$|home$)",
+        "pick": "all"
+      },
+      "note": "Space icons by order. Arc spreads them over x 42–234 (pitch 27.5 for 7, 24 for 8); with fewer Spaces the pitch is capped (inferred), so only the first item and the vertical position are comparable across different Space counts.",
+      "compare": [
+        "y",
+        "h",
+        "cy"
+      ]
+    },
+    {
+      "name": "dock.plus",
+      "group": "dock",
+      "arc": {
+        "identifier": "^sidebarPlusButton$",
+        "depth": [
+          1,
+          1
+        ]
+      },
+      "openarc": {
+        "identifier": "^openarc\\.sidebar\\.dock\\.plus$"
+      }
+    },
+    {
+      "name": "webPanel",
+      "group": "webPanel",
+      "arc": {
+        "role": "AXSplitGroup",
+        "depth": [
+          1,
+          1
+        ],
+        "frame": {
+          "x": [
+            100,
+            100000
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.webPanel$"
+      },
+      "note": "Arc: the split group holding the page; ours: the web panel container."
+    },
+    {
+      "name": "commandBar.field",
+      "group": "commandBar",
+      "optional": true,
+      "arc": {
+        "identifier": "^commandBarTextField$"
+      },
+      "openarc": {
+        "identifier": "^openarc\\.commandbar\\.field$"
+      }
+    },
+    {
+      "name": "commandBar.panel",
+      "group": "commandBar",
+      "optional": true,
+      "note": "Arc does not expose the panel itself (its parts are direct window children); measure it in the screenshot.",
+      "arc": null,
+      "openarc": {
+        "contains": "^openarc\\.commandbar\\.field$",
+        "frame": {
+          "w": [
+            500,
+            1000
+          ]
+        },
+        "pick": "smallest"
+      }
+    },
+    {
+      "name": "commandBar.searchIcon",
+      "group": "commandBar",
+      "optional": true,
+      "arc": {
+        "role": "AXImage",
+        "relativeTo": {
+          "entry": "commandBar.field",
+          "cx": [
+            -400,
+            -1
+          ],
+          "cy": [
+            -15,
+            15
+          ]
+        },
+        "frame": {
+          "w": [
+            8,
+            30
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.commandbar\\.icon$"
+      }
+    },
+    {
+      "name": "commandBar.accessory",
+      "group": "commandBar",
+      "optional": true,
+      "note": "ⓘ in the main window (✕ in Little Arc).",
+      "arc": {
+        "role": "AXButton|AXImage",
+        "relativeTo": {
+          "entry": "commandBar.field",
+          "cx": [
+            1,
+            450
+          ],
+          "cy": [
+            -15,
+            15
+          ]
+        },
+        "frame": {
+          "w": [
+            8,
+            40
+          ]
+        }
+      },
+      "openarc": {
+        "identifier": "^openarc\\.commandbar\\.(info|close)$"
+      }
+    },
+    {
+      "name": "commandBar.results",
+      "group": "commandBar",
+      "optional": true,
+      "arc": {
+        "role": "AXScrollArea",
+        "contains": "^commandBarSuggestions$",
+        "pick": "smallest"
+      },
+      "openarc": {
+        "role": "AXScrollArea",
+        "within": "commandBar.panel"
+      }
+    },
+    {
+      "name": "commandBar.row",
+      "group": "commandBar",
+      "kind": "sequence",
+      "optional": true,
+      "note": "Both report the full 50 pt row (x 585–1335 at 1920 wide).",
+      "arc": {
+        "role": "AXRow",
+        "within": "commandBar.results",
+        "pick": "all"
+      },
+      "openarc": {
+        "role": "AXStaticText|AXButton|AXGroup|AXRow",
+        "within": "commandBar.results",
+        "frame": {
+          "h": [
+            40,
+            60
+          ]
+        },
+        "pick": "all"
+      }
+    }
+  ]
+}

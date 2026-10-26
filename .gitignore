@@ -1,0 +1,19 @@
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+DerivedData/
+.DS_Store
+
+# App bundles from scripts/make-app.sh
+/build/
+
+# Chromium framework binaries (built by chromium-bridge/build-framework.sh)
+/app/Vendor/*
+!/app/Vendor/README.md
+
+# Docs live in a separate repository (../open-arc-browser-docs); `docs` is a local symlink
+/docs
+
+# Local Claude Code state
+/.claude/
