@@ -108,10 +108,13 @@ The script (run from anywhere) does a release build of the `OpenArcApp` product,
 
 Bundle inputs live in `app/Bundle/`:
 - `Info.plist`: the template. The script fills in the two version keys. `UTExportedTypeDeclarations` must list every `UTType(exportedAs:)` in the sources, as `<release bundle id>.<name>` (today `org.openarc.browser.sidebar-item` and `org.openarc.browser.library-space`); the sources build the identifier from the running bundle id, and `--dev` rewrites the prefix.
-- `OpenArc.entitlements`: empty for now. There is no App Sandbox until the Chromium helpers (C10) settle it; the file notes the iCloud keys D4 will add.
+- `OpenArc.entitlements`: the app's entitlements. No App Sandbox (C10 settled it: like Chrome, the app is unsandboxed and Chromium's helpers run under their own Seatbelt sandbox); library validation off until D6; the file notes the iCloud keys D4 will add.
+- `Helpers/*.entitlements`: one file per OpenArcCore helper app (C10), each commented: `helper` (utility processes; no JIT), `renderer` and `gpu` (`allow-jit` for V8 and SwiftShader), `plugin` (`disable-library-validation` for foreign-team CDMs, C18), `alerts` (notifications). All but `plugin` also carry `disable-library-validation` only because ad-hoc signatures have no Team ID; D6 removes it.
 - `AppIcon.icns`: a placeholder icon, regenerated with `swift scripts/make-app-icon.swift` (CoreGraphics, `sips`, `iconutil`).
 
-When `app/Vendor/OpenArcCore.xcframework` exists (`chromium-bridge/build-framework.sh`), the script also embeds `OpenArcCore.framework` in `Contents/Frameworks/` and signs its helper (with `app/Bundle/OpenArcHelper.entitlements`: JIT and library validation off, see the file) and libraries before the framework and the app. Launch with `--env OPENARC_ENGINE=chromium` to use it.
+When `app/Vendor/OpenArcCore.xcframework` exists (`chromium-bridge/build-framework.sh`), the script also embeds `OpenArcCore.framework` in `Contents/Frameworks/`. Its `Versions/A/Helpers/` holds the Chromium helper apps (C10): `Open Arc Helper.app` (utility processes), `Open Arc Helper (Renderer).app`, `Open Arc Helper (GPU).app`, `Open Arc Helper (Plugin).app` (reserved for CDMs) and `Open Arc Helper (Alerts).app` (alert-style notifications, gets the app icon). The script gives them the app's bundle id as prefix (`<bundle id>.helper`, `.helper.renderer`, `.helper.plugin`, `.helper.alerts`; the GPU helper shares `.helper`, as Chrome's does), signs each with its entitlements file, then crashpad, the libraries, the framework and the app, and verifies each helper and the whole bundle with `codesign --verify --deep --strict`. Every child process runs under Chromium's Seatbelt sandbox; nothing passes `--no-sandbox`. With `--universal`, the framework must be universal too (`chromium-bridge/build-framework.sh --universal`; the x86_64 Chromium build is deferred to plan C10b, so today `--universal` stops there).
+
+Keychain: Chromium encrypts cookies and saved passwords with a key it keeps in the login keychain, in the item "Open Arc Safe Storage" (release) or "Open Arc Dev Safe Storage" (`--dev`). The first launch creates it silently. Because ad-hoc signatures change with every build, a later build may be asked once for access to the item; choose "Always Allow". Denying it leaves cookies unreadable for that run. Unattended test hosts pass `--use-mock-keychain` instead; the app never does.
 
 Run the bundle against a scratch data directory so it never touches real data in `~/Library/Application Support/org.openarc.browser/`. `open` does not pass the caller's shell environment to the app, so pass the variable with `--env` (or start the binary directly):
 
@@ -132,7 +135,9 @@ The bundle is ad hoc signed, so it only runs on the machine that built it. Build
 | Default data dir | `~/Library/Application Support/org.openarc.browser/` | `~/Library/Application Support/org.openarc.browser.dev/` |
 | Defaults domain | `org.openarc.browser` | `org.openarc.browser.dev` |
 | Exported drag types | `org.openarc.browser.sidebar-item`, `.library-space` | `org.openarc.browser.dev.sidebar-item`, `.library-space` (make-app.sh rewrites them) |
-| Chromium Mach rendezvous / sandbox bundle id | `org.openarc.browser.*` | `org.openarc.browser.dev.*` (read from the embedding app, patch 0004) |
+| Chromium Mach rendezvous / sandbox bundle id | `org.openarc.browser.*` | `org.openarc.browser.dev.*` (read from the embedding app, patch 0009) |
+| Chromium helper apps | `org.openarc.browser.helper…` | `org.openarc.browser.dev.helper…` (make-app.sh) |
+| Keychain item (cookie encryption key) | "Open Arc Safe Storage" | "Open Arc Dev Safe Storage" (patch 0012) |
 | Sparkle updates | on once a release key exists | off: no `SUFeedURL`, and `UpdateConfiguration` refuses any non-release id |
 | CloudKit container | `iCloud.org.openarc.browser` (needs D4's entitlement) | unchanged; ad-hoc dev builds have no entitlement, so sync reports "not set up" |
 | URL / document types | http, https, HTML, PDF | the same. Declaring them never makes the app the default browser; do not make the dev build the default |

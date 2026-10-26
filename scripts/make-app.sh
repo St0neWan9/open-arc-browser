@@ -21,10 +21,15 @@
 # (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns,
 # PkgInfo, Frameworks/Sparkle.framework with an @executable_path/../Frameworks rpath,
 # and Frameworks/OpenArcCore.framework when app/Vendor/OpenArcCore.xcframework exists,
-# plan C8), ad-hoc sign inside-out (Sparkle's XPC services, Autoupdate, Updater.app,
-# the OpenArcCore helper and libraries, the frameworks, then the app with the hardened
-# runtime and app/Bundle/OpenArc.entitlements), then verify with codesign and plutil. Idempotent: the bundle is rebuilt from scratch.
-# Developer ID signing and notarization are plan task D6 (docs/release.md).
+# plan C8), give the OpenArcCore helper apps the app's bundle id prefix (plan C10:
+# <bundle id>.helper, .helper.renderer, .helper.plugin, .helper.alerts; the GPU helper
+# shares <bundle id>.helper), ad-hoc sign inside-out (Sparkle's XPC services, Autoupdate,
+# Updater.app; each OpenArcCore helper app with its own app/Bundle/Helpers/*.entitlements,
+# crashpad and the libraries; the frameworks; then the app with the hardened runtime and
+# app/Bundle/OpenArc.entitlements), then verify with codesign --deep --strict and plutil.
+# With --universal the app and OpenArcCore.framework must both carry arm64 and x86_64
+# (chromium-bridge/build-framework.sh --universal). Idempotent: the bundle is rebuilt from
+# scratch. Developer ID signing and notarization are plan task D6 (docs/release.md).
 # Prints the bundle path on the last line. Uses only Xcode / system tools.
 set -euo pipefail
 
@@ -45,7 +50,7 @@ while [[ $# -gt 0 ]]; do
         --build) build_number="$2"; shift 2 ;;
         --universal) universal=1; shift ;;
         --scratch-path) scratch_path="$2"; shift 2 ;;
-        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -60,6 +65,16 @@ else
     app_name="Open Arc"        # display name (Decision Q5)
 fi
 out_dir="$repo_root/build"
+
+# OpenArcCore's helper apps (plan C10, //openarc/app/helpers.gni) and the entitlements each
+# is signed with ("<name suffix>:<file in app/Bundle/Helpers>").
+openarc_helpers=(
+    ":helper.entitlements"
+    " (Renderer):renderer.entitlements"
+    " (GPU):gpu.entitlements"
+    " (Plugin):plugin.entitlements"
+    " (Alerts):alerts.entitlements"
+)
 app="$out_dir/$app_name.app"
 
 if [[ $universal -eq 1 ]]; then
@@ -145,6 +160,36 @@ if [[ -d "$package_dir/Vendor/OpenArcCore.xcframework" ]]; then
     # Headers and the module map are only needed to compile against the framework.
     rm -rf "$openarc_core/Headers" "$openarc_core/Modules" \
            "$openarc_core/Versions/A/Headers" "$openarc_core/Versions/A/Modules"
+    if [[ $universal -eq 1 ]]; then
+        core_archs="$(lipo -archs "$openarc_core/Versions/A/OpenArcCore")"
+        [[ "$core_archs" == *arm64* && "$core_archs" == *x86_64* ]] \
+            || { echo "OpenArcCore.framework is not universal ($core_archs);" \
+                      "run chromium-bridge/build-framework.sh --universal" >&2; exit 1; }
+    fi
+
+    # Helper apps (plan C10): Chromium's Mac helper model, one app per code-signing variant.
+    # The framework ships them with the release ids (org.openarc.browser.helper…); every id
+    # takes the embedding app's id as its prefix, so the development build's helpers are
+    # org.openarc.browser.dev.helper…, matching the base bundle id the engine reads from the
+    # embedding app (patch 0009).
+    helpers_dir="$openarc_core/Versions/A/Helpers"
+    helper_count=0
+    for helper_app in "$helpers_dir"/*.app; do
+        [[ -d "$helper_app" ]] || continue
+        helper_info="$helper_app/Contents/Info.plist"
+        helper_id="$(plutil -extract CFBundleIdentifier raw "$helper_info")"
+        [[ "$helper_id" == "$release_bundle_id.helper" || "$helper_id" == "$release_bundle_id.helper".* ]] \
+            || { echo "unexpected helper bundle id $helper_id in $helper_app" >&2; exit 1; }
+        plutil -replace CFBundleIdentifier -string "$bundle_id${helper_id#"$release_bundle_id"}" "$helper_info"
+        helper_count=$((helper_count + 1))
+    done
+    [[ $helper_count -eq ${#openarc_helpers[@]} ]] \
+        || { echo "expected ${#openarc_helpers[@]} helper apps in $helpers_dir, found $helper_count" >&2; exit 1; }
+    # Notifications shown by the alerts helper carry the app's icon.
+    alerts_app="$helpers_dir/Open Arc Helper (Alerts).app"
+    mkdir -p "$alerts_app/Contents/Resources"
+    cp "$bundle_src/AppIcon.icns" "$alerts_app/Contents/Resources/AppIcon.icns"
+    plutil -replace CFBundleIconFile -string AppIcon "$alerts_app/Contents/Info.plist"
 fi
 
 sign() {
@@ -163,10 +208,15 @@ sign "$sparkle"
 
 if [[ -n "$openarc_core" ]]; then
     echo "==> signing OpenArcCore.framework inside-out (ad-hoc, hardened runtime)" >&2
-    # The helper runs the renderer, GPU and utility processes (one unbundled executable until
-    # the helper apps of plan C10); its entitlements are the union they need under the
-    # hardened runtime (app/Bundle/OpenArcHelper.entitlements).
-    sign --entitlements "$bundle_src/OpenArcHelper.entitlements" "$openarc_core/Versions/A/Helpers/openarc_helper"
+    # Each helper app with its own entitlements (app/Bundle/Helpers/*.entitlements, the
+    # minimum per process type; see the comments in each file), then crashpad and the
+    # libraries, then the framework.
+    for helper in "${openarc_helpers[@]}"; do
+        helper_suffix="${helper%%:*}"
+        helper_entitlements="$bundle_src/Helpers/${helper#*:}"
+        sign --entitlements "$helper_entitlements" "$helpers_dir/Open Arc Helper$helper_suffix.app"
+    done
+    sign "$helpers_dir/chrome_crashpad_handler"
     shopt -s nullglob
     for library in "$openarc_core/Versions/A/Libraries"/*.dylib; do
         sign "$library"
@@ -181,6 +231,9 @@ sign --entitlements "$bundle_src/OpenArc.entitlements" "$app"
 echo "==> verifying" >&2
 codesign --verify --deep --strict --verbose=2 "$sparkle" >&2
 if [[ -n "$openarc_core" ]]; then
+    for helper in "${openarc_helpers[@]}"; do
+        codesign --verify --strict --verbose=2 "$helpers_dir/Open Arc Helper${helper%%:*}.app" >&2
+    done
     codesign --verify --deep --strict --verbose=2 "$openarc_core" >&2
     echo "OpenArcCore: Chromium $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$openarc_core/Resources/Info.plist")" >&2
 fi
@@ -193,5 +246,11 @@ otool -l "$app/Contents/MacOS/$product" | grep -q "path $frameworks_rpath " \
     || { echo "missing rpath $frameworks_rpath" >&2; exit 1; }
 echo "Sparkle: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$sparkle/Resources/Info.plist")" >&2
 echo "architectures: $(lipo -archs "$app/Contents/MacOS/$product")" >&2
+if [[ -n "$openarc_core" ]]; then
+    echo "OpenArcCore architectures: $(lipo -archs "$openarc_core/Versions/A/OpenArcCore")" >&2
+    for helper_app in "$helpers_dir"/*.app; do
+        echo "helper: ${helper_app##*/} $(plutil -extract CFBundleIdentifier raw "$helper_app/Contents/Info.plist")" >&2
+    done
+fi
 
 echo "$app"

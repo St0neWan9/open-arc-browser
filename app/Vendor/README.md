@@ -8,7 +8,7 @@ Binaries the Swift package consumes but does not build. Everything here except t
 
 ## OpenArcCore.xcframework
 
-Our Chromium fork (`~/chromium/src`, branch `openarc/156`, patches in `chromium-patches/`) packaged as `OpenArcCore.framework`: the engine library (all of Chromium linked statically; only the `OAC*` API and `OACChildProcessMain` exported), its headers and module map, `Resources/` (`openarc.pak`, ICU data, V8 snapshot), `Helpers/openarc_helper` (the child-process executable, unbundled until plan C10) and `Libraries/` (SwiftShader). macOS arm64 only for now; universal comes with C10.
+Our Chromium fork (`~/chromium/src`, branch `openarc/156`, patches in `chromium-patches/`) packaged as `OpenArcCore.framework`: the engine library (all of Chromium linked statically; only the `OAC*` API and `OACChildProcessMain` exported), its headers and module map, `Resources/` (`openarc.pak`, ICU data, V8 snapshot), `Helpers/Open Arc Helper*.app` (the child-process helper apps, plan C10) and `Libraries/` (SwiftShader). macOS arm64; arm64 + x86_64 via `build-framework.sh --universal` once the x86_64 Chromium build exists (plan C10b, deferred).
 
 ```sh
 chromium-bridge/build-framework.sh             # ninja build + xcframework (long: run in the background)
