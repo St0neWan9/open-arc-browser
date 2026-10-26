@@ -114,6 +114,9 @@ Rebase one milestone at a time. Skipping milestones piles up API changes in `//o
 | 0009 | `embedder`: the base bundle id (Mach rendezvous, sandbox) comes from the embedding app, so release and development builds do not collide (plan B37). |
 | 0010 | `embedder`: keep `//chrome` without its UI (plan C6b, decision Q7): `ChromeMainDelegate` / `ChromeContentBrowserClient` subclasses, profiles through `ProfileManager`, Chrome tab helpers on every tab, favicons from `ContentFaviconDriver`, Chrome's resource packs and crashpad handler in the framework. |
 
-Patches 0008 to 0010 are the `//openarc` directory; they stay last and may later be squashed into one.
+| 0011 | `embedder`: helper apps for the child processes (plan C10): `Open Arc Helper.app`, `… (Renderer)`, `… (GPU)`, `… (Plugin)`, `… (Alerts)` in the framework's `Helpers/`, named in `openarc/app/helpers.gni`, chosen by the browser client from content's and `//chrome`'s child flags; replaces the unbundled `openarc_helper`. |
+| 0012 | `embedder`: the keychain item is named after the build, "Open Arc Safe Storage" (release) or "Open Arc Dev Safe Storage" (development build), from the base bundle id (plan C10). |
 
-Verified on 2026-10-25 (after C6b): `apply.sh` onto a clean `156.0.8078.48` worktree produces the same tree hash as `openarc/156`, and a second run is a no-op.
+Patches 0008 to 0012 are the `//openarc` directory; they stay last and may later be squashed into one.
+
+Verified on 2026-10-25 (after C10): `apply.sh` onto a clean `156.0.8078.48` worktree produces the same tree hash as `openarc/156`, and a second run is a no-op.

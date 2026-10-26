@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements of "Open Arc Helper (Plugin).app" (plan C10), used by scripts/make-app.sh.
+  Reserved for library CDMs (plan C18); no process type launches it yet.
+  - com.apple.security.cs.disable-library-validation: a CDM is a library signed by another team,
+    which library validation would refuse. This key stays after D6 for this helper only; it is
+    the reason the variant exists.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

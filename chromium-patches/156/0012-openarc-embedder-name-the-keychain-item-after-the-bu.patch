@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 20:41:04 -0700
+Subject: [PATCH] openarc: embedder: name the keychain item after the build
+
+The os_crypt key that encrypts cookies and passwords lives in the
+keychain item "Open Arc Safe Storage" for every build. The release app
+and the development build (org.openarc.browser.dev, plan B37) keep their
+data in different directories, so they should not share the key either.
+The item is now "<product> Safe Storage" / "<product>", with the product
+name derived from the base bundle id: "Open Arc Safe Storage" for the
+release app, "Open Arc Dev Safe Storage" for the development build
+(plan C10). Patch 0003 makes the names assignable.
+---
+ .../openarc_browser_main_extra_parts.h        |  2 +-
+ .../openarc_browser_main_extra_parts.mm       | 22 +++++++++++--------
+ openarc/common/openarc_paths.h                |  8 +++++++
+ openarc/common/openarc_paths.mm               | 16 ++++++++++++++
+ 4 files changed, 38 insertions(+), 10 deletions(-)
+
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.h b/openarc/browser/openarc_browser_main_extra_parts.h
+index 4f4795e08505..d26bd5f70d18 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.h
++++ b/openarc/browser/openarc_browser_main_extra_parts.h
+@@ -14,7 +14,7 @@ namespace openarc {
+ 
+ // Open Arc's stage hooks inside //chrome's browser main parts:
+ // - names the Mac keychain item that protects cookies and passwords, so it is
+-//   never Chromium's own "Chromium Safe Storage";
++//   "<product> Safe Storage" (GetProductName()), never Chromium's own;
+ // - Open Arc's defaults for every profile: Safe Browsing off (no Google API
+ //   keys), browser sign-in off (sync is our own CloudKit sync of the
+ //   workspace; Chrome sync is never set up), background mode off;
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.mm b/openarc/browser/openarc_browser_main_extra_parts.mm
+index feba18b4de84..977a80f871b0 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.mm
++++ b/openarc/browser/openarc_browser_main_extra_parts.mm
+@@ -4,6 +4,8 @@
+ 
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
+ 
++#include <string>
++
+ #include "base/check.h"
+ #include "base/values.h"
+ #include "chrome/browser/browser_process.h"
+@@ -13,6 +15,7 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+ #include "components/signin/public/base/signin_pref_names.h"
++#include "openarc/common/openarc_paths.h"
+ 
+ namespace openarc {
+ 
+@@ -20,12 +23,6 @@
+ 
+ OpenArcBrowserMainExtraParts* g_extra_parts = nullptr;
+ 
+-// The keychain item holding the os_crypt key (OACApplication.h, decision Q5:
+-// placeholder product name). Shared by the release and development apps,
+-// which keep their data in different directories anyway.
+-constexpr char kKeychainServiceName[] = "Open Arc Safe Storage";
+-constexpr char kKeychainAccountName[] = "Open Arc";
+-
+ }  // namespace
+ 
+ OpenArcBrowserMainExtraParts::OpenArcBrowserMainExtraParts() {
+@@ -49,9 +46,16 @@
+ }
+ 
+ void OpenArcBrowserMainExtraParts::PostEarlyInitialization() {
+-  // Before any profile (and its cookie store) asks for the key.
+-  KeychainPassword::GetServiceName() = kKeychainServiceName;
+-  KeychainPassword::GetAccountName() = kKeychainAccountName;
++  // The keychain item holding the os_crypt key that encrypts cookies and
++  // passwords: "<product> Safe Storage" / "<product>", as Chrome names its own,
++  // so "Open Arc Safe Storage" for the release app and "Open Arc Dev Safe
++  // Storage" for the development build (decision Q5: placeholder product
++  // name). Each build's key goes with its own data directory, and neither
++  // touches the item of a Chrome or Chromium on the same Mac (patch 0003).
++  // Set before any profile (and its cookie store) asks for the key.
++  const std::string product_name = GetProductName();
++  KeychainPassword::GetServiceName() = product_name + " Safe Storage";
++  KeychainPassword::GetAccountName() = product_name;
+ 
+   // No Chrome background mode: the app's own lifetime decides.
+   if (PrefService* local_state = g_browser_process->local_state()) {
+diff --git a/openarc/common/openarc_paths.h b/openarc/common/openarc_paths.h
+index 4d5d684701a2..aba5524f4d69 100644
+--- a/openarc/common/openarc_paths.h
++++ b/openarc/common/openarc_paths.h
+@@ -5,6 +5,7 @@
+ #ifndef OPENARC_COMMON_OPENARC_PATHS_H_
+ #define OPENARC_COMMON_OPENARC_PATHS_H_
+ 
++#include <string>
+ #include <string_view>
+ 
+ #include "base/files/file_path.h"
+@@ -39,6 +40,13 @@ base::FilePath GetHelperExecutablePath(std::string_view suffix);
+ // load, in every process.
+ void ConfigureBundleOverrides();
+ 
++// The product name of the running build, derived from the base bundle id set
++// by ConfigureBundleOverrides(): "Open Arc" for the release id, "Open Arc Dev"
++// for "org.openarc.browser.dev" (in general "Open Arc <Variant>", the variant
++// capitalized). Names per-build items outside the user data directory, such
++// as the keychain item that protects cookies and passwords.
++std::string GetProductName();
++
+ }  // namespace openarc
+ 
+ #endif  // OPENARC_COMMON_OPENARC_PATHS_H_
+diff --git a/openarc/common/openarc_paths.mm b/openarc/common/openarc_paths.mm
+index 11e64acddd7f..1922426a324e 100644
+--- a/openarc/common/openarc_paths.mm
++++ b/openarc/common/openarc_paths.mm
+@@ -15,6 +15,7 @@
+ #include "base/apple/foundation_util.h"
+ #include "base/check.h"
+ #include "base/strings/strcat.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "openarc/app/openarc_helpers.h"
+ 
+@@ -22,6 +23,9 @@
+ 
+ namespace {
+ 
++// The release app's product name (decision Q5, placeholder).
++constexpr char kReleaseProductName[] = "Open Arc";
++
+ // The release app's placeholder bundle id (CLAUDE.md, decision Q5). The base
+ // bundle id of every engine process when the framework is not embedded in one
+ // of our apps (openarc_shell_test, xctest, a bare SwiftPM executable).
+@@ -109,4 +113,16 @@ void ConfigureBundleOverrides() {
+   base::apple::SetBaseBundleIDOverride(ComputeBaseBundleID());
+ }
+ 
++std::string GetProductName() {
++  const std::string bundle_id(base::apple::BaseBundleID());
++  const std::string prefix = base::StrCat({kReleaseBundleID, "."});
++  if (!bundle_id.starts_with(prefix) || bundle_id.size() == prefix.size()) {
++    return kReleaseProductName;
++  }
++  // IsOwnBundleID() admits only lowercase ASCII letters, digits and hyphens.
++  std::string variant = bundle_id.substr(prefix.size());
++  variant[0] = base::ToUpperASCII(variant[0]);
++  return base::StrCat({kReleaseProductName, " ", variant});
++}
++
+ }  // namespace openarc

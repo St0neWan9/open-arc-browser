@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements of "Open Arc Helper (Alerts).app" (plan C10), used by scripts/make-app.sh: the
+  notification service process that shows web notifications as alerts (an app shows either
+  banners or alerts; this helper declares NSUserNotificationAlertStyle = alert). No JIT.
+-->
+<plist version="1.0">
+<dict>
+  <!--
+    Ad-hoc signing only: ad-hoc signatures carry no Team ID, so the hardened runtime's library
+    validation refuses the framework library the helper dlopen()s (../../../../OpenArcCore:
+    "mapping process and mapped file (non-platform) have different Team IDs", seen in C10). Remove
+    once D6 signs the app, the framework and the helpers with one Developer ID team.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

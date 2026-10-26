@@ -1,0 +1,568 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 20:39:09 -0700
+Subject: [PATCH] openarc: embedder: helper apps for the child processes
+
+Replaces the unbundled openarc_helper executable with Chromium's Mac
+helper model (plan C10): one app bundle per code-signing variant in
+OpenArcCore.framework/Versions/A/Helpers/, named by the embedder
+(openarc/app/helpers.gni, generated into openarc/app/openarc_helpers.h):
+
+  Open Arc Helper.app             utility processes, GPU without SwiftShader
+  Open Arc Helper (Renderer).app  renderers (V8 JIT)
+  Open Arc Helper (GPU).app       GPU process with SwiftShader (JIT)
+  Open Arc Helper (Plugin).app    reserved for library CDMs (plan C18)
+  Open Arc Helper (Alerts).app    alert-style notifications
+
+Each has an Info.plist with LSUIElement and a bundle id below
+org.openarc.browser.helper (the GPU helper shares the default id, as
+Chrome's does for automatic graphics switching); the app packaging
+rewrites the prefix to the embedding app's id. The browser client maps
+content's CHILD_NORMAL / CHILD_RENDERER / CHILD_GPU and //chrome's alerts
+flag to these apps. The executable loads ../../../../OpenArcCore and
+exits at once when started without --type (for example by macOS for a
+notification click), as Chrome's helpers do.
+---
+ openarc/BUILD.gn                              | 110 ++++++++++++++----
+ openarc/app/helper-Info.plist                 |  57 +++++++++
+ openarc/app/helper-alerts-Info.plist          |  18 +++
+ openarc/app/helpers.gni                       |  71 +++++++++++
+ openarc/app/openarc_helper_main.cc            |  41 +++++--
+ .../browser/openarc_content_browser_client.h  |   2 +-
+ .../browser/openarc_content_browser_client.mm |  23 +++-
+ openarc/common/openarc_paths.h                |  11 +-
+ openarc/common/openarc_paths.mm               |  15 ++-
+ 9 files changed, 306 insertions(+), 42 deletions(-)
+ create mode 100644 openarc/app/helper-Info.plist
+ create mode 100644 openarc/app/helper-alerts-Info.plist
+ create mode 100644 openarc/app/helpers.gni
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index ba3ef2451264..d863213c6191 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -11,15 +11,18 @@
+ #   :openarc_shell_test  A bare Objective-C++ test host (our content_shell
+ #                        equivalent for bring-up): one NSWindow, one profile,
+ #                        one tab, URL from the command line.
+-#   :openarc_helper      The child-process executable (renderer, GPU, utility).
+-#                        Unbundled for now; helper apps and sandbox packaging are
+-#                        plan task C10.
++#   :openarc_helper_app_<variant>
++#                        The child-process helper apps (plan C10), one per
++#                        code-signing variant (app/helpers.gni): "Open Arc
++#                        Helper.app", "… (Renderer).app", "… (GPU).app",
++#                        "… (Plugin).app", "… (Alerts).app".
+ #
+ # Build: ninja -C out/Release openarc_framework openarc_shell_test
+ # (chromium-bridge/build-framework.sh in the Open Arc repository wraps this).
+ 
+ import("//build/config/mac/rules.gni")
+ import("//chrome/version.gni")
++import("//openarc/app/helpers.gni")
+ import("//third_party/icu/config.gni")
+ import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
+ import("//ui/gl/features.gni")
+@@ -106,7 +109,9 @@ source_set("embedder") {
+     "//third_party/cld_3/src/src:cld_3",
+   ]
+   deps = [
++    ":helper_names",
+     "//base",
++    "//chrome/browser:child_process_host_flags",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:tab_helpers",
+     "//chrome/browser/ui:tab_helpers_impl",
+@@ -179,8 +184,9 @@ source_set("bridge") {
+ #   Versions/A/Resources/             Info.plist, Chrome's resources.pak and locale paks,
+ #                                     icudtl.dat, V8 snapshot,
+ #                                     ANGLE Metal shader cache
+-#   Versions/A/Helpers/openarc_helper the child-process executable (unbundled until the
+-#                                     helper apps of plan C10)
++#   Versions/A/Helpers/Open Arc Helper*.app
++#                                     the child-process helper apps (plan C10,
++#                                     app/helpers.gni), and chrome_crashpad_handler
+ #   Versions/A/Libraries/             SwiftShader (software GPU fallback)
+ #
+ # Chromium links statically into the library (is_component_build is false).
+@@ -225,13 +231,13 @@ bundle_data("openarc_framework_helpers") {
+     # Crashpad's handler (local crash reports, plan D8); Chrome's crash
+     # reporter starts it from the framework's Helpers/.
+     "$root_out_dir/chrome_crashpad_handler",
+-    "$root_out_dir/openarc_helper",
+   ]
+   outputs = [ "{{bundle_contents_dir}}/Helpers/{{source_file_part}}" ]
+-  public_deps = [
+-    ":openarc_helper",
+-    "//components/crash/core/app:chrome_crashpad_handler",
+-  ]
++  public_deps = [ "//components/crash/core/app:chrome_crashpad_handler" ]
++  foreach(helper_params, openarc_mac_helpers) {
++    sources += [ "$root_out_dir/${openarc_helper_name}${helper_params[2]}.app" ]
++    public_deps += [ ":openarc_helper_app_${helper_params[0]}" ]
++  }
+ }
+ 
+ bundle_data("openarc_framework_swiftshader") {
+@@ -287,18 +293,80 @@ mac_framework_bundle("openarc_framework") {
+   ldflags = [ "-Wl,-install_name,@rpath/OpenArcCore.framework/Versions/$openarc_framework_version/OpenArcCore" ]
+ }
+ 
+-# Child processes (renderer, GPU, utility). It lives in the framework's Helpers/
+-# directory, loads the framework's library (../OpenArcCore) and calls
+-# OACChildProcessMain. Same split as Chrome's helpers: the executable only
+-# sets up the sandbox and loads the library, so //base exists once per process.
+-executable("openarc_helper") {
+-  sources = [ "app/openarc_helper_main.cc" ]
+-  deps = [
+-    # Despite its path, this does not add a //base dependency.
+-    "//base/allocator:early_zone_registration_apple",
+-    "//base:compiler_specific",
+-    "//sandbox/mac:seatbelt",
++# The helper names as C++ constants (openarc/app/openarc_helpers.h), so the
++# browser process finds the helper apps under the names this file gives them.
++source_set("helper_names") {
++  visibility = [ ":*" ]
++  _lines = [
++    "// Generated by //openarc:helper_names from openarc/app/helpers.gni.",
++    "",
++    "#ifndef OPENARC_APP_OPENARC_HELPERS_H_",
++    "#define OPENARC_APP_OPENARC_HELPERS_H_",
++    "",
++    "namespace openarc {",
++    "",
++    "// Base name of the helper apps and their executables.",
++    "inline constexpr char kHelperName[] = \"$openarc_helper_name\";",
++    "",
++    "// Name suffix of each helper variant (kHelperSuffix_<variant>).",
++  ]
++  foreach(helper_params, openarc_mac_helpers) {
++    _lines += [ "inline constexpr char kHelperSuffix_${helper_params[0]}[] = \"${helper_params[2]}\";" ]
++  }
++  _lines += [
++    "",
++    "}  // namespace openarc",
++    "",
++    "#endif  // OPENARC_APP_OPENARC_HELPERS_H_",
++    "",
+   ]
++  _file = "$root_gen_dir/openarc/app/openarc_helpers.h"
++  write_file(_file, _lines)
++  sources = [ _file ]
++}
++
++# The alerts helper's Info.plist: the common one plus the alert style.
++action("openarc_helper_alerts_plist") {
++  script = "//build/apple/plist_util.py"
++  sources = [
++    "app/helper-Info.plist",
++    "app/helper-alerts-Info.plist",
++  ]
++  outputs = [ "$target_gen_dir/helper-alerts-Info.plist" ]
++  args = [
++           "merge",
++           "-f=xml1",
++           "-o=" + rebase_path(outputs[0], root_build_dir),
++         ] + rebase_path(sources, root_build_dir)
++}
++
++# Child processes (renderer, GPU, utility, notifications): one helper app per
++# variant of openarc_mac_helpers. The executable sets up the seatbelt sandbox,
++# then loads the framework's library (Versions/A/OpenArcCore, four directories
++# up from Contents/MacOS) and calls OACChildProcessMain. Same split as
++# Chrome's helpers: the executable does not link //base, so //base exists once
++# per process. scripts/make-app.sh in the Open Arc repository signs each
++# variant with its own entitlements.
++foreach(helper_params, openarc_mac_helpers) {
++  mac_app_bundle("openarc_helper_app_${helper_params[0]}") {
++    output_name = openarc_helper_name + helper_params[2]
++    if (helper_params[0] == "alerts") {
++      info_plist_target = ":openarc_helper_alerts_plist"
++    } else {
++      info_plist = "app/helper-Info.plist"
++    }
++    extra_substitutions = [
++      "OPENARC_CHROMIUM_VERSION=$chrome_version_full",
++      "OPENARC_HELPER_BUNDLE_ID=$openarc_release_bundle_id.helper${helper_params[1]}",
++    ]
++    sources = [ "app/openarc_helper_main.cc" ]
++    deps = [
++      # Despite its path, this does not add a //base dependency.
++      "//base/allocator:early_zone_registration_apple",
++      "//base:compiler_specific",
++      "//sandbox/mac:seatbelt",
++    ]
++  }
+ }
+ 
+ # Bring-up test host: a bare NSApplication with one window and one tab.
+diff --git a/openarc/app/helper-Info.plist b/openarc/app/helper-Info.plist
+new file mode 100644
+index 000000000000..4a60772099b0
+--- /dev/null
++++ b/openarc/app/helper-Info.plist
+@@ -0,0 +1,57 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<!--
++  Copyright 2026 The Open Arc Authors
++  Use of this source code is governed by a BSD-style license that can be
++  found in the LICENSE file.
++
++  Info.plist of the Open Arc helper apps (plan C10, openarc/app/helpers.gni).
++  CFBundleIdentifier is the release app's; scripts/make-app.sh rewrites the
++  "org.openarc.browser" prefix to the embedding app's id (the development
++  build's helpers are org.openarc.browser.dev.helper...).
++-->
++<plist version="1.0">
++<dict>
++	<key>CFBundleDevelopmentRegion</key>
++	<string>en</string>
++	<key>CFBundleDisplayName</key>
++	<string>${EXECUTABLE_NAME}</string>
++	<key>CFBundleExecutable</key>
++	<string>${EXECUTABLE_NAME}</string>
++	<key>CFBundleIdentifier</key>
++	<string>${OPENARC_HELPER_BUNDLE_ID}</string>
++	<key>CFBundleInfoDictionaryVersion</key>
++	<string>6.0</string>
++	<key>CFBundleName</key>
++	<string>${EXECUTABLE_NAME}</string>
++	<key>CFBundlePackageType</key>
++	<string>APPL</string>
++	<key>CFBundleShortVersionString</key>
++	<string>${OPENARC_CHROMIUM_VERSION}</string>
++	<key>CFBundleVersion</key>
++	<string>${OPENARC_CHROMIUM_VERSION}</string>
++	<key>CFBundleSignature</key>
++	<string>????</string>
++	<!-- As Chrome's helpers: the nano malloc zone is off in every process. -->
++	<key>LSEnvironment</key>
++	<dict>
++		<key>MallocNanoZone</key>
++		<string>0</string>
++	</dict>
++	<key>LSFileQuarantineEnabled</key>
++	<true/>
++	<key>LSMinimumSystemVersion</key>
++	<string>${MACOSX_DEPLOYMENT_TARGET}</string>
++	<!-- No Dock icon or menu bar; also how //chrome tells a helper process
++	     (base::apple::IsBackgroundOnlyProcess) from the browser process. -->
++	<key>LSUIElement</key>
++	<string>1</string>
++	<!-- The GPU process may use the integrated GPU on dual-GPU Macs. -->
++	<key>NSSupportsAutomaticGraphicsSwitching</key>
++	<true/>
++	<key>NSCameraReactionEffectGesturesEnabledDefault</key>
++	<false/>
++	<key>NSCameraUseContinuityCameraDeviceType</key>
++	<true/>
++</dict>
++</plist>
+diff --git a/openarc/app/helper-alerts-Info.plist b/openarc/app/helper-alerts-Info.plist
+new file mode 100644
+index 000000000000..8c5ec902cf65
+--- /dev/null
++++ b/openarc/app/helper-alerts-Info.plist
+@@ -0,0 +1,18 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<!--
++  Copyright 2026 The Open Arc Authors
++  Use of this source code is governed by a BSD-style license that can be
++  found in the LICENSE file.
++
++  Merged over helper-Info.plist for "Open Arc Helper (Alerts).app": an app
++  shows its notifications either as banners or as alerts, so alert-style
++  notifications come from this helper. scripts/make-app.sh adds the app icon
++  (CFBundleIconFile) so the notifications carry it.
++-->
++<plist version="1.0">
++<dict>
++	<key>NSUserNotificationAlertStyle</key>
++	<string>alert</string>
++</dict>
++</plist>
+diff --git a/openarc/app/helpers.gni b/openarc/app/helpers.gni
+new file mode 100644
+index 000000000000..e103af447d6d
+--- /dev/null
++++ b/openarc/app/helpers.gni
+@@ -0,0 +1,71 @@
++# Copyright 2026 The Open Arc Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# Open Arc's helper apps (plan C10): the child-process executables, one app
++# bundle per code-signing variant, in OpenArcCore.framework/Versions/A/Helpers/.
++# Chrome's Mac helper model (//content/public/app/mac_helpers.gni plus
++# //chrome's alerts helper) with our own names. The browser process picks the
++# variant by the child flags content passes to
++# ContentBrowserClient::GetChildProcessPath() (openarc_content_browser_client.mm);
++# the names reach C++ through the generated openarc/app/openarc_helpers.h.
++#
++# The bundle ids here are the release app's (org.openarc.browser.helper…).
++# scripts/make-app.sh rewrites them to the embedding app's id, so the
++# development build's helpers are org.openarc.browser.dev.helper…, matching
++# the base bundle id every process reads from the embedding app (patch 0009).
++
++# The base name of every helper app and executable.
++openarc_helper_name = "Open Arc Helper"
++
++# The release app's placeholder bundle id (CLAUDE.md, decision Q5).
++openarc_release_bundle_id = "org.openarc.browser"
++
++# One entry per helper variant:
++#   [ target suffix, bundle id suffix (after "<app id>.helper"), name suffix ]
++# Each variant is signed with its own entitlements by scripts/make-app.sh
++# (app/Bundle/Helpers/*.entitlements in the Open Arc repository).
++openarc_mac_helpers = [
++  # Utility processes (network, storage, audio, …) and the GPU process when
++  # SwiftShader is not allowed (content's CHILD_NORMAL). No JIT.
++  [
++    "default",
++    "",
++    "",
++  ],
++
++  # Renderers and JIT-using utility processes (content's CHILD_RENDERER):
++  # V8 needs MAP_JIT.
++  [
++    "renderer",
++    ".renderer",
++    " (Renderer)",
++  ],
++
++  # The GPU process when SwiftShader may run (content's CHILD_GPU):
++  # SwiftShader's JIT. It shares the default helper's bundle id, as Chrome's
++  # GPU helper does: a bundle id of its own can break automatic graphics
++  # switching on Macs with two GPUs (https://crbug.com/40636691).
++  [
++    "gpu",
++    "",
++    " (GPU)",
++  ],
++
++  # Reserved for library CDMs signed by another team (plan C18): the only
++  # variant that may load a library with a foreign signature. No process type
++  # launches it yet.
++  [
++    "plugin",
++    ".plugin",
++    " (Plugin)",
++  ],
++
++  # Notifications shown as alerts rather than banners (//chrome's
++  # kChildProcessHelperAlerts, the Mac notification service).
++  [
++    "alerts",
++    ".alerts",
++    " (Alerts)",
++  ],
++]
+diff --git a/openarc/app/openarc_helper_main.cc b/openarc/app/openarc_helper_main.cc
+index bef49fcad6df..6f2bd24e25cc 100644
+--- a/openarc/app/openarc_helper_main.cc
++++ b/openarc/app/openarc_helper_main.cc
+@@ -2,15 +2,16 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-// The child-process executable: renderer, GPU and utility processes. It sets
+-// up the seatbelt sandbox, then loads the OpenArcCore library and calls
+-// OACChildProcessMain. It must not link //base: the library carries its own
+-// copy, and two would split the allocator and globals.
++// The executable of every Open Arc helper app (plan C10): renderer, GPU,
++// utility and notification processes. It sets up the seatbelt sandbox, then
++// loads the OpenArcCore library and calls OACChildProcessMain. It must not
++// link //base: the library carries its own copy, and two would split the
++// allocator and globals.
+ //
+-// Layout (plan C8): the helper is OpenArcCore.framework/Versions/A/Helpers/
+-// openarc_helper and the library is Versions/A/OpenArcCore, so the library is
+-// ../OpenArcCore relative to the helper. The helper app bundles and their
+-// sandbox profiles are plan C10.
++// Layout: the helper is OpenArcCore.framework/Versions/A/Helpers/
++// Open Arc Helper<suffix>.app/Contents/MacOS/Open Arc Helper<suffix> and the
++// library is Versions/A/OpenArcCore, four directories up from the executable's
++// directory.
+ 
+ #include <dlfcn.h>
+ #include <libgen.h>
+@@ -29,14 +30,34 @@ namespace {
+ 
+ using ChildProcessMainPtr = int (*)(int, const char**);
+ 
+-// Relative to the helper's directory (Versions/A/Helpers).
+-constexpr char kLibraryRelativePath[] = "../OpenArcCore";
++// Relative to the executable's directory
++// (Versions/A/Helpers/<helper>.app/Contents/MacOS).
++constexpr char kLibraryRelativePath[] = "../../../../OpenArcCore";
++
++// True if the command line names a process type. The browser process always
++// passes one; without it the helper was started by someone else, for example
++// by macOS when the user clicks an alert of the notification helper (Chrome
++// exits early in the same cases, chrome_main_mac.mm).
++bool HasProcessType(int argc, char* argv[]) {
++  static constexpr char kTypeSwitch[] = "--type=";
++  for (int i = 1; i < argc; ++i) {
++    if (UNSAFE_TODO(strncmp(argv[i], kTypeSwitch, sizeof(kTypeSwitch) - 1)) ==
++        0) {
++      return true;
++    }
++  }
++  return false;
++}
+ 
+ }  // namespace
+ 
+ int main(int argc, char* argv[]) {
+   partition_alloc::EarlyMallocZoneRegistration();
+ 
++  if (!HasProcessType(argc, argv)) {
++    return 0;
++  }
++
+   uint32_t exec_path_size = 0;
+   if (_NSGetExecutablePath(nullptr, &exec_path_size) != -1) {
+     fprintf(stderr, "_NSGetExecutablePath: get length failed\n");
+diff --git a/openarc/browser/openarc_content_browser_client.h b/openarc/browser/openarc_content_browser_client.h
+index 3a0580e04bf6..92cc91072cc4 100644
+--- a/openarc/browser/openarc_content_browser_client.h
++++ b/openarc/browser/openarc_content_browser_client.h
+@@ -18,7 +18,7 @@ namespace openarc {
+ // Chrome's own UI redirected: no Chrome context menus, no Chrome HTTP-auth,
+ // client-certificate or external-protocol dialogs (plan C12 turns those into
+ // shell requests through OACDialogDelegate; until then they get default
+-// answers), the shell's per-tab color scheme, and our helper executable.
++// answers), the shell's per-tab color scheme, and our helper apps.
+ class OpenArcContentBrowserClient : public ChromeContentBrowserClient {
+  public:
+   OpenArcContentBrowserClient();
+diff --git a/openarc/browser/openarc_content_browser_client.mm b/openarc/browser/openarc_content_browser_client.mm
+index 649970b97ba4..3158b379b7f6 100644
+--- a/openarc/browser/openarc_content_browser_client.mm
++++ b/openarc/browser/openarc_content_browser_client.mm
+@@ -4,9 +4,14 @@
+ 
+ #include "openarc/browser/openarc_content_browser_client.h"
+ 
++#include <utility>
++
+ #include "base/functional/callback_helpers.h"
++#include "base/notreached.h"
++#include "chrome/browser/child_process_host_flags.h"
+ #include "chrome/browser/chrome_browser_main.h"
+ #include "chrome/browser/chrome_browser_main_extra_parts.h"
++#include "content/public/browser/child_process_host.h"
+ #include "content/public/browser/client_certificate_delegate.h"
+ #include "content/public/browser/login_delegate.h"
+ #include "content/public/browser/web_contents.h"
+@@ -14,6 +19,7 @@
+ #include "net/ssl/client_cert_identity.h"
+ #include "net/ssl/ssl_private_key.h"
+ #include "net/cert/x509_certificate.h"
++#include "openarc/app/openarc_helpers.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ #include "openarc/common/openarc_paths.h"
+@@ -58,9 +64,20 @@ bool ApplyTabColorScheme(content::WebContents* web_contents,
+ }
+ 
+ base::FilePath OpenArcContentBrowserClient::GetChildProcessPath(int flags) {
+-  // One unbundled helper for every child type until the helper apps of plan
+-  // C10 exist (they will add the renderer / GPU / plugin / alerts variants).
+-  return GetHelperExecutablePath();
++  // One helper app per code-signing variant (plan C10, app/helpers.gni), in
++  // the framework's Helpers/ directory, as content and //chrome would pick
++  // Chrome's own helpers. The "plugin" helper has no process type yet.
++  switch (flags) {
++    case content::ChildProcessHost::CHILD_NORMAL:
++      return GetHelperExecutablePath(kHelperSuffix_default);
++    case content::ChildProcessHost::CHILD_RENDERER:
++      return GetHelperExecutablePath(kHelperSuffix_renderer);
++    case content::ChildProcessHost::CHILD_GPU:
++      return GetHelperExecutablePath(kHelperSuffix_gpu);
++    case std::to_underlying(ChildProcessHostFlags::kChildProcessHelperAlerts):
++      return GetHelperExecutablePath(kHelperSuffix_alerts);
++  }
++  NOTREACHED() << "unknown child process flags " << flags;
+ }
+ 
+ std::unique_ptr<content::WebContentsViewDelegate>
+diff --git a/openarc/common/openarc_paths.h b/openarc/common/openarc_paths.h
+index 94a12b8eaa71..4d5d684701a2 100644
+--- a/openarc/common/openarc_paths.h
++++ b/openarc/common/openarc_paths.h
+@@ -5,6 +5,8 @@
+ #ifndef OPENARC_COMMON_OPENARC_PATHS_H_
+ #define OPENARC_COMMON_OPENARC_PATHS_H_
+ 
++#include <string_view>
++
+ #include "base/files/file_path.h"
+ 
+ namespace openarc {
+@@ -15,15 +17,18 @@ namespace openarc {
+ //   OpenArcCore.framework/Versions/A/            GetFrameworkVersionDirectory()
+ //     OpenArcCore                                the library
+ //     Resources/resources.pak, *.lproj, ...      Chrome's resource packs
+-//     Helpers/openarc_helper                     GetHelperExecutablePath()
++//     Helpers/Open Arc Helper<suffix>.app/       GetHelperExecutablePath()
++//       Contents/MacOS/Open Arc Helper<suffix>
+ //     Libraries/                                 SwiftShader
+ 
+ // The framework's versioned directory (Versions/A), i.e. the directory of the
+ // library that contains this code.
+ base::FilePath GetFrameworkVersionDirectory();
+ 
+-// The child-process executable (renderer, GPU, utility).
+-base::FilePath GetHelperExecutablePath();
++// The executable of the helper app with name suffix |suffix| (one of the
++// kHelperSuffix_* constants of openarc/app/openarc_helpers.h, generated from
++// openarc/app/helpers.gni).
++base::FilePath GetHelperExecutablePath(std::string_view suffix);
+ 
+ // Points base::apple's framework bundle (used to find icudtl.dat, the V8
+ // snapshot and Libraries/) at the framework's versioned directory, as Chrome
+diff --git a/openarc/common/openarc_paths.mm b/openarc/common/openarc_paths.mm
+index dda6c99967b6..11e64acddd7f 100644
+--- a/openarc/common/openarc_paths.mm
++++ b/openarc/common/openarc_paths.mm
+@@ -14,7 +14,9 @@
+ #include "base/apple/bundle_locations.h"
+ #include "base/apple/foundation_util.h"
+ #include "base/check.h"
++#include "base/strings/strcat.h"
+ #include "base/strings/sys_string_conversions.h"
++#include "openarc/app/openarc_helpers.h"
+ 
+ namespace openarc {
+ 
+@@ -49,7 +51,7 @@ bool IsOwnBundleID(NSString* bundle_id) {
+ // The bundle id of the app that embeds the framework
+ // (<app>.app/Contents/Frameworks/OpenArcCore.framework/Versions/A), when it is
+ // one of ours; else the release id. Every process computes it from the same
+-// file, the framework it runs, so the browser process and its unbundled
++// file, the framework it runs, so the browser process and its
+ // helpers agree on it without passing it around, and the release and
+ // development apps get distinct Mach rendezvous names and sandbox bundle ids.
+ // The helpers call this after their seatbelt is up; the sandbox allows reads
+@@ -88,9 +90,14 @@ bool IsOwnBundleID(NSString* bundle_id) {
+   return base::FilePath(path).DirName();
+ }
+ 
+-base::FilePath GetHelperExecutablePath() {
+-  return GetFrameworkVersionDirectory().Append("Helpers").Append(
+-      "openarc_helper");
++base::FilePath GetHelperExecutablePath(std::string_view suffix) {
++  const std::string name = base::StrCat({kHelperName, suffix});
++  return GetFrameworkVersionDirectory()
++      .Append("Helpers")
++      .Append(name + ".app")
++      .Append("Contents")
++      .Append("MacOS")
++      .Append(name);
+ }
+ 
+ void ConfigureBundleOverrides() {

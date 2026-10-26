@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements of "Open Arc Helper (GPU).app" (plan C10), used by scripts/make-app.sh: the GPU
+  process when SwiftShader may run (content's CHILD_GPU; with hardware GPU access the GPU
+  process runs in the plain helper).
+  - com.apple.security.cs.allow-jit: SwiftShader's JIT (Reactor) compiles shaders into MAP_JIT
+    memory. This is the only key of Chromium's helper-gpu-entitlements.plist.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!--
+    Ad-hoc signing only: ad-hoc signatures carry no Team ID, so the hardened runtime's library
+    validation refuses the framework library the helper dlopen()s (../../../../OpenArcCore:
+    "mapping process and mapped file (non-platform) have different Team IDs", seen in C10). Remove
+    once D6 signs the app, the framework and the helpers with one Developer ID team.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

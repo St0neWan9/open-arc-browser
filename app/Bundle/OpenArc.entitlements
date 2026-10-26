@@ -4,14 +4,12 @@
   Entitlements for "Open Arc.app", used by scripts/make-app.sh (ad-hoc signing,
   hardened runtime).
 
-  Intentionally minimal for now:
-  - No App Sandbox (com.apple.security.app-sandbox). The Chromium engine (task C10)
-    runs its own multi-process sandbox and ships GPU / renderer / plugin helper apps.
-    Their entitlements and the main app's sandbox decision belong to C10, so the
-    sandbox is decided there instead of being added now and removed later.
-  - No hardened-runtime exceptions (JIT, unsigned executable memory, library
-    validation). The current build uses FakeEngine and needs none. Chromium's
-    helpers will need some of them; C10 adds them.
+  Intentionally minimal:
+  - No App Sandbox (com.apple.security.app-sandbox), settled in C10: like Chrome, the app (the
+    browser process) is unsandboxed, and Chromium's helper apps in OpenArcCore.framework run
+    under Chromium's own Seatbelt sandbox. Their entitlements are app/Bundle/Helpers/*.
+  - No JIT or unsigned-executable-memory exceptions: the browser process runs no V8 code of
+    web pages; the renderer and GPU helpers carry allow-jit.
   - No device entitlements yet. When web permissions land, the hardened runtime
     needs com.apple.security.device.camera, com.apple.security.device.audio-input
     and com.apple.security.personal-information.location alongside the usage
