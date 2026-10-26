@@ -21,7 +21,9 @@ public struct ThemePalette: Hashable, Sendable {
     /// Fill for the address field, favorites blocks and dock highlights: window × 0.96 (darker, not
     /// lighter). [07 §8] inferred, light and dark.
     public var controlFill: RGBAColor
-    /// Selected tab row background: mix(window, #F5F5F5, 0.90). [07 §8] inferred, light and dark.
+    /// Selected tab row background (also the lifted drag row and the hover card). Dark ink:
+    /// mix(window, #F5F5F5, 0.90), near white; light ink: mix(window, #F5F5FF, 0.222), a muted
+    /// tone close to the window. It follows the ink, not light / dark. [07 §8.3] inferred (B46).
     public var selectedTabFill: RGBAColor
     /// Command bar panel: #F9F9F9 light, #181818 dark, whatever the theme. [07 §5, §8] observed.
     public var commandBarBackground: RGBAColor
@@ -97,8 +99,9 @@ public struct ThemePalette: Hashable, Sendable {
     public var chromeInk: RGBAColor = RGBAColor(hex: 0x000000)
     /// Hairline divider between pinned and Today: window × 0.87. [07 §4, §8] inferred.
     public var separator: RGBAColor = RGBAColor(hex: 0xCCCCCC)
-    /// Title on the selected tab row (on `selectedTabFill`): the row text color, never white.
-    /// [07 §8] observed (the AX title color does not change).
+    /// Title on the selected tab row (on `selectedTabFill`): the row text color with dark ink
+    /// ([07 §8] observed, the AX title color does not change); with light ink the same white as the
+    /// other row titles (B46 PX: ≈ 79 % white on the muted fill, [07 §8.3] observed).
     public var selectedTabText: RGBAColor = RGBAColor(hex: 0x1C1C1E)
     /// Command bar input text: #101214 at 80 % (light), ≈ #F0F5F7 (dark). [07 §3] observed.
     public var commandBarInputText: RGBAColor = RGBAColor(hex: 0x101214, alpha: 0.80)
@@ -127,9 +130,9 @@ public struct ThemePalette: Hashable, Sendable {
 
     // MARK: B32 additions (light ink on dark windows)
 
-    /// True when the window is dark enough that the chrome uses light (white) ink instead of the
-    /// theme's dark tone and black. `ThemeDerivation.prefersLightInk` decides. [07 §8] observed dark
-    /// ink on the three presets; round-1 comparison observed white ink on a saturated blue-violet.
+    /// True when the theme color is dark enough that the chrome uses light (white) ink instead of
+    /// the theme's dark tone and black, in light and dark alike. `ThemeDerivation.prefersLightInk`
+    /// decides. [07 §8.3] observed on the E12 presets (B46).
     public var usesLightInk: Bool = false
     /// Opacities of the chrome ink per element; they differ between dark and light ink.
     public var inkOpacity: ChromeInkOpacities = .darkInk
@@ -248,9 +251,19 @@ public enum ThemeDerivation {
     /// Separator and scroll-edge lines on a light-ink window: window + 5 % white. Round-1 PX (B32):
     /// #5247FE → #5A52FD; inferred.
     public static let lightInkSeparatorWhite: Double = 0.05
-    /// Selected row fill = mix(window, #F5F5F5, 0.90). [07 §8] inferred (≤ 2/255).
+    /// Selected row fill with dark ink = mix(window, #F5F5F5, 0.90). [07 §8, §8.3] inferred
+    /// (≤ 2.6/255 over 17 B46 samples).
     public static let selectedRowMixColor = RGBAColor(hex: 0xF5F5F5)
     public static let selectedRowMixAmount: Double = 0.90
+    /// Selected row fill with light ink = mix(window, #F5F5FF, 0.222): a muted tone close to the
+    /// window, not near white (navy dark #838498 → #9E9DB0). [07 §8.3] inferred, fitted to 16
+    /// light-ink B46 samples in light and dark, max 1.7/255.
+    public static let lightInkSelectedRowMixColor = RGBAColor(hex: 0xF5F5FF)
+    public static let lightInkSelectedRowMixAmount: Double = 0.222
+    /// Light ink when the theme color's relative luminance is below this. [07 §8.3] observed on the
+    /// 36 E12 presets: ≤ 0.143 light ink, ≥ 0.204 dark ink, the same in light and dark; the
+    /// midpoint is inferred.
+    public static let lightInkThemeLuminance: Double = 0.17
     /// Row text = OKLCH(L, chroma × factor, theme hue). [07 §8] inferred: L 0.25–0.265, chroma
     /// 0.36–0.53 × the theme's over the three samples.
     public static let rowTextLightness: Double = 0.258
@@ -362,12 +375,19 @@ public enum ThemeDerivation {
         return OKLCH(lightness: lightness, chroma: lch.chroma * chromaFactor, hue: lch.hue).rgb(alpha: 1)
     }
 
-    /// Whether a window color takes light (white) ink: true when white has more contrast on it than
-    /// the theme's dark row text. The crossover sits near a relative luminance of 0.22. [07 §8]
-    /// observed: the three presets (window luminance 0.39–0.73) use dark ink; round-1 (B32)
-    /// observed: the blue-violet window (0.135) uses white. The exact threshold is inferred.
-    public static func prefersLightInk(window: RGBAColor, darkText: RGBAColor) -> Bool {
-        contrast(window, darkText) < contrast(window, RGBAColor(hex: 0xFFFFFF))
+    /// Whether a theme takes light (white) ink: decided by the theme color, not the window, so a
+    /// Space keeps its ink when switched between light and dark. [07 §8.3] observed (B46): the dark
+    /// navy preset uses white ink although its dark window (luminance 0.24) has more contrast with
+    /// the dark row text, while purple's (0.30) keeps dark ink. The former window-contrast test got
+    /// navy and mid-gray wrong. Threshold `lightInkThemeLuminance`, inferred.
+    public static func prefersLightInk(theme: RGBAColor) -> Bool {
+        luminance(theme) < lightInkThemeLuminance
+    }
+
+    /// The selected row fill for a window color and ink. [07 §8.3] inferred.
+    public static func selectedRowFill(window: RGBAColor, lightInk: Bool) -> RGBAColor {
+        lightInk ? mix(window, lightInkSelectedRowMixColor, amount: lightInkSelectedRowMixAmount)
+            : mix(window, selectedRowMixColor, amount: selectedRowMixAmount)
     }
 
     /// Relative luminance (WCAG formula).
@@ -422,9 +442,9 @@ public enum ThemeDerivation {
         let window = windowOf(theme)
         let white = RGBAColor(hex: 0xFFFFFF), black = RGBAColor(hex: 0x000000)
 
-        // Row text: the theme's dark tone, unless the window is too dark for it (then white).
+        // Row text: the theme's dark tone, unless the theme is dark (then white) [07 §8.3].
         let rowText = tone(of: theme, lightness: rowTextLightness, chromaFactor: rowTextChromaFactor)
-        let lightInk = prefersLightInk(window: window, darkText: rowText)
+        let lightInk = prefersLightInk(theme: theme)
         let primaryText = lightInk ? white : rowText
         let chromeInk = lightInk ? white : black
         let inkOpacity: ChromeInkOpacities = lightInk ? .lightInk : .darkInk
@@ -435,7 +455,7 @@ public enum ThemeDerivation {
         var palette = ThemePalette(
             windowBackground: window,
             controlFill: controlFill,
-            selectedTabFill: mix(window, selectedRowMixColor, amount: selectedRowMixAmount),
+            selectedTabFill: selectedRowFill(window: window, lightInk: lightInk),
             commandBarBackground: isDark ? darkCommandBarBackground : commandBarBackground,
             commandBarSelection: isDark
                 ? tone(of: theme, lightness: darkCommandBarSelectionLightness, chromaFactor: darkCommandBarSelectionChromaFactor)
@@ -453,7 +473,7 @@ public enum ThemeDerivation {
         palette.scrollEdgeLine = separator
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
         palette.webPanelBackground = contentBackground(theme, appearance: appearance)
-        palette.selectedTabText = rowText
+        palette.selectedTabText = lightInk ? withAlpha(white, inkOpacity.rowTitle) : rowText
         palette.dropTargetFill = dropTargetFill(window: window, isDark: isDark)
         palette.splitPreviewFill = splitPreviewFill(window: window, isDark: isDark)
         palette.floatingPanelBackground = isDark

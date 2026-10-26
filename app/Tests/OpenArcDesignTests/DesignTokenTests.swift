@@ -147,7 +147,8 @@ final class DesignTokenTests: XCTestCase {
     /// [07 §8, §8.2]: window = mix(theme, #EBEBEB, 0.37); control = window × 0.96 (darker, not +10 %
     /// white); selected row = mix(window, #F5F5F5, 0.9); command bar panel #F9F9F9 whatever the theme.
     func testPaletteFollowsThemeRules() {
-        let purple = RGBAColor(hex: 0x6B4FD8)
+        // The E11 purple preset: a dark-ink theme [07 §8.3] (#6B4FD8 would take light ink).
+        let purple = RGBAColor(hex: 0xA5729C)
         let theme = Theme(id: UUID(), appearance: .light, colors: [purple], now: Date(timeIntervalSince1970: 0))
         let palette = ThemeDerivation.palette(for: theme)
         let window = ThemeDerivation.mix(purple, RGBAColor(hex: 0xEBEBEB), amount: 0.37)
