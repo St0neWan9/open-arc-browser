@@ -3,6 +3,8 @@
 #
 # Usage (from anywhere):
 #   scripts/make-app.sh [--dev] [--version 0.1.0] [--build N] [--universal] [--scratch-path DIR]
+#                       [--out-dir DIR]
+#                       [--sign-identity SHA1 --keychain PATH [--keychain-password-file FILE]]
 #
 #   --dev           development build (plan B37): bundle id org.openarc.browser.dev, name
 #                   "Open Arc Dev", output build/Open Arc Dev.app. The app derives everything
@@ -16,6 +18,27 @@
 #   --universal     build arm64 + x86_64 (default: arm64 only)
 #   --scratch-path  SwiftPM scratch directory (default app/.build/scratch-make-app),
 #                   kept apart from app/.build so it does not race with other builds
+#   --out-dir       where the bundle is assembled (default build/ in the repo)
+#
+# Release signing (plan D6, opt-in; without it every build is signed ad-hoc as before):
+#   --sign-identity  SHA-1 of the "Developer ID Application" identity. Always a hash, never the
+#                    name: two identities with the same name can exist in the search list.
+#   --keychain       keychain that holds that identity (passed to codesign --keychain).
+#   --keychain-password-file  optional: unlock --keychain with the password in this file first.
+#   While signing, --keychain is moved to the front of the user keychain search list and put back
+#   afterwards (scripts/signing-keychain.sh): codesign finds the private key through the search
+#   list, and a copy of the key in the login keychain makes it fail with errSecInternalComponent
+#   when no one can answer the keychain prompt (SSH, agents).
+#   Developer ID mode signs with --timestamp (Apple's secure timestamp, needs network) and the
+#   hardened runtime, in the same inside-out order as ad-hoc, and drops
+#   com.apple.security.cs.disable-library-validation from every entitlements file except the
+#   Plugin helper's (one team signs everything, so library validation passes; C18 CDMs need it).
+#   Then verifies that every signature carries the identity's Team ID. Notarize the result with
+#   scripts/notarize.sh. Example:
+#     scripts/make-app.sh --version 0.2.0 --build 2 \
+#         --sign-identity 14D84F5327335E27AF84B31C5921A0DEF8E92CA1 \
+#         --keychain ~/projects/open-arc-browser-signing/open-arc-signing.keychain-db
+#     scripts/notarize.sh "build/Open Arc.app"
 #
 # Steps: release build of the OpenArcApp product, assemble build/Open Arc.app
 # (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns,
@@ -26,10 +49,11 @@
 # shares <bundle id>.helper), ad-hoc sign inside-out (Sparkle's XPC services, Autoupdate,
 # Updater.app; each OpenArcCore helper app with its own app/Bundle/Helpers/*.entitlements,
 # crashpad and the libraries; the frameworks; then the app with the hardened runtime and
-# app/Bundle/OpenArc.entitlements), then verify with codesign --deep --strict and plutil.
+# app/Bundle/OpenArc.entitlements; Developer ID instead with --sign-identity), then verify with
+# codesign --deep --strict and plutil.
 # With --universal the app and OpenArcCore.framework must both carry arm64 and x86_64
 # (chromium-bridge/build-framework.sh --universal). Idempotent: the bundle is rebuilt from
-# scratch. Developer ID signing and notarization are plan task D6 (docs/release.md).
+# scratch. Release steps: docs/release.md.
 # Prints the bundle path on the last line. Uses only Xcode / system tools.
 set -euo pipefail
 
@@ -42,6 +66,10 @@ build_number="1"
 universal=0
 dev=0
 scratch_path="$package_dir/.build/scratch-make-app"
+out_dir="$repo_root/build"
+sign_identity=""
+keychain=""
+keychain_password_file=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -50,10 +78,32 @@ while [[ $# -gt 0 ]]; do
         --build) build_number="$2"; shift 2 ;;
         --universal) universal=1; shift ;;
         --scratch-path) scratch_path="$2"; shift 2 ;;
-        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+        --out-dir) out_dir="$2"; shift 2 ;;
+        --sign-identity) sign_identity="$2"; shift 2 ;;
+        --keychain) keychain="$2"; shift 2 ;;
+        --keychain-password-file) keychain_password_file="$2"; shift 2 ;;
+        -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+
+if [[ -n "$sign_identity" ]]; then
+    [[ "$sign_identity" =~ ^[0-9A-Fa-f]{40}$ ]] \
+        || { echo "--sign-identity takes the identity's SHA-1 (40 hex digits), not its name" >&2; exit 2; }
+    [[ -n "$keychain" ]] || { echo "--sign-identity needs --keychain" >&2; exit 2; }
+    [[ -f "$keychain" ]] || { echo "keychain not found: $keychain" >&2; exit 2; }
+    keychain="$(cd "$(dirname "$keychain")" && pwd)/$(basename "$keychain")"
+    security find-identity -v -p codesigning "$keychain" | grep -qi " $sign_identity \"Developer ID Application: " \
+        || { echo "no valid Developer ID Application identity $sign_identity in $keychain" >&2; exit 2; }
+    team_id="$(security find-certificate -a -Z -p "$keychain" \
+        | awk -v h="$(tr a-f A-F <<<"$sign_identity")" '/^SHA-1 hash:/ {keep = ($3 == h)} keep' \
+        | openssl x509 -noout -subject -nameopt multiline | awk -F' = ' '/organizationalUnitName/ {print $2; exit}')"
+    [[ -n "$team_id" ]] || { echo "cannot read the Team ID of $sign_identity" >&2; exit 2; }
+elif [[ -n "$keychain" || -n "$keychain_password_file" ]]; then
+    echo "--keychain and --keychain-password-file need --sign-identity" >&2; exit 2
+fi
+# shellcheck source=scripts/signing-keychain.sh
+source "$repo_root/scripts/signing-keychain.sh"
 
 product="OpenArcApp"           # SwiftPM executable product == CFBundleExecutable
 release_bundle_id="org.openarc.browser"   # placeholder id (CLAUDE.md, Decision Q5)
@@ -64,7 +114,8 @@ else
     bundle_id="$release_bundle_id"
     app_name="Open Arc"        # display name (Decision Q5)
 fi
-out_dir="$repo_root/build"
+mkdir -p "$out_dir"
+out_dir="$(cd "$out_dir" && pwd)"
 
 # OpenArcCore's helper apps (plan C10, //openarc/app/helpers.gni) and the entitlements each
 # is signed with ("<name suffix>:<file in app/Bundle/Helpers>").
@@ -192,13 +243,48 @@ if [[ -d "$package_dir/Vendor/OpenArcCore.xcframework" ]]; then
     plutil -replace CFBundleIconFile -string AppIcon "$alerts_app/Contents/Info.plist"
 fi
 
-sign() {
-    codesign --force --sign - --timestamp=none --options runtime "$@" >&2
+if [[ -n "$sign_identity" ]]; then
+    sign_mode="Developer ID, team $team_id"
+    sign() {
+        codesign --force --sign "$sign_identity" --keychain "$keychain" --timestamp \
+            --options runtime "$@" >&2
+    }
+else
+    sign_mode="ad-hoc"
+    sign() {
+        codesign --force --sign - --timestamp=none --options runtime "$@" >&2
+    }
+fi
+
+# entitlements <file in app/Bundle>: the path to sign with. Ad-hoc signatures carry no Team ID,
+# so library validation would refuse our own frameworks; the files therefore turn it off. With a
+# Developer ID every image carries one Team ID and validation passes, so a stripped copy is used,
+# except for the Plugin helper, which loads CDMs signed by other teams (plan C18).
+entitlements_tmp="$(mktemp -d)"
+trap 'rm -rf "$entitlements_tmp"; restore_signing_keychain_order' EXIT
+if [[ -n "$sign_identity" ]]; then
+    # Unlocks the keychain (if a password file is given) and puts it first in the search list
+    # until the script exits; see scripts/signing-keychain.sh for why.
+    use_signing_keychain "$keychain" "$keychain_password_file"
+fi
+entitlements() {
+    local src="$bundle_src/$1"
+    if [[ -z "$sign_identity" || "$1" == "Helpers/plugin.entitlements" ]]; then
+        echo "$src"
+        return
+    fi
+    local dst="$entitlements_tmp/${1//\//_}"
+    cp "$src" "$dst"
+    # PlistBuddy, not plutil: plutil reads the dots in the key as a key path.
+    if /usr/libexec/PlistBuddy -c "Print :com.apple.security.cs.disable-library-validation" "$dst" >/dev/null 2>&1; then
+        /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.disable-library-validation" "$dst" >/dev/null
+    fi
+    echo "$dst"
 }
 
-echo "==> signing Sparkle.framework inside-out (ad-hoc, hardened runtime)" >&2
+echo "==> signing Sparkle.framework inside-out ($sign_mode, hardened runtime)" >&2
 # Order and flags follow Sparkle's "sandboxing / code signing" guide: nested code first, keep the
-# entitlements Sparkle ships with each helper. D6 swaps "-" for the Developer ID identity.
+# entitlements Sparkle ships with each helper.
 sparkle_b="$sparkle/Versions/B"
 sign --preserve-metadata=entitlements "$sparkle_b/XPCServices/Installer.xpc"
 sign --preserve-metadata=entitlements "$sparkle_b/XPCServices/Downloader.xpc"
@@ -207,13 +293,13 @@ sign --preserve-metadata=entitlements "$sparkle_b/Updater.app"
 sign "$sparkle"
 
 if [[ -n "$openarc_core" ]]; then
-    echo "==> signing OpenArcCore.framework inside-out (ad-hoc, hardened runtime)" >&2
+    echo "==> signing OpenArcCore.framework inside-out ($sign_mode, hardened runtime)" >&2
     # Each helper app with its own entitlements (app/Bundle/Helpers/*.entitlements, the
     # minimum per process type; see the comments in each file), then crashpad and the
     # libraries, then the framework.
     for helper in "${openarc_helpers[@]}"; do
         helper_suffix="${helper%%:*}"
-        helper_entitlements="$bundle_src/Helpers/${helper#*:}"
+        helper_entitlements="$(entitlements "Helpers/${helper#*:}")"
         sign --entitlements "$helper_entitlements" "$helpers_dir/Open Arc Helper$helper_suffix.app"
     done
     sign "$helpers_dir/chrome_crashpad_handler"
@@ -225,8 +311,8 @@ if [[ -n "$openarc_core" ]]; then
     sign "$openarc_core"
 fi
 
-echo "==> signing the app (ad-hoc, hardened runtime)" >&2
-sign --entitlements "$bundle_src/OpenArc.entitlements" "$app"
+echo "==> signing the app ($sign_mode, hardened runtime)" >&2
+sign --entitlements "$(entitlements OpenArc.entitlements)" "$app"
 
 echo "==> verifying" >&2
 codesign --verify --deep --strict --verbose=2 "$sparkle" >&2
@@ -238,6 +324,27 @@ if [[ -n "$openarc_core" ]]; then
     echo "OpenArcCore: Chromium $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$openarc_core/Resources/Info.plist")" >&2
 fi
 codesign --verify --deep --strict --verbose=2 "$app" >&2
+if [[ -n "$sign_identity" ]]; then
+    # Every Mach-O image must carry our Team ID and a secure timestamp (notarization requires both).
+    while IFS= read -r -d '' image; do
+        file -b "$image" | grep -q '^Mach-O' || continue
+        details="$(codesign -dvv "$image" 2>&1)"
+        grep -q "^TeamIdentifier=$team_id\$" <<<"$details" \
+            || { echo "not signed by team $team_id: $image" >&2; exit 1; }
+        grep -q '^Timestamp=' <<<"$details" \
+            || { echo "no secure timestamp: $image" >&2; exit 1; }
+    done < <(find "$app" -type f -print0)
+    # Only the Plugin helper may turn library validation off (see entitlements()).
+    for code in "$app" "${helpers_dir:-/nonexistent}"/*.app; do
+        [[ -d "$code" ]] || continue
+        [[ "$code" == *"(Plugin).app" ]] && continue
+        if codesign -d --entitlements - --xml "$code" 2>/dev/null \
+            | grep -q 'com.apple.security.cs.disable-library-validation'; then
+            echo "library validation still disabled in $code" >&2; exit 1
+        fi
+    done
+    echo "signed: Developer ID, team $team_id, every Mach-O image timestamped, library validation on" >&2
+fi
 plutil -lint "$app/Contents/Info.plist" >&2
 [[ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == "$bundle_id" ]] \
     || { echo "unexpected bundle id in $app" >&2; exit 1; }
