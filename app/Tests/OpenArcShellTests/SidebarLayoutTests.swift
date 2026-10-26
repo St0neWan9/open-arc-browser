@@ -164,14 +164,11 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertEqual(SidebarLayout.favoriteGapIndex(forX: 10, count: 0, blockWidth: 300), 0)
     }
 
-    /// [06 §12] observed: the hover card sits below the row, slightly to the left, inside the sidebar.
-    func testHoverCardBelowRow() {
-        let row = layout.listItemFrames([.row, .row])[1]
-        let card = SidebarHoverCardPlacement.frame(rowFrame: row, containerWidth: layout.width)
-        XCTAssertGreaterThan(card.minY, row.maxY)
-        XCTAssertGreaterThanOrEqual(card.minX, 0)
-        XCTAssertLessThanOrEqual(card.maxX, layout.width)
-        XCTAssertLessThan(card.midX, row.midX)
+    /// [07 §12] observed: the hover card is placed at the pointer (+11.5, +5.5), not at the row.
+    func testHoverCardAtPointer() {
+        let screen = CGRect(x: 0, y: 25, width: 1920, height: 985)
+        let card = FloatingBubbleLayout.hoverCard(pointer: CGPoint(x: 330, y: 455), size: CGSize(width: 141.5, height: 42.5), screen: screen)
+        XCTAssertEqual(card.origin, CGPoint(x: 341.5, y: 460.5))
     }
 
     /// Hover delay token. [06 §12] observed ≈ 0.5 s.

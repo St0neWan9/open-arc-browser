@@ -150,15 +150,14 @@ public struct SidebarView: View {
         }
     }
 
-    @ViewBuilder
+    /// The hover card: its own floating panel at the pointer. [07 §12] observed.
     private func hoverCard(layout: SidebarLayout) -> some View {
-        if let id = viewModel.hoverCardTabID, let row = rowFrames[id], let tab = viewModel.workspace.tabs[id] {
-            let frame = SidebarHoverCardPlacement.frame(rowFrame: row, containerWidth: layout.width)
-            SidebarHoverCardView(title: tab.displayTitle)
-                .frame(width: frame.width, height: frame.height)
-                .offset(x: frame.minX, y: frame.minY)
-                .transition(.opacity)
-        }
+        let id = viewModel.hoverCardTabID
+        let tab = id.flatMap { viewModel.workspace.tabs[$0] }
+        return SidebarHoverCardPresenter(tabID: tab == nil ? nil : id, title: tab?.displayTitle ?? "",
+                                         fill: viewModel.palette.selectedTabFill)
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
     }
 
     private var deleteSpaceName: String {

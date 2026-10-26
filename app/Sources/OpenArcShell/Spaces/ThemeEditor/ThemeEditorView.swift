@@ -26,15 +26,31 @@ struct ThemeEditorView: View {
 
     private typealias M = ThemeEditorMetrics
 
-    init(theme: Binding<SpaceThemeDraft>, systemAppearance: ResolvedAppearance = .light) {
+    /// Fills and clips its own rounded background. Off inside a floating bubble, whose chrome
+    /// (`FloatingBubbleChrome`) draws the tint, rim and arrow instead (B42).
+    var drawsBackground = true
+
+    init(theme: Binding<SpaceThemeDraft>, systemAppearance: ResolvedAppearance = .light, drawsBackground: Bool = true) {
         _theme = theme
         self.systemAppearance = systemAppearance
+        self.drawsBackground = drawsBackground
         _presetPage = State(initialValue: ThemePresets.pageContaining(theme.wrappedValue.colors.first))
     }
 
     /// The bubble follows the theme being edited, so switching the segment restyles it at once.
-    private var palette: ThemePalette {
+    private var palette: ThemePalette { Self.palette(for: theme, systemAppearance: systemAppearance) }
+
+    /// The palette the bubble shows for `theme`; its chrome uses the same one.
+    static func palette(for theme: SpaceThemeDraft, systemAppearance: ResolvedAppearance) -> ThemePalette {
         ThemeDerivation.palette(forStyle: theme.style, systemAppearance: systemAppearance)
+    }
+
+    /// Floating-bubble chrome for this bubble ([07 §6] size and radius, [07 §12] tint).
+    static func bubbleStyle(for theme: SpaceThemeDraft, systemAppearance: ResolvedAppearance) -> FloatingBubbleStyle {
+        let palette = palette(for: theme, systemAppearance: systemAppearance)
+        return FloatingBubbleStyle(width: ThemeEditorMetrics.size.width, height: ThemeEditorMetrics.size.height,
+                                   cornerRadius: ThemeEditorMetrics.cornerRadius,
+                                   tint: palette.floatingPanelBackground, isDark: palette.isDark)
     }
 
     /// Ink for icons, labels and tracks: black in light, white in dark.
@@ -49,7 +65,7 @@ struct ThemeEditorView: View {
         }
         .padding(M.padding)
         .frame(width: M.size.width, height: M.size.height)
-        .background(palette.floatingPanelBackground.swiftUI)
+        .background(drawsBackground ? palette.floatingPanelBackground.swiftUI : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
         .environment(\.colorScheme, palette.isDark ? .dark : .light)
         .accessibilityElement(children: .contain)

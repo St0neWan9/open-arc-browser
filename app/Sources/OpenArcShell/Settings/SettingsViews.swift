@@ -26,10 +26,13 @@ public struct SettingsWindowView: View {
     }
 }
 
-/// Window size. Not measured (inferred: about the width of a standard macOS settings window).
+/// Window size. Width [07 §6] observed (684; height follows the pane, 650 in Arc); the window
+/// opens centered on the screen like Arc's ([07 §12] observed). B42.
 enum SettingsTokens {
-    static let windowWidth: CGFloat = 620
-    static let paneMinHeight: CGFloat = 360
+    static let windowWidth = CGFloat(Metrics.Settings.windowSize.width)
+    /// Pane height that makes the window 650 tall ([07 §6] observed) under the 80 pt title bar and
+    /// toolbar of the settings window (measured on ours: 640 tall with a 560 pane). B42.
+    static let paneMinHeight = CGFloat(Metrics.Settings.windowSize.height) - 80
     static let profileListWidth: CGFloat = 180
     static let iconTileSize: CGFloat = 96
 }

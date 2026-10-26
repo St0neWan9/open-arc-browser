@@ -39,6 +39,9 @@ enum SpaceFlowLocalTokens {
     static let contentWidth: CGFloat = 220          // unknown
     static let fieldHeight: CGFloat = 36            // unknown (matches the address field height)
     static let iconButtonSize: CGFloat = 28         // unknown
+    /// How far the "Choose a Theme" bubble anchor reaches past our 28 pt form inset, so its right
+    /// edge sits where Arc's row ends (x 262 of 276). [07 §12] observed row frame.
+    static let themeRowAnchorOutset: CGFloat = 14
     static let primaryButtonHeight: CGFloat = 36    // unknown
     static let swatchSize: CGFloat = 20             // unknown
     static let renameSheetSize = CGSize(width: 360, height: 150)   // inferred (smaller than New Folder)

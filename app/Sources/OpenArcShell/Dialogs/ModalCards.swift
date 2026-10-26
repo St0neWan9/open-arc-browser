@@ -78,7 +78,70 @@ struct ModalCard<Content: View>: View {
         }
         .frame(width: CGFloat(size.width), height: CGFloat(size.height))
         .background(palette.dialogBackground.swiftUI)
+        .background(ClearSheetWindow())
+        // Rounded card on a clear sheet window: nothing of the window shows at the corners.
+        // [07 §12] observed (radius 26). B42.
+        .clipShape(RoundedRectangle(cornerRadius: CGFloat(d.cornerRadius), style: .continuous))
+        .presentationBackground(.clear)
         .environment(\.colorScheme, palette.isDark ? .dark : .light)
+    }
+}
+
+/// Makes the sheet window that hosts a `ModalCard` transparent, so only the rounded card shows.
+/// The window's shadow follows the card's alpha. B42.
+struct ClearSheetWindow: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ProbeView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class ProbeView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            ClearSheetWindow.makeClear(window)
+            // AppKit finishes setting up the sheet after this view joins it: clear again once.
+            DispatchQueue.main.async { [weak window] in
+                MainActor.assumeIsolated { if let window { ClearSheetWindow.makeClear(window) } }
+            }
+        }
+        // AppKit may restore the sheet's chrome when it presents or re-lays out the sheet.
+        override func layout() {
+            super.layout()
+            if let window { ClearSheetWindow.makeClear(window) }
+        }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    /// Clear, non-opaque, shadowed. Exposed for tests.
+    @MainActor static func makeClear(_ window: NSWindow) {
+        var changed = false
+        if window.isOpaque { window.isOpaque = false; changed = true }
+        if window.backgroundColor != .clear { window.backgroundColor = .clear; changed = true }
+        if !window.hasShadow { window.hasShadow = true; changed = true }
+        // A sheet's frame view draws its own material with a small corner radius behind the
+        // content: hide it so only the card's radius 26 shows.
+        if let frameView = window.contentView?.superview {
+            for case let effect as NSVisualEffectView in frameView.subviews where !effect.isHidden {
+                effect.isHidden = true
+                changed = true
+            }
+            // The frame view draws the window frame (a light fill with the sheet's small system
+            // corner radius) in a sublayer of its own: hide it. Matched by layer type name, as
+            // AppKit gives it no public API; nothing happens when it is absent.
+            for sub in frameView.layer?.sublayers ?? [] where !sub.isHidden && String(describing: type(of: sub)).contains("WindowFrameLayer") {
+                sub.isHidden = true
+                changed = true
+            }
+            // The window's root layer clips everything to its corner radius: give it the card's.
+            var root = frameView.layer
+            while let parent = root?.superlayer { root = parent }
+            if let root, root.cornerRadius != CGFloat(Metrics.Dialog.cornerRadius) {
+                root.cornerRadius = CGFloat(Metrics.Dialog.cornerRadius)
+                root.cornerCurve = .continuous
+                root.masksToBounds = true
+                changed = true
+            }
+        }
+        if changed { window.invalidateShadow() }
     }
 }
 

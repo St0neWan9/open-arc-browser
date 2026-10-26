@@ -131,13 +131,9 @@ enum SidebarLocalTokens {
 
     // MARK: Hover card
 
-    /// Hover card geometry. [06 §12] "small rounded white bubble, two lines, below the row,
-    /// slightly left" observed; the numbers are inferred.
-    static let hoverCardCornerRadius: CGFloat = 8
-    static let hoverCardMaxWidth: CGFloat = 220
-    static let hoverCardHeight: CGFloat = 48
-    static let hoverCardOffsetX: CGFloat = 6
-    static let hoverCardOffsetY: CGFloat = 4
+    /// Widest hover card; longer titles are truncated. inferred. Placement and shape:
+    /// `Metrics.HoverCard` ([07 §12] observed).
+    static let hoverCardMaxWidth: CGFloat = 260
 
     /// Text of the second hover-card line. [06 §12] observed.
     static let hoverCardHint = "Double-click to rename"
