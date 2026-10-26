@@ -77,4 +77,5 @@ Cite the spec section with the label, for example `docs/arc-spec/04-visual-metri
 
 ## Conventions
 - All comments and docs in this repo are in English.
-- Do not commit or push unless the user asks.
+- Git: the main session commits finished stages in batches (one concern per commit). Subagents do not commit; they leave changes in the working tree for the main session. Do not push unless the user asks.
+- Docs live in a separate repository (`../open-arc-browser-docs`); `docs/` here is a symlink to it and is not tracked by this repository.
