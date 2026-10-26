@@ -27,7 +27,11 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // --no-sandbox: the helpers' seatbelt profile only lets them read inside the main bundle
         // (Open Arc.app, which embeds the framework), and under xctest the framework lives
         // outside it. The app run checks the sandboxed path (plan C8 report).
-        let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"])
+        // --use-mock-keychain: the cookie store's key comes from a mock keychain (no keychain prompt
+        // for a test process).
+        let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: [
+            "--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--use-mock-keychain",
+        ])
         XCTAssertTrue(engine.engineVersion.hasPrefix("Chromium "))
 
         // Creating a tab starts the engine and loads the page.
@@ -92,6 +96,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         try await tab.load(first)
         try await waitForState(tab) { !$0.isCrashed && $0.title == "First" }
 
+        // C11: two profiles and incognito keep their data apart; clearing and deleting a profile.
+        try await checkProfileIsolation(engine, dataDirectory: dataDirectory, defaultProfile: profile)
+
         // Closing ends the tab's stream; shutdown makes new tabs fail.
         await engine.closeTab(tab.id)
         let closedLookup = await engine.tab(for: tab.id)
@@ -108,7 +115,7 @@ final class ChromiumEngineConformanceTests: XCTestCase {
     /// Polls the tab's state until `condition` holds, at most 20 s. The main run loop keeps
     /// turning, which Chromium's UI thread needs.
     @MainActor
-    private func waitForState(_ tab: any BrowserTab, _ condition: (BrowserTabState) -> Bool) async throws {
+    func waitForState(_ tab: any BrowserTab, _ condition: (BrowserTabState) -> Bool) async throws {
         let deadline = Date().addingTimeInterval(20)
         while Date() < deadline {
             if condition(await tab.currentState()) { return }
@@ -120,7 +127,7 @@ final class ChromiumEngineConformanceTests: XCTestCase {
 }
 
 /// Runs `operation`, failing with `CancellationError` after `seconds`.
-private func withTimeout<T: Sendable>(
+func withTimeout<T: Sendable>(
     seconds: Double, _ operation: @escaping @Sendable () async -> T
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in

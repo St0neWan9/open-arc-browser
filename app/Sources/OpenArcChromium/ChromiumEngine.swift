@@ -18,10 +18,17 @@ import OpenArcCore
 // edit commands, selected text, snapshots, view source, exit fullscreen, the beforeunload close
 // path, JavaScript dialogs (alert / confirm / prompt / beforeunload).
 //
+// Profiles (C11): one on-disk Chromium profile per model Profile at `<user data dir>/<UUID>`
+// (cookies, storage, cache, HTTP auth cache, permissions, history, favicons, service workers and
+// downloads all live in it), its off-the-record profile for incognito tabs (destroyed by the
+// bridge once the last incognito tab of the profile closes), `deleteProfileData` (removes the
+// directory) and `clearBrowsingData` (Chromium's browsing-data remover). A live tab cannot change
+// profile: the shell closes it and makes a new one in the other profile, which loads the tab's
+// URL again (`WorkspaceController.reconcileLiveTabProfiles`).
+//
 // Not supported yet (the bridge has no implementation):
-// - `savePage(to:)` and `deleteProfileData(_:)` throw `EngineError.unsupported` (C15, C11).
+// - `savePage(to:)` throws `EngineError.unsupported` (C15).
 // - `print()` and `showDevTools(_:)` do nothing (C15).
-// - `clearBrowsingData` is forwarded but the bridge removes nothing yet (C11).
 // - HTTP auth, permission, file chooser and external protocol prompts never reach the shell:
 //   content answers them with their defaults (cancel / deny) until plan C12.
 // - Downloads and extensions are empty services (C12, C14).
@@ -290,11 +297,24 @@ final class ChromiumEngineCore {
         }
     }
 
-    func deleteProfileData(_ profileID: Profile.ID) throws {
+    /// Deletes the profile's on-disk engine profile (C11): the bridge wipes its browsing data
+    /// through Chromium, destroys the profile (and its off-the-record context) and removes
+    /// `<user data dir>/<UUID>` and its cache directory. Every tab of the profile, regular or
+    /// off the record, must be closed first. Never started engine: there is nothing loaded, but
+    /// the directory may exist from an earlier run, so the engine starts to remove it.
+    func deleteProfileData(_ profileID: Profile.ID) async throws {
         guard !isShutDown else { throw EngineError.shuttingDown }
         guard !tabs.values.contains(where: { $0.profileID == profileID }) else { throw EngineError.invalidArgument }
-        // TODO(C11): OACApplication.deleteProfile once the bridge removes the profile's data.
-        throw EngineError.unsupported("deleteProfileData")
+        let app = try ensureStarted()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            app.deleteProfile(identifier: profileID) { error in
+                if let error {
+                    continuation.resume(throwing: EngineError(bridge: error))
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     func clearBrowsingData(_ profileID: Profile.ID, types: BrowsingDataTypes, since: Date?) async {
