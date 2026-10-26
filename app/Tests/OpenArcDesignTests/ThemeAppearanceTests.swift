@@ -120,14 +120,18 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(purple, appearance: .dark), "[07 §8.1] dark: tinted, not black")
         XCTAssertGreaterThan(ThemeDerivation.luminance(palette.webPanelBackground), ThemeDerivation.luminance(palette.windowBackground), "a little lighter than the dark window")
         XCTAssertEqual(palette.backgroundGradientColors, [palette.windowBackground])
-        XCTAssertEqual(palette.controlFill, ThemeDerivation.shade(palette.windowBackground, by: 0.96))
+        // #6B4FD8 (luminance 0.14) is a light-ink theme [07 §8.3]: controls are window + 11 % white.
+        XCTAssertTrue(palette.usesLightInk)
+        XCTAssertEqual(palette.controlFill, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkControlWhite))
     }
 
-    /// Sidebar text stays dark in a dark Space (the AX title color is the same) and the selected row
-    /// stays near white. [07 §8] observed.
+    /// On a dark-ink theme sidebar text stays dark in a dark Space (the AX title color is the same)
+    /// and the selected row stays near white. [07 §8, §8.3] observed (E11 purple preset).
     func testDarkSidebarKeepsDarkTextAndLightSelection() {
-        let palette = ThemeDerivation.palette(for: theme(.dark), systemAppearance: .light)
-        XCTAssertEqual(palette.primaryText, ThemeDerivation.palette(for: theme(.light)).primaryText)
+        let e11Purple = [RGBAColor(hex: 0xA5729C)]
+        let palette = ThemeDerivation.palette(for: theme(.dark, colors: e11Purple), systemAppearance: .light)
+        XCTAssertFalse(palette.usesLightInk)
+        XCTAssertEqual(palette.primaryText, ThemeDerivation.palette(for: theme(.light, colors: e11Purple)).primaryText)
         XCTAssertGreaterThan(ThemeDerivation.luminance(palette.selectedTabFill), 0.8)
         XCTAssertEqual(palette.secondaryText.alpha, 0.45, accuracy: 1e-9)
     }
@@ -210,15 +214,82 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(purple.rowTitleText, purple.primaryText, "opaque row text with dark ink")
     }
 
-    /// The light-ink rule: white wins where it has more contrast than the dark row text. [07 §8]
-    /// observed dark ink on windows of luminance 0.39–0.73; round 1 (B32) observed white on the
-    /// blue-violet window #5247FE (luminance 0.135).
+    /// The light-ink rule follows the theme color, the same in light and dark. [07 §8.3] observed
+    /// (B46): on the 36 E12 presets every theme of luminance ≤ 0.143 uses white ink and every one
+    /// of ≥ 0.204 dark ink, in both appearances; round 1 (B32) saw white on a saturated blue-violet.
     func testLightInkThreshold() {
-        let dark = RGBAColor(hex: 0x2F1F2C)
-        XCTAssertTrue(ThemeDerivation.prefersLightInk(window: RGBAColor(hex: 0x5247FE), darkText: dark))
-        for window: UInt32 in [0xBF9EB8, 0xF5DD8F, 0x9ACBE0, 0xDFC87F, 0x87B7CB] {
-            XCTAssertFalse(ThemeDerivation.prefersLightInk(window: RGBAColor(hex: window), darkText: dark), String(format: "%06X", window))
+        // (preset, theme) with light ink in Arc, then with dark ink. [07 §8.3] observed.
+        let light: [UInt32] = [0x010101, 0x191919, 0x333333, 0x4E3A5A, 0x27476C, 0x683557, 0x226148, 0x8F4144, 0x666666, 0x666789, 0x0000FF]
+        let dark: [UInt32] = [0xAF6D40, 0x7F7F7F, 0xA5729C, 0xF25E6C, 0x79AA82, 0x6CBAD9, 0xF8D55A, 0xFFFFFF, 0xF1EBE5]
+        for hex in light {
+            XCTAssertTrue(ThemeDerivation.prefersLightInk(theme: RGBAColor(hex: hex)), String(format: "%06X", hex))
         }
+        for hex in dark {
+            XCTAssertFalse(ThemeDerivation.prefersLightInk(theme: RGBAColor(hex: hex)), String(format: "%06X", hex))
+        }
+        for appearance in [ThemeAppearance.light, .dark] {
+            XCTAssertTrue(ThemeDerivation.palette(for: theme(appearance, colors: [RGBAColor(hex: 0x666789)])).usesLightInk, "navy keeps white ink")
+            XCTAssertFalse(ThemeDerivation.palette(for: theme(appearance, colors: [RGBAColor(hex: 0xA5729C)])).usesLightInk, "purple keeps dark ink")
+        }
+    }
+
+    // MARK: Selected row fill (B46, [07 §8.3])
+
+    /// [07 §8.3] observed (B46, lossless-equivalent LCU window captures, 8 160 px averages, sd ≤ 1.1):
+    /// (theme, appearance, sidebar window, selected row). Light-ink themes get a muted row close to
+    /// the window, in light and dark; dark-ink themes keep the near-white row. The fill is computed
+    /// from Arc's own window color so only the selected-row rule is checked (within 4/255).
+    func testSelectedRowFollowsTheInk() {
+        let samples: [(UInt32, ResolvedAppearance, UInt32, UInt32)] = [
+            // Light ink, dark appearance: navy, drab purple / plum / red / green / blue, grays.
+            (0x666789, .dark, 0x838498, 0x9E9DB0), (0x4E3A5A, .dark, 0x766C7E, 0x928B99),
+            (0x683557, .dark, 0x86687A, 0x9D8797), (0x8F4144, .dark, 0x9F6E6E, 0xB28C8D),
+            (0x226148, .dark, 0x608172, 0x829B91), (0x27476C, .dark, 0x617188, 0x818EA1),
+            (0x666666, .dark, 0x838383, 0x9E9EA0), (0x333333, .dark, 0x666666, 0x868688),
+            (0x191919, .dark, 0x595959, 0x7C7C7F), (0x010101, .dark, 0x484848, 0x6F6F71),
+            // Light ink, light appearance.
+            (0x010101, .light, 0x585858, 0x7B7B7D), (0x191919, .light, 0x686868, 0x878789),
+            (0x333333, .light, 0x777777, 0x939395), (0x666666, .light, 0x979797, 0xACACAE),
+            (0x666789, .light, 0x9798AE, 0xADADBF), (0x8F4144, .light, 0xB07F7F, 0xC1999B),
+            // Dark ink (controls): dark appearance, then light.
+            (0xF1EBE5, .dark, 0xDCD6D2, 0xF4F4F4), (0xF19CBB, .dark, 0xDCA4B8, 0xF4EFF0),
+            (0xA5729C, .dark, 0xAC8BA6, 0xF0EBEF), (0xF25E6C, .dark, 0xDD8088, 0xF5EAEB),
+            (0xFF8557, .dark, 0xE3977C, 0xF4EDE9), (0xF8D55A, .dark, 0xDFC87F, 0xF5F2EB),
+            (0x35E896, .dark, 0x73D4A1, 0xE9F3EE), (0x6CBAD9, .dark, 0x87B7CB, 0xEBEFF1),
+            (0xAF6D40, .dark, 0xB3896E, 0xEFEBE8), (0xD7B35F, .dark, 0xC9B280, 0xF3EFEA),
+            (0xCDCCA3, .dark, 0xC4C2AA, 0xF1F1EF), (0x79AA82, .dark, 0x90AE95, 0xEBEFEE),
+            (0x7F7F7F, .dark, 0x939393, 0xECECEC), (0x7F7F7F, .light, 0xA7A7A7, 0xEFEFEF),
+            (0xA5729C, .light, 0xBF9EB8, 0xF0EEF0), (0x6CBAD9, .light, 0x9BCCE1, 0xECF3F4),
+            (0xAF6D40, .light, 0xC69B7F, 0xF2EDEA),
+        ]
+        for (hex, appearance, window, row) in samples {
+            let label = String(format: "%06X %@", hex, appearance.rawValue)
+            let lightInk = ThemeDerivation.prefersLightInk(theme: RGBAColor(hex: hex))
+            assertClose(ThemeDerivation.selectedRowFill(window: RGBAColor(hex: window), lightInk: lightInk),
+                        RGBAColor(hex: row), tolerance: 4.0 / 255, "selected row \(label)")
+            // The palette end to end: our window is within 3.1/255 of Arc's [07 §8.2], so the row
+            // lands within a few levels more.
+            let palette = ThemeDerivation.palette(for: theme(appearance == .dark ? .dark : .light, colors: [RGBAColor(hex: hex)]))
+            assertClose(palette.selectedTabFill, RGBAColor(hex: row), tolerance: 6.0 / 255, "palette selected row \(label)")
+        }
+    }
+
+    /// [07 §8.3] / [04 §拖动图像(E17)] observed: dark navy shows the selected and the lifted row as
+    /// #9293AA over a #7D7E98 window when Arc is in the background, and #9E9DB0 over #838498 in
+    /// front; the old near-white rule gave #DADAE0. Titles on it stay white like the other rows.
+    func testDarkNavySelectedRowIsMuted() {
+        let palette = ThemeDerivation.palette(for: theme(.dark, colors: [RGBAColor(hex: 0x666789)]))
+        assertClose(palette.selectedTabFill, RGBAColor(hex: 0x9E9DB0), tolerance: 4.0 / 255, "front window")
+        // E17 measured the lifted image, drawn at `rowImageOpacity` over the window.
+        let window17 = RGBAColor(hex: 0x7D7E98)
+        let lifted = ThemeDerivation.mix(window17, ThemeDerivation.selectedRowFill(window: window17, lightInk: true),
+                                         amount: Metrics.SidebarDrag.rowImageOpacity)
+        assertClose(lifted, RGBAColor(hex: 0x9293AA), tolerance: 4.0 / 255, "E17 lifted row")
+        XCTAssertLessThan(ThemeDerivation.luminance(palette.selectedTabFill), 0.4, "not near white")
+        XCTAssertEqual(palette.selectedTabText, RGBAColor(hex: 0xFFFFFF, alpha: ChromeInkOpacities.lightInk.rowTitle))
+        XCTAssertEqual(palette.selectedTabText, palette.rowTitleText)
+        // White title on the muted row: Arc's own contrast (≈ 2.6 at full white), kept by ours.
+        XCTAssertGreaterThan(ThemeDerivation.contrast(palette.selectedTabFill, RGBAColor(hex: 0xFFFFFF)), 2.3)
     }
 
     /// A saturated blue theme: light ink with the round-1 opacities, controls and lines lighter than
@@ -239,7 +310,9 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(palette.separator, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkSeparatorWhite))
         XCTAssertEqual(palette.scrollEdgeLine, palette.separator)
         XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(RGBAColor(hex: 0x0000FF), appearance: .light), "[07 §8.1] the content tint")
-        XCTAssertLessThan(ThemeDerivation.luminance(palette.selectedTabText), 0.1, "selected rows keep dark text on the near-white fill")
+        // [07 §8.3] observed (B46): the selected row is a muted tone with the same white title.
+        XCTAssertEqual(palette.selectedTabText, palette.rowTitleText, "selected rows keep the white title")
+        XCTAssertEqual(palette.selectedTabFill, ThemeDerivation.selectedRowFill(window: palette.windowBackground, lightInk: true))
         // The rules reproduce the round-1 samples from Arc's own window color.
         let arcWindow = RGBAColor(hex: 0x5247FE)
         assertClose(ThemeDerivation.overlayWhite(arcWindow, amount: ThemeDerivation.lightInkControlWhite), RGBAColor(hex: 0x655CFE), tolerance: 2.0 / 255, "control / empty panel")
