@@ -140,6 +140,8 @@ NS_SWIFT_UI_ACTOR
 - (void)tab:(OACTab *)tab didChangeCaptureState:(OACCaptureState)captureState;
 /// `<meta name="theme-color">` appeared, changed or went away (plan C17).
 - (void)tab:(OACTab *)tab didChangeThemeColor:(OACColor)color hasThemeColor:(BOOL)hasThemeColor;
+/// A finished load was sampled: `tab.state.pageTopColorKind` / `pageTopColor` changed (plan B45).
+- (void)tabDidSamplePageTopColor:(OACTab *)tab;
 /// The page entered or left HTML fullscreen. The shell hides the sidebar and makes the window full
 /// screen (inferred; the spec records no page-fullscreen behavior).
 - (void)tab:(OACTab *)tab didChangeFullscreen:(BOOL)isFullscreen;

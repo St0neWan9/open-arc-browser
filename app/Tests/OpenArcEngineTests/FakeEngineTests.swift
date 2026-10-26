@@ -1,5 +1,6 @@
 import XCTest
 import OpenArcEngine
+import OpenArcModel
 
 final class FakeEngineTests: XCTestCase {
     private let profile = UUID()
@@ -61,6 +62,20 @@ final class FakeEngineTests: XCTestCase {
             .navigationStateChanged(.none),
             .loadStateChanged(.idle),
         ])
+    }
+
+    /// docs/arc-spec/06-flows.md §17.4 (plan B45): FakeEngine reports a sample after each finished load (navigation and reload),
+    /// from its provider.
+    func testFakeEngineSamplesEachLoad() async throws {
+        let red = RGBAColor(hex: 0xFD0200)
+        let engine = FakeEngine(pageTopColorProvider: { url in url.host == "red.example" ? .color(red) : .scrollbar })
+        let tab = try await engine.makeTab(TabConfiguration(profileID: profile, initialURL: try XCTUnwrap(URL(string: "https://red.example"))))
+        var state = await tab.currentState()
+        XCTAssertEqual(state.pageTopColor, .color(red))
+        try await tab.load(try XCTUnwrap(URL(string: "https://long.example")))
+        state = await tab.currentState()
+        XCTAssertEqual(state.pageTopColor, .scrollbar)
+        await engine.closeTab(tab.id)
     }
 
     func testBackForwardHistory() async throws {

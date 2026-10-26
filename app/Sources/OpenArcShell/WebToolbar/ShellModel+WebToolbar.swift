@@ -71,9 +71,24 @@ extension ShellModel {
                              showsSidebarButton: isTopLeading && !isSidebarVisible && !spaceFlow.isCreating)
     }
 
-    /// The toolbar's background and ink: only the Space's light / dark decides. [06 §17.4] observed.
-    func webToolbarColors(isSplitPane: Bool) -> WebToolbarColors {
-        ThemeDerivation.webToolbarColors(appearance: windowPalette.appearance, isSplitPane: isSplitPane)
+    /// Where the bar of `tabID` takes its background (plan B45, [06 §17.4] observed, E18): the
+    /// page's top-right color from its last finished load; the Space-mode neutral when that sample
+    /// hit a classic scrollbar (observed) or none arrived yet (inferred); transparent when the
+    /// panel or pane shows no page (observed: a new empty split pane, an empty panel).
+    func webToolbarBackgroundSource(for tabID: UUID?) -> WebToolbarBackgroundSource {
+        guard let tabID, sidebar.linkURL(for: tabID) != nil else { return .transparent }
+        switch sidebar.liveState(for: tabID)?.pageTopColor {
+        case .color(let color): return .page(color)
+        case .scrollbar, nil: return .neutral
+        }
+    }
+
+    /// The bar of `tabID`: background from its own page (each split pane samples its own,
+    /// [06 §17.4] observed), ink by the bar's luminance.
+    func webToolbarColors(for tabID: UUID?) -> WebToolbarColors {
+        ThemeDerivation.webToolbarColors(appearance: windowPalette.appearance,
+                                         source: webToolbarBackgroundSource(for: tabID),
+                                         panelBackground: windowPalette.webPanelBackground)
     }
 
     // MARK: Actions

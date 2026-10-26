@@ -124,11 +124,14 @@ Rebase one milestone at a time. Skipping milestones piles up API changes in `//o
 | 0019 | `chrome`: `ExtensionTabUtil::SetEmbedderTabLookup()`, so `chrome.tabs` resolves the ids of an embedder's own tabs (no `Browser` window). Chrome's PDF viewer needs it to load a document (plan C15). |
 | 0020 | `chrome`: `ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate()`, so an embedder's tabs are DevTools "page" and tab targets like `Browser` tabs; without it DevTools shows no Elements, Console or Network (plan C15). |
 | 0021 | `embedder`: page tools (plan C15): DevTools in a window of its own per tab (`openarc/browser/openarc_page_tools.mm`), printing through the macOS print panel (`--disable-print-preview`), Save Page As (complete page, HTML only, MHTML; original file for non-HTML), the PDF viewer (lookup of patch 0019), video Picture in Picture through Chrome's PiP window with automatic entry when the user leaves a video tab; `OACTab` API for all of these. |
+| 0022 | `embedder`: page top color (plan B45, `06 §17.4`): `openarc/browser/openarc_page_top_color.mm` samples the rendered color at the top-right of the visible page once per finished main-frame load (`CopyFromSurface` of a 3 × 12 DIP area, converted to sRGB and averaged; classic scrollbar detected in an isolated world and reported as such); `OACTabState.pageTopColorKind` / `pageTopColor`, `-[OACTabDelegate tabDidSamplePageTopColor:]`. |
 
-Patches 0010 to 0018 and 0021 are the `//openarc` directory; they may later be squashed into one. Patches 0019 and 0020 change upstream code but come after `//openarc` because they were added while other tasks' commits sat on top of the branch; move them before 0010 at the next rebase (they do not depend on `//openarc`).
+Patches 0010 to 0018, 0021 and 0022 are the `//openarc` directory; they may later be squashed into one. Patches 0019 and 0020 change upstream code but come after `//openarc` because they were added while other tasks' commits sat on top of the branch; move them before 0010 at the next rebase (they do not depend on `//openarc`).
 
 Verified on 2026-10-25 (after C18): the series applied onto a clean `156.0.8078.48` worktree (`git am --3way`) produces the same tree hash as `openarc/156`, and `apply.sh` on the existing branch is a no-op.
 
 Verified on 2026-10-26 (after C12, which inserted 0008 and renumbered the later patches; their files are byte-identical apart from the number): the 17 patches applied onto a clean `156.0.8078.48` worktree (`git am --3way`) produce the same tree hash as `openarc/156` (`507cec150cc5`).
 
 Verified on 2026-10-26 (after C16): the 18 patches applied onto a clean `156.0.8078.48` worktree (`git am --3way`) produce the same tree hash as `openarc/156` (`72e96496da75`).
+
+Verified on 2026-10-26 (after B45): the 22 patches applied onto a clean `156.0.8078.48` worktree (`git am --3way`) produce the same tree hash as `openarc/156` (`859442eed292`).

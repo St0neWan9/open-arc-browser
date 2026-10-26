@@ -99,6 +99,16 @@ typedef NS_OPTIONS(NSUInteger, OACCaptureState) {
     OACCaptureStateScreen = 1 << 2,
 };
 
+/// What `OACTabState.pageTopColor` holds (plan B45). Maps to `PageTopColor?`.
+typedef NS_ENUM(NSInteger, OACPageTopColorKind) {
+    /// No finished load was sampled yet (or the copy failed).
+    OACPageTopColorKindNone = 0,
+    /// `pageTopColor` is the rendered color at the top-right of the visible page.
+    OACPageTopColorKindColor = 1,
+    /// The sample would land on a classic (always shown) scrollbar; the shell uses its fallback.
+    OACPageTopColorKindScrollbar = 2,
+};
+
 /// Immutable snapshot of a tab's observable state. Maps to `BrowserTabState`; the fields that
 /// `BrowserTabState` lacks are listed in SWIFT_PROTOCOL_CHANGES.md §6.
 OAC_EXPORT NS_SWIFT_SENDABLE
@@ -146,6 +156,12 @@ OAC_EXPORT NS_SWIFT_SENDABLE
 /// The page's `<meta name="theme-color">`, if any (plan C17).
 @property (nonatomic, readonly) BOOL hasThemeColor;
 @property (nonatomic, readonly) OACColor themeColor;
+/// The color at the top-right of the visible page (the top row of the viewport, at its right
+/// end, inside any classic scrollbar), averaged over a 2 × 2 device-pixel area, sampled once each
+/// time a main-frame load finishes (navigation, reload) and not on scroll or later style changes
+/// (plan B45; [06 §17.4] observed). Opaque sRGB; valid only for `OACPageTopColorKindColor`.
+@property (nonatomic, readonly) OACPageTopColorKind pageTopColorKind;
+@property (nonatomic, readonly) OACColor pageTopColor;
 
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;

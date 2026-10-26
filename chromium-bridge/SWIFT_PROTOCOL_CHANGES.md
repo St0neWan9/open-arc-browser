@@ -108,7 +108,8 @@ with `TabEvent.findResultChanged(FindResult)` (`matches`, `activeOrdinal`, `isFi
 | `zoomFactor: Double` | Site Control Center zoom row, View ▸ Zoom items | `zoomFactor` |
 | `capture: CaptureState` (camera/mic/screen option set) | recording indicators (inferred) | `captureState` |
 | `isFullscreen: Bool` | hide the sidebar for page fullscreen (inferred) | `isFullscreen` |
-| `themeColor: RGBAColor?` | C17 page top color | `themeColor` |
+| `themeColor: RGBAColor?` | `<meta name="theme-color">` (C17 is not needed, `06 §17.4`) | `themeColor` |
+| `pageTopColor: PageTopColor?` (B45, applied) | web toolbar background, `06 §17.4` | `pageTopColorKind` / `pageTopColor`, `tabDidSamplePageTopColor:` |
 
 Each gets a `TabEvent` case (`securityChanged`, `zoomChanged`, `captureStateChanged`, `fullscreenChanged`, `themeColorChanged`) or one `TabEvent.stateChanged(BrowserTabState)` for the less frequent ones. Also useful: `TabEvent.hoveredLinkChanged(URL?)` (status bubble, inferred) and `TabEvent.navigationFinished(...)` for engine conformance tests.
 
