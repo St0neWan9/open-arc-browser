@@ -174,7 +174,7 @@ final class SidebarPeekTests: XCTestCase {
         let model = makeModel()
         model.toggleSidebar()
         let hidden = model.windowLayout(size: reference).webPanelFrame
-        XCTAssertEqual(hidden, CGRect(x: 5, y: 5, width: 1910, height: 975))
+        XCTAssertEqual(hidden, CGRect(x: 10, y: 10, width: 1900, height: 965))
         runTimersImmediately(model.sidebarPeek)
         model.sidebarPeek.pointerMoved(to: CGPoint(x: 1, y: 500), windowSize: reference)
         XCTAssertEqual(model.sidebarPresentation, .peeking)

@@ -14,9 +14,13 @@ enum SidebarPeekTokens {
     /// [06 §14] observed (≈ 5 pt).
     static let panelInset: CGFloat = 5
 
-    /// Themed border around the web panel while the sidebar is hidden, on all four sides.
-    /// [06 §14] observed (≈ 5 pt).
-    static let hiddenWebPanelInset: Double = 5
+    /// Themed border around the web panel while the sidebar is hidden, on all four sides: the
+    /// same inset the panel keeps from the top, right and bottom edges with the sidebar shown, so
+    /// hiding the sidebar only moves the left edge. [06 §14] observed 2026-10-25 from Arc
+    /// screenshots (hidden and shown both ≈ 9 pt at top/right/bottom, hidden left ≈ 8.5 pt); the
+    /// earlier "≈ 5 pt" reading was wrong. Tied to `Metrics.WebPanel.insetTrailing` so the
+    /// border is uniform.
+    static let hiddenWebPanelInset: Double = Metrics.WebPanel.insetTrailing
 
     /// Corner radius of the floating panel. [06 §14] observed "rounded"; the value is unknown.
     static let panelCornerRadius: CGFloat = 10
