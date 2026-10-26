@@ -294,6 +294,7 @@ public final class WorkspaceController: ObservableObject {
         dependencies.persistence?.submit(changesFrom: old, to: new)
         for sidebar in liveSidebars where sidebar !== origin { sidebar.workspaceDidChange() }
         syncWebColorSchemes()
+        reconcileLiveTabProfiles()
     }
 
     /// Replaces the workspace without persisting it (a value that is already stored elsewhere,
@@ -302,6 +303,7 @@ public final class WorkspaceController: ObservableObject {
         workspace = new
         for sidebar in liveSidebars { sidebar.workspaceDidChange() }
         syncWebColorSchemes()
+        reconcileLiveTabProfiles()
     }
 
     // MARK: - Profiles
@@ -335,12 +337,21 @@ public final class WorkspaceController: ObservableObject {
         let favorites = workspace.favorites(profileID: profileID).map(\.id)
         guard (try? mutate(origin: nil) { try TreeOps.deleteProfile($0, id: profileID, now: now()) }) != nil else { return false }
         favorites.forEach(closeLive)
+        // Incognito windows opened on a Space of this profile (before the Space changed profile)
+        // still have tabs in its off-the-record context: they go too. inferred (C11).
+        let incognito = liveIncognitoChildren.filter { child in child.workspace.profiles[profileID] != nil }
+        for child in incognito { Array(child.liveTabs.keys).forEach(child.closeLive) }
         // The engine needs every tab of the profile closed first: wait for the queued closes.
         let earlier = engineWork
         let engine = dependencies.engine
         enqueueEngineWork {
             for task in earlier { await task.value }
-            try? await engine.deleteProfileData(profileID)
+            for child in incognito { await child.settleEngineWork() }
+            do {
+                try await engine.deleteProfileData(profileID)
+            } catch {
+                NSLog("Open Arc: removing the engine data of profile %@ failed: %@", profileID.uuidString, String(describing: error))
+            }
         }
         return true
     }
@@ -411,16 +422,22 @@ public final class WorkspaceController: ObservableObject {
         }
     }
 
+    /// The engine profile a model tab's page belongs to: the favorite's profile, else its Space's
+    /// profile. nil when the Space is unknown (the caller's fallback applies). C11: "Profiles help
+    /// keep your data separate across Spaces — like history, logins, cookies" ([03 §Profiles]
+    /// observed), so a Space's Profile decides where its tabs' data lives.
+    func engineProfileID(forTab tab: TabNode) -> UUID? {
+        switch tab.location {
+        case .favorite(let favoriteProfile): return favoriteProfile
+        case .pinned(let spaceID, _), .today(let spaceID): return workspace.spaces[spaceID]?.profileID
+        }
+    }
+
     /// Creates the engine tab for `id` if needed and starts observing it. The profile is the tab's
     /// Space's profile (or the favorite's profile), else `fallbackProfileID`.
     func ensureLive(_ id: UUID, fallbackProfileID: UUID?) async throws {
         guard liveTabs[id] == nil, !pageRequests.adopting.contains(id), let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
-        let profileID: UUID?
-        switch tab.location {
-        case .favorite(let favoriteProfile): profileID = favoriteProfile
-        case .pinned(let spaceID, _), .today(let spaceID): profileID = workspace.spaces[spaceID]?.profileID ?? fallbackProfileID
-        }
-        guard let profileID = profileID ?? fallbackProfileID else { return }
+        guard let profileID = engineProfileID(forTab: tab) ?? fallbackProfileID else { return }
         let engine = dependencies.engine
         let scheme = webColorScheme(forTab: id)
         let configuration = TabConfiguration(
@@ -445,6 +462,8 @@ public final class WorkspaceController: ObservableObject {
             return
         }
         liveTabs[id] = live
+        // The tab moved to a Space of another Profile while the engine made it (C11).
+        if reconcileProfile(of: id) { return }
         sentColorSchemes[id] = initialColorScheme
         syncWebColorScheme(of: id)
         dialogs.observe(live)
@@ -484,6 +503,28 @@ public final class WorkspaceController: ObservableObject {
         guard url != node.url || title != node.title || favicon != node.faviconURL else { return }
         let stamp = now()
         try? mutate(origin: nil) { try TreeOps.updateTabContent($0, id: id, url: url, title: title, faviconURL: favicon, now: stamp) }
+    }
+
+    /// A live engine tab belongs to one engine profile for good: its cookies, storage and history
+    /// live there, and a web contents cannot move to another profile. When a model tab now belongs
+    /// to another Profile (moved to a Space of another Profile, its Space's Profile changed, or a
+    /// favorite moved), its engine tab is closed and a new one is made in the right profile, which
+    /// loads the tab's URL again (back/forward history, form state and the page's scripts state
+    /// are lost; inferred, the spec records no detail). C11.
+    func reconcileLiveTabProfiles() {
+        for id in Array(liveTabs.keys) { reconcileProfile(of: id) }
+    }
+
+    /// See `reconcileLiveTabProfiles`. Returns whether the engine tab of `id` was replaced.
+    @discardableResult
+    private func reconcileProfile(of id: UUID) -> Bool {
+        guard let live = liveTabs[id], let tab = workspace.tabs[id], !tab.meta.isTombstone,
+              let expected = engineProfileID(forTab: tab), expected != live.profileID else { return false }
+        closeLive(id)
+        enqueueEngineWork { [weak self] in
+            try? await self?.ensureLive(id, fallbackProfileID: expected)
+        }
+        return true
     }
 
     /// Closes the engine tab of `id`, if any, and forgets its live state.

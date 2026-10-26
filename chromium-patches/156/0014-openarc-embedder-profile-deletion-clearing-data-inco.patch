@@ -1,0 +1,491 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 23:08:57 -0700
+Subject: [PATCH] openarc: embedder: profile deletion, clearing data, incognito
+ teardown
+
+Plan C11 (profiles: on-disk data directory per Profile, isolation of
+cookies and storage). C6b maps each Open Arc Profile to a ProfileManager
+profile at <user data dir>/<Profile UUID>, its primary off-the-record
+profile for incognito. This commit fills the three parts the bridge
+left as stubs:
+
+- OACApplication.deleteProfile: refuses while a tab of the profile
+  (regular or off the record) is open. Otherwise it does what Chrome's
+  DeleteProfileHelper does minus its Browser-window steps (there are no
+  Browser windows; the shell, not Chrome, picks profiles): schedules and
+  marks the directory for deletion (recorded in Local State, so a crash
+  removes the files at the next start; the profile turns ephemeral, so
+  ProfileManager removes it when it unloads it), cancels downloads, wipes
+  the browsing data (Profile::Wipe), destroys the off-the-record profile,
+  removes the attributes entry and drops the bridge's keep-alive. Once
+  Chrome has destroyed the Profile (or after 30 s) it removes the
+  directory and its cache directory itself and only then calls back, so
+  the caller knows the data is gone.
+- OACProfile.clearBrowsingData: Chrome's BrowsingDataRemover with
+  //chrome's delegate. Cookies also clear the HTTP auth cache; site
+  storage is Chrome's "site data" without cookies (DOM storage, service
+  workers, cache storage, media licenses, site usage); history, cache,
+  downloads list, passwords, autofill and content settings map to
+  Chrome's data types.
+- Incognito: when the last off-the-record tab of a profile closes, the
+  bridge destroys the primary OTR profile (ProfileDestroyer, after its
+  renderers exit) and tells the application delegate. Upstream Chrome
+  does this when the last incognito Browser closes, which never happens
+  here. A new incognito tab while the old context is still being torn
+  down destroys it at once, so it always starts empty.
+---
+ openarc/BUILD.gn                      |   6 +
+ openarc/bridge/oac_application.mm     | 201 +++++++++++++++++++++++++-
+ openarc/bridge/oac_profile.mm         | 128 +++++++++++++++-
+ openarc/bridge/oac_profile_internal.h |   9 +-
+ 4 files changed, 330 insertions(+), 14 deletions(-)
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 6730bf8e434f..c8e0c76b875d 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -152,7 +152,13 @@ source_set("bridge") {
+   deps = [
+     ":embedder",
+     "//base",
++    "//chrome/browser/browsing_data:constants",
++    "//chrome/browser/download",
+     "//chrome/browser/profiles:profile",
++    "//chrome/browser/profiles:profile_manager",
++    "//chrome/browser/profiles:profile_util",
++    "//chrome/common",
++    "//components/prefs",
+     "//components/favicon/content",
+     "//components/favicon/core",
+     "//components/input",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 0ba9d545f119..441be7419cad 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -13,13 +13,24 @@
+ #include "base/apple/foundation_util.h"
+ #include "base/check.h"
+ #include "base/files/file_path.h"
++#include "base/files/file_util.h"
+ #include "base/logging.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/strings/sys_string_conversions.h"
++#include "base/task/thread_pool.h"
++#include "base/time/time.h"
+ #include "base/version_info/version_info.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/download/download_core_service.h"
++#include "chrome/browser/download/download_core_service_factory.h"
+ #include "chrome/browser/embedder_owned_ui_mac.h"
++#include "chrome/browser/profiles/nuke_profile_directory_utils.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_attributes_entry.h"
++#include "chrome/browser/profiles/profile_attributes_storage.h"
+ #include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/common/chrome_paths_internal.h"
++#include "components/prefs/pref_service.h"
+ #include "chrome/common/chrome_switches.h"
+ #include "components/embedder_support/user_agent_utils.h"
+ #include "content/public/app/content_main.h"
+@@ -48,6 +59,12 @@
+ 
+ EngineState* g_engine = nullptr;
+ 
++// How long profile deletion waits for Chrome to destroy the Profile (its
++// browsing-data wipe and its renderers) before it removes the directory
++// anyway, and how often it looks.
++constexpr base::TimeDelta kProfileDestructionTimeout = base::Seconds(30);
++constexpr NSTimeInterval kProfileDestructionPollInterval = 0.1;
++
+ // Chrome switches every Open Arc browser process starts with (after the
+ // host's own switches, so a development switch can still override them).
+ // The app owns first run, default-browser prompts, updates and sync (our sync
+@@ -410,12 +427,149 @@ - (OACProfile*)loadedProfileWithIdentifier:(NSUUID*)identifier {
+ 
+ - (void)deleteProfileWithIdentifier:(NSUUID*)identifier
+                   completionHandler:(void (^)(NSError*))completionHandler {
+-  // TODO(C11): close the context and remove its directory.
+-  NSError* error = OACMakeError(OACErrorInvalidArgument,
+-                                @"Deleting profiles is not implemented yet.");
+-  OACPostToMainThread(^{
+-    completionHandler(error);
+-  });
++  CHECK(NSThread.isMainThread);
++  void (^fail)(OACErrorCode, NSString*) = ^(OACErrorCode code,
++                                            NSString* message) {
++    NSError* error = OACMakeError(code, message);
++    OACPostToMainThread(^{
++      completionHandler(error);
++    });
++  };
++  if (_state != OACApplicationStateRunning) {
++    fail(OACErrorNotStarted, @"The engine is not running.");
++    return;
++  }
++  // Every tab of the profile, on disk or off the record, must be closed.
++  for (OACTab* tab in _tabs.allObjects) {
++    if (!tab.closed && [tab.profile.identifier isEqual:identifier]) {
++      fail(OACErrorInvalidArgument, @"The profile still has open tabs.");
++      return;
++    }
++  }
++  if (_pendingProfileLoads[identifier]) {
++    fail(OACErrorInvalidArgument, @"The profile is still loading.");
++    return;
++  }
++  ProfileManager* profile_manager = g_browser_process->profile_manager();
++  const base::FilePath path = profile_manager->user_data_dir().Append(
++      base::SysNSStringToUTF8(identifier.UUIDString));
++  // Chrome's own profile deletion (DeleteProfileHelper) also closes the
++  // profile's Browser windows and picks a new "last used" profile, loading or
++  // creating one; neither applies here (no Browser windows, the shell picks
++  // profiles). This is the rest of it.
++  if (!ScheduleProfileDirectoryForDeletion(path)) {
++    fail(OACErrorInvalidArgument, @"The profile is already being deleted.");
++    return;
++  }
++  OACProfile* wrapper = _profiles[identifier];
++  [_profiles removeObjectForKey:identifier];
++  Profile* profile = profile_manager->GetProfileByPath(path);
++  ProfileAttributesStorage& storage =
++      profile_manager->GetProfileAttributesStorage();
++  const bool has_entry = storage.GetProfileAttributesWithPath(path) != nullptr;
++  if (has_entry) {
++    // Prevents creating the profile again in this run, records it in Local
++    // State so that a crash before the files are gone removes them at the
++    // next start (DeleteProfileHelper::CleanUpDeletedProfiles), and makes the
++    // profile ephemeral, so ProfileManager removes its directory (and its
++    // cache directory) when it unloads it.
++    MarkProfileDirectoryForDeletion(path);
++  }
++  base::WeakPtr<Profile> weak_profile;
++  if (profile) {
++    weak_profile = profile->GetWeakPtr();
++    DownloadCoreServiceFactory::GetForBrowserContext(profile)->CancelDownloads(
++        DownloadCoreService::CancelDownloadsTrigger::kProfileDeletion);
++    profile_manager->NotifyOnProfileMarkedForPermanentDeletion(profile);
++    // Remove the data right away rather than when the files go: cookies,
++    // storage, history, cache, passwords, autofill, content settings. The
++    // remover holds the profile until it is done.
++    profile->Wipe();
++    profile->GetPrefs()->OnStoreDeletionFromDisk();
++    // The off-the-record context goes first (it has no tabs).
++    [wrapper destroyOffTheRecordContext];
++  }
++  if (has_entry) {
++    storage.RemoveProfile(path);
++  }
++  // Drops the shell's keep-alive. Chrome keeps the Profile while the wipe
++  // runs, then unloads it.
++  [wrapper invalidate];
++  if (profile) {
++    profile_manager->ClearFirstBrowserWindowKeepAlive(profile);
++  }
++  [self removeDeletedProfileAtPath:path
++                       chromeProfile:weak_profile
++                           startedAt:base::TimeTicks::Now()
++                   completionHandler:completionHandler];
++}
++
++// Removes the profile's directory and its cache directory once Chrome has
++// destroyed the Profile (so no store writes into the directory any more), or
++// after kProfileDestructionTimeout. ProfileManager removes them too when it
++// unloads a profile marked for deletion, without telling anyone; this pass is
++// what the completion handler waits for, and covers a profile that was never
++// loaded in this run.
++- (void)removeDeletedProfileAtPath:(const base::FilePath&)path
++                     chromeProfile:(base::WeakPtr<Profile>)profile
++                         startedAt:(base::TimeTicks)start
++                 completionHandler:(void (^)(NSError*))completionHandler {
++  if (profile && _state == OACApplicationStateRunning &&
++      base::TimeTicks::Now() - start < kProfileDestructionTimeout) {
++    __weak OACApplication* weakSelf = self;
++    const base::FilePath path_copy = path;
++    dispatch_after(
++        dispatch_time(DISPATCH_TIME_NOW,
++                      (int64_t)(kProfileDestructionPollInterval * NSEC_PER_SEC)),
++        dispatch_get_main_queue(), ^{
++          OACApplication* strongSelf = weakSelf;
++          if (!strongSelf) {
++            return;
++          }
++          [strongSelf removeDeletedProfileAtPath:path_copy
++                                   chromeProfile:profile
++                                       startedAt:start
++                               completionHandler:completionHandler];
++        });
++    return;
++  }
++  if (profile) {
++    LOG(WARNING) << "OpenArc: the deleted profile is still alive; removing "
++                    "its files anyway: "
++                 << path;
++  }
++  if (_state != OACApplicationStateRunning) {
++    // Chrome removes profiles marked for deletion at shutdown
++    // (NukeDeletedProfilesFromDisk), else at the next start.
++    OACPostToMainThread(^{
++      completionHandler(nil);
++    });
++    return;
++  }
++  base::FilePath cache_path;
++  chrome::GetUserCacheDirectory(path, &cache_path);
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
++      base::BindOnce(
++          [](const base::FilePath& profile_path,
++             const base::FilePath& cache_path) {
++            bool removed = base::DeletePathRecursively(profile_path);
++            if (cache_path != profile_path) {
++              removed = base::DeletePathRecursively(cache_path) && removed;
++            }
++            return removed;
++          },
++          path, cache_path),
++      base::BindOnce(^(bool removed) {
++        NSError* error =
++            removed ? nil
++                    : OACMakeError(OACErrorProfileUnavailable,
++                                   @"Some of the profile's files could not be "
++                                   @"removed; they go at the next start.");
++        completionHandler(error);
++      }));
+ }
+ 
+ // MARK: Tabs
+@@ -426,6 +580,41 @@ - (void)registerTab:(OACTab*)tab {
+ 
+ - (void)unregisterTab:(OACTab*)tab {
+   [_tabs removeObject:tab];
++  OACProfile* original = tab.profile.originalProfile;
++  if (!original) {
++    return;
++  }
++  // The last off-the-record tab of |original| closed: the context goes with
++  // it (OACProfile.h, Lifetime). Checked in a later turn, so a tab the shell
++  // creates right away (closing one incognito window, opening another) keeps
++  // it.
++  __weak OACApplication* weakSelf = self;
++  __weak OACProfile* weakOriginal = original;
++  OACPostToMainThread(^{
++    [weakSelf destroyOffTheRecordContextIfUnused:weakOriginal];
++  });
++}
++
++- (void)destroyOffTheRecordContextIfUnused:(OACProfile*)original {
++  if (!original || _state != OACApplicationStateRunning ||
++      !original.hasOffTheRecordProfile) {
++    return;
++  }
++  for (OACTab* tab in _tabs.allObjects) {
++    if (!tab.closed && tab.profile.originalProfile == original) {
++      return;
++    }
++  }
++  if (![original destroyOffTheRecordContext]) {
++    return;
++  }
++  NSUUID* identifier = original.identifier;
++  id<OACApplicationDelegate> delegate = _delegate;
++  if ([delegate respondsToSelector:@selector
++                (application:didDestroyOffTheRecordProfileOfIdentifier:)]) {
++    [delegate application:self
++        didDestroyOffTheRecordProfileOfIdentifier:identifier];
++  }
+ }
+ 
+ @end
+diff --git a/openarc/bridge/oac_profile.mm b/openarc/bridge/oac_profile.mm
+index 38ce96b41f21..21e5d537c9e7 100644
+--- a/openarc/bridge/oac_profile.mm
++++ b/openarc/bridge/oac_profile.mm
+@@ -7,18 +7,94 @@
+ #include <memory>
+ 
+ #include "base/check.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/time/time.h"
++#include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
+ #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+ #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_destroyer.h"
++#include "content/public/browser/browsing_data_remover.h"
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ 
++namespace {
++
++// Waits for one BrowsingDataRemover task and runs |completion| on the main
++// thread (bridge callback rule). Owns itself: deleted when the task is done,
++// also when the remover goes away first (its destructor reports pending tasks
++// as done).
++class RemovalObserver : public content::BrowsingDataRemover::Observer {
++ public:
++  RemovalObserver(content::BrowsingDataRemover* remover,
++                  void (^completion)(void))
++      : remover_(remover), completion_(completion) {
++    remover_->AddObserver(this);
++  }
++  RemovalObserver(const RemovalObserver&) = delete;
++  RemovalObserver& operator=(const RemovalObserver&) = delete;
++
++  void OnBrowsingDataRemoverDone(uint64_t failed_data_types) override {
++    remover_->RemoveObserver(this);
++    OACPostToMainThread(completion_);
++    delete this;
++  }
++
++ private:
++  ~RemovalObserver() override = default;
++
++  raw_ptr<content::BrowsingDataRemover> remover_;
++  void (^completion_)(void);
++};
++
++// OACBrowsingDataTypes in //chrome's remover data types
++// (chrome_browsing_data_remover_constants.h). Cookies also clear the HTTP
++// auth cache (content's remover does that with cookies).
++uint64_t RemoveMask(OACBrowsingDataTypes types) {
++  using content::BrowsingDataRemover;
++  namespace constants = chrome_browsing_data_remover;
++  uint64_t mask = 0;
++  if (types & OACBrowsingDataTypeHistory) {
++    mask |= constants::DATA_TYPE_HISTORY;
++  }
++  if (types & OACBrowsingDataTypeCookies) {
++    mask |= BrowsingDataRemover::DATA_TYPE_COOKIES;
++  }
++  if (types & OACBrowsingDataTypeCache) {
++    mask |= BrowsingDataRemover::DATA_TYPE_CACHE;
++  }
++  if (types & OACBrowsingDataTypeSiteStorage) {
++    // Chrome's "site data" without cookies: DOM storage (local storage,
++    // IndexedDB, service workers, cache storage, file systems), media
++    // licenses, site usage data and the privacy sandbox stores.
++    mask |= constants::DATA_TYPE_SITE_DATA &
++            ~BrowsingDataRemover::DATA_TYPE_COOKIES;
++  }
++  if (types & OACBrowsingDataTypeDownloadsList) {
++    mask |= BrowsingDataRemover::DATA_TYPE_DOWNLOADS;
++  }
++  if (types & OACBrowsingDataTypePasswords) {
++    mask |= constants::DATA_TYPE_PASSWORDS;
++  }
++  if (types & OACBrowsingDataTypeAutofill) {
++    mask |= constants::DATA_TYPE_FORM_DATA;
++  }
++  if (types & OACBrowsingDataTypeSiteSettings) {
++    mask |= constants::DATA_TYPE_CONTENT_SETTINGS;
++  }
++  return mask;
++}
++
++}  // namespace
++
+ // One //chrome Profile per model Profile (plan C11, decision Q7), created by
+-// ProfileManager in <userDataDirectory>/Profiles/<UUID>. Its off-the-record
+-// variant is Chrome's primary OTR profile of that Profile. Site settings,
+-// downloads and extensions surfaces come with C12 and C14.
++// ProfileManager in <userDataDirectory>/<UUID>. Its off-the-record variant is
++// Chrome's primary OTR profile of that Profile: OACApplication destroys it
++// after the last off-the-record tab closed (-destroyOffTheRecordContext), and
++// the next incognito tab gets a fresh one. Site settings, downloads and
++// extensions surfaces come with C12 and C14.
+ @implementation OACProfile {
+   NSUUID* _identifier;
+   NSURL* _dataDirectory;
+@@ -62,8 +138,17 @@ - (Profile*)chromeProfile {
+   OACProfile* original = _originalProfile;
+   if (original) {
+     Profile* profile = original.chromeProfile;
+-    return profile ? profile->GetPrimaryOTRProfile(/*create_if_needed=*/true)
+-                   : nullptr;
++    if (!profile) {
++      return nullptr;
++    }
++    Profile* otr = profile->GetPrimaryOTRProfile(/*create_if_needed=*/false);
++    if (otr && otr->ShutdownStarted()) {
++      // The previous incognito context is still waiting for its renderers to
++      // exit (-destroyOffTheRecordContext). A new incognito tab must not land
++      // in it: destroy it now and start a fresh one.
++      ProfileDestroyer::DestroyOTRProfileImmediately(otr);
++    }
++    return profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+   }
+   return _profile.get();
+ }
+@@ -75,6 +160,23 @@ - (void)invalidate {
+   _keepAlive.reset();
+ }
+ 
++- (BOOL)destroyOffTheRecordContext {
++  CHECK(!_originalProfile);
++  OACProfile* wrapper = _offTheRecordProfile;
++  _offTheRecordProfile = nil;
++  [wrapper invalidate];
++  Profile* original = _valid ? _profile.get() : nullptr;
++  if (!original || !original->HasPrimaryOTRProfile()) {
++    return wrapper != nil;
++  }
++  // Waits (briefly) for the incognito renderers to exit, then deletes the
++  // profile. Nothing of it was on disk: its cookie store, cache and storage
++  // partitions are in memory (Chrome's OffTheRecordProfileImpl).
++  ProfileDestroyer::DestroyOTRProfileWhenAppropriate(
++      original->GetPrimaryOTRProfile(/*create_if_needed=*/false));
++  return YES;
++}
++
+ - (NSUUID*)identifier {
+   return _identifier;
+ }
+@@ -134,8 +236,20 @@ - (OACExtensions*)extensions {
+ - (void)clearBrowsingDataOfTypes:(OACBrowsingDataTypes)types
+                            since:(NSDate*)since
+                completionHandler:(void (^)(void))completionHandler {
+-  // TODO(C11): BrowsingDataRemover with Chrome's remover delegate.
+-  OACPostToMainThread(completionHandler);
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.chromeProfile;
++  const uint64_t mask = RemoveMask(types);
++  if (!profile || mask == 0) {
++    OACPostToMainThread(completionHandler);
++    return;
++  }
++  // Chrome's remover with //chrome's delegate (history, passwords, autofill,
++  // content settings); the delegate keeps the profile alive while it works.
++  content::BrowsingDataRemover* remover = profile->GetBrowsingDataRemover();
++  auto* observer = new RemovalObserver(remover, completionHandler);
++  remover->RemoveAndReply(
++      since ? base::Time::FromNSDate(since) : base::Time(), base::Time::Max(),
++      mask, chrome_browsing_data_remover::ALL_ORIGIN_TYPES, observer);
+ }
+ 
+ @end
+diff --git a/openarc/bridge/oac_profile_internal.h b/openarc/bridge/oac_profile_internal.h
+index cc2a833c18ea..38bee8a35b38 100644
+--- a/openarc/bridge/oac_profile_internal.h
++++ b/openarc/bridge/oac_profile_internal.h
+@@ -20,8 +20,15 @@ class Profile;
+ // profile), or nullptr once destroyed. Creates the off-the-record profile on
+ // first use.
+ @property(nonatomic, readonly) Profile* chromeProfile;
+-// Called when the engine shuts down; the profile turns invalid.
++// Called when the engine shuts down or the profile is deleted; the profile
++// turns invalid (and so does its off-the-record variant) and releases its
++// keep-alive.
+ - (void)invalidate;
++// On-disk profiles only: invalidates the off-the-record wrapper and asks
++// Chrome to destroy the primary OTR profile (after its renderers exit).
++// Returns whether there was one. The next `offTheRecordProfile` makes a new
++// wrapper, and the next tab in it a fresh OTR profile.
++- (BOOL)destroyOffTheRecordContext;
+ @end
+ 
+ #endif  // OPENARC_BRIDGE_OAC_PROFILE_INTERNAL_H_
