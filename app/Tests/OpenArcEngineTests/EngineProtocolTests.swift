@@ -164,8 +164,8 @@ final class EngineProtocolTests: XCTestCase {
             case .externalProtocol(let r):
                 XCTAssertEqual(r.handlerApplicationName, "Mail")
                 r.reply.send(.open(rememberForOrigin: false))
-            case .passwordSave, .autofillPopup:
-                XCTFail("not raised here (C13 has its own tests)")
+            case .passwordSave, .autofillPopup, .extensionInstall:
+                XCTFail("not raised here (C13 and C14 have their own tests)")
             }
             XCTAssertTrue(request.isFinished)
             XCTAssertFalse(request.answerWithDefault(), "single-shot")
@@ -473,7 +473,8 @@ final class EngineProtocolTests: XCTestCase {
         try await engine.extensions.install(webStoreID: "abc", profileID: profile)
         var actions = await engine.extensions.actions(for: tab.id)
         XCTAssertEqual(actions.map(\.id), ["abc"])
-        await engine.extensions.runAction("abc", on: tab.id)
+        let popup = await engine.extensions.runAction("abc", on: tab.id)
+        XCTAssertNil(popup, "no popup: the click goes to the extension")
         XCTAssertEqual(engine.fakeExtensionService.actionsRun, ["abc@\(tab.id)"])
         await engine.extensions.setEnabled(false, extensionID: "abc", profileID: profile)
         actions = await engine.extensions.actions(for: tab.id)

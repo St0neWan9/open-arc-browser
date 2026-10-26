@@ -27,4 +27,22 @@ enum SiteControlsLocalTokens {
     /// Seconds between the pointer leaving and the bubble closing. inferred (06 §12 only says
     /// it disappears when the pointer moves away).
     static let pointerLeaveGrace: Double = 0.3
+    /// An extension's action icon in the "Extensions" section: Chrome's toolbar size. inferred.
+    static let extensionIconSize: CGFloat = 16
+    /// Extension popup limits: Chromium's (25×25 to 800×600 points), the page sizes itself in
+    /// between. inferred (the spec records no extension popup).
+    static let extensionPopupMinimumSize: Double = 25
+    static let extensionPopupMaximumWidth: Double = 800
+    static let extensionPopupMaximumHeight: Double = 600
+    /// Corner radius of the extension popup bubble: the Site Control Center's, since it opens
+    /// from the same button. inferred.
+    static let extensionPopupCornerRadius = CGFloat(Metrics.SiteControls.cornerRadius)
+    /// Inset of the page inside its bubble, so the bubble's rounded corners do not clip it.
+    /// inferred.
+    static let extensionPopupInset: CGFloat = 8
+
+    static func clampedExtensionPopupSize(width: Double, height: Double) -> (width: Double, height: Double) {
+        (min(max(width, extensionPopupMinimumSize), extensionPopupMaximumWidth),
+         min(max(height, extensionPopupMinimumSize), extensionPopupMaximumHeight))
+    }
 }

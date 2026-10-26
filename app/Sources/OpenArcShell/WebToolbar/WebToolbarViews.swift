@@ -163,6 +163,7 @@ struct WebToolbarView: View {
             }
             .siteControlsBubble(siteControls, isPresented: siteControls.isPresented && siteControls.tabID == state.tabID,
                                 palette: model.windowPalette)
+            .extensionPopupBubble(siteControls, tabID: state.tabID, palette: model.windowPalette)
         case .splitMenu:
             WebToolbarSplitMenu(colors: colors) { placement in model.addSplit(placement, beside: state.tabID) }
         case .closePane:

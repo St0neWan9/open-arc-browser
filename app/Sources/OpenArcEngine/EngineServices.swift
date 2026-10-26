@@ -4,7 +4,7 @@ import OpenArcModel
 // Downloads (plan C12) and the extensions skeleton (chromium-bridge/SWIFT_PROTOCOL_CHANGES.md §8,
 // §9; bridge: OACDownloads.h, OACExtensions.h). The Library's Downloads section ([06 §8] observed:
 // "Search Downloads…", "Filter", empty state "Nothing here yet!") lists the downloads; the Site
-// Control Center's extension rows (C14) will read the extensions. Fake implementations live in
+// Control Center's extension rows read the extensions (C14). Fake implementations live in
 // FakeServices.swift.
 
 // MARK: - Downloads
@@ -95,7 +95,9 @@ public struct EngineExtensionInfo: Identifiable, Hashable, Sendable {
     public var version: String
     public var isEnabled: Bool
     public var isAllowedInIncognito: Bool
-    /// Action icon at 32 px, PNG.
+    /// Loaded from a folder (developer mode), not installed from the Web Store.
+    public var isUnpacked: Bool
+    /// Action icon at 16 pt in 2x pixels (32 px), PNG; nil while loading.
     public var iconPNGData: Data?
     public var badgeText: String
     public var actionTitle: String
@@ -106,14 +108,15 @@ public struct EngineExtensionInfo: Identifiable, Hashable, Sendable {
 
     public init(
         id: String, name: String, version: String = "1.0", isEnabled: Bool = true, isAllowedInIncognito: Bool = false,
-        iconPNGData: Data? = nil, badgeText: String = "", actionTitle: String = "", isActionEnabled: Bool = true,
-        hasPopup: Bool = false
+        isUnpacked: Bool = false, iconPNGData: Data? = nil, badgeText: String = "", actionTitle: String = "",
+        isActionEnabled: Bool = true, hasPopup: Bool = false
     ) {
         self.id = id
         self.name = name
         self.version = version
         self.isEnabled = isEnabled
         self.isAllowedInIncognito = isAllowedInIncognito
+        self.isUnpacked = isUnpacked
         self.iconPNGData = iconPNGData
         self.badgeText = badgeText
         self.actionTitle = actionTitle
@@ -129,14 +132,51 @@ public enum ExtensionEvent: Hashable, Sendable {
     case actionUpdated(extensionID: String, tabID: EngineTabID?)
 }
 
-/// A profile's extensions (`OACExtensions`). Popup hosting and install confirmation are settled
-/// in C14.
+/// What an extension popup reports (`OACExtensionPopupDelegate`).
+public enum ExtensionPopupEvent: Hashable, Sendable {
+    /// The page finished its first load: show the popup now (never half loaded).
+    case loaded
+    /// The page laid out at this size, in points (within 25×25…800×600).
+    case resized(width: Double, height: Double)
+    /// Closed (by `close()`, by the page, or because the extension or its tab went away). Last
+    /// element: the stream finishes after it.
+    case closed
+}
+
+/// An extension action's popup page (`OACExtensionPopup`). The shell draws the bubble; the page is a
+/// native view handed to a `SurfaceHost`, like a tab's. One per engine at a time: running another
+/// action closes the open popup.
+public protocol ExtensionPopup: AnyObject, Sendable {
+    var extensionID: String { get }
+    /// The tab the action ran on.
+    var tabID: EngineTabID { get }
+    /// Every call returns a new stream; it starts with `.loaded` / `.resized` for what already
+    /// happened and finishes after `.closed`.
+    func events() -> AsyncStream<ExtensionPopupEvent>
+    /// The page's view goes into `host` (replacing what it showed).
+    @MainActor func attach(to host: any SurfaceHost)
+    /// Gives the page the keyboard (after its bubble became key).
+    @MainActor func focus()
+    func close() async
+}
+
+/// A profile's extensions (`OACExtensions`, plan C14). Off-the-record tabs use their profile's
+/// extensions (only those allowed in incognito have actions there). Install confirmations reach the
+/// shell as `EngineDialogRequest.extensionInstall` on the tab that asked (the Web Store page).
 public protocol EngineExtensions: AnyObject, Sendable {
+    /// Extensions the user manages (no built-in component extensions), enabled or not.
     func installed(profileID: Profile.ID) async -> [EngineExtensionInfo]
-    /// Extensions with an action on the tab, with that tab's icon, badge and enabled state.
+    /// Enabled extensions with a toolbar action on the tab, with that tab's icon, badge and state.
     func actions(for tabID: EngineTabID) async -> [EngineExtensionInfo]
-    func runAction(_ extensionID: String, on tabID: EngineTabID) async
+    /// Runs an action as a click on Chrome's toolbar button does (grants activeTab, then opens the
+    /// popup or sends the click). Returns the popup, not shown yet (wait for `.loaded`), or nil.
+    @discardableResult
+    func runAction(_ extensionID: String, on tabID: EngineTabID) async -> (any ExtensionPopup)?
+    /// Installs from the Chrome Web Store by id; the engine asks for confirmation first on a tab of
+    /// the profile (`.extensionInstall`). Throws when declined or failed.
     func install(webStoreID: String, profileID: Profile.ID) async throws
+    /// Loads an unpacked extension from a folder (developer mode). Returns its id.
+    func loadUnpacked(_ folder: URL, profileID: Profile.ID) async throws -> String
     func setEnabled(_ enabled: Bool, extensionID: String, profileID: Profile.ID) async
     func uninstall(_ extensionID: String, profileID: Profile.ID) async
     /// Changes for one profile. Every call returns a new stream.

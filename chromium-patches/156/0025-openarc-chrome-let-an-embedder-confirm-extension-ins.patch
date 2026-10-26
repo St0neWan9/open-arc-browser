@@ -1,0 +1,341 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 13:53:01 -0700
+Subject: [PATCH] openarc: chrome: let an embedder confirm extension installs
+ and list its tabs
+
+Open Arc embeds Chrome's browser process and shows its tabs in its own UI,
+without Browser windows (chrome::EmbedderOwnsUI()). Chrome's extension
+system works there, but three of its UI assumptions do not hold:
+
+- ExtensionInstallPrompt shows its confirmation with a Views dialog parented
+  to a Browser window. Adds ExtensionInstallPrompt::
+  SetEmbedderShowDialogCallback(): when set, every prompt runs the embedder's
+  callback instead of its dialog (the embedder draws the confirmation and runs
+  the DoneCallback). The Web Store's "Add to Chrome" flow and
+  WebstoreInstallWithPrompt go through it.
+- ExtensionInstallUIDesktop::OnInstallSuccess() shows the "added" bubble in
+  a Browser window and creates one when none exists; under an embedder-owned
+  UI it now does nothing (the embedder learns about the extension from the
+  ExtensionRegistry).
+- chrome.tabs.query() lists the tab strips of Browser windows only, so an
+  extension popup asking for {active: true, currentWindow: true} finds no
+  tab. Adds ExtensionTabUtil::SetEmbedderTabList(): the embedder's tabs with
+  whether each is shown and in the current window; TabsQueryFunction appends
+  them when the query names no window id, index or window type (they have no
+  window and no index, like the tabs of patch 0019's lookup).
+
+Nothing changes when no embedder registers a callback (Chrome never does).
+Needed by plan task C14 (extensions). There is no upstream embedding hook
+for any of these.
+---
+ .../browser/extensions/api/tabs/tabs_api.cc   | 76 +++++++++++++++++++
+ chrome/browser/extensions/api/tabs/tabs_api.h |  5 ++
+ .../extensions/extension_install_prompt.cc    | 18 +++++
+ .../extensions/extension_install_prompt.h     |  8 ++
+ .../browser/extensions/extension_tab_util.cc  | 22 ++++++
+ .../browser/extensions/extension_tab_util.h   | 21 +++++
+ chrome/browser/ui/extensions/BUILD.gn         |  4 +
+ .../extension_install_ui_desktop.cc           | 11 +++
+ 8 files changed, 165 insertions(+)
+
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
+index 2a631eb9fc79..ec24e6ac63d6 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -1936,9 +1936,85 @@ base::ListValue TabsQueryFunction::BuildTabList(
+                         .ToValue());
+     }
+   }
++
++  // Open Arc: tabs of an embedder-owned UI live in no Browser window. They
++  // have no window id and no index, so a query for a given window or index
++  // never matches them.
++  if (window_id < 0 && tab_index < 0 && window_type.empty()) {
++    for (const ExtensionTabUtil::EmbedderTab& embedder_tab :
++         ExtensionTabUtil::GetEmbedderTabs(browser_context(),
++                                           include_incognito_information())) {
++      if (MatchesEmbedderTab(embedder_tab, url_patterns)) {
++        api::tabs::Tab tab_object = tabs_internal::CreateTabObjectHelper(
++            embedder_tab.contents, extension(), source_context_type(),
++            /*browser=*/nullptr, /*tab_index=*/-1);
++        tab_object.active = embedder_tab.active;
++        tab_object.selected = embedder_tab.active;
++        tab_object.highlighted = embedder_tab.active;
++        result.Append(tab_object.ToValue());
++      }
++    }
++  }
+   return result;
+ }
+ 
++bool TabsQueryFunction::MatchesEmbedderTab(
++    const ExtensionTabUtil::EmbedderTab& embedder_tab,
++    const URLPatternSet& target_url_patterns) {
++  content::WebContents* web_contents = embedder_tab.contents;
++  if (!web_contents) {
++    return false;
++  }
++  // Window properties: the embedder's tabs are in its one window list; the
++  // "current" and "last focused" window is the one the user works in.
++  if (!MatchesBool(query_info_.current_window,
++                   embedder_tab.in_current_window) ||
++      !MatchesBool(query_info_.last_focused_window,
++                   embedder_tab.in_current_window) ||
++      !MatchesBool(query_info_.active, embedder_tab.active) ||
++      !MatchesBool(query_info_.highlighted, embedder_tab.active) ||
++      !MatchesBool(query_info_.pinned, false) ||
++      !MatchesBool(query_info_.muted, web_contents->IsAudioMuted()) ||
++      !MatchesBool(query_info_.audible, web_contents->IsCurrentlyAudible()) ||
++      !MatchesBool(query_info_.discarded, false) ||
++      !MatchesBool(query_info_.frozen, false)) {
++    return false;
++  }
++  if ((query_info_.group_id && *query_info_.group_id != -1) ||
++      (query_info_.split_view_id && *query_info_.split_view_id != -1)) {
++    return false;
++  }
++  ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
++      ExtensionTabUtil::GetScrubTabBehavior(extension(), source_context_type(),
++                                            web_contents);
++  if (query_info_.title && !query_info_.title->empty()) {
++    if (scrub_tab_behavior.committed_info == ExtensionTabUtil::kScrubTabFully ||
++        !base::MatchPattern(web_contents->GetTitle(),
++                            base::UTF8ToUTF16(*query_info_.title))) {
++      return false;
++    }
++  }
++  if (!target_url_patterns.is_empty()) {
++    bool matches_committed =
++        scrub_tab_behavior.committed_info != ExtensionTabUtil::kScrubTabFully &&
++        target_url_patterns.MatchesURL(web_contents->GetLastCommittedURL());
++    content::NavigationEntry* pending_entry =
++        web_contents->GetController().GetPendingEntry();
++    bool matches_pending =
++        pending_entry &&
++        scrub_tab_behavior.pending_info != ExtensionTabUtil::kScrubTabFully &&
++        target_url_patterns.MatchesURL(pending_entry->GetVirtualURL());
++    if (!matches_committed && !matches_pending) {
++      return false;
++    }
++  }
++  if (query_info_.status != tabs::TabStatus::kNone &&
++      query_info_.status != ExtensionTabUtil::GetLoadingStatus(web_contents)) {
++    return false;
++  }
++  return true;
++}
++
+ bool TabsQueryFunction::MatchesWindow(
+     BrowserWindowInterface* candidate_browser,
+     BrowserWindowInterface* current_browser,
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.h b/chrome/browser/extensions/api/tabs/tabs_api.h
+index 19ed3ed3a924..994f863ffb0a 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.h
++++ b/chrome/browser/extensions/api/tabs/tabs_api.h
+@@ -15,6 +15,7 @@
+ #include "base/types/expected.h"
+ #include "base/values.h"
+ #include "chrome/browser/extensions/chrome_extension_function_details.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
+ #include "chrome/browser/extensions/window_controller.h"
+ #include "chrome/common/extensions/api/tabs.h"
+ #include "chrome/common/extensions/api/windows.h"
+@@ -302,6 +303,10 @@ class TabsQueryFunction : public ExtensionFunction {
+   bool MatchesTab(tabs::TabInterface* candidate_tab,
+                   const URLPatternSet& target_url_patterns);
+ 
++  // Open Arc: ExtensionTabUtil::GetEmbedderTabs().
++  bool MatchesEmbedderTab(const ExtensionTabUtil::EmbedderTab& embedder_tab,
++                          const URLPatternSet& target_url_patterns);
++
+   // The query parameters passed by the extension.
+   api::tabs::Query::Params::QueryInfo query_info_;
+ };
+diff --git a/chrome/browser/extensions/extension_install_prompt.cc b/chrome/browser/extensions/extension_install_prompt.cc
+index b07aaf556e8d..7c667983db7b 100644
+--- a/chrome/browser/extensions/extension_install_prompt.cc
++++ b/chrome/browser/extensions/extension_install_prompt.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/no_destructor.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
+ #include "chrome/browser/extensions/extension_util.h"
+@@ -56,8 +57,21 @@ SkBitmap GetDefaultIconBitmapForMaxScaleFactor(bool is_app) {
+       .GetBitmap();
+ }
+ 
++// Open Arc: see ExtensionInstallPrompt::SetEmbedderShowDialogCallback().
++ExtensionInstallPrompt::ShowDialogCallback& EmbedderShowDialogCallback() {
++  static base::NoDestructor<ExtensionInstallPrompt::ShowDialogCallback>
++      callback;
++  return *callback;
++}
++
+ }  // namespace
+ 
++// static
++void ExtensionInstallPrompt::SetEmbedderShowDialogCallback(
++    ShowDialogCallback callback) {
++  EmbedderShowDialogCallback() = std::move(callback);
++}
++
+ InstallPromptData::PromptType
+     ExtensionInstallPrompt::g_last_prompt_type_for_tests =
+         InstallPromptData::UNSET_PROMPT_TYPE;
+@@ -293,6 +307,10 @@ void ExtensionInstallPrompt::ShowConfirmation() {
+ 
+   if (show_dialog_callback_.is_null())
+     show_dialog_callback_ = GetDefaultShowDialogCallback();
++  // Open Arc: an embedder that owns the UI draws the default dialog itself.
++  if (const ShowDialogCallback& embedder = EmbedderShowDialogCallback()) {
++    show_dialog_callback_ = embedder;
++  }
+   // TODO(crbug.com/40625151): Use OnceCallback and eliminate the need for
+   // a callback on the stack.
+   auto cb = std::move(done_callback_);
+diff --git a/chrome/browser/extensions/extension_install_prompt.h b/chrome/browser/extensions/extension_install_prompt.h
+index 7edcac89efe1..2952c7323780 100644
+--- a/chrome/browser/extensions/extension_install_prompt.h
++++ b/chrome/browser/extensions/extension_install_prompt.h
+@@ -60,6 +60,14 @@ class ExtensionInstallPrompt : public extensions::ExtensionInstallPromptClient {
+   // The implementations of this function are platform-specific.
+   static ShowDialogCallback GetDefaultShowDialogCallback();
+ 
++  // Open Arc: an app that embeds the browser process and owns the UI
++  // (chrome::EmbedderOwnsUI() on Mac) has no Browser window to parent Chrome's
++  // Views install dialog to, and draws the confirmation itself. When set, every
++  // prompt runs `callback` instead of its dialog (the embedder must eventually
++  // run the DoneCallback it receives). A null
++  // callback restores Chrome's dialog. Not part of upstream Chromium.
++  static void SetEmbedderShowDialogCallback(ShowDialogCallback callback);
++
+   // Returns the appropriate prompt type for the given `extension`.
+   // TODO(devlin): This method is yucky - callers probably only care about one
+   // prompt type. We just need to comb through and figure out what it is.
+diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
+index 00ec87896760..fb17298da6bf 100644
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -111,6 +111,12 @@ ExtensionTabUtil::EmbedderTabLookup& EmbedderTabLookupCallback() {
+   return *lookup;
+ }
+ 
++// Open Arc: see ExtensionTabUtil::SetEmbedderTabList().
++ExtensionTabUtil::EmbedderTabList& EmbedderTabListCallback() {
++  static base::NoDestructor<ExtensionTabUtil::EmbedderTabList> list;
++  return *list;
++}
++
+ constexpr char kGroupNotFoundError[] = "No group with id: *.";
+ constexpr char kSplitNotFoundError[] = "No split view with id: *.";
+ constexpr char kInvalidSplitIdError[] = "Invalid split view id: *.";
+@@ -743,6 +749,22 @@ void ExtensionTabUtil::SetEmbedderTabLookup(EmbedderTabLookup lookup) {
+   EmbedderTabLookupCallback() = std::move(lookup);
+ }
+ 
++// static
++void ExtensionTabUtil::SetEmbedderTabList(EmbedderTabList list) {
++  EmbedderTabListCallback() = std::move(list);
++}
++
++// static
++std::vector<ExtensionTabUtil::EmbedderTab> ExtensionTabUtil::GetEmbedderTabs(
++    content::BrowserContext* browser_context,
++    bool include_incognito) {
++  const EmbedderTabList& list = EmbedderTabListCallback();
++  if (!list || !browser_context) {
++    return {};
++  }
++  return list.Run(browser_context, include_incognito);
++}
++
+ // static
+ bool ExtensionTabUtil::GetTabById(int tab_id,
+                                   content::BrowserContext* browser_context,
+diff --git a/chrome/browser/extensions/extension_tab_util.h b/chrome/browser/extensions/extension_tab_util.h
+index de520c171ce4..3558e8724fe5 100644
+--- a/chrome/browser/extensions/extension_tab_util.h
++++ b/chrome/browser/extensions/extension_tab_util.h
+@@ -11,6 +11,7 @@
+ 
+ #include "base/auto_reset.h"
+ #include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/types/expected.h"
+ #include "base/values.h"
+ #include "chrome/browser/extensions/window_controller.h"
+@@ -198,6 +199,26 @@ class ExtensionTabUtil {
+                                                     bool include_incognito)>;
+   static void SetEmbedderTabLookup(EmbedderTabLookup lookup);
+ 
++  // Open Arc: the same embedder's tabs for chrome.tabs.query(), which lists
++  // the tab strips of Browser windows only. `active`: the tab is shown in its
++  // window (the selected tab, or a pane of a split view); `in_current_window`:
++  // its window is the one the user works in (the main window). Such a tab has
++  // no window id and no index. Not part of upstream Chromium.
++  struct EmbedderTab {
++    raw_ptr<content::WebContents> contents;
++    bool active = false;
++    bool in_current_window = false;
++  };
++  using EmbedderTabList =
++      base::RepeatingCallback<std::vector<EmbedderTab>(content::BrowserContext*,
++                                                       bool include_incognito)>;
++  static void SetEmbedderTabList(EmbedderTabList list);
++  // The embedder's live tabs in `browser_context` (and its incognito profile
++  // when `include_incognito`); empty when no embedder registered a list.
++  static std::vector<EmbedderTab> GetEmbedderTabs(
++      content::BrowserContext* browser_context,
++      bool include_incognito);
++
+   // Gets the extensions-specific Group ID.
+   static int GetGroupId(const tab_groups::TabGroupId& id);
+ 
+diff --git a/chrome/browser/ui/extensions/BUILD.gn b/chrome/browser/ui/extensions/BUILD.gn
+index 7d3f03ae3d9a..0ff1a0dcb2d3 100644
+--- a/chrome/browser/ui/extensions/BUILD.gn
++++ b/chrome/browser/ui/extensions/BUILD.gn
+@@ -219,6 +219,10 @@ source_set("impl") {
+ 
+   if (is_win || is_mac || is_linux || is_chromeos) {
+     sources += [ "extension_install_ui_desktop.cc" ]
++    if (is_mac) {
++      # Open Arc: see chrome/browser/embedder_owned_ui_mac.h.
++      deps += [ "//chrome/browser:embedder_owned_ui_mac" ]
++    }
+     deps += [
+       "//chrome/app:generated_resources",
+       "//chrome/browser/prefs",
+diff --git a/chrome/browser/ui/extensions/extension_install_ui_desktop.cc b/chrome/browser/ui/extensions/extension_install_ui_desktop.cc
+index c9e2a59c3e0d..1b9026873fbd 100644
+--- a/chrome/browser/ui/extensions/extension_install_ui_desktop.cc
++++ b/chrome/browser/ui/extensions/extension_install_ui_desktop.cc
+@@ -13,6 +13,9 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
++#if BUILDFLAG(IS_MAC)
++#include "chrome/browser/embedder_owned_ui_mac.h"
++#endif
+ #include "chrome/browser/infobars/browser_infobar_manager.h"
+ #include "chrome/browser/infobars/infobar_features.h"
+ #include "chrome/browser/infobars/infobar_spec.h"
+@@ -122,6 +125,14 @@ void ExtensionInstallUIDesktop::OnInstallSuccess(
+   if (IsUiDisabled() || skip_post_install_ui() || extension->is_theme()) {
+     return;
+   }
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an embedding app that owns the UI has no Browser window to show
++  // the "added" bubble or the apps page in (and Chrome may not create one);
++  // the app learns about the new extension from the ExtensionRegistry.
++  if (chrome::EmbedderOwnsUI()) {
++    return;
++  }
++#endif
+ 
+   if (!profile()) {
+     // TODO(zelidrag): Figure out what exact conditions cause crash

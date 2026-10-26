@@ -100,11 +100,19 @@ public final class ShellModel: ObservableObject {
         self.library = LibraryModel(sidebar: sidebar, now: controller.now)
         // The engine's ad blocker (C16) over fake site settings until the bridge provides the
         // rest (plan C12 / C14).
+        // The engine's ad blocker (C16) and extensions (C14) over fake site settings until the
+        // bridge provides the rest (plan C12).
+        let engine = controller.dependencies.engine
         self.siteControls = SiteControlsModel(
             sidebar: sidebar,
-            provider: EngineSiteSettingsProvider(adBlocking: controller.dependencies.engine.adBlocking, base: FakeSiteSettingsProvider()),
+            provider: EngineSiteSettingsProvider(
+                adBlocking: engine.adBlocking, extensions: engine.extensions,
+                engineTab: { [weak controller] id in controller?.liveTab(for: id)?.id },
+                base: FakeSiteSettingsProvider()
+            ),
             pasteboard: SystemPasteboardWriter()
         )
+        siteControls.engineExtensions = engine.extensions
         self.findBar = FindBarModel(sidebar: sidebar)
         self.sidebarPeek = SidebarPeekController(isPinned: window.isSidebarVisible)
         sidebar.requestHandler = { [weak self] request in self?.handle(request) }
@@ -127,6 +135,7 @@ public final class ShellModel: ObservableObject {
         connectLibraryFlags()
         let preferences = controller.dependencies.preferences
         autoPictureInPicture = AutoPictureInPicture(sidebar: sidebar) { preferences.entersPictureInPictureOnLeavingVideoTab }
+        installExtensionHandlers()
         if isBrowserWindow {
             launchNotice = controller.takeLaunchNotice()
             // Starts auto-archive with the first window, after its selection is restored. [B3]

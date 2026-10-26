@@ -20,7 +20,9 @@ import OpenArcCore
 // prompts, HTTP auth, file chooser, external protocol), downloads (C12), and the page tools of
 // C15: DevTools (its own window per tab), printing (the macOS print panel), Save Page As (complete
 // page, HTML only, one MHTML file), Picture in Picture (Chromium's PiP window, also entered
-// automatically when the user leaves a video tab) and Chromium's PDF viewer.
+// automatically when the user leaves a video tab) and Chromium's PDF viewer; extensions (C14:
+// //chrome's extension system per profile, unpacked loading, Web Store installs with a
+// shell-drawn confirmation, action state and popups for the Site Control Center).
 //
 // Profiles (C11): one on-disk Chromium profile per model Profile at `<user data dir>/<UUID>`
 // (cookies, storage, cache, HTTP auth cache, permissions, history, favicons, service workers and
@@ -33,7 +35,6 @@ import OpenArcCore
 // Not supported yet (the bridge has no implementation):
 // - Document Picture in Picture (`documentPictureInPicture.requestWindow`) is refused: it needs a
 //   Chrome window type the embedder does not have (C15).
-// - Extensions are an empty service (C14).
 // - Downloads list the on-disk profile only; downloads of incognito windows are not listed (C12
 //   follow-up).
 // - Capture state stays empty (C9).
@@ -44,7 +45,8 @@ public final class ChromiumEngine: BrowserEngine {
     /// `"Chromium <version>"`, for Settings ▸ About.
     public let engineVersion: String
     public let downloads: any EngineDownloads
-    public let extensions: any EngineExtensions = UnsupportedExtensions()
+    /// //chrome's extension system per profile (plan C14).
+    public let extensions: any EngineExtensions
     /// Chromium's subresource filter with the bundled EasyList + EasyPrivacy ruleset (plan C16).
     public let adBlocking: any EngineAdBlocking
 
@@ -70,6 +72,11 @@ public final class ChromiumEngine: BrowserEngine {
         )
         engineVersion = "Chromium " + OACApplication.shared.chromiumVersion
         downloads = ChromiumDownloads(core: core)
+        let extensions = ChromiumExtensions(core: core)
+        self.extensions = extensions
+        // Every loaded profile gets the extensions delegate at once, so a Web Store install from a
+        // page finds someone to confirm it.
+        core.onProfileLoaded = { [weak extensions] id, profile in extensions?.attach(to: id, extensions: profile.extensions) }
         adBlocking = ChromiumAdBlocking(core: core)
         core.startAtLaunch()
     }
@@ -133,6 +140,8 @@ final class ChromiumEngineCore {
     private var pending: [PendingTabToken: (request: OACNewTabRequest, opener: EngineTabID)] = [:]
     private var isShutDown = false
     private var launchObserver: NSObjectProtocol?
+    /// Called once per on-disk profile after it loaded (C14 attaches the extensions delegate).
+    var onProfileLoaded: ((Profile.ID, OACProfile) -> Void)?
 
     init(
         userDataDirectory: URL, crashReportsDirectory: URL?, additionalSwitches: [String],
@@ -193,6 +202,12 @@ final class ChromiumEngineCore {
         return profile.siteSettings
     }
 
+    /// The profile's extensions (C14). nil when the profile cannot be loaded.
+    func extensions(_ id: Profile.ID) async -> OACExtensions? {
+        guard !isShutDown, let profile = try? await profile(id, offTheRecord: false) else { return nil }
+        return profile.extensions
+    }
+
     /// The profile's downloads (C12). nil when the profile cannot be loaded.
     func downloads(_ id: Profile.ID) async -> OACDownloads? {
         guard !isShutDown, let profile = try? await profile(id, offTheRecord: false) else { return nil }
@@ -215,6 +230,7 @@ final class ChromiumEngineCore {
                 }
             }
         }
+        onProfileLoaded?(id, profile)
         return offTheRecord ? profile.offTheRecordProfile : profile
     }
 

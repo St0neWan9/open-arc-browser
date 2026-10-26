@@ -90,7 +90,8 @@ public final class FakeDownloads: EngineDownloads, @unchecked Sendable {
     }
 }
 
-/// Fake extensions: seeded with `simulateInstalled`; `install` adds a placeholder entry.
+/// Fake extensions: seeded with `simulateInstalled`; `install` and `loadUnpacked` add a placeholder
+/// entry; `runAction` on an extension with a popup returns a `FakeExtensionPopup`.
 // @unchecked: every mutable stored property is read and written only under `lock` (`Mutex` needs macOS 15).
 public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
     private let lock = NSLock()
@@ -98,11 +99,14 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
     private var tabProfiles: [EngineTabID: Profile.ID] = [:]
     private var actionLog: [String] = []
     private var broadcasters: [Profile.ID: AsyncBroadcaster<ExtensionEvent>] = [:]
+    private var openPopup: FakeExtensionPopup?
 
     public init() {}
 
     /// "<extension id>@<tab id>" for every action run. For tests.
     public var actionsRun: [String] { lock.withLock { actionLog } }
+    /// The popup `runAction` opened last, until it closes. For tests.
+    public var popup: FakeExtensionPopup? { lock.withLock { openPopup.flatMap { $0.isClosed ? nil : $0 } } }
 
     public func simulateInstalled(_ info: EngineExtensionInfo, profileID: Profile.ID) {
         let target: AsyncBroadcaster<ExtensionEvent> = lock.withLock {
@@ -110,6 +114,17 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
             return broadcaster(profileID)
         }
         target.yield(.changed)
+    }
+
+    /// An extension changed its action on a tab (`chrome.action.setBadgeText`…).
+    public func simulateActionUpdate(_ info: EngineExtensionInfo, profileID: Profile.ID, tabID: EngineTabID?) {
+        let target: AsyncBroadcaster<ExtensionEvent> = lock.withLock {
+            if let index = installedByProfile[profileID]?.firstIndex(where: { $0.id == info.id }) {
+                installedByProfile[profileID]?[index] = info
+            }
+            return broadcaster(profileID)
+        }
+        target.yield(.actionUpdated(extensionID: info.id, tabID: tabID))
     }
 
     /// FakeEngine tells this object which profile a tab belongs to.
@@ -128,12 +143,31 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
         }
     }
 
-    public func runAction(_ extensionID: String, on tabID: EngineTabID) async {
-        lock.withLock { actionLog.append("\(extensionID)@\(tabID)") }
+    @discardableResult
+    public func runAction(_ extensionID: String, on tabID: EngineTabID) async -> (any ExtensionPopup)? {
+        let (made, previous): (FakeExtensionPopup?, FakeExtensionPopup?) = lock.withLock {
+            actionLog.append("\(extensionID)@\(tabID)")
+            let previous = openPopup
+            openPopup = nil
+            guard let profile = tabProfiles[tabID],
+                  let info = installedByProfile[profile]?.first(where: { $0.id == extensionID }),
+                  info.isEnabled, info.hasPopup else { return (nil, previous) }
+            let popup = FakeExtensionPopup(extensionID: extensionID, tabID: tabID)
+            openPopup = popup
+            return (popup, previous)
+        }
+        previous?.simulateClose()
+        return made
     }
 
     public func install(webStoreID: String, profileID: Profile.ID) async throws {
         simulateInstalled(EngineExtensionInfo(id: webStoreID, name: webStoreID), profileID: profileID)
+    }
+
+    public func loadUnpacked(_ folder: URL, profileID: Profile.ID) async throws -> String {
+        let id = folder.lastPathComponent
+        simulateInstalled(EngineExtensionInfo(id: id, name: id, isUnpacked: true), profileID: profileID)
+        return id
     }
 
     public func setEnabled(_ enabled: Bool, extensionID: String, profileID: Profile.ID) async {
@@ -164,6 +198,70 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
         let made = AsyncBroadcaster<ExtensionEvent>()
         broadcasters[profileID] = made
         return made
+    }
+}
+
+/// A fake extension popup: the test drives its page with `simulateLoad`, `simulateResize` and
+/// `simulateClose` (the page calling `window.close()`); the host shows a placeholder.
+// @unchecked: every mutable stored property is read and written only under `lock` (`Mutex` needs macOS 15).
+public final class FakeExtensionPopup: ExtensionPopup, @unchecked Sendable {
+    public let extensionID: String
+    public let tabID: EngineTabID
+    private let lock = NSLock()
+    private var history: [ExtensionPopupEvent] = []
+    private var closed = false
+    private var focusCount = 0
+    private let broadcaster = AsyncBroadcaster<ExtensionPopupEvent>()
+
+    init(extensionID: String, tabID: EngineTabID) {
+        self.extensionID = extensionID
+        self.tabID = tabID
+    }
+
+    public var isClosed: Bool { lock.withLock { closed } }
+    /// Times the shell gave the page the keyboard.
+    public var focusRequests: Int { lock.withLock { focusCount } }
+
+    public func events() -> AsyncStream<ExtensionPopupEvent> {
+        lock.withLock {
+            let stream = broadcaster.subscribe(initial: history)
+            return stream
+        }
+    }
+
+    @MainActor public func attach(to host: any SurfaceHost) {
+        host.show(.placeholder(SurfacePlaceholder(title: extensionID, url: nil)))
+    }
+
+    @MainActor public func focus() {
+        lock.withLock { focusCount += 1 }
+    }
+
+    public func close() async { simulateClose() }
+
+    public func simulateLoad() { record(.loaded) }
+    public func simulateResize(width: Double, height: Double) { record(.resized(width: width, height: height)) }
+
+    public func simulateClose() {
+        let wasClosed: Bool = lock.withLock {
+            defer { closed = true }
+            if !closed {
+                history.append(.closed)
+                broadcaster.yield(.closed)
+            }
+            return closed
+        }
+        if !wasClosed { broadcaster.finish() }
+    }
+
+    private func record(_ event: ExtensionPopupEvent) {
+        lock.withLock {
+            guard !closed else { return }
+            // A later size replaces the earlier one in what new subscribers see.
+            if case .resized = event { history.removeAll { if case .resized = $0 { return true } else { return false } } }
+            history.append(event)
+            broadcaster.yield(event)
+        }
     }
 }
 

@@ -94,6 +94,7 @@ struct BrowserCommands: Commands {
         let model = focused ?? controller.appHost()
         ShellCommands(model: model, hasWindow: focused != nil)
         LibraryCommands(model: model, hasWindow: focused != nil)
+        ExtensionCommands(model: model, hasWindow: focused != nil)
     }
 }
 
