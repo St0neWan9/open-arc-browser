@@ -512,6 +512,72 @@ public enum Metrics {
         public static let toggleRowPitch: Double = 37
     }
 
+    // MARK: Sidebar drag image
+
+    /// The lifted copy of a sidebar row that follows the pointer while it is dragged, and the
+    /// shapes it takes over the upper sidebar. [06 §15.1, §15.4, §15.5] and [04 §拖动图像(E17)];
+    /// design-tokens.json `Metrics.SidebarDrag`. Arc draws it in a window above everything, so it
+    /// shows over the web panel and outside the window too (observed).
+    public enum SidebarDrag {
+        /// Full-size image: the row's size. [06 §15.1] observed (≈ 258 × 36; the row fill is
+        /// 257 × 35.5).
+        public static let rowImageSize = Size2D(width: 258, height: 36)
+        /// The image's left edge sits this far left of the row fill's left edge, so a press 90 pt
+        /// into the row is 91.5 pt into the image. [06 §15.1] observed.
+        public static let rowImageLeadingOutset: Double = 1.5
+        /// Corner radius of the full-size image, as the selected row. [06 §15.1] inferred (≈ 10).
+        public static let rowImageCornerRadius: Double = 10
+        /// Opacity of the full-size image (row text below shows through). [06 §15.1] inferred (≈ 0.85).
+        public static let rowImageOpacity: Double = 0.85
+        /// Soft shadow under the image: offset (0, 3), ≈ 10 pt blur, ≈ 9–13 pt below and ≈ 2 pt
+        /// above; at most ≈ 15 % darker on light themes, nearly invisible on dark ones.
+        /// [06 §15.1] observed (extent) / inferred (parameters). The SwiftUI radius and the two
+        /// opacities are our fit to that extent and darkening (inferred).
+        public static let shadowOffsetY: Double = 3
+        public static let shadowRadius: Double = 6
+        public static let shadowOpacityLight: Double = 0.28
+        public static let shadowOpacityDark: Double = 0.06
+        /// Room around the image for the shadow inside the drag image bitmap (ours).
+        public static let shadowMargin: Double = 16
+
+        /// Compact pill over the Space-name row, the address field and the window top: smaller
+        /// text, still icon + title + ✕, near-white and translucent. [06 §15.4] observed (≈ 186 × 26).
+        public static let pillSize = Size2D(width: 186, height: 26)
+        /// The pill's corners: a rounded rectangle, not a full capsule. B44 side-by-side PX
+        /// (lossless full-screen capture of Arc 1.170.0, edge fit ≈ 7 pt); inferred.
+        public static let pillCornerRadius: Double = 7
+        /// The pill's text and icon. [06 §15.4] observed "smaller text"; sizes inferred (scaled
+        /// with the height, 26 / 36).
+        public static let pillTitleSize: Double = 10.5
+        public static let pillIconSize: Double = 13
+        public static let pillAccessorySize: Double = 8
+        /// Insets of the pill content (scaled from the row: icon at 9, title gap 8). inferred.
+        public static let pillIconLeading: Double = 8
+        public static let pillTitleGap: Double = 6
+        public static let pillTrailing: Double = 8
+
+        /// Favorite-tile shape over Favorites: the favorite block's height, only the centered icon.
+        /// [06 §15.5] observed (≈ 126 × 47, radius ≈ 10–12).
+        public static let favoriteTileSize = Size2D(width: 126, height: 47)
+        public static let favoriteTileCornerRadius: Double = 11
+        /// Its fill: near white / light gray whatever the theme (lavender #F0F0F6, pink light
+        /// #F6E5EB, navy dark #B9BBC8 observed). The tile sits over the favorites block (window ×
+        /// 0.96), so it is modeled as white at this opacity over that fill: 0.66 in light (≤ 4/255
+        /// for lavender and pink), 0.48 in dark (≤ 3/255 for navy). [06 §15.5] observed samples;
+        /// rule inferred (B44 side-by-side check).
+        public static let favoriteTileWhiteOpacity: Double = 0.66
+        public static let favoriteTileWhiteOpacityDark: Double = 0.48
+
+        /// Split preview block on a row's middle band: about half the row (≈ 129 of 258 wide).
+        /// [06 §15.4] observed (E17, ≈ 129 × 37); E9 measured ≈ 105 of 250 on a narrower sidebar.
+        public static let splitPreviewWidthFraction: Double = 0.5
+        /// Dark themes: the split preview is the window lightened by this much white (navy dark
+        /// #7D7E98 → #B7B7C9 observed, ≤ 3/255). [06 §15.4] observed sample; rule inferred.
+        /// Light themes use the Space-name band color (lavender band #878CFF vs block #838BFE,
+        /// observed; rule inferred).
+        public static let darkSplitPreviewWhite: Double = 0.45
+    }
+
     // MARK: Icon opacity
 
     public enum IconOpacity {

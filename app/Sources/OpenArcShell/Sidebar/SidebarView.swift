@@ -72,7 +72,7 @@ public struct SidebarView: View {
 
             // Starts drags past the per-axis threshold and selects on press. [06 §15.1] observed.
             // Transparent to clicks (it only watches the mouse events).
-            SidebarDragSourceHost(viewModel: viewModel, items: dragSourceItems(snapshot, layout: layout))
+            SidebarDragSourceHost(viewModel: viewModel, items: dragSourceItems(snapshot, layout: layout), layout: layout)
                 .frame(width: layout.width, height: layout.windowSize.height)
                 .allowsHitTesting(false)
         }

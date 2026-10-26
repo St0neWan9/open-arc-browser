@@ -172,11 +172,12 @@ enum SidebarLocalTokens {
     /// Light themes: the spec only captured a dark theme; a dark ink line keeps contrast. inferred.
     static let dropIndicatorLightThemeRGB: UInt32 = 0x1C1C1E
 
-    /// Split preview block on a tab row: light gray-violet (≈ #94939F), as tall as the row
-    /// highlight, ≈ 105 of the row's ≈ 250 pt, on the pointer's side; the row content moves to the
-    /// other side. [06 §15.2] observed.
+    /// Split preview block on a tab row: as tall as the row highlight, on the pointer's side; the
+    /// row content moves to the other side. [06 §15.2] observed. Its color follows the theme
+    /// (`ThemePalette.splitPreviewFill`) and its width is about half the row
+    /// (`Metrics.SidebarDrag.splitPreviewWidthFraction`) per E17 [06 §15.4]; this E9 dark-theme
+    /// gray (≈ #94939F) is only the default of `SidebarRowFrame`.
     static let splitPreviewRGB: UInt32 = 0x94939F
-    static let splitPreviewWidthFraction: CGFloat = 105.0 / 250.0
 
     /// Folder "drop into" highlight: a light gray-violet rounded fill (≈ #9493A6), no stroke.
     /// [06 §15.3] observed.
@@ -190,8 +191,9 @@ enum SidebarLocalTokens {
     static let dockDropFillOpacity: Double = 0.5
 
 
-    /// Drag image: the spec sees no row snapshot following the pointer inside the window
-    /// [06 §15.1] observed; outside the window its look is unknown. The image is transparent.
+    /// The AppKit drag session's own image: transparent, 1 pt. The visible lifted row is drawn by
+    /// `SidebarDragImageController` above every window, so it can change shape while held
+    /// ([06 §15.1] E17 observed). Ours.
     static let dragImageSize: CGFloat = 1
 
     /// How long a dragged item must hover over a dock icon before the sidebar switches to that

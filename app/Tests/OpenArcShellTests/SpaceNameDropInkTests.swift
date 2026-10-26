@@ -7,6 +7,29 @@ import OpenArcDesign
 /// with a darker tone of the theme color, not a fixed blue, and the name keeps its dark theme ink.
 @MainActor
 final class SpaceNameDropBandTests: XCTestCase {
+    /// [06 §15.4] observed (E17): sidebar → band pairs on three themes. The rule
+    /// (`ThemeDerivation.dropTargetFill`) is inferred and works on the window color.
+    func testBandMatchesTheThreeE17Samples() {
+        let samples: [(window: UInt32, band: UInt32, dark: Bool)] = [
+            (0xDFE0FA, 0x878CFF, false), // lavender (light)
+            (0xF2B0C9, 0xD26E92, false), // pink (light, most saturated)
+            (0x7D7E98, 0x6A6B85, true),  // navy (dark)
+        ]
+        for sample in samples {
+            let band = ThemeDerivation.dropTargetFill(window: RGBAColor(hex: sample.window), isDark: sample.dark)
+            let expected = RGBAColor(hex: sample.band)
+            XCTAssertEqual(band.red * 255, expected.red * 255, accuracy: 11, String(sample.band, radix: 16))
+            XCTAssertEqual(band.green * 255, expected.green * 255, accuracy: 11, String(sample.band, radix: 16))
+            XCTAssertEqual(band.blue * 255, expected.blue * 255, accuracy: 11, String(sample.band, radix: 16))
+        }
+        // The band is darker than the sidebar in every case (a darker tone, not gray).
+        for sample in samples {
+            let window = RGBAColor(hex: sample.window)
+            let band = ThemeDerivation.dropTargetFill(window: window, isDark: sample.dark)
+            XCTAssertLessThan(ThemeDerivation.luminance(band), ThemeDerivation.luminance(window))
+        }
+    }
+
     func testBandFollowsTheThemeAccent() {
         let lavender = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0xC9C6F0)]), appearance: .light)
         let magenta = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0xE204E6)]), appearance: .light)

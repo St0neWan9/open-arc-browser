@@ -67,10 +67,15 @@ public struct ThemePalette: Hashable, Sendable {
     /// ≈ #FDF1FA for the purple sample) or the theme hue darkened (dark, ≈ #5C4457). [07 §6] observed
     /// samples; OKLCH rule inferred.
     public var floatingPanelBackground: RGBAColor = RGBAColor(hex: 0xFFFFFF)
-    /// Sidebar drop target fill (the Space-name row while a tab is dragged over it): the theme
-    /// color, a bit darker and less saturated. [06 §15.4] observed 2026-10-26 (magenta theme
-    /// #E204E6 → band #B828BC, lavender theme → #7B80F5); OKLCH rule inferred from those samples.
-    public var dropTargetFill: RGBAColor = RGBAColor(hex: 0x7B80F5)
+    /// Sidebar drop target fill (the Space-name row while a tab is dragged over it): a darker tone
+    /// of the theme, not gray. [06 §15.4] observed (E17, sidebar → band: lavender #DFE0FA →
+    /// #878CFF, pink light #F2B0C9 → #D26E92, navy dark #7D7E98 → #6A6B85; magenta #E204E6 →
+    /// #B828BC). Rule `ThemeDerivation.dropTargetFill`, inferred.
+    public var dropTargetFill: RGBAColor = RGBAColor(hex: 0x878CFF)
+    /// Split preview block on a row's middle band while a tab is dragged. Follows the theme: light
+    /// themes a saturated tone (lavender #838BFE), dark themes a light gray (navy dark #B7B7C9).
+    /// [06 §15.2, §15.4] observed samples; rule `ThemeDerivation.splitPreviewFill` inferred.
+    public var splitPreviewFill: RGBAColor = RGBAColor(hex: 0x838BFE)
     /// Ink on floating panels, used with opacities: black in light, white in dark.
     /// [04 §dark mode] observed; exact values inferred.
     public var floatingPanelInk: RGBAColor = RGBAColor(hex: 0x000000)
@@ -263,11 +268,37 @@ public enum ThemeDerivation {
     public static let floatingPanelChromaFactor: Double = 0.2
     public static let darkFloatingPanelLightness: Double = 0.42
     public static let darkFloatingPanelChromaFactor: Double = 0.5
-    /// Drop target fill = OKLCH(theme L × factor, theme chroma × factor, theme hue). [06 §15.4]
-    /// fitted to the magenta sample (L 0.644 → 0.567, chroma 0.296 → 0.235); inferred. Dark: unknown,
-    /// the same rule is used.
-    public static let dropTargetLightnessFactor: Double = 0.88
-    public static let dropTargetChromaFactor: Double = 0.8
+    /// Drop target fill (Space-name band), derived from the window color in OKLCH, hue kept.
+    /// Light: L = min(window L × 0.80, 0.685), chroma = max(window chroma, min(0.155, window
+    /// chroma × 5)), i.e. pale windows get a saturated band. Dark: L × 0.893, chroma × 1.05.
+    /// [06 §15.4] fitted to the E17 pairs (lavender, pink light, navy dark) and the magenta
+    /// sample: ≤ 10/255 per channel (dark ≤ 1/255). inferred.
+    public static let dropTargetLightnessFactor: Double = 0.80
+    public static let dropTargetMaxLightness: Double = 0.685
+    public static let dropTargetChromaBoost: Double = 5
+    public static let dropTargetMaxBoostedChroma: Double = 0.155
+    public static let darkDropTargetLightnessFactor: Double = 0.893
+    public static let darkDropTargetChromaFactor: Double = 1.05
+
+    /// The Space-name band color for a window color. [06 §15.4] inferred (see the factors above).
+    public static func dropTargetFill(window: RGBAColor, isDark: Bool) -> RGBAColor {
+        let lch = OKLCH(window)
+        if isDark {
+            return OKLCH(lightness: lch.lightness * darkDropTargetLightnessFactor,
+                         chroma: lch.chroma * darkDropTargetChromaFactor, hue: lch.hue).rgb(alpha: 1)
+        }
+        return OKLCH(lightness: min(lch.lightness * dropTargetLightnessFactor, dropTargetMaxLightness),
+                     chroma: max(lch.chroma, min(dropTargetMaxBoostedChroma, lch.chroma * dropTargetChromaBoost)),
+                     hue: lch.hue).rgb(alpha: 1)
+    }
+
+    /// Split preview block: light = the Space-name band color (lavender block #838BFE vs band
+    /// #878CFF); dark = window + 45 % white (navy dark #7D7E98 → #B7B7C9, ≤ 3/255).
+    /// [06 §15.4] observed samples; rule inferred.
+    public static func splitPreviewFill(window: RGBAColor, isDark: Bool) -> RGBAColor {
+        isDark ? overlayWhite(window, amount: Metrics.SidebarDrag.darkSplitPreviewWhite)
+            : dropTargetFill(window: window, isDark: false)
+    }
 
     /// Base color when a space has no theme: "default light neutral theme" [06 §1] observed;
     /// the exact value is unknown.
@@ -423,10 +454,8 @@ public enum ThemeDerivation {
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
         palette.webPanelBackground = contentBackground(theme, appearance: appearance)
         palette.selectedTabText = rowText
-        let themeLCH = OKLCH(theme)
-        palette.dropTargetFill = OKLCH(lightness: themeLCH.lightness * dropTargetLightnessFactor,
-                                       chroma: themeLCH.chroma * dropTargetChromaFactor,
-                                       hue: themeLCH.hue).rgb(alpha: 1)
+        palette.dropTargetFill = dropTargetFill(window: window, isDark: isDark)
+        palette.splitPreviewFill = splitPreviewFill(window: window, isDark: isDark)
         palette.floatingPanelBackground = isDark
             ? tone(of: theme, lightness: darkFloatingPanelLightness, chromaFactor: darkFloatingPanelChromaFactor)
             : tone(of: theme, lightness: floatingPanelLightness, chromaFactor: floatingPanelChromaFactor)
