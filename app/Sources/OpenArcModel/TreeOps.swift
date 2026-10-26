@@ -520,13 +520,16 @@ public enum TreeOps {
 
     /// Adds `newTabID` as a pane next to `existingTabID`. If the existing tab is not in a split
     /// yet, a new layout with id `layoutID` is created (06 §5: current tab left, new tab right,
-    /// observed). Both tabs must be live and in the same space.
+    /// observed). Both tabs must be live and in the same space. `side` puts the new pane before
+    /// (`.leading`: left or top) or after (`.trailing`: right or bottom) the existing one; the web
+    /// toolbar's split menu offers all four (06 §17.3 observed: Add Right / Left / Top / Bottom Split).
     public static func addSplitPane(
         _ state: WorkspaceState,
         layoutID: UUID,
         existingTabID: UUID,
         newTabID: UUID,
         axis: SplitAxis = .horizontal,
+        side: SplitSide = .trailing,
         now: Date
     ) throws -> WorkspaceState {
         var s = state
@@ -536,14 +539,12 @@ public enum TreeOps {
         if let other = newTab.location.spaceID, other != spaceID { throw TreeError.spaceMismatch }
         if let layout = s.splits.values.first(where: { !$0.meta.isTombstone && $0.root.tabIDs.contains(existingTabID) }) {
             var updated = layout
-            updated.root = layout.root.inserting(newTabID, after: existingTabID, axis: axis)
+            updated.root = layout.root.inserting(newTabID, beside: existingTabID, side: side, axis: axis)
             updated.meta.stamp([SplitLayout.FieldGroup.layout], at: now)
             s.splits[layout.id] = updated
         } else {
-            let root = SplitNode.split(axis: axis, children: [
-                SplitChild(node: .pane(tabID: existingTabID), fraction: 0.5),
-                SplitChild(node: .pane(tabID: newTabID), fraction: 0.5),
-            ])
+            let panes = side == .leading ? [newTabID, existingTabID] : [existingTabID, newTabID]
+            let root = SplitNode.split(axis: axis, children: panes.map { SplitChild(node: .pane(tabID: $0), fraction: 0.5) })
             s.splits[layoutID] = SplitLayout(id: layoutID, spaceID: spaceID, root: root, now: now)
         }
         return s

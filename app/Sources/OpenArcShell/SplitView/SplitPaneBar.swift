@@ -9,6 +9,9 @@ import OpenArcDesign
 //   [06 §5]  observed: every pane has its own top bar with back, forward, a centered "🔗 domain"
 //            pill and a close ✕ at the top right; the top bar of an inactive pane is fainter.
 //            Sizes and the dimming amount were not measured, so they are local tokens below.
+//   [06 §17.6] observed: the pane bar is the web toolbar strip (B43). The bar's buttons and domain
+//            group are drawn by `WebToolbarView` with `WebToolbarLayout`; this file keeps the
+//            bar / page split, the bar state and the pane actions.
 
 /// Local tokens of the pane top bar. None of these were measured.
 public enum SplitPaneBarTokens {

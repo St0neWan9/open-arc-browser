@@ -166,6 +166,9 @@ struct ShellCommands: Commands {
                 // ⌘S toggles the sidebar. [02 §tabs] observed 2026-10-25. Stop Loading has no key in [02].
                 Button(model.sidebarToggleTitle) { model.toggleSidebar() }
                     .keyboardShortcut("s", modifiers: .command)
+                // [01 §View] observed after Hide Sidebar; ⇧⌘D and the Hide Toolbar title [06 §17.1]
+                // observed. Global: every window follows. B43.
+                WebToolbarMenuItem(settings: model.webToolbar)
                 Button("Stop Loading") { model.sidebar.reloadOrStop() }
                     .disabled(model.sidebar.reloadMode != .stop)
                 Button("Refresh the Page") { model.sidebar.reloadOrStop() }
@@ -357,5 +360,16 @@ extension ShellModel {
         let request = fromWindow ? windowRequest(kind) : BrowserWindowRequest(kind: kind)
         controller.noteIssued(request)
         return request
+    }
+}
+
+/// View ▸ Show Toolbar / Hide Toolbar (⇧⌘D). Observes the shared settings so the title follows.
+/// [06 §17.1] observed. B43.
+struct WebToolbarMenuItem: View {
+    @ObservedObject var settings: WebToolbarSettings
+
+    var body: some View {
+        Button(settings.menuTitle) { settings.toggle() }
+            .keyboardShortcut("d", modifiers: [.shift, .command])
     }
 }

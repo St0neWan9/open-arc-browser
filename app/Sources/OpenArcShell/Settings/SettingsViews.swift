@@ -407,6 +407,10 @@ struct AdvancedPane: View {
                         Toggle(SettingsCatalog.control(id).label, isOn: Binding(
                             get: { model.restoresWindows }, set: { model.restoresWindows = $0 }
                         ))
+                    } else if id == "advanced.showFullURL" {
+                        // [03 §Advanced] observed, off by default; [06 §17.2] the toolbar shows the
+                        // address without its scheme. Live since B43; every window follows.
+                        WebToolbarFullURLToggle(settings: model.shell.webToolbar)
                     } else {
                         PendingToggle(id: id)
                     }
@@ -487,5 +491,14 @@ struct DeleteProfileSheet: View {
         .padding(38)
         .frame(width: 450)
         .accessibilityIdentifier("openarc.deleteProfile")
+    }
+}
+
+/// "Show full URL when Toolbar is enabled": the shared toolbar setting (B43).
+struct WebToolbarFullURLToggle: View {
+    @ObservedObject var settings: WebToolbarSettings
+
+    var body: some View {
+        Toggle(SettingsCatalog.control("advanced.showFullURL").label, isOn: $settings.showsFullURL)
     }
 }
