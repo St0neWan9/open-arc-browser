@@ -67,6 +67,10 @@ public struct ThemePalette: Hashable, Sendable {
     /// ≈ #FDF1FA for the purple sample) or the theme hue darkened (dark, ≈ #5C4457). [07 §6] observed
     /// samples; OKLCH rule inferred.
     public var floatingPanelBackground: RGBAColor = RGBAColor(hex: 0xFFFFFF)
+    /// Sidebar drop target fill (the Space-name row while a tab is dragged over it): the theme
+    /// color, a bit darker and less saturated. [06 §15.4] observed 2026-10-26 (magenta theme
+    /// #E204E6 → band #B828BC, lavender theme → #7B80F5); OKLCH rule inferred from those samples.
+    public var dropTargetFill: RGBAColor = RGBAColor(hex: 0x7B80F5)
     /// Ink on floating panels, used with opacities: black in light, white in dark.
     /// [04 §dark mode] observed; exact values inferred.
     public var floatingPanelInk: RGBAColor = RGBAColor(hex: 0x000000)
@@ -259,6 +263,11 @@ public enum ThemeDerivation {
     public static let floatingPanelChromaFactor: Double = 0.2
     public static let darkFloatingPanelLightness: Double = 0.42
     public static let darkFloatingPanelChromaFactor: Double = 0.5
+    /// Drop target fill = OKLCH(theme L × factor, theme chroma × factor, theme hue). [06 §15.4]
+    /// fitted to the magenta sample (L 0.644 → 0.567, chroma 0.296 → 0.235); inferred. Dark: unknown,
+    /// the same rule is used.
+    public static let dropTargetLightnessFactor: Double = 0.88
+    public static let dropTargetChromaFactor: Double = 0.8
 
     /// Base color when a space has no theme: "default light neutral theme" [06 §1] observed;
     /// the exact value is unknown.
@@ -414,6 +423,10 @@ public enum ThemeDerivation {
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
         palette.webPanelBackground = contentBackground(theme, appearance: appearance)
         palette.selectedTabText = rowText
+        let themeLCH = OKLCH(theme)
+        palette.dropTargetFill = OKLCH(lightness: themeLCH.lightness * dropTargetLightnessFactor,
+                                       chroma: themeLCH.chroma * dropTargetChromaFactor,
+                                       hue: themeLCH.hue).rgb(alpha: 1)
         palette.floatingPanelBackground = isDark
             ? tone(of: theme, lightness: darkFloatingPanelLightness, chromaFactor: darkFloatingPanelChromaFactor)
             : tone(of: theme, lightness: floatingPanelLightness, chromaFactor: floatingPanelChromaFactor)

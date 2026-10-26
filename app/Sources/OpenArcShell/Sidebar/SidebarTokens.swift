@@ -189,14 +189,6 @@ enum SidebarLocalTokens {
     /// Opacity of that fill on a dock dot under a drag. unknown.
     static let dockDropFillOpacity: Double = 0.5
 
-    /// Space-name row as a drop target: a full-width saturated blue band (≈ #242CAA), not the
-    /// Space's theme color. [06 §15.4] observed.
-    static let spaceNameDropRGB: UInt32 = 0x242CAA
-
-    /// Name and icon ink on that band: white, so the name stays readable on the blue band in
-    /// every theme (user-reported 2026-10-26: dark ink vanished on it). inferred ([06 §15.4]
-    /// records the band, not its text color).
-    static let spaceNameDropInkRGB: UInt32 = 0xFFFFFF
 
     /// Drag image: the spec sees no row snapshot following the pointer inside the window
     /// [06 §15.1] observed; outside the window its look is unknown. The image is transparent.
