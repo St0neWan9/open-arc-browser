@@ -4,7 +4,8 @@
 # Usage (from anywhere):
 #   scripts/make-app.sh [--dev] [--version 0.1.0] [--build N] [--universal] [--scratch-path DIR]
 #                       [--out-dir DIR]
-#                       [--sign-identity SHA1 --keychain PATH [--keychain-password-file FILE]]
+#                       [--sign-identity SHA1 --keychain PATH [--keychain-password-file FILE]
+#                        [--provisioning-profile FILE]]
 #
 #   --dev           development build (plan B37): bundle id org.openarc.browser.dev, name
 #                   "Open Arc Dev", output build/Open Arc Dev.app. The app derives everything
@@ -40,6 +41,19 @@
 #         --keychain ~/projects/open-arc-browser-signing/open-arc-signing.keychain-db
 #     scripts/notarize.sh "build/Open Arc.app"
 #
+# iCloud (plan D4, opt-in, Developer ID mode only):
+#   --provisioning-profile  Developer ID provisioning profile of this build's App ID
+#                    (org.openarc.browser, or org.openarc.browser.dev with --dev) with iCloud
+#                    (CloudKit) and container iCloud.org.openarc.browser. It is embedded as
+#                    Contents/embedded.provisionprofile, and the app (not the helpers) is signed
+#                    with com.apple.application-identifier, com.apple.developer.team-identifier and
+#                    the iCloud keys (container, services CloudKit, environment Production). These
+#                    are restricted entitlements: without a matching embedded profile AMFI kills
+#                    the app at launch, so the script checks the profile first (team, App ID,
+#                    signing certificate, expiry, every added entitlement allowed). Without the
+#                    option the app has no iCloud entitlement and sync reports "not configured";
+#                    the ad-hoc build never gets it.
+#
 # Steps: release build of the OpenArcApp product, assemble build/Open Arc.app
 # (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns,
 # PkgInfo, Frameworks/Sparkle.framework with an @executable_path/../Frameworks rpath,
@@ -70,6 +84,8 @@ out_dir="$repo_root/build"
 sign_identity=""
 keychain=""
 keychain_password_file=""
+provisioning_profile=""
+icloud_container="iCloud.org.openarc.browser"   # CloudKitSyncStore.Configuration default
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -82,6 +98,7 @@ while [[ $# -gt 0 ]]; do
         --sign-identity) sign_identity="$2"; shift 2 ;;
         --keychain) keychain="$2"; shift 2 ;;
         --keychain-password-file) keychain_password_file="$2"; shift 2 ;;
+        --provisioning-profile) provisioning_profile="$2"; shift 2 ;;
         -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -99,8 +116,11 @@ if [[ -n "$sign_identity" ]]; then
         | awk -v h="$(tr a-f A-F <<<"$sign_identity")" '/^SHA-1 hash:/ {keep = ($3 == h)} keep' \
         | openssl x509 -noout -subject -nameopt multiline | awk -F' = ' '/organizationalUnitName/ {print $2; exit}')"
     [[ -n "$team_id" ]] || { echo "cannot read the Team ID of $sign_identity" >&2; exit 2; }
-elif [[ -n "$keychain" || -n "$keychain_password_file" ]]; then
-    echo "--keychain and --keychain-password-file need --sign-identity" >&2; exit 2
+elif [[ -n "$keychain" || -n "$keychain_password_file" || -n "$provisioning_profile" ]]; then
+    echo "--keychain, --keychain-password-file and --provisioning-profile need --sign-identity" >&2; exit 2
+fi
+if [[ -n "$provisioning_profile" ]]; then
+    [[ -f "$provisioning_profile" ]] || { echo "provisioning profile not found: $provisioning_profile" >&2; exit 2; }
 fi
 # shellcheck source=scripts/signing-keychain.sh
 source "$repo_root/scripts/signing-keychain.sh"
@@ -113,6 +133,39 @@ if [[ $dev -eq 1 ]]; then
 else
     bundle_id="$release_bundle_id"
     app_name="Open Arc"        # display name (Decision Q5)
+fi
+
+# plan D4: check the provisioning profile before building, so a wrong profile fails fast instead
+# of producing an app that AMFI kills at launch.
+if [[ -n "$provisioning_profile" ]]; then
+    profile_plist="$(mktemp)"
+    security cms -D -i "$provisioning_profile" >"$profile_plist" 2>/dev/null \
+        || { rm -f "$profile_plist"; echo "cannot decode provisioning profile $provisioning_profile" >&2; exit 2; }
+    # profile_value <PlistBuddy path>: one value, or nothing when the key is missing.
+    profile_value() { /usr/libexec/PlistBuddy -c "Print $1" "$profile_plist" 2>/dev/null || true; }
+    profile_fail() { rm -f "$profile_plist"; echo "provisioning profile $provisioning_profile: $1" >&2; exit 2; }
+    [[ "$(profile_value :TeamIdentifier:0)" == "$team_id" ]] || profile_fail "not for team $team_id"
+    [[ "$(profile_value :Entitlements:com.apple.application-identifier)" == "$team_id.$bundle_id" ]] \
+        || profile_fail "not for App ID $team_id.$bundle_id"
+    [[ "$(plutil -extract ExpirationDate raw "$profile_plist")" > "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]] \
+        || profile_fail "expired"
+    profile_cert_found=0
+    profile_cert_count="$(plutil -extract DeveloperCertificates raw "$profile_plist")"
+    for ((i = 0; i < profile_cert_count; i++)); do
+        fingerprint="$(plutil -extract "DeveloperCertificates.$i" raw "$profile_plist" | base64 -D \
+            | openssl x509 -inform der -noout -fingerprint -sha1 | sed 's/^.*=//; s/://g')"
+        [[ "$fingerprint" == "$(tr a-f A-F <<<"$sign_identity")" ]] && profile_cert_found=1
+    done
+    [[ $profile_cert_found -eq 1 ]] || profile_fail "does not include the certificate $sign_identity"
+    profile_value :Entitlements:com.apple.developer.icloud-container-identifiers | grep -qx "[[:space:]]*$icloud_container" \
+        || profile_fail "does not allow the container $icloud_container"
+    profile_value :Entitlements:com.apple.developer.icloud-services | grep -Eqx '[[:space:]]*(CloudKit|\*)' \
+        || profile_fail "does not allow CloudKit"
+    # A single string or an array, depending on the profile type.
+    profile_value :Entitlements:com.apple.developer.icloud-container-environment | grep -Eq '(^|[[:space:]])Production$' \
+        || profile_fail "does not allow the Production CloudKit environment"
+    echo "provisioning profile: $(profile_value :Name) ($(profile_value :UUID)), expires $(plutil -extract ExpirationDate raw "$profile_plist")" >&2
+    rm -f "$profile_plist"
 fi
 mkdir -p "$out_dir"
 out_dir="$(cd "$out_dir" && pwd)"
@@ -321,7 +374,22 @@ if [[ -n "$openarc_core" ]]; then
 fi
 
 echo "==> signing the app ($sign_mode, hardened runtime)" >&2
-sign --entitlements "$(entitlements OpenArc.entitlements)" "$app"
+app_entitlements="$(entitlements OpenArc.entitlements)"
+if [[ -n "$provisioning_profile" ]]; then
+    # plan D4: iCloud for CKSyncEngine. Only the app (the browser process) talks to CloudKit; the
+    # helpers keep their own minimal entitlements. app_entitlements is a copy in Developer ID mode.
+    cp "$provisioning_profile" "$app/Contents/embedded.provisionprofile"
+    pb() { /usr/libexec/PlistBuddy -c "$1" "$app_entitlements" >/dev/null; }
+    pb "Add :com.apple.application-identifier string $team_id.$bundle_id"
+    pb "Add :com.apple.developer.team-identifier string $team_id"
+    pb "Add :com.apple.developer.icloud-container-identifiers array"
+    pb "Add :com.apple.developer.icloud-container-identifiers:0 string $icloud_container"
+    pb "Add :com.apple.developer.icloud-services array"
+    pb "Add :com.apple.developer.icloud-services:0 string CloudKit"
+    # Developer ID apps may only use the Production CloudKit environment.
+    pb "Add :com.apple.developer.icloud-container-environment string Production"
+fi
+sign --entitlements "$app_entitlements" "$app"
 
 echo "==> verifying" >&2
 codesign --verify --deep --strict --verbose=2 "$sparkle" >&2
@@ -353,6 +421,17 @@ if [[ -n "$sign_identity" ]]; then
         fi
     done
     echo "signed: Developer ID, team $team_id, every Mach-O image timestamped, library validation on" >&2
+    if [[ -n "$provisioning_profile" ]]; then
+        signed_entitlements="$(codesign -d --entitlements - --xml "$app" 2>/dev/null)"
+        for key in com.apple.application-identifier com.apple.developer.icloud-container-identifiers \
+                   com.apple.developer.icloud-services com.apple.developer.icloud-container-environment; do
+            grep -q "<key>$key</key>" <<<"$signed_entitlements" \
+                || { echo "missing entitlement $key in $app" >&2; exit 1; }
+        done
+        cmp -s "$provisioning_profile" "$app/Contents/embedded.provisionprofile" \
+            || { echo "embedded.provisionprofile differs from $provisioning_profile" >&2; exit 1; }
+        echo "iCloud: container $icloud_container (CloudKit, Production), profile embedded" >&2
+    fi
 fi
 plutil -lint "$app/Contents/Info.plist" >&2
 [[ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == "$bundle_id" ]] \
