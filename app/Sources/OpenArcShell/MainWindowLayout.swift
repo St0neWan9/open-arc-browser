@@ -1,0 +1,82 @@
+import CoreGraphics
+import OpenArcDesign
+
+/// Pure frame computation for the main window (top-left origin, points). Views read frames from
+/// here so layout can be unit-tested against the measured tokens without rendering.
+public struct MainWindowLayout: Equatable, Sendable {
+    public var windowSize: CGSize
+    public var isSidebarVisible: Bool
+
+    public init(windowSize: CGSize, isSidebarVisible: Bool = true) {
+        self.windowSize = windowSize
+        self.isSidebarVisible = isSidebarVisible
+    }
+
+    /// Sidebar area (includes its right-hand gap). [07 §1] observed
+    public var sidebarFrame: CGRect {
+        guard isSidebarVisible else { return .zero }
+        return CGRect(x: 0, y: 0, width: min(Metrics.Sidebar.width, windowSize.width), height: windowSize.height)
+    }
+
+    /// Web panel: 10 pt from the top, right and bottom edges, flush with the sidebar on the left.
+    /// [07 §1] observed (276, 10, 1634 × 965 in a 1920 × 985 window).
+    /// With the sidebar hidden, a ≈ 5 pt themed border on all four sides. [06 §14] observed.
+    public var webPanelFrame: CGRect {
+        guard isSidebarVisible else {
+            let inset = SidebarPeekTokens.hiddenWebPanelInset
+            return CGRect(x: inset, y: inset, width: max(0, windowSize.width - 2 * inset), height: max(0, windowSize.height - 2 * inset))
+        }
+        let leading = sidebarFrame.maxX + Metrics.WebPanel.insetLeading
+        let width = windowSize.width - leading - Metrics.WebPanel.insetTrailing
+        let height = windowSize.height - Metrics.WebPanel.insetTop - Metrics.WebPanel.insetBottom
+        return CGRect(x: leading, y: Metrics.WebPanel.insetTop, width: max(0, width), height: max(0, height))
+    }
+
+    /// Address/search field inside the sidebar: x 8–268, y 46–82. [07 §4] observed
+    public var addressFieldFrame: CGRect {
+        let inset = Metrics.Sidebar.addressFieldHorizontalInset
+        return CGRect(
+            x: inset,
+            y: Metrics.Sidebar.addressFieldTop,
+            width: sidebarContentWidth - 2 * inset,
+            height: Metrics.Sidebar.addressFieldHeight
+        )
+    }
+
+    /// Favorites blocks: x 8–268, y 90–137. [07 §4] observed
+    public var favoritesFrame: CGRect {
+        let inset = Metrics.Sidebar.addressFieldHorizontalInset
+        return CGRect(
+            x: inset,
+            y: Metrics.Sidebar.favoritesTop,
+            width: sidebarContentWidth - 2 * inset,
+            height: Metrics.Sidebar.favoritesHeight
+        )
+    }
+
+    /// Command bar panel: horizontally centered; the top stays where the five-result panel puts it
+    /// (5 pt above the window's vertical center, y 324 in a 985 pt window) and the panel grows or
+    /// shrinks downward with the results. [07 §5] observed position; top alignment inferred.
+    public func commandBarFrame(resultCount: Int = 5) -> CGRect {
+        let c = Metrics.CommandBar.self
+        let rows = max(0, resultCount)
+        let height = rows == 0
+            ? c.inputRowHeight
+            : c.inputRowHeight + c.resultsTopGap + Double(rows) * c.resultRowPitch + c.bottomPadding
+        let width = min(c.width, windowSize.width)
+        let x = (windowSize.width - width) / 2
+        return CGRect(x: x, y: Self.commandBarTop(containerHeight: windowSize.height), width: width, height: height)
+    }
+
+    /// Top edge of the window command bar in a container of this height. [07 §5] observed (324 in 985).
+    public static func commandBarTop(containerHeight: Double) -> Double {
+        let c = Metrics.CommandBar.self
+        return max(0, (containerHeight - c.heightWithFiveResults) / 2 - c.centerOffsetAboveMiddle)
+    }
+
+    /// Width of the sidebar content area: the whole sidebar; the URL box, favorites and selected
+    /// rows are inset 8 on both sides (x 8–268 of 276). [07 §1] observed.
+    var sidebarContentWidth: Double {
+        Metrics.Sidebar.width
+    }
+}

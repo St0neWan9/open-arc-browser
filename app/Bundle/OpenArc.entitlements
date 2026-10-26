@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for "Open Arc.app", used by scripts/make-app.sh (ad-hoc signing,
+  hardened runtime).
+
+  Intentionally minimal for now:
+  - No App Sandbox (com.apple.security.app-sandbox). The Chromium engine (task C10)
+    runs its own multi-process sandbox and ships GPU / renderer / plugin helper apps.
+    Their entitlements and the main app's sandbox decision belong to C10, so the
+    sandbox is decided there instead of being added now and removed later.
+  - No hardened-runtime exceptions (JIT, unsigned executable memory, library
+    validation). The current build uses FakeEngine and needs none. Chromium's
+    helpers will need some of them; C10 adds them.
+  - No device entitlements yet. When web permissions land, the hardened runtime
+    needs com.apple.security.device.camera, com.apple.security.device.audio-input
+    and com.apple.security.personal-information.location alongside the usage
+    strings in Info.plist.
+
+  iCloud (task D4): CKSyncEngine needs these keys, and they only work with a real
+  team signature plus a provisioning profile (not with ad-hoc signing):
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array><string>iCloud.org.openarc.browser</string></array>
+    <key>com.apple.developer.icloud-services</key>
+    <array><string>CloudKit</string></array>
+  The container id matches CloudKitSyncStore's default containerIdentifier.
+-->
+<plist version="1.0">
+<dict>
+  <!--
+    Ad-hoc signatures carry no Team ID, so with the hardened runtime the default
+    library validation refuses to load the embedded Sparkle.framework ("different
+    Team IDs"; found when launching the bundle in task B19). Turn library validation
+    off until D6 signs the app and its frameworks with one Developer ID team; then
+    remove this key.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

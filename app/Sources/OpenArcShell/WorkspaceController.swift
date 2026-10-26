@@ -1,0 +1,924 @@
+import Foundation
+import Combine
+import OpenArcModel
+import OpenArcEngine
+import OpenArcDesign
+import OpenArcSyncAPI
+import OpenArcPersistence
+
+// App-level owner of the workspace (plan B14). One instance per app; every browser window reads
+// and mutates the same workspace through it.
+//
+// Owns:
+// - the `WorkspaceState` value and every mutation of it (through `TreeOps`, via `mutate`/`commit`);
+// - persistence (`WorkspaceStore.submit`, flush on termination, `ui-state.json`) and forwarding
+//   store changes to the sync store;
+// - the registry of live engine tabs (one engine tab per model tab, shared by all windows);
+// - the auto-archive scheduler;
+// - the list of open browser windows (for the per-window UI state and the one-window-per-tab rule).
+//
+// Per-window state (selected space and tab, sidebar visibility, command bar, Library mode, split
+// focus, site controls) lives in `ShellModel` and its `SidebarViewModel`.
+
+/// Values the Library keeps across launches for the whole app (B22): the Media intro dismissal
+/// and the last section shown. App-level, not per window (inferred).
+struct LibraryUIFlags: Equatable {
+    var mediaIntroDismissed = false
+    var lastSection: String?
+}
+
+/// A weak reference, for registries that must not keep windows alive.
+private struct WeakRef<Object: AnyObject> {
+    weak var object: Object?
+}
+
+@MainActor
+public final class WorkspaceController: ObservableObject {
+    public let dependencies: AppDependencies
+
+    /// The workspace every window shows. Changed only through `mutate`, `commit` and `replaceWorkspace`.
+    @Published public private(set) var workspace: WorkspaceState
+    /// Live engine state per tab id (only for tabs that have an engine tab).
+    @Published private(set) var liveStates: [UUID: SidebarTabLiveState] = [:]
+    /// Library flags shared by every window (B22).
+    @Published private(set) var libraryFlags = LibraryUIFlags()
+    /// The system's light/dark setting, for themes set to Automatic (B21). Follows
+    /// `AppDependencies.systemAppearance`.
+    @Published public private(set) var systemAppearance: ResolvedAppearance
+
+    let now: () -> Date
+    let makeID: () -> UUID
+    /// An incognito window's controller: an in-memory workspace, no persistence, no sync, and
+    /// engine tabs created off the record. Discarded with its window. inferred (B14).
+    public let isOffTheRecord: Bool
+    /// The app's controller, for an incognito one (window opening goes through it).
+    private weak var parent: WorkspaceController?
+    /// Opens a browser window. Installed by the scene's views, where SwiftUI's `openWindow` is
+    /// available; nil in tests (callers record the request as unhandled). An incognito
+    /// controller uses its parent's.
+    public var openBrowserWindow: ((BrowserWindowRequest) -> Void)? {
+        get { parent?.openBrowserWindow ?? ownWindowOpener }
+        set { ownWindowOpener = newValue }
+    }
+    private var ownWindowOpener: ((BrowserWindowRequest) -> Void)?
+    /// Where links and files from other apps open (D2). Reads the Links setting for Little Arc
+    /// (B24). Air Traffic Control (E5) replaces it.
+    public lazy var externalLinkRouter: any ExternalLinkRouting = DefaultExternalLinkRouter(preferences: dependencies.preferences)
+    /// External URLs waiting for a browser window to register (none was open). D2.
+    var pendingExternalURLs: [URL] = []
+    /// Opens a Little Arc window with the given window id. Installed by the scene's views, where
+    /// SwiftUI's `openWindow` is available; nil in tests. B24.
+    public var openLittleArcWindow: ((UUID) -> Void)?
+    /// Pages that new Little Arc windows open with, by window id (B24). See `takeLittleArcLaunchURL`.
+    var littleArcLaunchURLs: [UUID: URL] = [:]
+    /// Default-browser status and action, shared by Settings and the app menu (D2).
+    public private(set) lazy var defaultBrowser = DefaultBrowserModel(service: dependencies.defaultBrowser)
+    /// Update checks and the automatic-update settings, shared by the app menu and Settings (D7).
+    /// Creating it starts the checker, so it is made on first use.
+    public private(set) lazy var updates = UpdatesModel(checker: dependencies.updateChecker, preferences: dependencies.preferences)
+
+    private var liveTabs: [UUID: any BrowserTab] = [:]
+    private var eventTasks: [UUID: Task<Void, Never>] = [:]
+    /// Dialog requests of every live tab of this controller, queued per tab (C7b).
+    public let dialogs = DialogCenter()
+    /// State of page-initiated tabs and engine-event observation (C7b, WorkspaceController+PageRequests.swift).
+    let pageRequests = PageRequestState()
+    private var engineWork: [Task<Void, Never>] = []
+    /// Last queued command per engine tab: the next one waits for it, so commands reach each
+    /// engine tab in the order they were issued (`enqueueTabCommand`).
+    private var tabCommandTails: [EngineTabID: Task<Void, Never>] = [:]
+    /// Color scheme last sent to each live tab (B21, WorkspaceController+Appearance.swift).
+    var sentColorSchemes: [UUID: WebColorScheme] = [:]
+    private var systemAppearanceObservation: AnyCancellable?
+    /// Fires after anything that may change a page's color scheme (B21). For pages that have no
+    /// model tab (Little Arc).
+    let colorSchemeInputsChanged = PassthroughSubject<Void, Never>()
+    /// Incognito controllers made from this one: they follow its View ▸ Appearance changes.
+    private var incognitoChildren: [WeakRef<WorkspaceController>] = []
+
+    /// Sidebars of every open window, in creation order.
+    private var sidebars: [WeakRef<SidebarViewModel>] = []
+    /// Browser windows whose state is saved in `ui-state.json`, in creation order.
+    private var windows: [WeakRef<ShellModel>] = []
+    /// The browser window that was used last (key window, or the last one created).
+    public private(set) weak var activeWindow: ShellModel?
+
+    /// Windows from the last session not yet reopened (consumed by `.restore` windows).
+    private var pendingRestores: [WindowUIState] = []
+    private var didRequestAdditionalRestores = false
+    private var launchNotice: LaunchNotice?
+    /// First-run onboarding is finished or skipped on this device (D9, own design). Saved in
+    /// `ui-state.json`; see `OnboardingLaunch` for the launch rule.
+    var onboardingCompleted = true
+    /// The first-run onboarding flow (D9).
+    public private(set) lazy var onboarding = OnboardingModel(controller: self)
+
+    private let autoArchiveTicker: any AutoArchiveTicker
+    private var autoArchiveScheduler: AutoArchiveScheduler?
+    /// Forwards store changes to the sync store and merges applied remote changes back in.
+    private var syncForwarding: Task<Void, Never>?
+    /// Starts, stops and observes the sync store (D5). Incognito controllers get one around
+    /// `DisabledSyncStore` with no database, so it never starts.
+    public private(set) lazy var sidebarSync = SidebarSyncController(
+        store: dependencies.sync,
+        database: dependencies.persistence.flatMap { $0.isReadOnly ? nil : $0 },
+        preferences: dependencies.preferences,
+        allRecordIDs: { [weak self] in self?.workspace.allRecordIDs ?? [] },
+        now: now
+    )
+    /// Flushes the store and the UI state and shuts the engine down on
+    /// `NSApplication.willTerminateNotification`.
+    private var terminationObserver: TerminationObserver?
+    private var isStopped = false
+    /// Set once the termination flush ran; later UI state saves are skipped.
+    private var isTerminating = false
+    /// The quit sequence (`prepareForTermination` or the `willTerminate` fallback) is running or
+    /// has run: neither runs twice.
+    private var isTerminationRunning = false
+    private(set) var isTerminationPrepared = false
+
+    /// - Parameters:
+    ///   - workspace: used when the persistence store has no usable file (first launch).
+    ///   - notificationCenter: where `willTerminate` is observed (tests pass their own).
+    public init(
+        dependencies: AppDependencies,
+        workspace: WorkspaceState,
+        now: @escaping () -> Date = Date.init,
+        makeID: @escaping () -> UUID = UUID.init,
+        notificationCenter: NotificationCenter = .default,
+        autoArchiveTicker: any AutoArchiveTicker = SystemAutoArchiveTicker()
+    ) {
+        self.dependencies = dependencies
+        self.now = now
+        self.makeID = makeID
+        self.autoArchiveTicker = autoArchiveTicker
+        self.isOffTheRecord = false
+        self.systemAppearance = dependencies.systemAppearance.current
+        // With a persistence store, a workspace read from disk replaces the caller's default. First
+        // launch, a recovered corrupt file or a refused file keep the default. [B2]
+        let persistence = dependencies.persistence
+        if let persistence, persistence.loadResult.outcome == .loaded {
+            self.workspace = persistence.loadResult.workspace
+        } else {
+            self.workspace = workspace
+        }
+        // Per-device UI state from the last quit (not for a read-only store: its workspace is not
+        // the one the ids refer to).
+        if let persistence, !persistence.isReadOnly, let saved = UIStateFile.load(from: persistence.directory) {
+            pendingRestores = saved.restorableWindows
+            libraryFlags = LibraryUIFlags(mediaIntroDismissed: saved.mediaIntroDismissed, lastSection: saved.lastLibrarySection)
+        }
+        onboardingCompleted = OnboardingLaunch.isCompleted(persistence: persistence)
+        if let persistence {
+            if persistence.loadResult.outcome != .loaded { persistence.submit(self.workspace) }
+            if persistence.isReadOnly {
+                launchNotice = .dataNotLoaded(persistence.loadResult.outcome)
+            } else {
+                syncForwarding = makeSyncForwarding(persistence, baseline: persistence.loadResult.workspace)
+            }
+        }
+        // Quit: flush the store, then shut the engine down (B25). Also without persistence, so
+        // the engine always gets its shutdown.
+        terminationObserver = TerminationObserver(center: notificationCenter) { [weak self] in
+            self?.flushForTermination()
+        }
+        // Profile settings from older per-device preferences, before the first auto-archive run. [A18]
+        migrateLegacyProfileSettings()
+        // New tabs the pages ask for (window.open, ⌘-click). C7b.
+        observeEngineEvents()
+        // "Sync Sidebar" decides whether the sync store starts. [03 §账号卡] observed toggle (D5).
+        sidebarSync.launch()
+        observeSystemAppearance()
+    }
+
+    /// An incognito window's controller: one off-the-record Space (dark theme, no favorites) in
+    /// memory only. Nothing reaches `WorkspaceStore` or the sync store: there is neither. The
+    /// profile id is the parent's current profile, so the engine can derive the off-the-record
+    /// context from it (inferred).
+    private init(incognitoOf parent: WorkspaceController) {
+        self.dependencies = AppDependencies(
+            engine: parent.dependencies.engine,
+            sync: DisabledSyncStore(),
+            persistence: nil,
+            preferences: parent.dependencies.preferences,
+            systemAppearance: parent.dependencies.systemAppearance
+        )
+        self.systemAppearance = parent.systemAppearance
+        self.now = parent.now
+        self.makeID = parent.makeID
+        self.autoArchiveTicker = parent.autoArchiveTicker
+        self.isOffTheRecord = true
+        self.parent = parent
+        let stamp = parent.now()
+        let profileID = parent.currentProfileID ?? parent.makeID()
+        let themeID = parent.makeID(), spaceID = parent.makeID()
+        var ws = TreeOps.createProfile(WorkspaceState(), id: profileID, name: IncognitoLocalTokens.profileName, now: stamp)
+        ws = TreeOps.createTheme(ws, id: themeID, style: ThemeStyle(appearance: IncognitoLocalTokens.themeAppearance, colors: [IncognitoLocalTokens.themeColor]), now: stamp)
+        do {
+            ws = try TreeOps.createSpace(
+                ws, id: spaceID, profileID: profileID, name: IncognitoLocalTokens.spaceName,
+                icon: IncognitoLocalTokens.spaceIcon, themeID: themeID, now: stamp
+            )
+        } catch {
+            assertionFailure("incognito workspace is invalid: \(error)")
+        }
+        self.workspace = ws
+        observeEngineEvents()
+        observeSystemAppearance()
+    }
+
+    /// A new controller for one incognito window. inferred (B14): [01 §File] observed the item.
+    public func makeIncognito() -> WorkspaceController {
+        let child = WorkspaceController(incognitoOf: self)
+        incognitoChildren.removeAll { $0.object == nil }
+        incognitoChildren.append(WeakRef(object: child))
+        return child
+    }
+
+    /// Live incognito controllers made from this one.
+    var liveIncognitoChildren: [WorkspaceController] {
+        incognitoChildren.removeAll { $0.object == nil }
+        return incognitoChildren.compactMap(\.object)
+    }
+
+    /// Follows the system light/dark setting: palettes of Automatic themes and the pages' color
+    /// scheme update at once. [04 §dark mode] observed: automatic follows the system appearance.
+    private func observeSystemAppearance() {
+        systemAppearanceObservation = dependencies.systemAppearance.observe { [weak self] appearance in
+            guard let self, self.systemAppearance != appearance else { return }
+            self.systemAppearance = appearance
+            self.syncWebColorSchemes()
+        }
+    }
+
+    /// Cancels background work: the scheduler, sync forwarding, the termination observer and
+    /// engine observation. Call when the app (or a test's world) goes away. An incognito
+    /// controller also closes every engine tab it made: closing the window discards them.
+    public func stop() {
+        isStopped = true
+        autoArchiveScheduler?.stop()
+        autoArchiveScheduler = nil
+        syncForwarding?.cancel()
+        syncForwarding = nil
+        terminationObserver?.invalidate()
+        terminationObserver = nil
+        pageRequests.stop()
+        if isOffTheRecord { Array(liveTabs.keys).forEach(closeLive) }
+        eventTasks.values.forEach { $0.cancel() }
+        eventTasks.removeAll()
+        systemAppearanceObservation = nil
+    }
+
+    // MARK: - Workspace mutations
+
+    /// Applies `body` to the workspace and commits the result. Throws what `body` throws; the
+    /// workspace is unchanged then. `origin` is the sidebar that made the change: it handles its own
+    /// selection, every other window repairs its selection.
+    func mutate(origin: SidebarViewModel?, _ body: (WorkspaceState) throws -> WorkspaceState) throws {
+        let new = try body(workspace)
+        commit(new, origin: origin)
+    }
+
+    /// Stores a new workspace value made by the app: persists it and lets every window except
+    /// `origin` repair its selection.
+    func commit(_ new: WorkspaceState, origin: SidebarViewModel?) {
+        let old = workspace
+        workspace = new
+        // Only the records this change touched: a remote batch the store applied after `old` was
+        // read (and not yet merged here, see `mergeRemote`) must not be reverted or purged. [A19]
+        dependencies.persistence?.submit(changesFrom: old, to: new)
+        for sidebar in liveSidebars where sidebar !== origin { sidebar.workspaceDidChange() }
+        syncWebColorSchemes()
+    }
+
+    /// Replaces the workspace without persisting it (a value that is already stored elsewhere,
+    /// e.g. merged from sync, or set up by a test). Every window repairs its selection.
+    public func replaceWorkspace(_ new: WorkspaceState) {
+        workspace = new
+        for sidebar in liveSidebars { sidebar.workspaceDidChange() }
+        syncWebColorSchemes()
+    }
+
+    // MARK: - Profiles
+
+    /// The profile the app-level surfaces (Settings) act on: the active window's, else Default.
+    public var currentProfileID: UUID? {
+        activeWindow?.sidebar.currentProfileID ?? workspace.defaultProfileID
+    }
+
+    /// New Profile… Returns the new profile id. [01, 05 §context menus] observed menu items.
+    @discardableResult
+    public func createProfile(name: String) -> UUID {
+        let id = makeID()
+        commit(TreeOps.createProfile(workspace, id: id, name: name, now: now()), origin: nil)
+        return id
+    }
+
+    /// Replaces a profile's synced settings through `TreeOps.updateProfileSettings`.
+    /// [03 §Profiles] observed. Returns false if refused.
+    @discardableResult
+    public func updateProfileSettings(_ profileID: UUID, _ settings: ProfileSettings) -> Bool {
+        (try? mutate(origin: nil) { try TreeOps.updateProfileSettings($0, id: profileID, settings: settings, now: now()) }) != nil
+    }
+
+    /// Deletes a profile through `TreeOps.deleteProfile` (refused for the Default profile and while
+    /// Spaces use it). Archived favorites lose their live engine tabs. Returns false if refused.
+    @discardableResult
+    public func deleteProfile(_ profileID: UUID) -> Bool {
+        let favorites = workspace.favorites(profileID: profileID).map(\.id)
+        guard (try? mutate(origin: nil) { try TreeOps.deleteProfile($0, id: profileID, now: now()) }) != nil else { return false }
+        favorites.forEach(closeLive)
+        return true
+    }
+
+    /// One-time migration of the per-device values B12 stored in `AppPreferences` into the synced
+    /// `Profile.settings`. For each live profile with legacy keys, the stored values replace the
+    /// matching settings and the keys are removed, so it never runs twice. Skipped for a read-only
+    /// store: nothing would be saved, and the keys must survive until a build that can save runs.
+    func migrateLegacyProfileSettings() {
+        if dependencies.persistence?.isReadOnly == true { return }
+        let preferences = dependencies.preferences
+        for profile in workspace.liveProfilesOldestFirst where preferences.hasLegacyProfileSettings(for: profile.id) {
+            let legacy = preferences.legacyProfileSettings(for: profile.id)
+            var settings = profile.settings
+            if let engine = legacy.searchEngine { settings.searchEngine = engine }
+            if let lifetime = legacy.archiveLifetime { settings.todayLifetime = lifetime.interval }
+            if settings == profile.settings || updateProfileSettings(profile.id, settings) {
+                preferences.removeLegacyProfileSettings(for: profile.id)
+            }
+        }
+    }
+
+    // MARK: - Live engine tabs
+
+    func liveTab(for id: UUID) -> (any BrowserTab)? { liveTabs[id] }
+
+    /// Every live engine tab with its model tab id.
+    var liveTabEntries: [(id: UUID, tab: any BrowserTab)] { liveTabs.map { ($0.key, $0.value) } }
+
+    /// The model tab whose engine tab is `engineID`, if this controller owns it.
+    func modelTabID(forEngineTab engineID: EngineTabID) -> UUID? {
+        liveTabs.first { $0.value.id == engineID }?.key
+    }
+
+    func liveState(for id: UUID) -> SidebarTabLiveState? { liveStates[id] }
+
+    /// Forgets the find result shown for `id` (the find bar closed or its text was cleared; the
+    /// engine reports no result for a stopped search). B25.
+    func clearFindResult(_ id: UUID) {
+        guard liveStates[id]?.findResult != nil else { return }
+        liveStates[id]?.findResult = nil
+    }
+
+    /// Queues engine work (tab creation, navigation, closing) so tests can wait for it.
+    func enqueueEngineWork(_ work: @escaping @MainActor () async -> Void) {
+        engineWork.append(Task { await work() })
+    }
+
+    /// Queues a command for one engine tab. Commands for the same tab run one after another in the
+    /// order issued (View ▸ Developer ▸ items pressed in a row reach DevTools in that order); other
+    /// engine work and other tabs are not held up.
+    func enqueueTabCommand(_ tab: any BrowserTab, _ work: @escaping @MainActor (any BrowserTab) async -> Void) {
+        let previous = tabCommandTails[tab.id]
+        let task = Task { @MainActor in
+            await previous?.value
+            await work(tab)
+        }
+        tabCommandTails[tab.id] = task
+        engineWork.append(task)
+    }
+
+    /// Waits until queued engine work has finished. For tests.
+    func settleEngineWork() async {
+        while !engineWork.isEmpty {
+            let pending = engineWork
+            engineWork.removeAll()
+            for task in pending { await task.value }
+        }
+    }
+
+    /// Creates the engine tab for `id` if needed and starts observing it. The profile is the tab's
+    /// Space's profile (or the favorite's profile), else `fallbackProfileID`.
+    func ensureLive(_ id: UUID, fallbackProfileID: UUID?) async throws {
+        guard liveTabs[id] == nil, !pageRequests.adopting.contains(id), let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
+        let profileID: UUID?
+        switch tab.location {
+        case .favorite(let favoriteProfile): profileID = favoriteProfile
+        case .pinned(let spaceID, _), .today(let spaceID): profileID = workspace.spaces[spaceID]?.profileID ?? fallbackProfileID
+        }
+        guard let profileID = profileID ?? fallbackProfileID else { return }
+        let engine = dependencies.engine
+        let scheme = webColorScheme(forTab: id)
+        let configuration = TabConfiguration(
+            profileID: profileID,
+            initialURL: tab.url ?? tab.pinnedURL,
+            opener: pageRequests.openers.removeValue(forKey: id),
+            isOffTheRecord: isOffTheRecord,
+            preferredColorScheme: scheme
+        )
+        let live = try await engine.makeTab(configuration)
+        await attachLive(id, live, initialColorScheme: scheme)
+    }
+
+    /// Registers `live` as the engine tab of model tab `id` and starts observing its events and
+    /// dialog requests. Closes it instead when the model tab went away (archived, or made live by
+    /// another window) while the engine worked.
+    /// `initialColorScheme`: the scheme `live` was created with; nil (an adopted tab) makes the
+    /// shell send the tab's scheme right away.
+    func attachLive(_ id: UUID, _ live: any BrowserTab, initialColorScheme: WebColorScheme? = nil) async {
+        guard workspace.tabs[id].map({ !$0.meta.isTombstone }) == true, liveTabs[id] == nil, !isStopped else {
+            await dependencies.engine.closeTab(live.id)
+            return
+        }
+        liveTabs[id] = live
+        sentColorSchemes[id] = initialColorScheme
+        syncWebColorScheme(of: id)
+        dialogs.observe(live)
+        liveStates[id] = SidebarTabLiveState(snapshot: await live.currentState())
+        syncContent(id)
+        let stream = live.events()
+        eventTasks[id] = Task { [weak self] in
+            for await event in stream {
+                guard let self else { return }
+                self.apply(event, to: id)
+            }
+        }
+    }
+
+    /// Applies an engine event to the live state and mirrors content changes into the workspace.
+    func apply(_ event: TabEvent, to id: UUID) {
+        var state = liveStates[id] ?? SidebarTabLiveState()
+        state.apply(event)
+        liveStates[id] = state
+        switch event {
+        case .urlChanged, .titleChanged, .faviconChanged, .snapshot: syncContent(id)
+        case .closeRequested: pageRequestedClose(id)
+        default: break
+        }
+    }
+
+    /// Mirrors the live page's URL, title and favicon into the tab record (`TreeOps.updateTabContent`).
+    func syncContent(_ id: UUID) {
+        guard let live = liveStates[id], let node = workspace.tabs[id], !node.meta.isTombstone else { return }
+        let title = live.title.isEmpty ? node.title : live.title
+        let url = live.url ?? node.url
+        let favicon = live.favicon?.url ?? node.faviconURL
+        guard url != node.url || title != node.title || favicon != node.faviconURL else { return }
+        let stamp = now()
+        try? mutate(origin: nil) { try TreeOps.updateTabContent($0, id: id, url: url, title: title, faviconURL: favicon, now: stamp) }
+    }
+
+    /// Closes the engine tab of `id`, if any, and forgets its live state.
+    func closeLive(_ id: UUID) {
+        eventTasks.removeValue(forKey: id)?.cancel()
+        liveStates.removeValue(forKey: id)
+        sentColorSchemes.removeValue(forKey: id)
+        guard let live = liveTabs.removeValue(forKey: id) else { return }
+        tabCommandTails.removeValue(forKey: live.id)
+        // The page goes away: its queued dialogs get their default answers.
+        dialogs.stopObserving(live.id)
+        let engine = dependencies.engine
+        enqueueEngineWork { await engine.closeTab(live.id) }
+    }
+
+    // MARK: - Auto-archive
+
+    /// Auto-archive: archives Today tabs idle for their profile's "Archive tabs after" setting
+    /// (`lifetimeOverride` replaces it for every tab), closes their live engine tabs and repairs
+    /// every window's selection. [05 §window and app entry points] observed (12 h default).
+    /// Tabs on screen in any window (selected tab and its split partners), and the tabs of windows
+    /// of the last session that are still being reopened, are kept: inferred.
+    /// Returns the archived ids.
+    @discardableResult
+    func runAutoArchive(lifetimeOverride: TimeInterval? = nil) -> [UUID] {
+        let base = workspace
+        // Windows of the last session that are not open yet keep their tab too.
+        var onScreen = liveSidebars.filter(\.countsAsVisibleWindow).reduce(into: Set<UUID>()) { $0.formUnion($1.onScreenTabIDs) }
+        for pending in pendingRestores {
+            guard let tabID = pending.selectedTabID else { continue }
+            onScreen.insert(tabID)
+            if let layout = SplitPaneLayout.activeLayout(in: base, containing: tabID) { onScreen.formUnion(layout.root.tabIDs) }
+        }
+        let after = TreeOps.autoArchive(base, lifetimeOverride: lifetimeOverride, excluding: onScreen, now: now())
+        guard after != base else { return [] }
+        let archived = base.tabs.values
+            .filter { !$0.meta.isTombstone && after.tabs[$0.id]?.meta.isTombstone == true }
+            .map(\.id)
+        commit(after, origin: nil)
+        archived.forEach(closeLive)
+        return archived
+    }
+
+    /// Starts the auto-archive scheduler (first run now, then hourly). [B3] Idempotent. Not for an
+    /// incognito window: its tabs go away with the window.
+    func startAutoArchive() {
+        guard autoArchiveScheduler == nil, !isStopped, !isOffTheRecord else { return }
+        autoArchiveScheduler = AutoArchiveScheduler(ticker: autoArchiveTicker) { [weak self] in self?.runAutoArchive() }
+        autoArchiveScheduler?.start()
+    }
+
+    var isAutoArchiveRunning: Bool { autoArchiveScheduler?.isRunning ?? false }
+
+    // MARK: - Windows
+
+    /// Sidebars of windows that are still open.
+    var liveSidebars: [SidebarViewModel] {
+        sidebars.removeAll { $0.object == nil }
+        return sidebars.compactMap(\.object)
+    }
+
+    /// Browser windows whose state is saved, in creation order.
+    var browserWindows: [ShellModel] {
+        windows.removeAll { $0.object == nil }
+        return windows.compactMap(\.object)
+    }
+
+    func register(_ sidebar: SidebarViewModel) {
+        guard !liveSidebars.contains(where: { $0 === sidebar }) else { return }
+        sidebars.append(WeakRef(object: sidebar))
+    }
+
+    func unregister(_ sidebar: SidebarViewModel) {
+        sidebars.removeAll { $0.object == nil || $0.object === sidebar }
+    }
+
+    /// The window (other than `except`) that shows `tabID` on screen, if any. A tab's engine
+    /// surface can be hosted in one window only. inferred.
+    func sidebar(showing tabID: UUID, except: SidebarViewModel) -> SidebarViewModel? {
+        liveSidebars.first { $0 !== except && $0.countsAsVisibleWindow && $0.onScreenTabIDs.contains(tabID) }
+    }
+
+    /// Adds a browser window to the saved UI state and makes it the active window. The first one
+    /// starts the auto-archive scheduler, after its selection was restored. [B3, B14]
+    func registerWindow(_ window: ShellModel) {
+        if !browserWindows.contains(where: { $0 === window }) { windows.append(WeakRef(object: window)) }
+        activeWindow = window
+        startAutoArchive()
+        // Links from other apps that arrived while no window was open. D2.
+        deliverPendingExternalURLs(to: window)
+        // A Little Arc page adopted while no window was open. B29.
+        deliverPendingReveal(to: window)
+        // First-run onboarding shows in the first window that opens (D9).
+        onboarding.attach(window)
+    }
+
+    /// A browser window closed (`save` true: its state leaves `ui-state.json` right away) or was
+    /// stopped. The last window closing does not quit the app (macOS convention, inferred); its
+    /// state is kept, so the next launch opens it again.
+    func unregisterWindow(_ window: ShellModel, save: Bool) {
+        guard browserWindows.contains(where: { $0 === window }) else { return }
+        windows.removeAll { $0.object == nil || $0.object === window }
+        if browserWindows.isEmpty { lastClosedWindow = window.windowUIState }
+        if activeWindow === window { activeWindow = browserWindows.last }
+        if save { saveUIState() }
+    }
+
+    /// The state of the last window that closed while no other was open.
+    private var lastClosedWindow: WindowUIState?
+
+    /// The model Little Arc acts on: the active browser window, else a hidden host on this
+    /// workspace (made once). The host is not a window: it holds no tab away from real windows.
+    func littleArcHost() -> ShellModel {
+        if let activeWindow { return activeWindow }
+        if let host = hiddenHost { return host }
+        let host = ShellModel(controller: self, window: WindowUIState(selectedSpaceID: activeSpaceID), isBrowserWindow: false)
+        hiddenHost = host
+        return host
+    }
+
+    private var hiddenHost: ShellModel?
+
+    /// The window became key.
+    func windowDidBecomeActive(_ window: ShellModel) {
+        guard browserWindows.contains(where: { $0 === window }) else { return }
+        activeWindow = window
+        // Favorites take the color scheme of the active window's Space (B21).
+        syncWebColorSchemes()
+    }
+
+    /// The Space a new window opens on: the active window's. inferred.
+    var activeSpaceID: UUID? { activeWindow?.selectedSpaceID ?? workspace.allLiveSpaces.first?.id }
+
+    /// The tab a New Window shows: the most recently active pinned or Today tab of `spaceID` that
+    /// no open window has on screen. inferred (B14).
+    func mostRecentTabNotOnScreen(inSpace spaceID: UUID) -> UUID? {
+        let onScreen = liveSidebars.filter(\.countsAsVisibleWindow).reduce(into: Set<UUID>()) { $0.formUnion($1.onScreenTabIDs) }
+        return workspace.allTabs(inSpace: spaceID)
+            .filter { !onScreen.contains($0.id) }
+            .max { ($0.lastActiveAt, $0.id.uuidString) < ($1.lastActiveAt, $1.id.uuidString) }?
+            .id
+    }
+
+    /// A model for the app-level surfaces that are not a browser window (the Settings window): it
+    /// reads and writes this workspace and never holds a tab on screen. Made once.
+    public func appHost() -> ShellModel {
+        if let host = settingsHost { return host }
+        let host = ShellModel(controller: self, window: WindowUIState(selectedSpaceID: activeSpaceID), isBrowserWindow: false)
+        settingsHost = host
+        return host
+    }
+
+    private var settingsHost: ShellModel?
+
+    /// The next window from the last session, or nil when all are back.
+    func takePendingRestore() -> WindowUIState? {
+        guard !pendingRestores.isEmpty else { return nil }
+        return pendingRestores.removeFirst()
+    }
+
+    /// What a window the app opens by itself shows when nothing is left to restore (e.g. a Dock
+    /// click after the last window closed): the last closed window's Space and sidebar, and its tab
+    /// unless another window shows it; else the active Space. inferred.
+    func reopenState() -> WindowUIState {
+        guard var state = lastClosedWindow else { return WindowUIState(selectedSpaceID: activeSpaceID) }
+        if let tab = state.selectedTabID, liveSidebars.contains(where: { $0.countsAsVisibleWindow && $0.onScreenTabIDs.contains(tab) }) {
+            state.selectedTabID = nil
+        }
+        return state
+    }
+
+    /// A tab ("Open in Open Arc", B29) that must show in the next browser window that registers.
+    private(set) var pendingRevealTabID: UUID?
+
+    /// Shows `tabID` in a browser window and brings that window to the front: the active window if
+    /// one is open (it may be behind or minimized), else a new window opens for it. Until that
+    /// window registers the tab waits, like links from other apps do (D2). inferred (B29).
+    func revealInBrowserWindow(_ tabID: UUID, spaceID: UUID?) {
+        if let window = activeWindow {
+            window.revealTab(tabID)
+            return
+        }
+        pendingRevealTabID = tabID
+        guard !isRevealWindowRequested, let open = openBrowserWindow else { return }
+        isRevealWindowRequested = true
+        open(BrowserWindowRequest(kind: .newWindow, spaceID: spaceID, tabID: tabID))
+    }
+
+    /// A window was requested for `pendingRevealTabID` and has not registered yet.
+    private var isRevealWindowRequested = false
+
+    private func deliverPendingReveal(to window: ShellModel) {
+        isRevealWindowRequested = false
+        guard let tabID = pendingRevealTabID else { return }
+        pendingRevealTabID = nil
+        guard workspace.tabs[tabID].map({ !$0.meta.isTombstone }) == true else { return }
+        window.revealTab(tabID)
+    }
+
+    /// Ids of the window requests this run handed to SwiftUI (see `BrowserWindowRoot`).
+    private var issuedRequestIDs: Set<UUID> = []
+    /// The opener came from the scene's commands, which work with no window open. A browser
+    /// window's own `openWindow` does not replace it: that window may close, and an opener taken
+    /// from a closed window's view opened nothing (B29).
+    private var hasSceneWindowOpener = false
+
+    /// Installs the scene's window opener (SwiftUI's `openWindow`). Every request it opens is
+    /// recorded first (`noteIssued`). The closure holds this controller weakly: an incognito
+    /// controller stores it on itself, and a strong capture would keep the closed window's
+    /// in-memory workspace alive. [A19]
+    /// - Parameter sceneLevel: the opener comes from the scene's commands (always usable), not
+    ///   from one window's view. A scene-level opener is never replaced by a window's.
+    func installWindowOpener(sceneLevel: Bool = false, _ open: @escaping (BrowserWindowRequest) -> Void) {
+        if hasSceneWindowOpener, !sceneLevel { return }
+        if sceneLevel { hasSceneWindowOpener = true }
+        openBrowserWindow = { [weak self] request in
+            self?.noteIssued(request)
+            open(request)
+        }
+    }
+
+    /// Records a request about to be handed to SwiftUI. Kept by the app's controller (the one the
+    /// scene's windows check), also when an incognito window's controller issues it. [A19]
+    func noteIssued(_ request: BrowserWindowRequest) {
+        if let parent { parent.noteIssued(request) } else { issuedRequestIDs.insert(request.id) }
+    }
+
+    /// A fresh Little Arc window id, recorded as issued by this run. Every Little Arc window is
+    /// opened with one (⌥⌘N, the command bar, links from other apps). B30.
+    func issueLittleArcWindowID() -> UUID {
+        if let parent { return parent.issueLittleArcWindowID() }
+        let id = makeID()
+        issuedLittleArcWindowIDs.insert(id)
+        return id
+    }
+
+    /// Whether this run opened the Little Arc window `id`. nil (the group's default window) and ids
+    /// from an earlier run (window restoration) do not count. B30.
+    func wasIssuedLittleArcWindow(_ id: UUID?) -> Bool {
+        if let parent { return parent.wasIssuedLittleArcWindow(id) }
+        return id.map { issuedLittleArcWindowIDs.contains($0) } ?? false
+    }
+
+    private var issuedLittleArcWindowIDs: Set<UUID> = []
+
+    /// Whether this run made `request`. `.restore` requests always count (the scene's default).
+    func wasIssued(_ request: BrowserWindowRequest) -> Bool {
+        if let parent { return parent.wasIssued(request) }
+        return request.kind == .restore || issuedRequestIDs.contains(request.id)
+    }
+
+    /// Profile settings for a window of this controller. An incognito window follows its parent
+    /// profile's synced settings (its in-memory profile has the same id but default settings).
+    /// [03 §Profiles] observed per-profile settings; following them in incognito is inferred. [A19]
+    func profileSettings(for profileID: UUID?) -> ProfileSettings {
+        if let parent { return parent.profileSettings(for: profileID) }
+        guard let profileID, let profile = workspace.profiles[profileID], !profile.meta.isTombstone else { return .default }
+        return profile.settings
+    }
+
+    var pendingRestoreCount: Int { pendingRestores.count }
+
+    /// Forgets the windows of the last session that were not reopened (single-window hosts).
+    func discardPendingRestores() { pendingRestores.removeAll() }
+
+    /// How many more windows the scene must open to bring back the last session (all but the one
+    /// the app opens by itself). Asked once, by the first window; later calls return 0.
+    ///
+    /// [03 §Advanced] observed: "When opening Arc, restore windows from previous session", off by
+    /// default. Off: only the first window comes back (its Space, tab and sidebar, as before B14;
+    /// inferred). On: every window of the last session.
+    func takeAdditionalRestoreCount() -> Int {
+        guard !didRequestAdditionalRestores else { return 0 }
+        didRequestAdditionalRestores = true
+        guard dependencies.preferences.restoresWindowsFromPreviousSession else {
+            pendingRestores.removeAll()
+            return 0
+        }
+        return pendingRestores.count
+    }
+
+    /// The one-time launch notice, handed to the first window that asks.
+    func takeLaunchNotice() -> LaunchNotice? {
+        defer { launchNotice = nil }
+        return launchNotice
+    }
+
+    // MARK: - Library flags
+
+    /// Stores new Library flags and saves the UI state. Other windows pick them up through
+    /// `libraryFlags`.
+    func setLibraryFlags(_ flags: LibraryUIFlags) {
+        guard flags != libraryFlags else { return }
+        libraryFlags = flags
+        saveUIState()
+    }
+
+    // MARK: - UI state and persistence
+
+    /// The per-device UI state to save now: every open browser window and the Library flags.
+    var currentUIState: UIState {
+        let open = browserWindows.map(\.windowUIState)
+        return UIState(
+            windows: open.isEmpty ? lastClosedWindow.map { [$0] } ?? [] : open,
+            mediaIntroDismissed: libraryFlags.mediaIntroDismissed,
+            lastLibrarySection: libraryFlags.lastSection,
+            onboardingCompleted: onboardingCompleted
+        )
+    }
+
+    /// Writes `ui-state.json` next to the workspace file. Skipped without persistence and when the
+    /// store is read-only (its ids would point into a workspace that is never saved).
+    func saveUIState() {
+        guard let store = dependencies.persistence, !store.isReadOnly, !isTerminating else { return }
+        try? UIStateFile.save(currentUIState, to: store.directory)
+    }
+
+    /// Writes pending workspace changes and the UI state to disk now.
+    public func flushPersistence() async throws {
+        saveUIState()
+        try await dependencies.persistence?.flush()
+    }
+
+    /// The quit path for `applicationShouldTerminate` (B27): saves the UI state, writes pending
+    /// workspace changes, then shuts the engine down, without blocking the main thread. Each step
+    /// is bounded (`TerminationTiming`), so a stuck store or engine cannot hold up quitting; the
+    /// store is flushed before the engine shuts down, so the user's data is on disk first. Runs
+    /// once: later calls, and the `willTerminate` fallback, return at once.
+    public func prepareForTermination(
+        storeFlushTimeout: TimeInterval = TerminationTiming.storeFlushTimeout,
+        engineShutdownTimeout: TimeInterval = TerminationTiming.engineShutdownTimeout
+    ) async {
+        guard !isTerminationPrepared, !isTerminationRunning else { return }
+        isTerminationRunning = true
+        defer {
+            isTerminationRunning = false
+            isTerminationPrepared = true
+        }
+        saveUIState()
+        // Windows closing while the app quits must not drop themselves from the saved state.
+        isTerminating = true
+        if let store = dependencies.persistence, !store.isReadOnly {
+            _ = await TerminationDeadline.run(timeout: storeFlushTimeout) { try? await store.flush() }
+        }
+        guard !isOffTheRecord else { return }
+        let engine = dependencies.engine
+        _ = await TerminationDeadline.run(timeout: engineShutdownTimeout) { await engine.shutdown() }
+    }
+
+    /// The synchronous fallback on `willTerminate`, for a quit that did not go through
+    /// `prepareForTermination` (no app delegate, tests). Does nothing when that already ran.
+    ///
+    /// Saves the UI state and writes pending workspace changes before the process exits. Blocks
+    /// the main thread until the store has written (at most `timeout` seconds): after
+    /// `willTerminate` returns the process ends, so an async flush would be lost. The store is an
+    /// actor off the main thread, so waiting here cannot deadlock.
+    ///
+    /// After the flush the engine is shut down (`BrowserEngine.shutdown`, B25), waiting at most
+    /// `engineShutdownTimeout` seconds so quitting never hangs on the engine. The workspace is on
+    /// disk first, so a slow or stuck engine cannot cost the user's data.
+    public func flushForTermination(
+        timeout: TimeInterval = TerminationTiming.storeFlushTimeout,
+        engineShutdownTimeout: TimeInterval = TerminationTiming.engineShutdownTimeout
+    ) {
+        guard !isTerminationPrepared, !isTerminationRunning else { return }
+        isTerminationPrepared = true
+        saveUIState()
+        isTerminating = true
+        if let store = dependencies.persistence, !store.isReadOnly {
+            let done = DispatchSemaphore(value: 0)
+            Task.detached {
+                try? await store.flush()
+                done.signal()
+            }
+            _ = done.wait(timeout: .now() + timeout)
+        }
+        shutDownEngine(timeout: engineShutdownTimeout)
+    }
+
+    /// Runs `engine.shutdown()` and waits for it, at most `timeout` seconds. The main run loop
+    /// keeps turning while it waits (unlike the store flush, which is off the main thread): an
+    /// engine may hop to the main actor to shut down (decision Q11), and blocking the thread would
+    /// make it wait for the full timeout. Only an incognito controller's parent shuts the engine
+    /// down; the two share it.
+    private func shutDownEngine(timeout: TimeInterval) {
+        guard !isOffTheRecord else { return }
+        let engine = dependencies.engine
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await engine.shutdown()
+            done.signal()
+        }
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while done.wait(timeout: .now()) == .timedOut, Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: min(deadline, Date(timeIntervalSinceNow: 0.01)))
+        }
+    }
+
+    /// Forwards every store change to the sync store (through `sidebarSync`, which drops them
+    /// while sync is off). Changes made before the subscription (e.g. the first-launch workspace)
+    /// are caught up by diffing against `baseline`, the workspace as loaded from disk. Remote
+    /// batches the store applied are merged into the shown workspace.
+    private func makeSyncForwarding(_ store: WorkspaceStore, baseline: WorkspaceState) -> Task<Void, Never> {
+        let sync = sidebarSync
+        return Task.detached { [weak self] in
+            let (current, events) = await store.subscribe()
+            let catchUp = WorkspaceDiff.pendingChanges(from: baseline, to: current)
+            await sync.forward(catchUp)
+            for await event in events {
+                if Task.isCancelled { return }
+                if event.origin == .remote { await self?.mergeRemote(event) }
+                await sync.forward(event.pendingChanges)
+            }
+        }
+    }
+
+    /// Brings records the sync store applied to the persistence store into the shown workspace.
+    /// Each changed record is merged with the shown copy under `ConflictPolicy` (`RecordMerge`), so
+    /// a local edit committed after the remote batch was applied keeps its newer field groups. The
+    /// result is committed like any change: saved, and every window repairs its selection.
+    ///
+    /// A record where the shown copy wins nothing (`needsUpload` false) is taken exactly as the
+    /// store holds it, version included: any difference would look like a local change to the
+    /// store, which would upload the record again, and the other device would echo that upload
+    /// back: an endless sync loop. [A19, A20]
+    /// Engine tabs of tabs that were deleted remotely are closed.
+    func mergeRemote(_ event: WorkspaceStoreEvent) {
+        guard !isStopped else { return }
+        var next = workspace
+        for id in event.changes.saved {
+            guard let server = event.workspace.record(for: id) else { continue }
+            if let local = next.record(for: id), let outcome = RecordMerge.merge(local: local, server: server) {
+                next.setRecord(outcome.needsUpload ? outcome.merged : server)
+            } else {
+                next.setRecord(server)
+            }
+        }
+        for id in event.changes.removed { next.removeRecord(id) }
+        guard next != workspace else { return }
+        let gone = liveTabs.keys.filter { next.tabs[$0].map(\.meta.isTombstone) ?? true }
+        commit(next, origin: nil)
+        gone.forEach(closeLive)
+    }
+}
+
+/// Timing of the quit path. Our own values (the spec records nothing about quitting).
+public enum TerminationTiming {
+    /// How long quitting waits for the workspace store to write. Own value; a normal flush takes
+    /// milliseconds.
+    public static let storeFlushTimeout: TimeInterval = 2
+    /// How long quitting waits for `BrowserEngine.shutdown()` after the store flush. Own value.
+    public static let engineShutdownTimeout: TimeInterval = 3
+    /// Hard limit for the whole quit sequence: the app replies to `applicationShouldTerminate`
+    /// by then even if a step is still running. Own value (store + engine limits, plus margin).
+    public static let quitDeadline: TimeInterval = 6
+}

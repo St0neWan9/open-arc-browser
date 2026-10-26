@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist template for "Open Arc.app".
+  scripts/make-app.sh copies this file into the bundle and sets
+  CFBundleShortVersionString and CFBundleVersion from its arguments
+  (the values below are only defaults).
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.openarc.browser</string>
+	<key>CFBundleName</key>
+	<string>Open Arc</string>
+	<key>CFBundleDisplayName</key>
+	<string>Open Arc</string>
+	<!-- The SwiftPM product name; make-app.sh copies the binary under this name. -->
+	<key>CFBundleExecutable</key>
+	<string>OpenArcApp</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<!-- Opt out of the macOS 26 control and window-chrome redesign so system controls (traffic
+	     lights tinted by the window, menus, scroll bars) look like Arc, which uses the earlier
+	     design. Decided by the user 2026-10-25 (B33 finding). -->
+	<key>UIDesignRequiresCompatibility</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<!-- Apple defines no web browser category; productivity is the closest one. -->
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+
+	<!--
+	  Custom drag-and-drop types. Each UTType(exportedAs:) in the sources must be
+	  declared here, or the system treats it as an undeclared dynamic type.
+	  Keep in sync with:
+	    app/Sources/OpenArcShell/Sidebar/SidebarDragPayload.swift  (itemType)
+	    app/Sources/OpenArcShell/Library/LibrarySpacesBoard.swift  (columnType)
+	-->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openarc.browser.sidebar-item</string>
+			<key>UTTypeDescription</key>
+			<string>Open Arc Sidebar Item</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openarc.browser.library-space</string>
+			<key>UTTypeDescription</key>
+			<string>Open Arc Library Space</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+	</array>
+
+	<!-- Web URLs the app can open. Declaring them does not make it the default browser. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Web site URL</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- Documents the app can open. Rank Alternate: never claim to be the preferred handler. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>HTML document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>XHTML document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.xhtml</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Web archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.apple.webarchive</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PDF document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+			</array>
+		</dict>
+	</array>
+
+	<!--
+	  Sparkle 2 software updates (plan D7). See docs/release.md.
+	  SUFeedURL: PLACEHOLDER. GitHub Pages of a not-yet-created "openarc" organization; replace
+	    it with the real appcast URL (GitHub Releases / Pages) before the first release.
+	  SUPublicEDKey: PLACEHOLDER. TODO(release): replace with the base64 Ed25519 public key
+	    printed by Sparkle's generate_keys. The private key stays in the release machine's
+	    Keychain and is never committed. While this placeholder is here the app does not start
+	    Sparkle (UpdateConfiguration) and "Check for Updates…" is disabled.
+	  Keep the placeholder strings in sync with UpdateConfiguration in
+	    app/Sources/OpenArcShell/Updates/UpdateChecker.swift.
+	-->
+	<key>SUFeedURL</key>
+	<string>https://openarc.github.io/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>OPENARC_PLACEHOLDER_EDDSA_PUBLIC_KEY</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+
+	<!-- Shown when a web page asks for these devices (web permissions, later). -->
+	<key>NSCameraUsageDescription</key>
+	<string>Websites you visit in Open Arc can ask to use your camera, for example for video calls.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Websites you visit in Open Arc can ask to use your microphone, for example for calls and voice input.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Websites you visit in Open Arc can ask for your location, for example to show nearby results.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Websites you visit in Open Arc can ask for your location, for example to show nearby results.</string>
+</dict>
+</plist>
