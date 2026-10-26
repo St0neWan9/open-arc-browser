@@ -116,7 +116,8 @@ Rebase one milestone at a time. Skipping milestones piles up API changes in `//o
 
 | 0011 | `embedder`: helper apps for the child processes (plan C10): `Open Arc Helper.app`, `… (Renderer)`, `… (GPU)`, `… (Plugin)`, `… (Alerts)` in the framework's `Helpers/`, named in `openarc/app/helpers.gni`, chosen by the browser client from content's and `//chrome`'s child flags; replaces the unbundled `openarc_helper`. |
 | 0012 | `embedder`: the keychain item is named after the build, "Open Arc Safe Storage" (release) or "Open Arc Dev Safe Storage" (development build), from the base bundle id (plan C10). |
+| 0013 | `embedder`: local crash reports (plan D8, decision Q8): the Crashpad database is `OACApplicationConfiguration.crashDumpDirectory` (the app's "Crash Reports" folder), never Chromium's default; uploads are off at every level (no upload URL, enforced by a `static_assert` against Google Chrome branding; upload consent and the database's upload setting cleared after the handler starts). |
 
-Patches 0008 to 0012 are the `//openarc` directory; they stay last and may later be squashed into one.
+Patches 0008 to 0013 are the `//openarc` directory; they stay last and may later be squashed into one.
 
 Verified on 2026-10-25 (after C10): `apply.sh` onto a clean `156.0.8078.48` worktree produces the same tree hash as `openarc/156`, and a second run is a no-op.

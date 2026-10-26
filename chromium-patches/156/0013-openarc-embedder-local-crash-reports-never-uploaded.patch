@@ -1,0 +1,206 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 22:14:39 -0700
+Subject: [PATCH] openarc: embedder: local crash reports, never uploaded
+
+Plan D8, decision Q8: crash reports are stored on the Mac only.
+
+Chrome's crash reporter (ChromeMainDelegate::PreSandboxStartup) starts
+the framework's Helpers/chrome_crashpad_handler with the database at
+chrome::DIR_CRASH_DUMPS. The embedder now points that at
+OACApplicationConfiguration.crashDumpDirectory (the app passes
+"<app data dir>/Crash Reports", the folder Settings reveals), falling
+back to <user data dir>/Crashpad, and never at Chromium's default
+~/Library/Application Support/Chromium/Crashpad.
+
+Uploads are off at every level:
+- a static_assert keeps Google Chrome branding out, so
+  CrashReporterClient::GetUploadUrl() stays empty and the handler runs
+  without --url, i.e. without an upload thread;
+- after the handler starts, the browser process clears upload consent
+  and the database's "uploads enabled" setting, whatever an
+  --enable-user-metrics switch or a forced MetricsReportingEnabled
+  policy asked for.
+
+The handler holds the exception port of the whole browser task, which
+is the embedding app's process, so crashes in the app's own code are
+reported too once the engine started. Helpers report to the same
+handler. Verified with chrome://crash, chrome://gpucrash and a Swift
+fatalError in the app: one minidump each (ptype renderer, gpu-process,
+browser) in <database>/pending, and no socket on the handler.
+---
+ openarc/BUILD.gn                     |  2 +
+ openarc/app/openarc_main_delegate.h  | 10 +++-
+ openarc/app/openarc_main_delegate.mm | 69 ++++++++++++++++++++++++----
+ openarc/bridge/oac_application.mm    |  6 ++-
+ 4 files changed, 75 insertions(+), 12 deletions(-)
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index d863213c6191..6730bf8e434f 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -111,6 +111,7 @@ source_set("embedder") {
+   deps = [
+     ":helper_names",
+     "//base",
++    "//build:branding_buildflags",
+     "//chrome/browser:child_process_host_flags",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:tab_helpers",
+@@ -123,6 +124,7 @@ source_set("embedder") {
+     "//content/public/browser",
+     "//content/public/common",
+     "//third_party/blink/public/common",
++    "//third_party/crashpad/crashpad/client",
+     "//ui/gfx",
+   ]
+   frameworks = [
+diff --git a/openarc/app/openarc_main_delegate.h b/openarc/app/openarc_main_delegate.h
+index 99eb61cd6ef2..b7a81865267a 100644
+--- a/openarc/app/openarc_main_delegate.h
++++ b/openarc/app/openarc_main_delegate.h
+@@ -36,7 +36,14 @@ class OpenArcMainDelegate : public ChromeMainDelegate {
+   // |user_data_directory|: Chromium's user data directory in the browser
+   // process (OACApplicationConfiguration); empty in child processes, which get
+   // it from the command line.
+-  explicit OpenArcMainDelegate(const base::FilePath& user_data_directory = {});
++  // |crash_dumps_directory|: the Crashpad database for local crash reports
++  // (plan D8, OACApplicationConfiguration.crashDumpDirectory); empty means
++  // <user_data_directory>/Crashpad. Only the browser process uses it: child
++  // processes report to the browser's handler through the exception port they
++  // inherit.
++  explicit OpenArcMainDelegate(
++      const base::FilePath& user_data_directory = {},
++      const base::FilePath& crash_dumps_directory = {});
+   OpenArcMainDelegate(const OpenArcMainDelegate&) = delete;
+   OpenArcMainDelegate& operator=(const OpenArcMainDelegate&) = delete;
+   ~OpenArcMainDelegate() override;
+@@ -56,6 +63,7 @@ class OpenArcMainDelegate : public ChromeMainDelegate {
+ 
+  private:
+   const base::FilePath user_data_directory_;
++  const base::FilePath crash_dumps_directory_;
+   std::unique_ptr<content::BrowserMainRunner> browser_main_runner_;
+ };
+ 
+diff --git a/openarc/app/openarc_main_delegate.mm b/openarc/app/openarc_main_delegate.mm
+index 83ac7ffc63ac..9ac165f9bd54 100644
+--- a/openarc/app/openarc_main_delegate.mm
++++ b/openarc/app/openarc_main_delegate.mm
+@@ -11,22 +11,58 @@
+ #include "base/base_switches.h"
+ #include "base/process/current_process.h"
+ #include "base/task/current_thread.h"
++#include "build/branding_buildflags.h"
+ #include "chrome/browser/chrome_content_browser_client.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
++#include "components/crash/core/app/crashpad.h"
+ #include "components/crash/core/common/objc_zombie.h"
+ #include "content/public/browser/browser_main_runner.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/main_function_params.h"
+ #include "openarc/browser/openarc_content_browser_client.h"
++#include "third_party/crashpad/crashpad/client/crash_report_database.h"
++#include "third_party/crashpad/crashpad/client/settings.h"
++
++// Decision Q8: crash reports stay on this Mac. Chrome's crash reporter client
++// does not override CrashReporterClient::GetUploadUrl(), which returns Google's
++// upload URL only in Google Chrome branded official builds; Open Arc is never
++// one, so the Crashpad handler starts without --url and runs no upload thread.
++static_assert(!BUILDFLAG(GOOGLE_CHROME_BRANDING),
++              "Open Arc must not be built with Google Chrome branding");
+ 
+ namespace openarc {
+ 
++namespace {
++
++// Browser process, after Chrome's crash reporter started the Crashpad handler
++// (ChromeMainDelegate::PreSandboxStartup): makes sure no crash report can
++// leave the Mac (plan D8, decision Q8).
++//
++// - The handler was started without --url (see the static_assert above), so
++//   it runs no upload thread at all.
++// - The database's "uploads enabled" setting is switched off, whatever an
++//   --enable-user-metrics switch or a forced MetricsReportingEnabled policy
++//   asked Chrome's client for; Chrome's own consent paths that could switch it
++//   back on (installer preferences, the metrics services manager) are Windows
++//   only or run before this point.
++void KeepCrashReportsLocal() {
++  crash_reporter::SetUploadConsent(false);
++  if (crashpad::CrashReportDatabase* database =
++          crash_reporter::internal::GetCrashReportDatabase()) {
++    database->GetSettings()->SetUploadsEnabled(false);
++  }
++}
++
++}  // namespace
++
+ OpenArcMainDelegate::OpenArcMainDelegate(
+-    const base::FilePath& user_data_directory)
++    const base::FilePath& user_data_directory,
++    const base::FilePath& crash_dumps_directory)
+     : ChromeMainDelegate(
+           {.exe_entry_point_ticks = base::TimeTicks::Now()}),
+-      user_data_directory_(user_data_directory) {}
++      user_data_directory_(user_data_directory),
++      crash_dumps_directory_(crash_dumps_directory) {}
+ 
+ OpenArcMainDelegate::~OpenArcMainDelegate() = default;
+ 
+@@ -55,16 +91,29 @@
+ void OpenArcMainDelegate::PreSandboxStartup() {
+   const base::CommandLine& command_line =
+       *base::CommandLine::ForCurrentProcess();
+-  if (!command_line.HasSwitch(switches::kProcessType) &&
+-      !user_data_directory_.empty()) {
+-    // Crash reports go below our user data directory (plan D8), not to
+-    // Chromium's default ~/Library/Application Support/Chromium/Crashpad.
+-    // Chrome's crash reporter starts in ChromeMainDelegate::PreSandboxStartup.
+-    base::PathService::OverrideAndCreateIfNeeded(
+-        chrome::DIR_CRASH_DUMPS, user_data_directory_.Append("Crashpad"),
+-        /*is_absolute=*/true, /*create=*/true);
++  const bool browser_process = !command_line.HasSwitch(switches::kProcessType);
++  if (browser_process) {
++    // The Crashpad database (plan D8): the app's "Crash Reports" folder, or
++    // <user data dir>/Crashpad; never Chromium's default
++    // ~/Library/Application Support/Chromium/Crashpad. Chrome's crash reporter
++    // reads chrome::DIR_CRASH_DUMPS and starts the handler (the framework's
++    // Helpers/chrome_crashpad_handler) in ChromeMainDelegate::PreSandboxStartup.
++    // The handler takes Mach exceptions for this whole task, so it also writes
++    // reports for crashes in the app's own (Swift) code once the engine started.
++    base::FilePath crash_dumps = crash_dumps_directory_;
++    if (crash_dumps.empty() && !user_data_directory_.empty()) {
++      crash_dumps = user_data_directory_.Append("Crashpad");
++    }
++    if (!crash_dumps.empty()) {
++      base::PathService::OverrideAndCreateIfNeeded(
++          chrome::DIR_CRASH_DUMPS, crash_dumps,
++          /*is_absolute=*/true, /*create=*/true);
++    }
+   }
+   ChromeMainDelegate::PreSandboxStartup();
++  if (browser_process) {
++    KeepCrashReportsLocal();
++  }
+ }
+ 
+ std::variant<int, content::MainFunctionParams> OpenArcMainDelegate::RunProcess(
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 008c7f7dd9f2..0ba9d545f119 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -247,8 +247,12 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   // its UI).
+   chrome::SetEmbedderOwnsUI();
+ 
++  // Local crash reports (plan D8): nil keeps <userDataDirectory>/Crashpad.
+   g_engine->main_delegate = std::make_unique<openarc::OpenArcMainDelegate>(
+-      base::apple::NSURLToFilePath(_configuration.userDataDirectory));
++      base::apple::NSURLToFilePath(_configuration.userDataDirectory),
++      _configuration.crashDumpDirectory
++          ? base::apple::NSURLToFilePath(_configuration.crashDumpDirectory)
++          : base::FilePath());
+   g_engine->main_runner = content::ContentMainRunner::Create();
+   content::ContentMainParams params(g_engine->main_delegate.get());
+   params.argc = static_cast<int>(g_engine->argv.size());
