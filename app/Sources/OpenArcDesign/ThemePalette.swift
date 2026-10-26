@@ -1,0 +1,541 @@
+import Foundation
+import OpenArcModel
+
+/// Light or dark, after `ThemeAppearance.automatic` was resolved against the system setting.
+/// Our own name (the spec only shows the automatic / light / dark segments [06 §2]).
+public enum ResolvedAppearance: String, Hashable, Sendable, CaseIterable {
+    case light, dark
+}
+
+/// Colors for one space, derived from its theme.
+///
+/// The derivation follows docs/arc-spec/07-design-system.md §8 (E11): rules fitted to three preset
+/// colors in light and dark (`ThemeDerivation`). The rules are inferred; the sample values they
+/// reproduce are observed (JPEG, ±2/255 on flat fills; text colors from the accessibility tree).
+/// Window, sidebar, controls and separators are one color family per Space [07 §8] observed; the
+/// command bar, sheets and menus do not follow the theme color, only light or dark [07 §8] observed.
+public struct ThemePalette: Hashable, Sendable {
+    /// Window and sidebar background (the same color everywhere in a Space). [07 §8] inferred rule:
+    /// light = mix(theme, #EBEBEB, 0.37) on sRGB; dark = mixP3(theme, gray 180/255, 0.393).
+    public var windowBackground: RGBAColor
+    /// Fill for the address field, favorites blocks and dock highlights: window × 0.96 (darker, not
+    /// lighter). [07 §8] inferred, light and dark.
+    public var controlFill: RGBAColor
+    /// Selected tab row background: mix(window, #F5F5F5, 0.90). [07 §8] inferred, light and dark.
+    public var selectedTabFill: RGBAColor
+    /// Command bar panel: #F9F9F9 light, #181818 dark, whatever the theme. [07 §5, §8] observed.
+    public var commandBarBackground: RGBAColor
+    /// Highlighted command bar result: the theme hue at OKLCH L ≈ 0.735 (light) / ≈ 0.50 (dark).
+    /// [07 §8] observed samples; the rule (and its chroma factor) is inferred.
+    public var commandBarSelection: RGBAColor
+    /// Text on the window background (tab and folder titles, toolbar icons): a dark color of the
+    /// theme's hue, OKLCH L ≈ 0.258, chroma ≈ 0.45 × the theme's; the same in dark. [07 §8] observed
+    /// values, inferred rule. White instead when the window is too dark for it (inferred).
+    public var primaryText: RGBAColor
+    /// Dimmed text (Space name, "Clear"): the chrome ink at the Space name opacity: black 45 %
+    /// [07 §3] observed (AX); white ≈ 50 % on a light-ink window (B32 round-1 PX, inferred).
+    public var secondaryText: RGBAColor
+    /// Colors for a gradient window background: every color dot of the theme mapped like the window
+    /// color, in order. One element for a single-color theme or no theme. How Arc blends several dots
+    /// is unknown [00 inventory]; spreading them evenly is inferred. `windowBackground` stays the
+    /// first dot.
+    public var backgroundGradientColors: [RGBAColor] = []
+
+    // MARK: B21 additions (appearance)
+
+    /// Light or dark: the space's `Theme.appearance`, with automatic resolved against the system.
+    public var appearance: ResolvedAppearance = .light
+    /// Content area: the web panel wherever no page paints (no tab selected, behind the command
+    /// bar, split panes, the Library's content area). Tinted from the theme in light and dark,
+    /// never plain white or black: `ThemeDerivation.contentBackground` [07 §8.1] (E12, inferred
+    /// rule, max 2.9/255 over 72 observed samples). On a light-ink window in dark it lands on the
+    /// control fill, as observed in [07 §8.1] and B32 round 1.
+    public var webPanelBackground: RGBAColor = RGBAColor(hex: 0xFFFFFF)
+    /// Command bar result titles: black 80 % (light), white ≈ 85 % (dark). [07 §3] observed.
+    public var commandBarText: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.80)
+    /// Opacity of dimmed command bar text relative to an opaque ink (subtitles, action text,
+    /// placeholder): 0.33 light, ≈ 0.42 dark. [07 §3] observed.
+    public var commandBarSecondaryAlpha: Double = 0.33
+    /// Text on the selected command bar row: white. [07 §3] observed.
+    public var commandBarSelectedText: RGBAColor = RGBAColor(hex: 0xFFFFFF)
+    /// 0.5 pt line under the input row: #E1E1E1 light, #363636 dark. [07 §5] observed.
+    public var commandBarSeparator: RGBAColor = RGBAColor(hex: 0xE1E1E1)
+    /// Rounded backdrop of small buttons on the panel (Little Arc ✕, unselected arrow box):
+    /// black 4 % in light [07 §5] observed (#EFEFEF on #F9F9F9); white 8 % in dark, inferred.
+    public var commandBarAccessoryFill: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.04)
+    /// Theme bubble and other floating panels drawn by us: near white tinted by the theme (light,
+    /// ≈ #FDF1FA for the purple sample) or the theme hue darkened (dark, ≈ #5C4457). [07 §6] observed
+    /// samples; OKLCH rule inferred.
+    public var floatingPanelBackground: RGBAColor = RGBAColor(hex: 0xFFFFFF)
+    /// Ink on floating panels, used with opacities: black in light, white in dark.
+    /// [04 §dark mode] observed; exact values inferred.
+    public var floatingPanelInk: RGBAColor = RGBAColor(hex: 0x000000)
+    /// Selected appearance segment in the theme bubble: gray in light ([06 §2] observed "gray
+    /// fill"), a pale block of the theme color in dark ([04 §dark mode] observed).
+    public var floatingPanelSelection: RGBAColor = RGBAColor(red: 0.86, green: 0.86, blue: 0.88)
+    /// Primary buttons ("Create Space"): brand blue in light, the theme color darkened in dark.
+    /// [04 §dark mode] observed; values approximate.
+    public var primaryButtonFill: RGBAColor = RGBAColor(red: 0.1, green: 0.2, blue: 0.6)
+    /// `Theme.grain` clamped to 0...1: strength of the noise overlay on the window background.
+    /// 0 = none. [06 §2] wavy slider; the meaning is inferred.
+    public var grain: Double = 0
+
+    // MARK: B16 additions (E11 design system, 07)
+
+    /// Ink of the theme-neutral chrome texts (address box, Space name, New Tab row): black, or white
+    /// when the window is too dark for black (inferred). Used with `Typography` opacities.
+    /// [07 §3, §8] observed: black with alpha, not tinted.
+    public var chromeInk: RGBAColor = RGBAColor(hex: 0x000000)
+    /// Hairline divider between pinned and Today: window × 0.87. [07 §4, §8] inferred.
+    public var separator: RGBAColor = RGBAColor(hex: 0xCCCCCC)
+    /// Title on the selected tab row (on `selectedTabFill`): the row text color, never white.
+    /// [07 §8] observed (the AX title color does not change).
+    public var selectedTabText: RGBAColor = RGBAColor(hex: 0x1C1C1E)
+    /// Command bar input text: #101214 at 80 % (light), ≈ #F0F5F7 (dark). [07 §3] observed.
+    public var commandBarInputText: RGBAColor = RGBAColor(hex: 0x101214, alpha: 0.80)
+    /// Command bar subtitles and action text: black 33 % (light), white ≈ 42 % (dark). [07 §3] observed.
+    public var commandBarSecondaryText: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.33)
+    /// Panel outline: a 0.5 pt black ≈ 25 % hairline outside (light), a 0.5 pt ≈ #565656 line
+    /// inside (dark). [07 §5] observed.
+    public var commandBarOutline: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.25)
+    /// Unselected arrow box fill: black 4 % (light) [07 §5] observed; white 8 % (dark) inferred.
+    /// The selected row's box is white with a theme-colored arrow. [07 §5] observed.
+    public var commandBarArrowBoxFill: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.04)
+    /// Sheets (New Folder, Delete Space, Rename): #FAFBFF light, #171C30 dark (they follow the
+    /// Space's light / dark, not its color). [07 §6] observed.
+    public var dialogBackground: RGBAColor = RGBAColor(hex: 0xFAFBFF)
+    /// Ink on sheets: near black (light), white (dark). [07 §3] observed (FIT).
+    public var dialogInk: RGBAColor = RGBAColor(hex: 0x000000)
+    /// Secondary (Cancel) button fill on sheets: #312E64 dark [07 §6] observed; light unknown
+    /// (black 6 %, placeholder).
+    public var dialogSecondaryButtonFill: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.06)
+    /// Primary (Create) button fill on sheets. Light: the disabled fill #E8E8FF is observed
+    /// [07 §6]; the enabled fill is unknown (a saturated blue of the same hue, placeholder).
+    public var dialogPrimaryButtonFill: RGBAColor = RGBAColor(hex: 0x3D47F5)
+    public var dialogPrimaryButtonDisabledFill: RGBAColor = RGBAColor(hex: 0xE8E8FF)
+    /// Destructive (Delete) button fill. [07 §6] observed (#F43616).
+    public var dialogDestructiveFill: RGBAColor = RGBAColor(hex: 0xF43616)
+
+    // MARK: B32 additions (light ink on dark windows)
+
+    /// True when the window is dark enough that the chrome uses light (white) ink instead of the
+    /// theme's dark tone and black. `ThemeDerivation.prefersLightInk` decides. [07 §8] observed dark
+    /// ink on the three presets; round-1 comparison observed white ink on a saturated blue-violet.
+    public var usesLightInk: Bool = false
+    /// Opacities of the chrome ink per element; they differ between dark and light ink.
+    public var inkOpacity: ChromeInkOpacities = .darkInk
+    /// Thin full-width lines at the scrolling list's top and bottom edges while rows are scrolled
+    /// under them. Round-1 PX observed (white ≈ 5 % on the blue-violet window); dark ink uses the
+    /// separator rule (inferred).
+    public var scrollEdgeLine: RGBAColor = RGBAColor(hex: 0xCCCCCC)
+
+    public var isDark: Bool { appearance == .dark }
+
+    /// The chrome ink at one of the `inkOpacity` values.
+    public func ink(_ opacity: KeyPath<ChromeInkOpacities, Double>) -> RGBAColor {
+        var c = chromeInk
+        c.alpha *= inkOpacity[keyPath: opacity]
+        return c
+    }
+
+    /// Tab and folder titles: the row text color at the ink's row-title opacity.
+    public var rowTitleText: RGBAColor {
+        var c = primaryText
+        c.alpha *= inkOpacity.rowTitle
+        return c
+    }
+}
+
+/// Opacity of the chrome ink (black or white, `ThemePalette.chromeInk`) for each chrome element.
+/// Dark ink: [07 §2, §3, §4, §7] (text from AX, icons PX). Light ink: measured on the round-1
+/// side-by-side screenshot of a saturated blue-violet Space (B32, PX on a JPEG, white over the
+/// window or control fill; thin strokes read low, so these are inferred).
+public struct ChromeInkOpacities: Hashable, Sendable {
+    /// Address box text (domain, placeholder).
+    public var addressText: Double
+    /// Magnifier in front of the placeholder.
+    public var addressIcon: Double
+    /// Space name in the header.
+    public var spaceName: Double
+    /// Space icon in the header.
+    public var spaceIcon: Double
+    /// "+ New Tab" row (icon and title).
+    public var newTabRow: Double
+    /// Tab and folder titles (on top of `primaryText`).
+    public var rowTitle: Double
+    /// Toolbar icons (hide sidebar, back, forward, reload).
+    public var toolbarEnabled: Double
+    public var toolbarDisabled: Double
+    /// Dock Home and "+" buttons.
+    public var dockButton: Double
+    /// Dock icon of the current Space and of the others.
+    public var dockCurrentSpace: Double
+    public var dockOtherSpace: Double
+    /// Rounded placeholder square of a row without a favicon.
+    public var faviconPlaceholder: Double
+
+    public init(addressText: Double, addressIcon: Double, spaceName: Double, spaceIcon: Double, newTabRow: Double,
+                rowTitle: Double, toolbarEnabled: Double, toolbarDisabled: Double, dockButton: Double,
+                dockCurrentSpace: Double, dockOtherSpace: Double, faviconPlaceholder: Double) {
+        self.addressText = addressText
+        self.addressIcon = addressIcon
+        self.spaceName = spaceName
+        self.spaceIcon = spaceIcon
+        self.newTabRow = newTabRow
+        self.rowTitle = rowTitle
+        self.toolbarEnabled = toolbarEnabled
+        self.toolbarDisabled = toolbarDisabled
+        self.dockButton = dockButton
+        self.dockCurrentSpace = dockCurrentSpace
+        self.dockOtherSpace = dockOtherSpace
+        self.faviconPlaceholder = faviconPlaceholder
+    }
+
+    /// Black ink. Text: [07 §3] observed (AX: address 60 %, Space name 45 %, New Tab 30 %, titles
+    /// opaque in the row text color). Icons: [07 §2, §4, §7] inferred (75 % / 30 %, other Spaces
+    /// 33 %). The magnifier, the Space icon and the favicon placeholder were not measured on a
+    /// light window (unknown): the address text value, opaque (the light-ink capture shows the
+    /// icon far stronger than the name) and 25 % are used.
+    public static let darkInk = ChromeInkOpacities(
+        addressText: Typography.addressField.opacity, addressIcon: Typography.addressField.opacity,
+        spaceName: Typography.spaceName.opacity, spaceIcon: 1, newTabRow: Typography.newTabRow.opacity,
+        rowTitle: 1, toolbarEnabled: 0.75, toolbarDisabled: 0.30, dockButton: 0.75,
+        dockCurrentSpace: 1, dockOtherSpace: 0.33, faviconPlaceholder: 0.25
+    )
+
+    /// White ink. Round-2 comparison (B33): the same luma-alpha measure on both apps' JPEGs, same
+    /// theme; each value is the round-1 value × (reference reading / our reading). Reference
+    /// readings: titles 0.81, Space name 0.50, Space icon 0.91, New Tab 0.49, placeholder text 0.34
+    /// and magnifier 0.43 (on the control fill), dock Home / "+" 0.33–0.34, current Space 0.49,
+    /// other Spaces 0.11, favicon placeholder 0.29. observed readings, inferred values. The four toolbar buttons read ≈ 0.29 and were all
+    /// disabled (AX), matching [07 §2]'s 30 % disabled; the enabled value keeps [07 §2]'s 75 %.
+    public static let lightInk = ChromeInkOpacities(
+        addressText: 0.30, addressIcon: 0.40, spaceName: 0.465, spaceIcon: 0.89, newTabRow: 0.46,
+        rowTitle: 0.78, toolbarEnabled: 0.75, toolbarDisabled: 0.30, dockButton: 0.30,
+        dockCurrentSpace: 0.46, dockOtherSpace: 0.10, faviconPlaceholder: 0.25
+    )
+}
+
+public enum ThemeDerivation {
+    /// Light window color = mix(theme, `windowMixGray`, `windowMixAmount`) on sRGB components.
+    /// [07 §8, §8.2] inferred: refitted over the 36 E12 presets (B38), max 2.8/255 per channel
+    /// (0.36 from the three E11 presets missed saturated green by 4.5/255). The same blend in
+    /// Display P3 fits worse (≥ 7.4/255), so the light window stays an sRGB blend.
+    public static let windowMixGray = RGBAColor(hex: 0xEBEBEB)
+    public static let windowMixAmount: Double = 0.37
+    /// Dark window color = mixP3(theme, `darkWindowGray`, `darkWindowAmount`): not black, not
+    /// desaturated. [07 §8, §8.2] inferred: fitted over the 36 E12 presets (B38), max 3.1/255 per
+    /// channel; the former "light window × 0.90" missed saturated green by 8.3/255.
+    public static let darkWindowGray: Double = 180.0 / 255
+    public static let darkWindowAmount: Double = 0.393
+    /// Control fill = window × 0.96. [07 §8, §10] inferred (≤ 1.4/255).
+    public static let controlFillScale: Double = 0.96
+    /// Separator = window × 0.87. [07 §8] inferred (thin lines on a JPEG: up to ≈ 13/255 off).
+    public static let separatorScale: Double = 0.87
+    /// Control fill on a light-ink (dark) window: window + 11 % white, i.e. lighter, not darker.
+    /// Round-1 PX (B32): #5247FE → #655CFE (≤ 1/255); inferred. The older "≈ 10 % white" of
+    /// [04 §theme system] matches this case.
+    public static let lightInkControlWhite: Double = 0.11
+    /// Separator and scroll-edge lines on a light-ink window: window + 5 % white. Round-1 PX (B32):
+    /// #5247FE → #5A52FD; inferred.
+    public static let lightInkSeparatorWhite: Double = 0.05
+    /// Selected row fill = mix(window, #F5F5F5, 0.90). [07 §8] inferred (≤ 2/255).
+    public static let selectedRowMixColor = RGBAColor(hex: 0xF5F5F5)
+    public static let selectedRowMixAmount: Double = 0.90
+    /// Row text = OKLCH(L, chroma × factor, theme hue). [07 §8] inferred: L 0.25–0.265, chroma
+    /// 0.36–0.53 × the theme's over the three samples.
+    public static let rowTextLightness: Double = 0.258
+    public static let rowTextChromaFactor: Double = 0.45
+    /// Command bar selection = OKLCH(L, chroma × factor, theme hue). [07 §8]: values observed,
+    /// L inferred (≈ 0.73 light / 0.50 dark); chroma factor unknown (fitted 0.39–0.61 light,
+    /// 0.62–0.79 dark; the middle is used).
+    public static let commandBarSelectionLightness: Double = 0.735
+    public static let commandBarSelectionChromaFactor: Double = 0.5
+    public static let darkCommandBarSelectionLightness: Double = 0.50
+    public static let darkCommandBarSelectionChromaFactor: Double = 0.6
+    /// Theme bubble = OKLCH(L, chroma × factor, theme hue): light L 0.97 × 0.2, dark L 0.42 × 0.5.
+    /// [07 §6] observed samples (#FDF1FA / #5C4457 for purple); rule inferred.
+    public static let floatingPanelLightness: Double = 0.97
+    public static let floatingPanelChromaFactor: Double = 0.2
+    public static let darkFloatingPanelLightness: Double = 0.42
+    public static let darkFloatingPanelChromaFactor: Double = 0.5
+
+    /// Base color when a space has no theme: "default light neutral theme" [06 §1] observed;
+    /// the exact value is unknown.
+    public static let defaultBaseColor = RGBAColor(hex: 0xE9E7EC)
+
+    /// Command bar background in light. [07 §5, §10] observed (#F9F9F9).
+    public static let commandBarBackground = RGBAColor(hex: 0xF9F9F9)
+    /// Command bar background in dark. [07 §5, §10] observed (#181818), for every theme.
+    public static let darkCommandBarBackground = RGBAColor(hex: 0x181818)
+
+    /// Source-over blend of `amount` white on top of `color` (sRGB, non-linear).
+    public static func overlayWhite(_ color: RGBAColor, amount: Double) -> RGBAColor {
+        mix(color, RGBAColor(red: 1, green: 1, blue: 1), amount: amount)
+    }
+
+    /// `color` moved `amount` (0...1) of the way to `other`, per sRGB channel (non-linear).
+    public static func mix(_ color: RGBAColor, _ other: RGBAColor, amount: Double) -> RGBAColor {
+        let a = min(max(amount, 0), 1)
+        return RGBAColor(
+            red: color.red + (other.red - color.red) * a,
+            green: color.green + (other.green - color.green) * a,
+            blue: color.blue + (other.blue - color.blue) * a,
+            alpha: color.alpha
+        )
+    }
+
+    /// Multiplies the color channels by `factor` (1 = unchanged, 0 = black).
+    public static func shade(_ color: RGBAColor, by factor: Double) -> RGBAColor {
+        let f = min(max(factor, 0), 1)
+        return RGBAColor(red: color.red * f, green: color.green * f, blue: color.blue * f, alpha: color.alpha)
+    }
+
+    /// Strongest lightening or darkening the brightness knob applies at its ends (0 or 1).
+    /// inferred: [06 §2] shows the knob ("brightness/contrast", inferred) but not its range.
+    public static let maxBrightnessShift: Double = 0.5
+
+    /// Applies `Theme.brightness` to one theme color. 0.5 is neutral and returns the color unchanged;
+    /// above it the color is blended toward white, below it toward black, linearly up to
+    /// `maxBrightnessShift` at the ends. inferred (the original mapping is unknown).
+    public static func applyBrightness(_ color: RGBAColor, brightness: Double) -> RGBAColor {
+        let b = min(max(brightness, 0), 1)
+        guard b != Theme.defaultBrightness else { return color }
+        let amount = abs(b - 0.5) * 2 * maxBrightnessShift
+        if b > 0.5 { return overlayWhite(color, amount: amount) }
+        return shade(color, by: 1 - amount)
+    }
+
+    /// Light window color of one theme color. [07 §8] inferred.
+    public static func lightWindow(_ color: RGBAColor) -> RGBAColor {
+        mix(color, windowMixGray, amount: windowMixAmount)
+    }
+
+    /// Dark window color of one theme color: a Display P3 blend toward gray 180/255. [07 §8.2] inferred.
+    public static func darkVariant(_ color: RGBAColor) -> RGBAColor {
+        mixInDisplayP3(color, gray: darkWindowGray, amount: darkWindowAmount)
+    }
+
+    /// The theme hue at a given OKLCH lightness, with the theme's chroma scaled by `chromaFactor`.
+    public static func tone(of theme: RGBAColor, lightness: Double, chromaFactor: Double) -> RGBAColor {
+        let lch = OKLCH(theme)
+        return OKLCH(lightness: lightness, chroma: lch.chroma * chromaFactor, hue: lch.hue).rgb(alpha: 1)
+    }
+
+    /// Whether a window color takes light (white) ink: true when white has more contrast on it than
+    /// the theme's dark row text. The crossover sits near a relative luminance of 0.22. [07 §8]
+    /// observed: the three presets (window luminance 0.39–0.73) use dark ink; round-1 (B32)
+    /// observed: the blue-violet window (0.135) uses white. The exact threshold is inferred.
+    public static func prefersLightInk(window: RGBAColor, darkText: RGBAColor) -> Bool {
+        contrast(window, darkText) < contrast(window, RGBAColor(hex: 0xFFFFFF))
+    }
+
+    /// Relative luminance (WCAG formula).
+    public static func luminance(_ c: RGBAColor) -> Double {
+        func channel(_ v: Double) -> Double {
+            v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
+    }
+
+    /// WCAG contrast ratio of two colors (1...21).
+    public static func contrast(_ a: RGBAColor, _ b: RGBAColor) -> Double {
+        let la = luminance(a), lb = luminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+
+    /// Light or dark for a theme appearance: automatic follows the system. [04 §dark mode] observed
+    /// (light / dark / automatic segments; automatic follows the system appearance).
+    public static func resolve(_ appearance: ThemeAppearance, system: ResolvedAppearance) -> ResolvedAppearance {
+        switch appearance {
+        case .light: return .light
+        case .dark: return .dark
+        case .automatic: return system
+        }
+    }
+
+    /// The palette of a theme, resolving its `appearance` against `systemAppearance`.
+    /// The default `.light` keeps callers that know no system setting (previews) on the light palette.
+    public static func palette(for theme: Theme?, systemAppearance: ResolvedAppearance = .light) -> ThemePalette {
+        palette(forStyle: theme?.style, systemAppearance: systemAppearance)
+    }
+
+    /// The palette of a theme in an already resolved appearance.
+    public static func palette(for theme: Theme?, appearance: ResolvedAppearance) -> ThemePalette {
+        palette(forStyle: theme?.style, appearance: appearance)
+    }
+
+    /// The palette of a theme style (a theme record, or the theme bubble's draft).
+    public static func palette(forStyle style: ThemeStyle?, systemAppearance: ResolvedAppearance = .light) -> ThemePalette {
+        palette(forStyle: style, appearance: resolve(style?.appearance ?? .automatic, system: systemAppearance))
+    }
+
+    /// Derives the palette for a theme in an already resolved appearance ([07 §8]). With several
+    /// color dots only the first drives the fills (how several colors blend is unknown).
+    /// `Theme.brightness` lightens or darkens the theme colors first (`applyBrightness`, inferred).
+    public static func palette(forStyle style: ThemeStyle?, appearance: ResolvedAppearance) -> ThemePalette {
+        let brightness = style?.brightness ?? Theme.defaultBrightness
+        let picked = (style?.colors ?? []).map { applyBrightness($0, brightness: brightness) }
+        let theme = picked.first ?? defaultBaseColor
+        let isDark = appearance == .dark
+        let windowOf: (RGBAColor) -> RGBAColor = { isDark ? darkVariant($0) : lightWindow($0) }
+        let window = windowOf(theme)
+        let white = RGBAColor(hex: 0xFFFFFF), black = RGBAColor(hex: 0x000000)
+
+        // Row text: the theme's dark tone, unless the window is too dark for it (then white).
+        let rowText = tone(of: theme, lightness: rowTextLightness, chromaFactor: rowTextChromaFactor)
+        let lightInk = prefersLightInk(window: window, darkText: rowText)
+        let primaryText = lightInk ? white : rowText
+        let chromeInk = lightInk ? white : black
+        let inkOpacity: ChromeInkOpacities = lightInk ? .lightInk : .darkInk
+        // Dark ink: controls are darker than the window [07 §8]; light ink: lighter (B32 round 1).
+        let controlFill = lightInk ? overlayWhite(window, amount: lightInkControlWhite) : shade(window, by: controlFillScale)
+        let separator = lightInk ? overlayWhite(window, amount: lightInkSeparatorWhite) : shade(window, by: separatorScale)
+
+        var palette = ThemePalette(
+            windowBackground: window,
+            controlFill: controlFill,
+            selectedTabFill: mix(window, selectedRowMixColor, amount: selectedRowMixAmount),
+            commandBarBackground: isDark ? darkCommandBarBackground : commandBarBackground,
+            commandBarSelection: isDark
+                ? tone(of: theme, lightness: darkCommandBarSelectionLightness, chromaFactor: darkCommandBarSelectionChromaFactor)
+                : tone(of: theme, lightness: commandBarSelectionLightness, chromaFactor: commandBarSelectionChromaFactor),
+            primaryText: primaryText,
+            secondaryText: withAlpha(chromeInk, inkOpacity.spaceName),
+            backgroundGradientColors: (picked.isEmpty ? [theme] : picked).map(windowOf)
+        )
+        palette.appearance = appearance
+        palette.grain = min(max(style?.grain ?? 0, 0), 1)
+        palette.chromeInk = chromeInk
+        palette.usesLightInk = lightInk
+        palette.inkOpacity = inkOpacity
+        palette.separator = separator
+        palette.scrollEdgeLine = separator
+        // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
+        palette.webPanelBackground = contentBackground(theme, appearance: appearance)
+        palette.selectedTabText = rowText
+        palette.floatingPanelBackground = isDark
+            ? tone(of: theme, lightness: darkFloatingPanelLightness, chromaFactor: darkFloatingPanelChromaFactor)
+            : tone(of: theme, lightness: floatingPanelLightness, chromaFactor: floatingPanelChromaFactor)
+
+        if isDark {
+            // [07 §3] observed (PX): input ≈ #F0F5F7, titles white ≈ 85 %, subtitles white ≈ 42 %.
+            palette.commandBarInputText = RGBAColor(hex: 0xF0F5F7)
+            palette.commandBarText = withAlpha(white, 0.85)
+            palette.commandBarSecondaryAlpha = 0.42
+            palette.commandBarSecondaryText = withAlpha(white, 0.42)
+            palette.commandBarSeparator = RGBAColor(hex: 0x363636)
+            palette.commandBarOutline = RGBAColor(hex: 0x565656)
+            palette.commandBarAccessoryFill = withAlpha(white, 0.08)
+            palette.commandBarArrowBoxFill = withAlpha(white, 0.08)
+            palette.floatingPanelInk = white
+            palette.floatingPanelSelection = withAlpha(window, 0.45)
+            palette.primaryButtonFill = tone(of: theme, lightness: 0.40, chromaFactor: 0.8)
+            // [07 §6] observed: a dark Space shows dark sheets.
+            palette.dialogBackground = RGBAColor(hex: 0x171C30)
+            palette.dialogInk = white
+            palette.dialogSecondaryButtonFill = RGBAColor(hex: 0x312E64)
+            palette.dialogPrimaryButtonDisabledFill = RGBAColor(hex: 0x312E64)
+        }
+        return palette
+    }
+
+    private static func withAlpha(_ color: RGBAColor, _ alpha: Double) -> RGBAColor {
+        var c = color
+        c.alpha = alpha
+        return c
+    }
+}
+
+/// OKLCH components of an sRGB color (Björn Ottosson's OKLab, polar form). Lightness 0...1,
+/// chroma ≥ 0, hue in degrees.
+struct OKLCH {
+    var lightness: Double
+    var chroma: Double
+    var hue: Double
+
+    init(lightness: Double, chroma: Double, hue: Double) {
+        self.lightness = lightness
+        self.chroma = chroma
+        self.hue = hue
+    }
+
+    init(_ c: RGBAColor) {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        let r = linear(c.red), g = linear(c.green), b = linear(c.blue)
+        let l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+        let m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+        let s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+        let L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+        let A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+        let B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+        var h = atan2(B, A) * 180 / .pi
+        if h < 0 { h += 360 }
+        self.init(lightness: L, chroma: (A * A + B * B).squareRoot(), hue: h)
+    }
+
+    /// The sRGB color, each channel clamped to 0...1.
+    func rgb(alpha: Double) -> RGBAColor {
+        let a = chroma * cos(hue * .pi / 180), b = chroma * sin(hue * .pi / 180)
+        let l = pow(lightness + 0.3963377774 * a + 0.2158037573 * b, 3)
+        let m = pow(lightness - 0.1055613458 * a - 0.0638541728 * b, 3)
+        let s = pow(lightness - 0.0894841775 * a - 1.2914855480 * b, 3)
+        func encode(_ v: Double) -> Double {
+            let c = min(max(v, 0), 1)
+            return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1 / 2.4) - 0.055
+        }
+        return RGBAColor(
+            red: encode(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+            green: encode(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+            blue: encode(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s),
+            alpha: alpha
+        )
+    }
+}
+
+/// HSB components of an sRGB color (all 0...1).
+struct HSV {
+    var hue: Double
+    var saturation: Double
+    var value: Double
+
+    init(hue: Double, saturation: Double, value: Double) {
+        self.hue = hue
+        self.saturation = min(max(saturation, 0), 1)
+        self.value = min(max(value, 0), 1)
+    }
+
+    init(_ c: RGBAColor) {
+        let maxC = max(c.red, c.green, c.blue), minC = min(c.red, c.green, c.blue)
+        let delta = maxC - minC
+        var h = 0.0
+        if delta > 0 {
+            if maxC == c.red {
+                h = ((c.green - c.blue) / delta).truncatingRemainder(dividingBy: 6)
+            } else if maxC == c.green {
+                h = (c.blue - c.red) / delta + 2
+            } else {
+                h = (c.red - c.green) / delta + 4
+            }
+            h /= 6
+            if h < 0 { h += 1 }
+        }
+        self.init(hue: h, saturation: maxC == 0 ? 0 : delta / maxC, value: maxC)
+    }
+
+    func rgb(alpha: Double) -> RGBAColor {
+        let h = (hue - hue.rounded(.down)) * 6
+        let sector = Int(h) % 6, f = h - Double(Int(h))
+        let p = value * (1 - saturation)
+        let q = value * (1 - saturation * f)
+        let t = value * (1 - saturation * (1 - f))
+        switch sector {
+        case 0: return RGBAColor(red: value, green: t, blue: p, alpha: alpha)
+        case 1: return RGBAColor(red: q, green: value, blue: p, alpha: alpha)
+        case 2: return RGBAColor(red: p, green: value, blue: t, alpha: alpha)
+        case 3: return RGBAColor(red: p, green: q, blue: value, alpha: alpha)
+        case 4: return RGBAColor(red: t, green: p, blue: value, alpha: alpha)
+        default: return RGBAColor(red: value, green: p, blue: q, alpha: alpha)
+        }
+    }
+}

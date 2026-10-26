@@ -1,0 +1,1135 @@
+import Foundation
+import Combine
+import OpenArcModel
+import OpenArcEngine
+import OpenArcSyncAPI
+import OpenArcDesign
+
+// The sidebar's view model, one per browser window: no UI types. It holds the window's selection
+// (Space, tab, per-Space memory, split focus) and exposes intents that mutate the shared workspace
+// only through the pure `TreeOps` functions, committed by the app-level `WorkspaceController`
+// (which also owns the live engine tabs). Ids and time come from the controller's injected
+// closures so tests are deterministic (TreeOps never calls `Date()` / `UUID()` itself).
+
+/// Where a command bar request comes from. The sidebar never shows the command bar itself.
+public enum SidebarCommandBarContext: Equatable, Sendable {
+    /// "+ New Tab" row: open the command bar to create a tab. [05 §command bar] observed.
+    case newTab
+    /// URL box click: the box is a placeholder that opens the command bar. [05 §window hierarchy] observed.
+    case currentTab
+    /// A new split pane was added; the bar opens inside that pane. [06 §5] observed.
+    case splitPane
+}
+
+/// Things the sidebar asks the shell to do because they open surfaces or need services that are
+/// not part of the sidebar (dialogs, share sheet, theme editor...). When no handler is set the
+/// matching menu items are disabled.
+public enum SidebarRequest: Equatable, Sendable {
+    case openCommandBar(SidebarCommandBarContext)
+    case toggleSidebar
+    case showSiteControls
+    case share(tabID: UUID)
+    case changeIcon(tabID: UUID)
+    case toggleUnreadBadge(tabID: UUID)
+    case editPinnedPage(tabID: UUID)
+    case moveTab(tabID: UUID, toProfile: UUID)
+    case newSpace
+    case changeSpaceIcon(spaceID: UUID)
+    case renameSpace(spaceID: UUID)
+    case editSpaceTheme(spaceID: UUID)
+    case setSpaceProfile(spaceID: UUID, profileID: UUID)
+    case shareSpace(spaceID: UUID)
+    case showLiveFolders(spaceID: UUID)
+    case exportSpace(spaceID: UUID, intoSpaceID: UUID)
+    case manageSpaces
+    /// The dock's leftmost button (the Home button of [05 §window hierarchy], [07 §4] observed):
+    /// opens the Library. inferred (its action was not recorded).
+    case openLibrary
+}
+
+@MainActor
+public final class SidebarViewModel: ObservableObject {
+
+    // MARK: Published state
+
+    /// The shared workspace (owned by `WorkspaceController`). Changes reach this view model's
+    /// observers through the controller.
+    public var workspace: WorkspaceState { controller.workspace }
+    @Published public private(set) var selectedSpaceID: UUID? {
+        // Favorites follow the window's Space for their pages' color scheme (B21).
+        didSet { if oldValue != selectedSpaceID { controller.syncWebColorSchemes() } }
+    }
+    @Published public private(set) var selectedTabID: UUID?
+    /// Item being renamed inline (tab or folder).
+    @Published public internal(set) var renamingItemID: UUID?
+    @Published public var isNewFolderSheetPresented = false
+    /// Parent for the folder the sheet creates (nil = top level).
+    @Published var newFolderParentID: UUID?
+    /// Space the user asked to delete (drives the confirmation).
+    @Published public internal(set) var pendingSpaceDeletionID: UUID?
+    /// Tab whose hover card is showing.
+    @Published private(set) var hoverCardTabID: UUID?
+    @Published private(set) var draggingItem: SidebarDragItem?
+    /// A link from another app is being dragged over the sidebar.
+    @Published private(set) var isDraggingExternalURL = false
+    /// Current drop target, only set while a valid plan exists for it.
+    @Published private(set) var dropTarget: SidebarDropTarget?
+    /// Last error from a rejected operation (for tests and diagnostics).
+    @Published public private(set) var lastError: Error?
+
+    // MARK: Hooks for the shell
+
+    /// Called after every change this window makes to the workspace (persistence is done by the
+    /// controller; this hook is for observers and tests).
+    public var onWorkspaceChange: ((WorkspaceState) -> Void)?
+    /// Shell-owned surfaces; see `SidebarRequest`.
+    public var requestHandler: ((SidebarRequest) -> Void)?
+    /// Asks the window to come to the front: the user selected a tab here that this window
+    /// already shows (see `selectTab`). Set by `ShellModel`.
+    public var onFocusRequest: (() -> Void)?
+    /// False for a model that is not a visible browser window (the Little Arc host when no window
+    /// is open): its selection does not hold tabs away from real windows.
+    var countsAsVisibleWindow = true
+    /// Seconds before the hover card shows. [06 §12] observed ≈ 0.5.
+    var hoverDelay: Double = Motion.hoverCardDelay
+    /// Seconds a drag must hover over a dock icon before the sidebar switches to that Space. inferred.
+    var dockSwitchDelay: Double = SidebarLocalTokens.dockSwitchDelay
+    /// Poll interval of the drag watchdog (see `beginDrag`).
+    var dragWatchInterval: Double = SidebarLocalTokens.dragWatchInterval
+    /// Seconds between two auto-scroll steps while a drag hovers an edge band of the list. inferred.
+    var autoScrollTickInterval: Double = SidebarLocalTokens.autoScrollTickInterval
+    /// Scroll hook of the list on screen (set by the list view, a fake in tests). Weak: the view owns it.
+    weak var listScroller: (any SidebarListScrolling)?
+    /// Signed auto-scroll velocity of the last step (points per second, 0 = not scrolling).
+    private(set) var autoScrollVelocity: CGFloat = 0
+    /// Last pointer position of the running drag (sidebar root space), so the target can be
+    /// re-hit-tested after the list scrolled under a pointer that did not move.
+    private(set) var lastDragPointer: CGPoint?
+    /// True while the auto-scroll loop runs.
+    var isAutoScrolling: Bool { autoScrollTask != nil }
+
+    // MARK: Dependencies and internals
+
+    /// The app-level owner of the workspace and the live engine tabs.
+    public let controller: WorkspaceController
+    /// True when this view model made its own controller (convenience init): `stop()` stops it.
+    private let ownsController: Bool
+    private var controllerChanges: AnyCancellable?
+    private var now: () -> Date { controller.now }
+    private var makeID: () -> UUID { controller.makeID }
+    private(set) var hoverTask: Task<Void, Never>?
+    private var hoveredTabID: UUID?
+    /// Last selected tab per space, restored when switching back. inferred.
+    private var lastSelectedTab: [UUID: UUID] = [:]
+    /// Last selected member per split layout, so selecting the group row returns to the pane that
+    /// had focus. inferred: `SplitLayout` stores no focus; the selected tab is the focused pane.
+    private var lastFocusedPane: [UUID: UUID] = [:]
+    private var dragWatchTask: Task<Void, Never>?
+    private var autoScrollTask: Task<Void, Never>?
+    /// Visible list area of the last drag update (sidebar root space).
+    private var autoScrollViewport: CGRect = .null
+    private var dockHoverTask: Task<Void, Never>?
+    private var dockHoverSpaceID: UUID?
+
+    /// A window's sidebar on the shared controller. A stale or missing Space id falls back to the
+    /// first live Space.
+    public init(controller: WorkspaceController, selectedSpaceID: UUID? = nil) {
+        self.controller = controller
+        self.ownsController = false
+        self.selectedSpaceID = Self.liveSpaceID(selectedSpaceID, in: controller.workspace)
+        attach()
+    }
+
+    /// A sidebar with its own in-memory controller (no persistence, sync disabled). For tests,
+    /// previews and single-window tools.
+    public init(
+        engine: any BrowserEngine,
+        workspace: WorkspaceState,
+        selectedSpaceID: UUID? = nil,
+        now: @escaping () -> Date = Date.init,
+        makeID: @escaping () -> UUID = UUID.init
+    ) {
+        self.controller = WorkspaceController(
+            dependencies: AppDependencies(engine: engine, sync: DisabledSyncStore()),
+            workspace: workspace,
+            now: now,
+            makeID: makeID
+        )
+        self.ownsController = true
+        self.selectedSpaceID = Self.liveSpaceID(selectedSpaceID, in: workspace)
+        attach()
+    }
+
+    private static func liveSpaceID(_ id: UUID?, in workspace: WorkspaceState) -> UUID? {
+        let initial = id.flatMap { workspace.spaces[$0] }.flatMap { $0.meta.isTombstone ? nil : $0.id }
+        return initial ?? workspace.allLiveSpaces.first?.id
+    }
+
+    /// Registers with the controller and redraws when the shared workspace or live tabs change.
+    private func attach() {
+        controller.register(self)
+        controllerChanges = controller.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    /// Cancels this window's background tasks (hover, drag) and leaves the controller. Call when
+    /// the window closes. A view model that made its own controller stops it too (engine tasks,
+    /// the scheduler).
+    public func stop() {
+        hoverTask?.cancel()
+        endDrag()
+        controllerChanges = nil
+        controller.unregister(self)
+        if ownsController { controller.stop() }
+    }
+
+    // MARK: - Derived state
+
+    public var selectedSpace: Space? {
+        selectedSpaceID.flatMap { workspace.spaces[$0] }.flatMap { $0.meta.isTombstone ? nil : $0 }
+    }
+
+    /// The selected Space's profile, else the Default profile (oldest live one).
+    var currentProfileID: UUID? { selectedSpace?.profileID ?? workspace.defaultProfileID }
+
+    var theme: Theme? { selectedSpace?.themeID.flatMap { workspace.themes[$0] } }
+
+    /// The selected Space's palette; Automatic themes follow the system appearance (B21).
+    var palette: ThemePalette { ThemeDerivation.palette(for: theme, systemAppearance: controller.systemAppearance) }
+
+    var snapshot: SidebarSnapshot {
+        SidebarSnapshot.make(workspace: workspace, spaceID: selectedSpaceID, profileID: currentProfileID)
+    }
+
+    /// Spaces in dock order. The dock shows every profile's spaces. [05 §window hierarchy] observed.
+    var dockSpaces: [Space] { workspace.allLiveSpaces }
+
+    var selectedLiveState: SidebarTabLiveState? { selectedTabID.flatMap { liveState(for: $0) } }
+
+    /// Tab shown in the URL box: its live URL if loaded, else the stored one.
+    var selectedURL: URL? {
+        guard let id = selectedTabID else { return nil }
+        return liveState(for: id)?.url ?? workspace.tabs[id]?.url
+    }
+
+    var urlBoxContent: SidebarURLBoxContent { SidebarURLBoxContent.make(url: selectedURL) }
+
+    var reloadMode: SidebarReloadMode { SidebarReloadMode.make(isLoading: selectedLiveState?.isLoading ?? false) }
+
+    var canGoBack: Bool { selectedLiveState?.canGoBack ?? false }
+    var canGoForward: Bool { selectedLiveState?.canGoForward ?? false }
+
+    var canRequest: Bool { requestHandler != nil }
+
+    /// A space can be deleted unless it is the last one. inferred (the window needs a space).
+    var canDeleteSpace: Bool { dockSpaces.count > 1 }
+
+    func liveState(for id: UUID) -> SidebarTabLiveState? { controller.liveState(for: id) }
+
+    /// An incognito window's sidebar: no favorites, dock or Space menus. inferred.
+    var isIncognito: Bool { controller.isOffTheRecord }
+
+    /// Tabs this window has on screen: the selected tab and its split partners. They are kept from
+    /// auto-archive and cannot be shown in another window at the same time. inferred.
+    var onScreenTabIDs: Set<UUID> {
+        guard let selected = selectedTabID else { return [] }
+        var ids: Set<UUID> = [selected]
+        if let layout = SplitPaneLayout.activeLayout(in: workspace, containing: selected) {
+            ids.formUnion(layout.root.tabIDs)
+        }
+        return ids
+    }
+
+    func isSelected(_ id: UUID) -> Bool { selectedTabID == id }
+
+    /// Link to copy for a tab. Copy Link in the tab menu and in the URL box. [05 §context menus] observed.
+    func linkURL(for id: UUID) -> URL? {
+        liveState(for: id)?.url ?? workspace.tabs[id]?.url
+    }
+
+    // MARK: - Workspace plumbing
+
+    /// Replaces the shared workspace without saving it (a value already stored elsewhere, e.g.
+    /// merged from sync, or test setup). Every window repairs its selection.
+    public func replaceWorkspace(_ new: WorkspaceState) {
+        controller.replaceWorkspace(new)
+    }
+
+    /// Commits a workspace value built by a flow of this window (Space edits, Library board): it
+    /// is saved, every window repairs its selection and `onWorkspaceChange` fires.
+    func commitWorkspace(_ new: WorkspaceState) {
+        controller.commit(new, origin: nil)
+        onWorkspaceChange?(new)
+    }
+
+    /// The shared workspace changed elsewhere (another window, auto-archive, sync).
+    func workspaceDidChange() {
+        repairSelection()
+    }
+
+    @discardableResult
+    private func mutate(_ body: (WorkspaceState) throws -> WorkspaceState) -> Bool {
+        do {
+            try controller.mutate(origin: self, body)
+            lastError = nil
+            onWorkspaceChange?(workspace)
+            return true
+        } catch {
+            lastError = error
+            return false
+        }
+    }
+
+    /// Queues engine work on the controller, so `settleEngineWork` can wait for it.
+    private func engineTask(_ work: @escaping @MainActor () async -> Void) {
+        controller.enqueueEngineWork(work)
+    }
+
+    private func repairSelection() {
+        if selectedSpace == nil { selectedSpaceID = workspace.allLiveSpaces.first?.id }
+        if let id = selectedTabID, workspace.tabs[id].map({ $0.meta.isTombstone }) ?? true {
+            selectedTabID = nil
+        }
+    }
+
+    private func request(_ r: SidebarRequest) { requestHandler?(r) }
+
+    // MARK: - Selection and engine
+
+    /// Selects a tab (row click, favorite click, ⌘1…⌘9). The engine tab is created lazily.
+    /// A favorite opens in the current space. [06 §12] observed.
+    ///
+    /// A tab's page can be on screen in one window only (one engine surface). When another window
+    /// already shows the tab, that window comes to the front and this window's selection stays as
+    /// it is. inferred (B14; the spec records nothing about tabs across windows).
+    public func selectTab(_ id: UUID) {
+        selectTab(id, focusingOtherWindow: true)
+    }
+
+    /// See `selectTab(_:)`. With `focusingOtherWindow` false a tab shown elsewhere is just not
+    /// selected (used when a Space switch restores its remembered tab). Returns whether it was selected.
+    @discardableResult
+    func selectTab(_ id: UUID, focusingOtherWindow: Bool) -> Bool {
+        guard let tab = workspace.tabs[id], !tab.meta.isTombstone else { return false }
+        if let other = controller.sidebar(showing: id, except: self) {
+            if focusingOtherWindow { other.onFocusRequest?() }
+            return false
+        }
+        selectedTabID = id
+        if let spaceID = tab.location.spaceID ?? selectedSpaceID { lastSelectedTab[spaceID] = id }
+        if let layout = SplitPaneLayout.activeLayout(in: workspace, containing: id) { lastFocusedPane[layout.id] = id }
+        mutate { try TreeOps.markTabActive($0, id: id, now: now()) }
+        let controller = self.controller, fallback = currentProfileID
+        engineTask { [weak self] in
+            do { try await controller.ensureLive(id, fallbackProfileID: fallback) } catch { self?.lastError = error }
+        }
+        return true
+    }
+
+    /// Creates the engine tab for `id` if needed (split panes other than the selected tab).
+    func ensureLive(_ id: UUID) async {
+        do { try await controller.ensureLive(id, fallbackProfileID: currentProfileID) } catch { lastError = error }
+    }
+
+    /// Applies an engine event to the live state (forwarded to the controller, which owns it).
+    func apply(_ event: TabEvent, to id: UUID) {
+        controller.apply(event, to: id)
+    }
+
+    private func syncContent(_ id: UUID) {
+        controller.syncContent(id)
+    }
+
+    /// Live engine tab for a model tab id, if one has been created.
+    func liveTab(for id: UUID) -> (any BrowserTab)? { controller.liveTab(for: id) }
+
+    /// Loads `url` in the selected tab (⌘L then Enter). With no selected tab, opens a new tab.
+    /// A tab without an engine tab yet gets the URL stored and is then loaded. [02] observed
+    /// ("edit the current address"); the no-selection fallback is inferred.
+    public func navigateSelectedTab(to url: URL) {
+        guard let id = selectedTabID, workspace.tabs[id].map({ !$0.meta.isTombstone }) == true else {
+            newTab(url: url, title: url.host ?? url.absoluteString)
+            return
+        }
+        if let live = liveTab(for: id) {
+            engineTask { try? await live.load(url) }
+        } else {
+            mutate { ws in
+                let title = ws.tabs[id]?.title ?? ""
+                return try TreeOps.updateTabContent(ws, id: id, url: url, title: title, faviconURL: nil, now: now())
+            }
+            selectTab(id)
+        }
+    }
+
+    /// Tabs in keyboard order: favorites, then pinned rows, then Today. Favorites counting as
+    /// sidebar items is inferred. A split group is ONE item (inferred, [06 §5] only says the group
+    /// is one unit); it stands for its focused pane tab, so selecting it keeps the focused pane.
+    var keyboardTabOrder: [UUID] {
+        let snap = snapshot
+        let rows = snap.visibleTabEntries.map { entry -> UUID in
+            switch entry {
+            case .tab(let id): return id
+            case .group(let group): return focusedPaneTab(of: group)
+            }
+        }
+        return snap.favorites.map(\.id) + rows
+    }
+
+    // MARK: Split groups
+
+    /// The pane a split-group row selects: the selected tab if it is a member, else the member
+    /// that was focused last, else the first member by sidebar order. [06 §5] gives no rule; inferred.
+    func focusedPaneTab(of group: SidebarSplitGroup) -> UUID {
+        if let selected = selectedTabID, group.contains(selected) { return selected }
+        if let last = lastFocusedPane[group.layoutID], group.contains(last) { return last }
+        return group.anchorID
+    }
+
+    /// Whether the group row is the selected row (one of its members is the selected tab).
+    func isGroupSelected(_ group: SidebarSplitGroup) -> Bool {
+        selectedTabID.map(group.contains) ?? false
+    }
+
+    /// Click on a split-group row: selects the group's focused pane tab.
+    public func selectSplitGroup(_ layoutID: UUID) {
+        guard let group = snapshot.splitGroup(layoutID: layoutID) else { return }
+        selectTab(focusedPaneTab(of: group))
+    }
+
+    /// ✕ on a split-group row in Today: archives every member (the whole split goes away at once).
+    /// inferred: [06 §5] does not say what the group's close button does; closing the group as the
+    /// one unit it is in the sidebar is the reading that matches "one group". Selection moves to the
+    /// next row, else the previous one.
+    public func closeSplitGroup(_ layoutID: UUID) {
+        guard let group = snapshot.splitGroup(layoutID: layoutID) else { return }
+        let ids = group.sidebarOrder
+        let next = isGroupSelected(group) ? neighborRow(of: group) : nil
+        let stamp = now()
+        guard mutate({ state in
+            try ids.reduce(state) { try TreeOps.archiveTab($0, id: $1, reason: .closed, now: stamp) }
+        }) else { return }
+        ids.forEach(closeLive)
+        if let selected = selectedTabID, ids.contains(selected) {
+            selectedTabID = nil
+            if let next { selectTab(next, focusingOtherWindow: false) }
+        }
+    }
+
+    /// "—" on a split-group row in the pinned area: unloads every member's page, as the single
+    /// pinned row does (see `unloadPinnedTab`). inferred.
+    public func unloadPinnedSplitGroup(_ layoutID: UUID) {
+        guard let group = snapshot.splitGroup(layoutID: layoutID) else { return }
+        let next = isGroupSelected(group) ? neighborRow(of: group) : nil
+        let wasSelected = isGroupSelected(group)
+        group.sidebarOrder.forEach(closeLive)
+        if wasSelected {
+            selectedTabID = nil
+            if let next { selectTab(next, focusingOtherWindow: false) }
+        }
+    }
+
+    /// The tab to select when a whole group row leaves: the next row, else the previous one.
+    private func neighborRow(of group: SidebarSplitGroup) -> UUID? {
+        let entries = snapshot.visibleTabEntries
+        guard let index = entries.firstIndex(where: { entry in
+            if case .group(let g) = entry { return g.layoutID == group.layoutID }
+            return false
+        }) else { return nil }
+        func tab(_ entry: SidebarSnapshot.TabEntry) -> UUID {
+            switch entry {
+            case .tab(let id): return id
+            case .group(let g): return focusedPaneTab(of: g)
+            }
+        }
+        if index + 1 < entries.count { return tab(entries[index + 1]) }
+        return index > 0 ? tab(entries[index - 1]) : nil
+    }
+
+    /// Next Tab / Previous Tab (⌥⌘↓ / ⌥⌘↑), wrapping. [02 §tabs] observed keys; wrapping inferred.
+    public func stepTab(by delta: Int) {
+        let order = keyboardTabOrder
+        guard !order.isEmpty else { return }
+        guard let id = selectedTabID, let index = order.firstIndex(of: id) else {
+            selectTab(delta >= 0 ? order[0] : order[order.count - 1])
+            return
+        }
+        selectTab(order[((index + delta) % order.count + order.count) % order.count])
+    }
+
+    /// Go to Sidebar Item 1–8 (⌘1…⌘8); 9 is the last item (⌘9). [02 §tabs] observed.
+    public func goToSidebarItem(number: Int) {
+        let order = keyboardTabOrder
+        guard !order.isEmpty, number >= 1 else { return }
+        if number == 9 { selectTab(order[order.count - 1]); return }
+        guard number <= order.count else { return }
+        selectTab(order[number - 1])
+    }
+
+    /// Mute / Unmute from the tab menu. [05 §context menus] observed "Mute".
+    public func toggleMute(_ id: UUID) {
+        guard let live = liveTab(for: id) else { return }
+        let muted = !(liveState(for: id)?.isMuted ?? false)
+        engineTask { await live.setMuted(muted) }
+    }
+
+    /// Edit Pinned Page ▸ Replace Pinned URL with Current. [05 §context menus] observed.
+    public func replacePinnedURLWithCurrent(_ id: UUID) {
+        if let live = liveState(for: id)?.url, workspace.tabs[id]?.url != live { syncContent(id) }
+        mutate { try TreeOps.replacePinnedURLWithCurrent($0, id: id, now: now()) }
+    }
+
+    /// Reset Tab to Original URL. [02 §tabs] observed command name.
+    public func resetTabToPinnedURL(_ id: UUID) {
+        guard let pinned = workspace.tabs[id]?.pinnedURL else { return }
+        guard mutate({ try TreeOps.resetTabToPinnedURL($0, id: id, now: now()) }) else { return }
+        if let live = liveTab(for: id) { engineTask { try? await live.load(pinned) } }
+    }
+
+    /// New Profile… (Set Profile ▸ / Move to ▸ Profile). Returns the new profile id.
+    /// [01, 05 §context menus] observed menu items.
+    @discardableResult
+    public func createProfile(name: String) -> UUID {
+        controller.createProfile(name: name)
+    }
+
+    /// Replaces a profile's synced settings (search engine, Today lifetime) through
+    /// `TreeOps.updateProfileSettings`. [03 §Profiles] observed. Returns false if refused.
+    @discardableResult
+    public func updateProfileSettings(_ profileID: UUID, _ settings: ProfileSettings) -> Bool {
+        controller.updateProfileSettings(profileID, settings)
+    }
+
+    /// Deletes a profile through `TreeOps.deleteProfile` (refused for the Default profile and
+    /// while Spaces use it). Archived favorites lose their live engine tabs. Returns false if refused.
+    @discardableResult
+    public func deleteProfile(_ profileID: UUID) -> Bool {
+        controller.deleteProfile(profileID)
+    }
+
+    /// Waits until queued engine work (tab creation, closing, navigation) has finished. For tests.
+    func settleEngineWork() async {
+        await controller.settleEngineWork()
+    }
+
+    private func closeLive(_ id: UUID) {
+        controller.closeLive(id)
+    }
+
+    /// Picks the tab to select after `id` leaves the visible list: the one below, else above.
+    private func neighbor(of id: UUID) -> UUID? {
+        let snap = snapshot
+        // A member of a split group: the sibling pane takes over, as it did when the panes were
+        // separate rows (`ShellModel.closeSplitPane` relies on this).
+        if let group = snap.splitGroup(containing: id), let layout = workspace.splits[group.layoutID],
+           let pane = SplitPaneLayout.neighborPane(of: id, in: layout.root), group.contains(pane) {
+            return pane
+        }
+        let order = snap.visibleTabOrder
+        guard let index = order.firstIndex(of: id) else { return nil }
+        if index + 1 < order.count { return order[index + 1] }
+        return index > 0 ? order[index - 1] : nil
+    }
+
+    // MARK: - Toolbar intents
+
+    public func goBack() {
+        guard let live = selectedTabID.flatMap({ liveTab(for: $0) }) else { return }
+        engineTask { try? await live.goBack() }
+    }
+
+    public func goForward() {
+        guard let live = selectedTabID.flatMap({ liveTab(for: $0) }) else { return }
+        engineTask { try? await live.goForward() }
+    }
+
+    /// Reload, or stop while loading. [06 §13] observed.
+    public func reloadOrStop() {
+        guard let live = selectedTabID.flatMap({ liveTab(for: $0) }) else { return }
+        let stop = reloadMode == .stop
+        engineTask { if stop { try? await live.stopLoading() } else { try? await live.reload() } }
+    }
+
+    public func openCommandBar(_ context: SidebarCommandBarContext) { request(.openCommandBar(context)) }
+
+    public func toggleSidebar() { request(.toggleSidebar) }
+
+    // MARK: - Tab intents
+
+    /// Opens a tab at the top of Today in the current space and selects it. [06 §13] observed.
+    @discardableResult
+    public func newTab(url: URL? = nil, title: String = "New Tab") -> UUID? {
+        guard let spaceID = selectedSpaceID else { return nil }
+        let id = makeID()
+        guard mutate({ try TreeOps.openTab($0, id: id, spaceID: spaceID, url: url, title: title, now: now()) }) else { return nil }
+        selectTab(id)
+        return id
+    }
+
+    /// Click on the "+ New Tab" row: opens the command bar when a shell is attached, otherwise
+    /// creates a blank tab directly (previews, tests). inferred.
+    public func newTabRowClicked() {
+        if requestHandler != nil { request(.openCommandBar(.newTab)) } else { newTab() }
+    }
+
+    /// Archives a tab (⌘W / ✕ on a Today row). [05 §window and app entry points] observed.
+    public func closeTab(_ id: UUID) {
+        guard workspace.tabs[id].map({ !$0.meta.isTombstone }) == true else { return }
+        let next = selectedTabID == id ? neighbor(of: id) : nil
+        guard mutate({ try TreeOps.archiveTab($0, id: id, reason: .closed, now: now()) }) else { return }
+        closeLive(id)
+        if selectedTabID == id {
+            selectedTabID = nil
+            if let next { selectTab(next, focusingOtherWindow: false) }
+        }
+    }
+
+    /// The newest archived item that ⇧⌘T would restore: reason `.closed` only. inferred: items the
+    /// app archived on its own (idle timeout, Clear, deleted space) were not "closed" by the user.
+    /// [02 §tabs and sidebar] observed lists "Restore Last Closed Tab" (⇧⌘T) without further detail.
+    var lastClosedArchiveItem: ArchiveItem? {
+        workspace.archiveNewestFirst.first { $0.reason == .closed }
+    }
+
+    var canRestoreLastClosedTab: Bool { lastClosedArchiveItem != nil }
+
+    /// Restores an archived item as a new tab at the top of Today and selects it. The archive item
+    /// is tombstoned by `TreeOps.restoreFromArchive`. Unknown or already restored ids are a no-op.
+    /// Target space: inferred, the space the item came from when it is still live (the sidebar
+    /// switches to it so the tab is visible), otherwise the current space. Favorites and items
+    /// with a deleted source space land in the current space. [06 §8] observed: the Library
+    /// "Archived Tabs" list; the destination of a restored tab is not specified.
+    @discardableResult
+    public func restoreArchived(_ itemID: UUID) -> UUID? {
+        guard let item = workspace.archive[itemID], !item.meta.isTombstone else { return nil }
+        let sourceSpace = item.spaceID.flatMap { id in workspace.spaces[id].flatMap { $0.meta.isTombstone ? nil : id } }
+        guard let spaceID = sourceSpace ?? selectedSpaceID else { return nil }
+        let newID = makeID()
+        guard mutate({ try TreeOps.restoreFromArchive($0, itemID: itemID, newTabID: newID, spaceID: spaceID, now: now()) }) else { return nil }
+        if spaceID != selectedSpaceID { selectedSpaceID = spaceID }
+        selectTab(newID)
+        return newID
+    }
+
+    /// Restore Last Closed Tab (⇧⌘T). [02 §tabs and sidebar] observed. Repeated calls walk back through
+    /// older closed items because each restore tombstones its archive item. No-op when nothing
+    /// qualifies.
+    @discardableResult
+    public func restoreLastClosedTab() -> UUID? {
+        guard let item = lastClosedArchiveItem else { return nil }
+        return restoreArchived(item.id)
+    }
+
+    /// "—" on a pinned row. [06 §12] observed that the pinned row shows "—" where Today rows show
+    /// "✕", described as "unpin / collapse". The text is ambiguous; this implements "collapse":
+    /// the live page is unloaded and the pin stays. Unpinning is a menu item ("Remove Pin").
+    public func unloadPinnedTab(_ id: UUID) {
+        guard liveTab(for: id) != nil || selectedTabID == id else { return }
+        let next = selectedTabID == id ? neighbor(of: id) : nil
+        closeLive(id)
+        if selectedTabID == id {
+            selectedTabID = nil
+            if let next { selectTab(next, focusingOtherWindow: false) }
+        }
+    }
+
+    /// Pin (⌘D): the tab goes to the end of the pinned area. [06 §4] observed.
+    public func pinTab(_ id: UUID) {
+        mutate { try TreeOps.pinTab($0, id: id, now: now()) }
+    }
+
+    /// Unpin ("Remove Pin"): the tab returns to the top of Today. The target position is
+    /// inferred ([06 §13] says new tabs go to the top; unpinning is unobserved).
+    public func unpinTab(_ id: UUID) {
+        guard let spaceID = workspace.tabs[id]?.location.spaceID ?? selectedSpaceID else { return }
+        mutate { try TreeOps.moveTab($0, id: id, to: .today(spaceID: spaceID), position: .first, now: now()) }
+    }
+
+    /// ⌘D toggles pinned state.
+    public func togglePin(_ id: UUID) {
+        guard let tab = workspace.tabs[id] else { return }
+        switch tab.location {
+        case .today: pinTab(id)
+        case .pinned: unpinTab(id)
+        case .favorite: removeFavorite(id)
+        }
+    }
+
+    public func addFavorite(_ id: UUID) {
+        // An incognito window has no favorites. inferred (B14).
+        guard !isIncognito, let profileID = currentProfileID else { return }
+        mutate { try TreeOps.moveTab($0, id: id, to: .favorite(profileID: profileID), position: .last, now: now()) }
+    }
+
+    /// "Remove Favorite": back to the top of Today in the current space. inferred.
+    public func removeFavorite(_ id: UUID) {
+        guard let spaceID = selectedSpaceID else { return }
+        mutate { try TreeOps.moveTab($0, id: id, to: .today(spaceID: spaceID), position: .first, now: now()) }
+    }
+
+    /// Move to ▸ <Space>. [05 §context menus] observed. Pinned tabs stay pinned (top level of
+    /// the target space), Today tabs go to the top of the target Today. inferred.
+    public func moveTab(_ id: UUID, toSpace spaceID: UUID) {
+        guard let tab = workspace.tabs[id] else { return }
+        let location: TabLocation
+        let position: InsertPosition
+        if case .pinned = tab.location {
+            location = .pinned(spaceID: spaceID, folderID: nil)
+            position = .last
+        } else {
+            location = .today(spaceID: spaceID)
+            position = .first
+        }
+        mutate { try TreeOps.moveTab($0, id: id, to: location, position: position, now: now()) }
+    }
+
+    /// Duplicate. [05 §context menus] observed. The copy opens at the top of Today. inferred.
+    @discardableResult
+    public func duplicateTab(_ id: UUID) -> UUID? {
+        guard let tab = workspace.tabs[id], let spaceID = selectedSpaceID else { return nil }
+        let copy = makeID()
+        let url = liveState(for: id)?.url ?? tab.url
+        guard mutate({ try TreeOps.openTab($0, id: copy, spaceID: spaceID, url: url, title: tab.displayTitle, now: now()) }) else { return nil }
+        selectTab(copy)
+        return copy
+    }
+
+    /// "↓ Clear" / ⇧⌘K: archives every Today tab. [05 §window and app entry points] observed.
+    public func clearToday() {
+        guard let spaceID = selectedSpaceID else { return }
+        let ids = workspace.today(spaceID: spaceID).map(\.id)
+        guard mutate({ try TreeOps.clearToday($0, spaceID: spaceID, now: now()) }) else { return }
+        ids.forEach(closeLive)
+        if let selected = selectedTabID, ids.contains(selected) { selectedTabID = nil }
+    }
+
+    /// Auto-archive: archives Today tabs idle for their profile's "Archive tabs after" setting
+    /// (`ProfileSettings.todayLifetime`, [03 §Profiles] observed per profile; `lifetimeOverride`
+    /// replaces it for every tab), closes their live engine tabs and repairs the selection of
+    /// every window. [05 §window and app entry points] observed ("auto archive after 12 hours by
+    /// default"). Pinned tabs and favorites are never touched (enforced by `TreeOps.autoArchive`).
+    /// The tabs on screen in any window (selected tab and its split partners) are kept: inferred.
+    /// Runs on the shared controller. Returns the ids that were archived.
+    @discardableResult
+    public func runAutoArchive(lifetimeOverride: TimeInterval? = nil) -> [UUID] {
+        controller.runAutoArchive(lifetimeOverride: lifetimeOverride)
+    }
+
+    // MARK: Rename
+
+    public func beginRename(_ id: UUID) {
+        hoverEnded(id)
+        renamingItemID = id
+    }
+
+    public func cancelRename() { renamingItemID = nil }
+
+    /// Commits a rename. An empty (or whitespace) title resets a tab to its page title (inferred)
+    /// and is ignored for folders.
+    public func commitRename(_ id: UUID, text: String) {
+        defer { renamingItemID = nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if workspace.tabs[id] != nil {
+            mutate { try TreeOps.renameTab($0, id: id, customTitle: trimmed.isEmpty ? nil : trimmed, now: now()) }
+        } else if workspace.folders[id] != nil, !trimmed.isEmpty {
+            mutate { try TreeOps.renameFolder($0, id: id, title: trimmed, now: now()) }
+        }
+    }
+
+    // MARK: Folders
+
+    public func requestNewFolder(parent: UUID? = nil) {
+        newFolderParentID = parent
+        isNewFolderSheetPresented = true
+    }
+
+    /// Creates a folder at the top of the pinned area, expanded. [06 §3] observed.
+    @discardableResult
+    public func createFolder(title: String, parent: UUID? = nil) -> UUID? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let spaceID = selectedSpaceID else { return nil }
+        let id = makeID()
+        guard mutate({ try TreeOps.createFolder($0, id: id, spaceID: spaceID, parentFolderID: parent, title: trimmed, now: now()) }) else { return nil }
+        isNewFolderSheetPresented = false
+        return id
+    }
+
+    public func toggleFolder(_ id: UUID) {
+        guard let folder = workspace.folders[id] else { return }
+        mutate { try TreeOps.setFolderExpanded($0, id: id, isExpanded: !folder.isExpanded, now: now()) }
+    }
+
+    /// Collapse All Folders / Expand All Folders. [02 §tabs and sidebar] observed (no default key).
+    public func setAllFoldersExpanded(_ expanded: Bool) {
+        guard let spaceID = selectedSpaceID else { return }
+        let ids = workspace.folders.values.filter { !$0.meta.isTombstone && $0.spaceID == spaceID && $0.isExpanded != expanded }.map(\.id)
+        mutate { state in
+            try ids.reduce(state) { try TreeOps.setFolderExpanded($0, id: $1, isExpanded: expanded, now: now()) }
+        }
+    }
+
+    // MARK: Spaces
+
+    public func selectSpace(_ id: UUID) {
+        guard workspace.spaces[id].map({ !$0.meta.isTombstone }) == true, id != selectedSpaceID else { return }
+        selectedSpaceID = id
+        // The remembered tab stays unselected while another window shows it. inferred.
+        if let remembered = lastSelectedTab[id], workspace.tabs[remembered].map({ !$0.meta.isTombstone }) == true {
+            selectTab(remembered, focusingOtherWindow: false)
+        }
+    }
+
+    /// Next/Previous Space (⌥⌘→ / ⌥⌘←), wrapping. [02 §space] observed.
+    public func stepSpace(by delta: Int) {
+        let spaces = dockSpaces
+        guard !spaces.isEmpty, let current = spaces.firstIndex(where: { $0.id == selectedSpaceID }) else { return }
+        let index = ((current + delta) % spaces.count + spaces.count) % spaces.count
+        selectSpace(spaces[index].id)
+    }
+
+    /// Go to Space N (⌃1…⌃9), 1-based. [02 §space] observed.
+    public func goToSpace(number: Int) {
+        let spaces = dockSpaces
+        guard number >= 1, number <= spaces.count else { return }
+        selectSpace(spaces[number - 1].id)
+    }
+
+    public func requestDeleteSpace(_ id: UUID) {
+        guard canDeleteSpace else { return }
+        pendingSpaceDeletionID = id
+    }
+
+    public func cancelDeleteSpace() { pendingSpaceDeletionID = nil }
+
+    /// Confirms "Delete Space": the model archives its tabs and folders. [06 §11] observed.
+    public func confirmDeleteSpace() {
+        guard let id = pendingSpaceDeletionID else { return }
+        pendingSpaceDeletionID = nil
+        let spaces = dockSpaces
+        let index = spaces.firstIndex(where: { $0.id == id }) ?? 0
+        let fallback = spaces.indices.contains(index + 1) ? spaces[index + 1].id : spaces.last(where: { $0.id != id })?.id
+        let doomed = workspace.allTabs(inSpace: id).map(\.id)
+        guard mutate({ try TreeOps.deleteSpace($0, id: id, now: now()) }) else { return }
+        doomed.forEach(closeLive)
+        if selectedSpaceID == id { selectedSpaceID = fallback }
+        if let tab = selectedTabID, workspace.tabs[tab]?.meta.isTombstone == true { selectedTabID = nil }
+    }
+
+    func requestFromMenu(_ r: SidebarRequest) { request(r) }
+
+    // MARK: Split view
+
+    /// Add Split View (⌃⇧=): the current tab goes left, a new empty tab opens right and the
+    /// command bar opens inside that pane. [06 §5] observed.
+    public func addSplitView() {
+        guard let base = selectedTabID, let spaceID = selectedSpaceID else { return }
+        let newID = makeID(), layoutID = makeID()
+        let ok = mutate { state in
+            let opened = try TreeOps.openTab(state, id: newID, spaceID: spaceID, url: nil, title: "New Tab", now: now())
+            return try TreeOps.addSplitPane(opened, layoutID: layoutID, existingTabID: base, newTabID: newID, now: now())
+        }
+        guard ok else { return }
+        selectTab(newID)
+        request(.openCommandBar(.splitPane))
+    }
+
+    /// "Open in Split View" from a row's menu: shows `id` next to the selected tab. [05 §context menus] observed.
+    public func openInSplitView(_ id: UUID) {
+        guard let base = selectedTabID, base != id else { return addSplitView() }
+        // A page on screen in another window cannot join this window's split. inferred (B14).
+        if let other = controller.sidebar(showing: id, except: self) {
+            other.onFocusRequest?()
+            return
+        }
+        let layoutID = makeID()
+        mutate { try TreeOps.addSplitPane($0, layoutID: layoutID, existingTabID: base, newTabID: id, now: now()) }
+    }
+
+    /// "Separate Page from Split View" (View menu): takes the tab out of its split layout and keeps
+    /// the tab itself. [01 §View] observed the item.
+    public func separateFromSplit(_ id: UUID) {
+        mutate { TreeOps.removeSplitPane($0, tabID: id, now: now()) }
+    }
+
+    /// Whether a tab is part of a live split group (the sidebar treats a group as a unit). [06 §5] observed.
+    func isInSplit(_ id: UUID) -> Bool {
+        workspace.splits.values.contains { !$0.meta.isTombstone && $0.root.tabIDs.contains(id) }
+    }
+
+    // MARK: - Hover card
+
+    func hoverBegan(_ id: UUID) {
+        hoverTask?.cancel()
+        hoveredTabID = id
+        hoverCardTabID = nil
+        guard draggingItem == nil, renamingItemID == nil, workspace.tabs[id] != nil else { return }
+        let delay = hoverDelay
+        hoverTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.hoveredTabID == id else { return }
+            self.hoverCardTabID = id
+        }
+    }
+
+    func hoverEnded(_ id: UUID) {
+        guard hoveredTabID == id else { return }
+        hoveredTabID = nil
+        hoverTask?.cancel()
+        hoverCardTabID = nil
+    }
+
+    // MARK: - Drag and drop
+
+    /// Starts an in-app drag. `isSessionActive` is polled by a watchdog and must return whether the
+    /// drag is still going (the view passes "primary mouse button is down"). SwiftUI gives no callback
+    /// when a drag is cancelled (released outside every drop target, or Esc), so without the watchdog
+    /// `draggingItem` would stay set. Tests omit it and call `endDrag()` themselves.
+    func beginDrag(_ item: SidebarDragItem, isSessionActive: (@MainActor () -> Bool)? = nil) {
+        endDrag()
+        draggingItem = item
+        hoverTask?.cancel()
+        hoverCardTabID = nil
+        guard let isSessionActive else { return }
+        let interval = dragWatchInterval
+        dragWatchTask = Task { [weak self] in
+            // Two consecutive inactive polls are required: the drop callback of a successful drop
+            // arrives right after the button goes up and must not lose the race against this poll.
+            var inactive = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                inactive = isSessionActive() ? 0 : inactive + 1
+                if inactive >= 2 {
+                    self.endDrag()
+                    return
+                }
+            }
+        }
+    }
+
+    /// An external drag (a link from another app) entered the sidebar.
+    func beginExternalDrag() {
+        guard draggingItem == nil, !isDraggingExternalURL else { return }
+        isDraggingExternalURL = true
+    }
+
+    /// Ends any drag and clears all drag feedback. A cancelled drag changes nothing in the workspace.
+    func endDrag() {
+        dragWatchTask?.cancel()
+        dragWatchTask = nil
+        cancelDockHover()
+        stopAutoScroll()
+        lastDragPointer = nil
+        draggingItem = nil
+        isDraggingExternalURL = false
+        dropTarget = nil
+    }
+
+    private var isDragActive: Bool { draggingItem != nil || isDraggingExternalURL }
+
+    /// The plan for the current drag over `target`, or nil. For an external URL the plan is computed
+    /// for a scratch tab opened at the top of Today, so the same rules apply as for a tab move.
+    func dropPlan(for target: SidebarDropTarget) -> SidebarDropPlan? {
+        guard let spaceID = selectedSpaceID else { return nil }
+        if let item = draggingItem {
+            return SidebarDropPlanner.plan(item: item, target: target, workspace: workspace, spaceID: spaceID, profileID: currentProfileID)
+        }
+        guard isDraggingExternalURL, let scratch = try? scratchURLTab(in: spaceID) else { return nil }
+        return SidebarDropPlanner.plan(item: .tab(Self.scratchTabID), target: target, workspace: scratch, spaceID: spaceID, profileID: currentProfileID)
+    }
+
+    /// Title shown in the drag preview.
+    func dragTitle(for item: SidebarDragItem) -> String {
+        switch item {
+        case .tab(let id): return workspace.tabs[id]?.displayTitle ?? ""
+        case .folder(let id): return workspace.folders[id]?.title ?? ""
+        case .splitGroup:
+            guard let group = snapshot.splitGroup(layoutID: item.id) else { return "" }
+            return group.members.map(\.displayTitle).joined(separator: " | ")
+        }
+    }
+
+    /// Hit-tests `point` and updates the indicator in one step. Returns whether the drop is accepted.
+    @discardableResult
+    func updateDropTarget(at point: CGPoint, in geometry: SidebarDropGeometry) -> Bool {
+        if isDragActive { lastDragPointer = point }
+        guard let target = SidebarDropHitTester.target(at: point, in: geometry) else {
+            clearDropTarget()
+            return false
+        }
+        let accepted = updateDropTarget(target)
+        updateAutoScroll(pointer: point, viewport: geometry.list)
+        return accepted
+    }
+
+    /// Re-hit-tests the last drag pointer against fresh geometry. The view calls it whenever the
+    /// reported frames change (the list scrolled under a resting pointer), so the indicator always
+    /// matches the rows currently under the pointer. No-op outside a drag.
+    func refreshDropTarget(in geometry: SidebarDropGeometry) {
+        guard isDragActive, let point = lastDragPointer else { return }
+        updateDropTarget(at: point, in: geometry)
+    }
+
+    /// Updates the indicator; returns whether the target accepts the drop.
+    @discardableResult
+    func updateDropTarget(_ target: SidebarDropTarget) -> Bool {
+        let accepted = dropPlan(for: target) != nil
+        let new: SidebarDropTarget? = accepted ? target : nil
+        if dropTarget != new { dropTarget = new }
+        trackDockHover(new)
+        return accepted
+    }
+
+    func clearDropTarget() {
+        if dropTarget != nil { dropTarget = nil }
+        cancelDockHover()
+        stopAutoScroll()
+    }
+
+    // MARK: Auto-scroll while dragging
+
+    /// Starts or stops the auto-scroll loop for a drag pointer at `pointer` over the list area
+    /// `viewport` (both in the sidebar root space). Not in the spec; inferred (see `SidebarAutoScroll`).
+    func updateAutoScroll(pointer: CGPoint, viewport: CGRect) {
+        autoScrollViewport = viewport
+        guard isDragActive, let metrics = listScroller?.metrics,
+              SidebarAutoScroll.velocity(pointerY: pointer.y, viewport: viewport, metrics: metrics) != 0 else {
+            stopAutoScroll()
+            return
+        }
+        guard autoScrollTask == nil else { return }
+        let interval = autoScrollTickInterval
+        autoScrollTask = Task { [weak self] in
+            let clock = ContinuousClock()
+            var last = clock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                let now = clock.now
+                let elapsed = now - last
+                last = now
+                let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
+                if !self.autoScrollStep(elapsed: seconds) {
+                    self.stopAutoScroll()
+                    return
+                }
+            }
+        }
+    }
+
+    /// One auto-scroll step of `elapsed` seconds for the last drag pointer. Returns false when the
+    /// list should stop scrolling (pointer out of the bands, content end reached, drag over).
+    @discardableResult
+    func autoScrollStep(elapsed: Double) -> Bool {
+        guard isDragActive, let pointer = lastDragPointer, let scroller = listScroller,
+              let metrics = scroller.metrics else {
+            autoScrollVelocity = 0
+            return false
+        }
+        let velocity = SidebarAutoScroll.velocity(pointerY: pointer.y, viewport: autoScrollViewport, metrics: metrics)
+        autoScrollVelocity = velocity
+        guard velocity != 0 else { return false }
+        let offset = SidebarAutoScroll.offset(after: elapsed, velocity: velocity, from: metrics)
+        if offset != metrics.offset { scroller.scroll(toOffset: offset) }
+        return true
+    }
+
+    func stopAutoScroll() {
+        autoScrollTask?.cancel()
+        autoScrollTask = nil
+        autoScrollVelocity = 0
+    }
+
+    /// Applies the in-app drop. Returns whether the workspace changed.
+    @discardableResult
+    func performDrop(on target: SidebarDropTarget) -> Bool {
+        defer { endDrag() }
+        guard let plan = dropPlan(for: target) else { return false }
+        return apply(plan)
+    }
+
+    /// Applies a link dropped from outside: opens a tab for `url` at the dropped position and
+    /// selects it. Position rules are the ones of a tab move; behavior inferred ([06 §12] covers
+    /// only in-app drags). Returns the new tab's id, or nil if the target does not accept it.
+    @discardableResult
+    func performURLDrop(_ url: URL, on target: SidebarDropTarget) -> UUID? {
+        defer { endDrag() }
+        guard let spaceID = selectedSpaceID, let plan = dropPlan(for: target) else { return nil }
+        let id = makeID()
+        let title = url.host ?? url.absoluteString
+        // One mutation: either the tab is opened at the dropped position or nothing changes.
+        let stamp = now()
+        guard mutate({ ws in
+            let opened = try TreeOps.openTab(ws, id: id, spaceID: spaceID, url: url, title: title, now: stamp)
+            return try Self.applying(plan, tabID: id, to: opened, now: stamp)
+        }) else { return nil }
+        // Dropped on a dock icon: the tab lives in another Space, so show that Space.
+        if let space = workspace.tabs[id]?.location.spaceID, space != selectedSpaceID { selectedSpaceID = space }
+        selectTab(id)
+        return id
+    }
+
+    /// Placeholder tab used only to compute plans for external drops. Never stored.
+    private static let scratchTabID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
+
+    private func scratchURLTab(in spaceID: UUID) throws -> WorkspaceState {
+        try TreeOps.openTab(workspace, id: Self.scratchTabID, spaceID: spaceID, url: nil, title: "", now: now())
+    }
+
+    /// Runs a plan through `TreeOps`.
+    private func apply(_ plan: SidebarDropPlan) -> Bool {
+        let stamp = now()
+        return mutate { try Self.applying(plan, tabID: nil, to: $0, now: stamp) }
+    }
+
+    /// Pure: the workspace after `plan`. `tabID` replaces the id of a tab move (external drops).
+    /// A folder the tab is dropped into is expanded. [06 §12] observed.
+    private static func applying(_ plan: SidebarDropPlan, tabID: UUID?, to ws: WorkspaceState, now: Date) throws -> WorkspaceState {
+        var result: WorkspaceState
+        switch plan.action {
+        case .moveTab(let id, let location, let position):
+            result = try TreeOps.moveTab(ws, id: tabID ?? id, to: location, position: position, now: now)
+        case .moveFolder(let id, let space, let parent, let position):
+            result = try TreeOps.moveFolder(ws, id: id, toSpace: space, parentFolderID: parent, position: position, now: now)
+        case .moveTabs(let ids, let location, let position):
+            // A split group moves as a unit: every member lands next to the others in one mutation.
+            result = ws
+            for step in SidebarDropPlanner.moveSteps(ids: ids, position: position) {
+                result = try TreeOps.moveTab(result, id: step.id, to: location, position: step.position, now: now)
+            }
+        case .moveSplitLayout(let id, let space, let position):
+            result = try TreeOps.moveSplitLayout(ws, layoutID: id, toSpaceID: space, position: position, now: now)
+        }
+        if let folderID = plan.expandFolderID, result.folders[folderID]?.isExpanded == false {
+            result = try TreeOps.setFolderExpanded(result, id: folderID, isExpanded: true, now: now)
+        }
+        return result
+    }
+
+    // MARK: Dock hover while dragging
+
+    /// Starts (or keeps) the timer that switches to the hovered Space; any other target cancels it.
+    private func trackDockHover(_ target: SidebarDropTarget?) {
+        guard case .dockSpace(let id)? = target, id != selectedSpaceID else {
+            cancelDockHover()
+            return
+        }
+        guard dockHoverSpaceID != id else { return }
+        cancelDockHover()
+        dockHoverSpaceID = id
+        let delay = dockSwitchDelay
+        dockHoverTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.dockHoverSpaceID == id,
+                  self.draggingItem != nil || self.isDraggingExternalURL else { return }
+            self.dockHoverSpaceID = nil
+            self.dropTarget = nil
+            self.selectSpace(id)
+        }
+    }
+
+    private func cancelDockHover() {
+        dockHoverTask?.cancel()
+        dockHoverTask = nil
+        dockHoverSpaceID = nil
+    }
+}

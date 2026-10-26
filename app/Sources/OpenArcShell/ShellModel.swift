@@ -1,0 +1,523 @@
+import Foundation
+import Combine
+import OpenArcModel
+import OpenArcEngine
+import OpenArcSyncAPI
+import OpenArcPersistence
+
+/// Per-window coordinator (B14): one per browser window. The window's `SidebarViewModel` holds its
+/// selection; the shared workspace, persistence, sync, live engine tabs and auto-archive belong to
+/// the app-level `WorkspaceController`. This type wires the window's sidebar to its command bar
+/// and the window-owned surfaces (command bar presentation, sidebar visibility, Library mode,
+/// split focus, site controls).
+@MainActor
+public final class ShellModel: ObservableObject {
+    /// The app-level owner of the workspace (an incognito window has its own, in memory).
+    public let controller: WorkspaceController
+    public var dependencies: AppDependencies { controller.dependencies }
+    public let sidebar: SidebarViewModel
+    public let commandBar: CommandBarViewModel
+    /// The command bar shown inside a split pane (400 pt, lower right). [06 §5] observed.
+    public let paneCommandBar: CommandBarViewModel
+    /// Create Space, Rename Space and Change Space Icon surfaces. [06 §1] observed.
+    public let spaceFlow: SpaceFlowModel
+    /// The Library mode of this window (rail, list column, web panel). [06 §8] observed.
+    public let library: LibraryModel
+    /// Site Control Center bubble and URL box copy link. [06 §12] observed.
+    public let siteControls: SiteControlsModel
+    /// Find in page for the selected tab (the focused pane in a split). B25.
+    public let findBar: FindBarModel
+    /// Hidden-sidebar peek: pinned / hidden / floating. Follows `isSidebarVisible`. [06 §14] B34.
+    let sidebarPeek: SidebarPeekController
+    /// Asks where Save Page As writes (suggested file name → location; nil cancels). nil uses the
+    /// system save panel; tests install their own. B25.
+    public var chooseSavePageLocation: (@MainActor (String) async -> URL?)?
+
+    /// Whether the command bar panel is showing. [05 §command bar] observed: floating, no scrim.
+    /// Also true while the bar is shown inside a split pane.
+    @Published public private(set) var isCommandBarPresented = false
+    /// The split pane (its tab id) that hosts the command bar; nil when the bar floats over the
+    /// window. [06 §5, §6] observed.
+    @Published public internal(set) var commandBarPaneTabID: UUID?
+    /// "Expand Current Split" is on: only the focused pane shows. inferred.
+    @Published public internal(set) var isSplitExpanded = false
+    /// Sidebar visibility (View ▸ Hide Sidebar). [01 §View] observed.
+    @Published public private(set) var isSidebarVisible = true
+    /// Last command the shell could not run itself (no surface for it yet). For tests/diagnostics.
+    @Published public private(set) var lastUnhandledCommand: CommandBarCommand?
+    /// One-time alert after launch, e.g. the workspace file was refused and nothing is saved.
+    @Published public internal(set) var launchNotice: LaunchNotice?
+    /// Opens a new Little Arc window. Installed by the main window's view, where SwiftUI's
+    /// `openWindow` is available; nil in tests and previews. [02] ⌥⌘N observed.
+    public var openLittleArcWindow: (() -> Void)?
+    /// Opens the Settings window. Installed by the main window's view (SwiftUI's `openSettings`);
+    /// nil in tests and previews. [01 §Arc] Settings…, [02] ⌘, observed.
+    public var openSettingsWindow: (() -> Void)?
+    /// Brings this window to the front. Installed by the window's view; nil in tests.
+    public var focusWindow: (() -> Void)?
+    /// How often another window asked this one to come to the front (one-window-per-tab rule).
+    /// For tests and diagnostics.
+    public private(set) var focusRequestCount = 0
+    /// How often a tab was revealed in this window (`revealTab`, B29). For tests and diagnostics.
+    public private(set) var revealRequestCount = 0
+    /// `revealTab` ran before the window's view installed `focusWindow`.
+    private var wantsFocusOnAttach = false
+
+    /// Saved in `ui-state.json` and counted as an open window (false for the hidden host Little
+    /// Arc uses when no window is open).
+    let isBrowserWindow: Bool
+    /// True when this model made its controller (convenience init, incognito): `stop()` stops it.
+    private let ownsController: Bool
+    private var isStopped = false
+    private var sidebarChanges: AnyCancellable?
+    private var spaceFlowChanges: AnyCancellable?
+    private var libraryChanges: AnyCancellable?
+    private var libraryFlagChanges: AnyCancellable?
+    private var peekChanges: AnyCancellable?
+
+    /// A window on `controller` that opens with `window`'s selection. A stale Space id falls back to
+    /// the first Space, a stale or foreign tab id to no selection.
+    init(controller: WorkspaceController, window: WindowUIState, isBrowserWindow: Bool = true, ownsController: Bool = false) {
+        self.controller = controller
+        self.isBrowserWindow = isBrowserWindow
+        self.ownsController = ownsController
+        let sidebar = SidebarViewModel(controller: controller, selectedSpaceID: window.selectedSpaceID)
+        sidebar.countsAsVisibleWindow = isBrowserWindow
+        self.sidebar = sidebar
+        // Sources read the shared workspace at query time, so results always reflect the current
+        // state (`installCommandBarSources` replaces these with window-aware ones).
+        self.commandBar = CommandBarViewModel(
+            sources: commandBarDefaultSources(workspace: { @MainActor in controller.workspace })
+        )
+        self.paneCommandBar = CommandBarViewModel(
+            sources: commandBarDefaultSources(workspace: { @MainActor in controller.workspace }),
+            mode: .currentTab,
+            presentation: .pane
+        )
+        self.spaceFlow = SpaceFlowModel(sidebar: sidebar, now: controller.now, makeID: controller.makeID)
+        self.library = LibraryModel(sidebar: sidebar, now: controller.now)
+        // Fake site settings until the Chromium bridge provides them (plan C12 / C14 / C16).
+        self.siteControls = SiteControlsModel(sidebar: sidebar, provider: FakeSiteSettingsProvider(), pasteboard: SystemPasteboardWriter())
+        self.findBar = FindBarModel(sidebar: sidebar)
+        self.sidebarPeek = SidebarPeekController(isPinned: window.isSidebarVisible)
+        sidebar.requestHandler = { [weak self] request in self?.handle(request) }
+        sidebar.onFocusRequest = { [weak self] in self?.requestFocus() }
+        installCommandBarSources()
+        commandBar.onAction = { [weak self] action in self?.perform(action) }
+        commandBar.onDismiss = { [weak self] in self?.dismissCommandBar() }
+        paneCommandBar.onAction = { [weak self] action in self?.perform(action) }
+        paneCommandBar.onDismiss = { [weak self] in self?.dismissCommandBar() }
+        // Menu enablement (split items, back/forward) reads sidebar state through this model.
+        sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        libraryChanges = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        peekChanges = sidebarPeek.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        isSidebarVisible = window.isSidebarVisible
+        if let tabID = window.selectedTabID { restoreSelectedTab(tabID) }
+        connectLibraryFlags()
+        if isBrowserWindow {
+            launchNotice = controller.takeLaunchNotice()
+            // Starts auto-archive with the first window, after its selection is restored. [B3]
+            controller.registerWindow(self)
+        }
+    }
+
+    /// A window for `request` on the app's controller: New Window, Blank Window, an incognito
+    /// window (with its own in-memory controller) or a window of the last session.
+    public static func window(for request: BrowserWindowRequest, on controller: WorkspaceController) -> ShellModel {
+        switch request.kind {
+        case .incognito:
+            let incognito = controller.makeIncognito()
+            return ShellModel(controller: incognito, window: WindowUIState(), ownsController: true)
+        case .restore:
+            let saved = controller.takePendingRestore() ?? controller.reopenState()
+            return ShellModel(controller: controller, window: saved)
+        case .newWindow:
+            let spaceID = request.spaceID ?? controller.activeSpaceID
+            let tabID = request.tabID ?? spaceID.flatMap { controller.mostRecentTabNotOnScreen(inSpace: $0) }
+            return ShellModel(controller: controller, window: WindowUIState(selectedSpaceID: spaceID, selectedTabID: tabID))
+        case .blank:
+            return ShellModel(controller: controller, window: WindowUIState(selectedSpaceID: request.spaceID ?? controller.activeSpaceID))
+        }
+    }
+
+    /// One window with its own controller: loads the workspace from the persistence store (or uses
+    /// `workspace` on first launch), restores the first saved window, starts sync forwarding and
+    /// auto-archive. Kept for tests and single-window tools; the app shares one controller across
+    /// windows (`OpenArcScene`).
+    public convenience init(
+        dependencies: AppDependencies,
+        workspace: WorkspaceState,
+        now: @escaping () -> Date = Date.init,
+        makeID: @escaping () -> UUID = UUID.init,
+        notificationCenter: NotificationCenter = .default
+    ) {
+        let controller = WorkspaceController(
+            dependencies: dependencies,
+            workspace: workspace,
+            now: now,
+            makeID: makeID,
+            notificationCenter: notificationCenter
+        )
+        let saved = controller.takePendingRestore() ?? WindowUIState()
+        controller.discardPendingRestores()
+        self.init(controller: controller, window: saved, ownsController: true)
+    }
+
+    /// Whether this is an incognito window. inferred (B14).
+    public var isIncognito: Bool { controller.isOffTheRecord }
+
+    /// This window's entry in `ui-state.json`.
+    var windowUIState: WindowUIState {
+        WindowUIState(selectedSpaceID: selectedSpaceID, selectedTabID: selectedTabID, isSidebarVisible: isSidebarVisible)
+    }
+
+    /// Another window asked for a tab this window shows: bring this window to the front.
+    private func requestFocus() {
+        focusRequestCount += 1
+        focusWindow?()
+    }
+
+    /// The window became the key window: New Window opens on its Space from now on.
+    public func windowDidBecomeKey() {
+        controller.windowDidBecomeActive(self)
+    }
+
+    /// The window closed (close button, Close Window ⇧⌘W). Its state leaves the saved UI state and
+    /// its background work stops. An incognito window's tabs are discarded. inferred.
+    public func windowDidClose() {
+        guard !isStopped else { return }
+        if isBrowserWindow { controller.unregisterWindow(self, save: true) }
+        stop()
+    }
+
+    /// Keeps the Library flags (B22) app-wide: this window starts from the shared values, saves its
+    /// changes through the controller and follows changes made in other windows.
+    private func connectLibraryFlags() {
+        let flags = controller.libraryFlags
+        library.restorePersistentState(mediaIntroDismissed: flags.mediaIntroDismissed, lastSectionName: flags.lastSection)
+        library.onPersistentStateChange = { [weak self] in
+            guard let self else { return }
+            self.controller.setLibraryFlags(LibraryUIFlags(
+                mediaIntroDismissed: !self.library.isMediaIntroVisible,
+                lastSection: self.library.lastSection?.rawValue
+            ))
+        }
+        libraryFlagChanges = controller.$libraryFlags.dropFirst().sink { [weak self] flags in
+            self?.library.restorePersistentState(mediaIntroDismissed: flags.mediaIntroDismissed, lastSectionName: flags.lastSection)
+        }
+    }
+
+    // MARK: Forwarded state (kept for callers and tests that predate the sidebar view model)
+
+    public var workspace: WorkspaceState { sidebar.workspace }
+    public var selectedSpaceID: UUID? { sidebar.selectedSpaceID }
+    public var selectedTabID: UUID? { sidebar.selectedTabID }
+    public var selectedSpace: Space? { sidebar.selectedSpace }
+    public var selectedTheme: Theme? { sidebar.theme }
+    public var selectedLiveTab: (any BrowserTab)? { selectedTabID.flatMap { sidebar.liveTab(for: $0) } }
+
+    /// Selects a tab and waits until its engine tab exists.
+    public func activate(tabID: UUID) async throws {
+        sidebar.selectTab(tabID)
+        await sidebar.settleEngineWork()
+        if let error = sidebar.lastError { throw error }
+    }
+
+    /// Opens a new tab at the top of Today in the current space and waits for its engine tab.
+    @discardableResult
+    public func openNewTab(url: URL?) async throws -> UUID? {
+        let id = sidebar.newTab(url: url, title: url?.host ?? "New Tab")
+        await sidebar.settleEngineWork()
+        if let error = sidebar.lastError { throw error }
+        return id
+    }
+
+    public func selectSpace(_ id: UUID) { sidebar.selectSpace(id) }
+
+    // MARK: Command bar
+
+    /// ⌘T opens an empty bar for a new tab; ⌘L prefills the current address. [02] observed.
+    public func presentCommandBar(_ mode: CommandBarMode) {
+        if commandBarPaneTabID != nil {
+            commandBarPaneTabID = nil
+            paneCommandBar.dismiss()
+        }
+        let url = mode == .currentTab ? sidebar.selectedURL : nil
+        commandBar.open(
+            mode: mode,
+            currentURL: url,
+            currentTabID: mode == .currentTab ? selectedTabID : nil,
+            currentSpaceID: selectedSpaceID
+        )
+        isCommandBarPresented = true
+    }
+
+    public func dismissCommandBar() {
+        guard isCommandBarPresented else { return }
+        isCommandBarPresented = false
+        if commandBarPaneTabID != nil {
+            commandBarPaneTabID = nil
+            paneCommandBar.dismiss()
+        } else {
+            commandBar.dismiss()
+        }
+    }
+
+    /// Opens the command bar inside the split pane of `tabID`: lower right, 400 pt wide.
+    /// URLs and searches load into that pane's tab. [06 §5] observed. `currentURL` prefills the
+    /// bar like ⌘L (the pane top bar's domain pill, B18); nil opens it empty.
+    public func presentCommandBarInPane(_ tabID: UUID, currentURL: URL? = nil) {
+        if isCommandBarPresented && commandBarPaneTabID == nil { commandBar.dismiss() }
+        paneCommandBar.open(mode: .currentTab, currentURL: currentURL, currentTabID: tabID, currentSpaceID: selectedSpaceID)
+        commandBarPaneTabID = tabID
+        isCommandBarPresented = true
+    }
+
+    /// Executes what the command bar returned.
+    func perform(_ action: CommandBarAction) {
+        // A pane bar loads into its own pane's tab, so make that pane the selected tab first.
+        let pane = commandBarPaneTabID
+        dismissCommandBar()
+        switch action {
+        case .openURL(_, .currentTab), .searchWeb(_, .currentTab):
+            if let pane, selectedTabID != pane { sidebar.selectTab(pane) }
+        default:
+            break
+        }
+        switch action {
+        case .switchToTab(let id):
+            // A tab another window shows brings that window to the front instead. inferred (B14).
+            if controller.sidebar(showing: id, except: sidebar) != nil {
+                sidebar.selectTab(id)
+                return
+            }
+            if let spaceID = workspace.tabs[id]?.location.spaceID, spaceID != selectedSpaceID {
+                sidebar.selectSpace(spaceID)
+            }
+            sidebar.selectTab(id)
+        case .openURL(let url, let target):
+            open(url, target: target)
+        case .searchWeb(let query, let target):
+            if let url = searchURL(for: query) { open(url, target: target) }
+        case .runCommand(let command):
+            run(command)
+        case .restoreArchived(let itemID):
+            sidebar.restoreArchived(itemID)
+        case .goToSpace(let spaceID):
+            sidebar.selectSpace(spaceID)
+        case .moveTab(let tabID, let spaceID):
+            // The sidebar's Move to ▸ <Space> intent; the window stays in its space. inferred.
+            sidebar.moveTab(tabID, toSpace: spaceID)
+        }
+    }
+
+    private func open(_ url: URL, target: CommandBarOpenTarget) {
+        switch target {
+        case .newTab: sidebar.newTab(url: url, title: url.host ?? url.absoluteString)
+        case .currentTab: sidebar.navigateSelectedTab(to: url)
+        }
+    }
+
+    func searchURL(for query: String) -> URL? {
+        guard let escaped = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+        return URL(string: searchURLTemplate.replacingOccurrences(of: "%@", with: escaped))
+    }
+
+    /// Runs an app command. Each one does what its menu item does (see `ShellCommands`,
+    /// `LibraryCommands`); rows of commands that cannot run are not offered (`isAvailable`).
+    func run(_ command: CommandBarCommand) {
+        // An incognito window has no Spaces to create, edit or manage. inferred (B14).
+        if isIncognito, [.newSpace, .editTheme, .renameSpace, .manageSpaces].contains(command) {
+            lastUnhandledCommand = command
+            return
+        }
+        switch command {
+        // File
+        case .newTab: presentCommandBar(.newTab)
+        case .newWindow: openBrowserWindow(.newWindow, for: command)
+        case .newIncognitoWindow: openBrowserWindow(.incognito, for: command)
+        case .newLittleArcWindow:
+            if let open = openLittleArcWindow { open() } else { lastUnhandledCommand = command }
+        case .restoreLastClosedTab: sidebar.restoreLastClosedTab()
+        // Edit
+        case .copyURL: if let url = sidebar.selectedURL { siteControls.pasteboard.writeURL(url) }
+        // View
+        case .toggleSidebar: toggleSidebar()
+        case .reload: sidebar.reloadOrStop()
+        case .addSplitView: addSplitView()
+        case .closeSplitPane: closeSplitPane()
+        case .separateFromSplit: separatePageFromSplitView()
+        case .expandSplit: toggleExpandCurrentSplit()
+        // Spaces
+        case .newSpace: spaceFlow.beginCreate()
+        case .editTheme: if let id = selectedSpaceID { spaceFlow.beginEditTheme(spaceID: id) }
+        case .renameSpace: if let id = selectedSpaceID { spaceFlow.beginRename(spaceID: id) }
+        case .nextSpace: sidebar.stepSpace(by: 1)
+        case .previousSpace: sidebar.stepSpace(by: -1)
+        case .manageSpaces: openLibrary(.spaces)
+        // Tabs
+        case .archiveTab: if let id = selectedTabID { sidebar.closeTab(id) }
+        case .togglePin: if let id = selectedTabID { sidebar.togglePin(id) }
+        case .newFolder: sidebar.requestNewFolder()
+        case .nextTab: sidebar.stepTab(by: 1)
+        case .previousTab: sidebar.stepTab(by: -1)
+        case .clearToday: sidebar.clearToday()
+        case .collapseAllFolders: sidebar.setAllFoldersExpanded(false)
+        case .expandAllFolders: sidebar.setAllFoldersExpanded(true)
+        // Archive
+        case .goBack: sidebar.goBack()
+        case .goForward: sidebar.goForward()
+        case .viewArchive: openLibrary(.archivedTabs)
+        // Window
+        case .openLibrary: openLibrary()
+        case .viewDownloads: openLibrary(.downloads)
+        case .viewEasels: openLibrary(.easels)
+        case .viewMedia: openLibrary(.media)
+        case .viewBoosts: openLibrary(.boosts)
+        // App
+        case .openSettings:
+            if let open = openSettingsWindow { open() } else { lastUnhandledCommand = command }
+        case .contactTheTeam:
+            // No help surface yet; the row stays because it closes the empty-query list ([04 §command bar] observed).
+            lastUnhandledCommand = command
+        }
+    }
+
+    /// Opens a browser window through the scene's opener; recorded as unhandled without one.
+    private func openBrowserWindow(_ kind: BrowserWindowRequest.Kind, for command: CommandBarCommand) {
+        guard let open = controller.openBrowserWindow else {
+            lastUnhandledCommand = command
+            return
+        }
+        open(windowRequest(kind))
+    }
+
+    /// A request for a new window opened from this one: New Window and Blank Window open on this
+    /// window's Space (inferred); an incognito window, or any window opened from one, uses the
+    /// app's active Space.
+    func windowRequest(_ kind: BrowserWindowRequest.Kind) -> BrowserWindowRequest {
+        BrowserWindowRequest(kind: kind, spaceID: kind == .incognito || isIncognito ? nil : selectedSpaceID)
+    }
+
+    // MARK: Little Arc
+
+    /// "Open in Open Arc" from a Little Arc window: opens the page as a new Today tab in the
+    /// current space (via `TreeOps.openTab`) and selects it. The Little Arc page had no model tab
+    /// before this. [06 §7] inferred. Returns the new tab id.
+    @discardableResult
+    public func adoptLittleArcTab(url: URL, title: String) -> UUID? {
+        // The window this Little Arc was opened from has closed since: use the window used last
+        // (or the hidden host, which opens a new window). inferred.
+        if isStopped, !isIncognito {
+            let host = controller.littleArcHost()
+            if host !== self { return host.adoptLittleArcTab(url: url, title: title) }
+        }
+        if isCommandBarPresented { dismissCommandBar() }
+        guard let id = sidebar.newTab(url: url, title: title) else { return nil }
+        if isBrowserWindow {
+            // The window may be behind other windows or minimized: bring it forward (B29).
+            revealTab(id)
+        } else {
+            // No browser window is open (this is the hidden host): one opens and shows the tab (B29).
+            controller.revealInBrowserWindow(id, spaceID: selectedSpaceID)
+        }
+        return id
+    }
+
+    /// Shows `tabID` in this window and brings the window to the front: leaves the Library,
+    /// switches to the tab's Space, selects the tab. A window that has no AppKit window yet comes
+    /// forward once it has one (`takeFocusOnAttach`). inferred (B29).
+    func revealTab(_ tabID: UUID) {
+        library.exit()
+        if let spaceID = workspace.tabs[tabID]?.location.spaceID, spaceID != selectedSpaceID {
+            sidebar.selectSpace(spaceID)
+        }
+        if selectedTabID != tabID { sidebar.selectTab(tabID, focusingOtherWindow: false) }
+        revealRequestCount += 1
+        if let focusWindow { focusWindow() } else { wantsFocusOnAttach = true }
+    }
+
+    /// Whether the window must come to the front as soon as its AppKit window is known. Consumed.
+    func takeFocusOnAttach() -> Bool {
+        defer { wantsFocusOnAttach = false }
+        return wantsFocusOnAttach
+    }
+
+    // MARK: Sidebar requests
+
+    /// Hides or shows the sidebar. From the floating overlay this is "Lock sidebar": it pins the
+    /// sidebar back. [06 §14] observed.
+    public func toggleSidebar() {
+        isSidebarVisible.toggle()
+        sidebarPeek.setPinned(isSidebarVisible)
+    }
+
+    func handle(_ request: SidebarRequest) {
+        // An incognito window has no Spaces to create, edit or manage. inferred.
+        if isIncognito {
+            switch request {
+            case .newSpace, .renameSpace, .changeSpaceIcon, .editSpaceTheme, .manageSpaces: return
+            default: break
+            }
+        }
+        switch request {
+        case .openCommandBar(.currentTab): presentCommandBar(.currentTab)
+        case .openCommandBar(.newTab): presentCommandBar(.newTab)
+        case .openCommandBar(.splitPane):
+            if let id = selectedTabID { presentCommandBarInPane(id) } else { presentCommandBar(.newTab) }
+        case .toggleSidebar: toggleSidebar()
+        case .newSpace: spaceFlow.beginCreate()
+        case .renameSpace(let spaceID): spaceFlow.beginRename(spaceID: spaceID)
+        case .changeSpaceIcon(let spaceID): spaceFlow.beginChangeIcon(spaceID: spaceID)
+        case .editSpaceTheme(let spaceID): spaceFlow.beginEditTheme(spaceID: spaceID)
+        case .manageSpaces: openLibrary(.spaces)
+        case .openLibrary: openLibrary()
+        case .showSiteControls: siteControls.present()
+        default:
+            // Share, theme editor, profiles… have no surface yet.
+            break
+        }
+    }
+
+    /// Writes pending workspace changes and the UI state to disk now.
+    public func flushPersistence() async throws {
+        try await controller.flushPersistence()
+    }
+
+    /// Cancels this window's background work and leaves the controller (without saving the UI
+    /// state; `windowDidClose` does that). A model that made its own controller stops it too.
+    public func stop() {
+        guard !isStopped else { return }
+        isStopped = true
+        if isBrowserWindow { controller.unregisterWindow(self, save: false) }
+        libraryFlagChanges = nil
+        siteControls.stop()
+        sidebar.stop()
+        if ownsController { controller.stop() }
+    }
+}
+
+extension WorkspaceState {
+    /// A small demo workspace for running the shell with FakeEngine.
+    public static func demo(now: Date = Date()) -> WorkspaceState {
+        let profile = UUID(), space = UUID(), theme = UUID(), folder = UUID()
+        var s = WorkspaceState()
+        s.profiles[profile] = Profile(id: profile, name: "Default", now: now)
+        s.themes[theme] = Theme(id: theme, colors: [RGBAColor(hex: 0x6E5BD6)], now: now)
+        do {
+            s = try TreeOps.createSpace(s, id: space, profileID: profile, name: "Home", themeID: theme, now: now)
+            s = try TreeOps.createFolder(s, id: folder, spaceID: space, title: "Reading", now: now)
+            for (index, host) in ["example.com", "example.org", "example.net"].enumerated() {
+                let id = UUID()
+                s = try TreeOps.openTab(s, id: id, spaceID: space, url: URL(string: "https://\(host)"), title: host, now: now)
+                if index == 0 {
+                    s = try TreeOps.moveTab(s, id: id, to: .pinned(spaceID: space, folderID: folder), position: .first, now: now)
+                }
+            }
+        } catch {
+            assertionFailure("demo workspace is invalid: \(error)")
+        }
+        return s
+    }
+}

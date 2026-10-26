@@ -1,0 +1,4 @@
+# Built binaries (chromium-bridge/build-framework.sh). Only this file and README.md are tracked.
+*
+!.gitignore
+!README.md
