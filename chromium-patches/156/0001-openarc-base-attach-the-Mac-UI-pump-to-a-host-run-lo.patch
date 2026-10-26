@@ -1,0 +1,398 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 03:26:43 -0700
+Subject: [PATCH] openarc: base: attach the Mac UI pump to a host run loop
+
+Open Arc runs Chromium's browser process inside an app whose
+NSApplication (SwiftUI's) already runs the main run loop. Upstream Mac
+code can only start the UI thread by Run()-ing its MessagePump, which
+would call -[NSApplication run] itself or nest a loop that never
+returns to the app.
+
+iOS has the model we need: the UI pump is attached to the platform's
+loop with CurrentUIThread::Attach() and pushes an outer RunLoop without
+running it. This extends that path to MessagePumpNSApplication:
+
+- MessagePumpNSApplication::Attach()/Detach(): set the delegate, mark
+  an outer RunLoop as running, and account for a CFRunLoop run already
+  on the stack so the enter/exit observer stays balanced. A Quit() of
+  the attached outer level is ignored: the app quits via NSApplication.
+  Nested RunLoops still go through DoRun() as before.
+- CurrentUIThread::Attach() and a new Mac-only Detach(), plus the
+  SequenceManager / ThreadController plumbing (IS_IOS -> also IS_MAC).
+- The controller detaches only a pump it attached, so normal Mac
+  embedders (Chrome, content_shell) are unaffected.
+
+Needed by plan task C6 (//openarc embedder start). Without it the
+embedder would have to own the app's main loop.
+---
+ base/message_loop/message_pump_apple.h        | 24 ++++++++-
+ base/message_loop/message_pump_apple.mm       | 49 ++++++++++++++++++-
+ base/run_loop.h                               | 11 +++++
+ base/task/current_thread.cc                   | 10 +++-
+ base/task/current_thread.h                    |  8 ++-
+ .../sequence_manager/sequence_manager_impl.cc | 12 ++++-
+ .../sequence_manager/sequence_manager_impl.h  |  5 +-
+ .../task/sequence_manager/thread_controller.h |  8 +--
+ ...hread_controller_with_message_pump_impl.cc | 15 +++++-
+ ...thread_controller_with_message_pump_impl.h |  9 +++-
+ 10 files changed, 134 insertions(+), 17 deletions(-)
+
+diff --git a/base/message_loop/message_pump_apple.h b/base/message_loop/message_pump_apple.h
+index b9c32f7ddd5c..26237bbae026 100644
+--- a/base/message_loop/message_pump_apple.h
++++ b/base/message_loop/message_pump_apple.h
+@@ -79,14 +79,18 @@ class BASE_EXPORT MessagePumpCFRunLoopBase : public MessagePump {
+                                  TimeTicks run_time,
+                                  TimeTicks latest_time) override;
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_APPLE)
+   // Some iOS message pumps do not support calling |Run()| to spin the main
+   // message loop directly.  Instead, call |Attach()| to set up a delegate, then
+   // |Detach()| before destroying the message pump.  These methods do nothing if
+   // the message pump supports calling |Run()| and |Quit()|.
++  //
++  // On Mac, MessagePumpNSApplication supports both: an app that embeds the
++  // browser process (Open Arc) runs -[NSApplication run] itself and attaches
++  // the UI pump to it instead of calling |Run()|.
+   virtual void Attach(Delegate* delegate);
+   virtual void Detach();
+-#endif  // BUILDFLAG(IS_IOS)
++#endif  // BUILDFLAG(IS_APPLE)
+ 
+  protected:
+   // Needs access to CreateAutoreleasePool.
+@@ -122,6 +126,13 @@ class BASE_EXPORT MessagePumpCFRunLoopBase : public MessagePump {
+   void OnDetach();
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++  // Called when the pump is attached to a run loop that the embedding app
++  // already runs. Accounts for a CFRunLoop run that may be on the stack at
++  // that moment, so the enter/exit observer stays balanced when it exits.
++  void OnAttachToHostRunLoop();
++#endif
++
+   // Sets this pump's delegate.  Signals the appropriate sources if
+   // |delegateless_work_| is true.  |delegate| can be NULL.
+   void SetDelegate(Delegate* delegate);
+@@ -355,9 +366,18 @@ class MessagePumpNSApplication : public MessagePumpCFRunLoopBase {
+   void DoRun(Delegate* delegate) override;
+   bool DoQuit() override;
+ 
++  // Attaches to the NSApplication run loop of an embedding app instead of
++  // running it (Open Arc). Nested RunLoops still work through DoRun().
++  void Attach(Delegate* delegate) override;
++  void Detach() override;
++
+  private:
+   void EnterExitRunLoop(CFRunLoopActivity activity) override;
+ 
++  // The outermost RunLoop while attached to the embedding app's run loop. It is
++  // never Run(); it only marks the thread as running a loop, as on iOS.
++  std::optional<RunLoop> attached_run_loop_;
++
+   // True if DoRun is managing its own run loop as opposed to letting
+   // -[NSApplication run] handle it.  The outermost run loop in the application
+   // is managed by -[NSApplication run], inner run loops are handled by a loop
+diff --git a/base/message_loop/message_pump_apple.mm b/base/message_loop/message_pump_apple.mm
+index 3f3d7b8e8377..522c1ef99b53 100644
+--- a/base/message_loop/message_pump_apple.mm
++++ b/base/message_loop/message_pump_apple.mm
+@@ -173,11 +173,11 @@ explicit OptionalAutoreleasePool(MessagePumpCFRunLoopBase* pump) {
+                                            latest_time);
+ }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_APPLE)
+ void MessagePumpCFRunLoopBase::Attach(Delegate* delegate) {}
+ 
+ void MessagePumpCFRunLoopBase::Detach() {}
+-#endif  // BUILDFLAG(IS_IOS)
++#endif  // BUILDFLAG(IS_APPLE)
+ 
+ // Must be called on the run loop thread.
+ MessagePumpCFRunLoopBase::MessagePumpCFRunLoopBase() {
+@@ -336,6 +336,23 @@ explicit OptionalAutoreleasePool(MessagePumpCFRunLoopBase* pump) {
+ }
+ #endif  // BUILDFLAG(IS_IOS)
+ 
++#if BUILDFLAG(IS_MAC)
++void MessagePumpCFRunLoopBase::OnAttachToHostRunLoop() {
++  CHECK_EQ(nesting_level_, 0);
++  // The observers were added while the embedding app was inside its own code.
++  // If that code runs inside a CFRunLoop run (a timer, a main dispatch queue
++  // block), that run's exit is observed later, so count it now. Deeper native
++  // nesting at attach time cannot be detected and is not supported.
++  apple::ScopedCFTypeRef<CFStringRef> mode(
++      CFRunLoopCopyCurrentMode(run_loop_.get()));
++  if (mode) {
++    ++nesting_level_;
++    PushWorkItemScope();
++    deepest_nesting_level_ = nesting_level_;
++  }
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ void MessagePumpCFRunLoopBase::SetDelegate(Delegate* delegate) {
+   delegate_ = delegate;
+ 
+@@ -803,7 +820,35 @@ explicit OptionalAutoreleasePool(MessagePumpCFRunLoopBase* pump) {
+   running_own_loop_ = last_running_own_loop;
+ }
+ 
++void MessagePumpNSApplication::Attach(Delegate* delegate) {
++  CHECK(!attached_run_loop_);
++  CHECK(NSApp);
++  attached_run_loop_.emplace();
++  CHECK(attached_run_loop_->BeforeRun());
++  SetDelegate(delegate);
++  OnAttachToHostRunLoop();
++  ScheduleWork();
++}
++
++void MessagePumpNSApplication::Detach() {
++  if (!attached_run_loop_) {
++    return;
++  }
++  attached_run_loop_->AfterRun();
++  SetDelegate(nullptr);
++  attached_run_loop_.reset();
++}
++
+ bool MessagePumpNSApplication::DoQuit() {
++  // While attached to the embedding app's run loop, the outermost level is not
++  // ours to stop: the app quits through NSApplication. Ignore such a quit
++  // (nobody holds the attached RunLoop, so it can only come from
++  // RunLoop::QuitCurrent*-style calls) instead of stopping NSApp.
++  if (attached_run_loop_ && run_nesting_level() == 0) {
++    DLOG(WARNING) << "Quit of the attached UI run loop ignored";
++    return false;
++  }
++
+   // If the app is displaying a modal window in a native run loop, we can only
+   // quit our run loop after the window is closed. Otherwise the [NSApplication
+   // stop] below will apply to the modal window run loop instead. To work around
+diff --git a/base/run_loop.h b/base/run_loop.h
+index 93c38e4405f0..0afefecec1e2 100644
+--- a/base/run_loop.h
++++ b/base/run_loop.h
+@@ -37,6 +37,10 @@ class MessagePumpAndroid;
+ class MessagePumpUIApplication;
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++class MessagePumpNSApplication;
++#endif
++
+ class SingleThreadTaskRunner;
+ 
+ // Helper class to run the RunLoop::Delegate associated with the current thread.
+@@ -276,6 +280,13 @@ class BASE_EXPORT RunLoop {
+   friend class MessagePumpUIApplication;
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: when Chromium is embedded in an app whose NSApplication already
++  // runs the main run loop, the UI pump is attached to that loop instead of
++  // being Run(), so it calls BeforeRun and AfterRun directly like iOS.
++  friend class MessagePumpNSApplication;
++#endif
++
+   // Support for //base/test/scoped_run_loop_timeout.h.
+   friend class test::ScopedRunLoopTimeout;
+   friend class test::ScopedDisableRunLoopTimeout;
+diff --git a/base/task/current_thread.cc b/base/task/current_thread.cc
+index dd959f737c8c..d05258a42712 100644
+--- a/base/task/current_thread.cc
++++ b/base/task/current_thread.cc
+@@ -167,11 +167,17 @@ bool CurrentUIThread::WatchFileDescriptor(
+ }
+ #endif
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ void CurrentUIThread::Attach() {
+   current_->AttachToMessagePump();
+ }
+-#endif  // BUILDFLAG(IS_IOS)
++#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
++
++#if BUILDFLAG(IS_MAC)
++void CurrentUIThread::Detach() {
++  current_->DetachFromMessagePump();
++}
++#endif  // BUILDFLAG(IS_MAC)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ void CurrentUIThread::Abort() {
+diff --git a/base/task/current_thread.h b/base/task/current_thread.h
+index 2bf2f919fe5c..f07b8893add2 100644
+--- a/base/task/current_thread.h
++++ b/base/task/current_thread.h
+@@ -259,7 +259,7 @@ class BASE_EXPORT CurrentUIThread : public CurrentThread {
+                            MessagePumpForUI::FdWatcher* delegate);
+ #endif
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+   // Forwards to SequenceManager::Attach().
+   // TODO(crbug.com/40568517): Plumb the actual SequenceManager* to
+   // callers and remove ability to access this method from
+@@ -267,6 +267,12 @@ class BASE_EXPORT CurrentUIThread : public CurrentThread {
+   void Attach();
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: undoes Attach() before the embedder shuts the browser process
++  // down, so the shutdown's own RunLoops see no attached outer level.
++  void Detach();
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+   // Forwards to MessagePumpAndroid::Abort().
+   // TODO(crbug.com/40568517): Plumb the actual MessagePumpForUI* to
+diff --git a/base/task/sequence_manager/sequence_manager_impl.cc b/base/task/sequence_manager/sequence_manager_impl.cc
+index a93844728951..e4440e83dd29 100644
+--- a/base/task/sequence_manager/sequence_manager_impl.cc
++++ b/base/task/sequence_manager/sequence_manager_impl.cc
+@@ -186,7 +186,9 @@ SequenceManagerImpl::~SequenceManagerImpl() {
+     ScopedBestEffortExecutionFence::RemoveSequenceManager(this);
+   }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
++  // On Mac (Open Arc) only a pump that was attached to a run loop owned by the
++  // embedding app has anything to detach; Detach() is a no-op otherwise.
+   if (settings_.message_loop_type == MessagePumpType::UI &&
+       associated_thread_->IsBound()) {
+     controller_->DetachFromMessagePump();
+@@ -1009,12 +1011,18 @@ bool SequenceManagerImpl::IsTaskExecutionAllowedInNativeNestedLoop() const {
+   return controller_->IsTaskExecutionAllowed();
+ }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ void SequenceManagerImpl::AttachToMessagePump() {
+   return controller_->AttachToMessagePump();
+ }
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++void SequenceManagerImpl::DetachFromMessagePump() {
++  return controller_->DetachFromMessagePump();
++}
++#endif
++
+ bool SequenceManagerImpl::IsIdleForTesting() {
+   ReloadEmptyWorkQueues();
+ 
+diff --git a/base/task/sequence_manager/sequence_manager_impl.h b/base/task/sequence_manager/sequence_manager_impl.h
+index 4505d8a609ef..60379bfb2c89 100644
+--- a/base/task/sequence_manager/sequence_manager_impl.h
++++ b/base/task/sequence_manager/sequence_manager_impl.h
+@@ -167,8 +167,11 @@ class BASE_EXPORT SequenceManagerImpl
+   void SetAddQueueTimeToTasks(bool enable);
+   void SetTaskExecutionAllowedInNativeNestedLoop(bool allowed);
+   bool IsTaskExecutionAllowedInNativeNestedLoop() const;
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+   void AttachToMessagePump();
++#endif
++#if BUILDFLAG(IS_MAC)
++  void DetachFromMessagePump();
+ #endif
+   bool IsIdleForTesting() override;
+   void EnableMessagePumpTimeKeeperMetrics(
+diff --git a/base/task/sequence_manager/thread_controller.h b/base/task/sequence_manager/thread_controller.h
+index b857eb5af42d..df328f8ef6a0 100644
+--- a/base/task/sequence_manager/thread_controller.h
++++ b/base/task/sequence_manager/thread_controller.h
+@@ -133,14 +133,16 @@ class BASE_EXPORT ThreadController {
+   // Returns true if the current run loop should quit when idle.
+   virtual bool ShouldQuitRunLoopWhenIdle() = 0;
+ 
+-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+-  // On iOS, the main message loop cannot be Run().  Instead call
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
++  // On iOS, the main message loop cannot be Run().  On Mac (Open Arc), the
++  // embedding app's NSApplication owns the main loop and the browser process
++  // attaches to it the same way.  Instead call
+   // AttachToMessagePump(), which connects this ThreadController to the
+   // UI thread's CFRunLoop and allows PostTask() to work.
+   virtual void AttachToMessagePump() = 0;
+ #endif
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+   // Detaches this ThreadController from the message pump, allowing the
+   // controller to be shut down cleanly.
+   virtual void DetachFromMessagePump() = 0;
+diff --git a/base/task/sequence_manager/thread_controller_with_message_pump_impl.cc b/base/task/sequence_manager/thread_controller_with_message_pump_impl.cc
+index 1e0a7c056a1c..99b4ae273b00 100644
+--- a/base/task/sequence_manager/thread_controller_with_message_pump_impl.cc
++++ b/base/task/sequence_manager/thread_controller_with_message_pump_impl.cc
+@@ -28,7 +28,7 @@
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_APPLE)
+ #include "base/message_loop/message_pump_apple.h"
+ #elif BUILDFLAG(IS_ANDROID)
+ #include "base/message_loop/message_pump_android.h"
+@@ -737,12 +737,23 @@ MessagePump* ThreadControllerWithMessagePumpImpl::GetBoundMessagePump() const {
+   return pump_.get();
+ }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_APPLE)
+ void ThreadControllerWithMessagePumpImpl::AttachToMessagePump() {
+   static_cast<MessagePumpCFRunLoopBase*>(pump_.get())->Attach(this);
++#if BUILDFLAG(IS_MAC)
++  attached_to_message_pump_ = true;
++#endif
+ }
+ 
+ void ThreadControllerWithMessagePumpImpl::DetachFromMessagePump() {
++#if BUILDFLAG(IS_MAC)
++  // On Mac only an explicitly attached pump (Open Arc) is detached; a UI pump
++  // that was Run() as usual, or a test pump, is left alone.
++  if (!attached_to_message_pump_) {
++    return;
++  }
++  attached_to_message_pump_ = false;
++#endif
+   static_cast<MessagePumpCFRunLoopBase*>(pump_.get())->Detach();
+ }
+ #elif BUILDFLAG(IS_ANDROID)
+diff --git a/base/task/sequence_manager/thread_controller_with_message_pump_impl.h b/base/task/sequence_manager/thread_controller_with_message_pump_impl.h
+index ec182362f5ea..c02dabf87773 100644
+--- a/base/task/sequence_manager/thread_controller_with_message_pump_impl.h
++++ b/base/task/sequence_manager/thread_controller_with_message_pump_impl.h
+@@ -72,10 +72,10 @@ class BASE_EXPORT ThreadControllerWithMessagePumpImpl
+   void SetTaskExecutionAllowedInNativeNestedLoop(bool allowed) override;
+   bool IsTaskExecutionAllowed() const override;
+   MessagePump* GetBoundMessagePump() const override;
+-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
+   void AttachToMessagePump() override;
+ #endif
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+   void DetachFromMessagePump() override;
+ #endif
+   bool ShouldQuitRunLoopWhenIdle() override;
+@@ -207,6 +207,11 @@ class BASE_EXPORT ThreadControllerWithMessagePumpImpl
+   // (i.e. when Quit()). Nested runs override their parent.
+   std::optional<WatchHangsInScope> hang_watch_scope_;
+ 
++#if BUILDFLAG(IS_MAC)
++  // True between AttachToMessagePump() and DetachFromMessagePump().
++  bool attached_to_message_pump_ = false;
++#endif
++
+   // Can only be set once (just before calling
+   // work_deduplicator_.BindToCurrentThread()). After that only read access is
+   // allowed.

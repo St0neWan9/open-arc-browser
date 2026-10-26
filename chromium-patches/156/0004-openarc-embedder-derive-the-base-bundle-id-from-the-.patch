@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 07:21:12 -0700
+Subject: [PATCH] openarc: embedder: derive the base bundle id from the
+ embedding app
+
+The base bundle id names the browser process's Mach rendezvous server and
+is the sandbox's bundle-id parameter. It was fixed to org.openarc.browser,
+so the release app and the development build (org.openarc.browser.dev)
+used the same names. Every process now reads the id of the app that embeds
+OpenArcCore.framework, falling back to the release id outside our apps.
+---
+ openarc/common/openarc_paths.h  |  7 ++--
+ openarc/common/openarc_paths.mm | 62 +++++++++++++++++++++++++++++----
+ 2 files changed, 61 insertions(+), 8 deletions(-)
+
+diff --git a/openarc/common/openarc_paths.h b/openarc/common/openarc_paths.h
+index 6da33c7daa66..3be19e5dda3c 100644
+--- a/openarc/common/openarc_paths.h
++++ b/openarc/common/openarc_paths.h
+@@ -30,8 +30,11 @@ base::FilePath GetHelperExecutablePath();
+ 
+ // Points base::apple's framework bundle (used to find icudtl.dat, the V8
+ // snapshot and Libraries/) at the framework's versioned directory, as Chrome
+-// does, and sets the base bundle id used for Mach rendezvous names. Must run
+-// before ICU and V8 load, in every process.
++// does, and sets the base bundle id used for Mach rendezvous names and the
++// sandbox: the embedding app's id ("org.openarc.browser", or
++// "org.openarc.browser.dev" for the development build), or the release id when
++// the framework is not inside one of our apps. Must run before ICU and V8
++// load, in every process.
+ void ConfigureBundleOverrides();
+ 
+ }  // namespace openarc
+diff --git a/openarc/common/openarc_paths.mm b/openarc/common/openarc_paths.mm
+index 03f25020339d..e79e563fd9cb 100644
+--- a/openarc/common/openarc_paths.mm
++++ b/openarc/common/openarc_paths.mm
+@@ -9,19 +9,69 @@
+ #include <limits.h>
+ #include <stdlib.h>
+ 
++#include <string>
++
+ #include "base/apple/bundle_locations.h"
+ #include "base/apple/foundation_util.h"
+ #include "base/check.h"
++#include "base/strings/sys_string_conversions.h"
+ 
+ namespace openarc {
+ 
+ namespace {
+ 
+-// Base bundle id of every engine process (the app's placeholder id, CLAUDE.md,
+-// decision Q5). Mach rendezvous names derive from it, so the browser process
+-// and its unbundled helpers must agree on it whatever the host process is (the
+-// app, openarc_shell_test, xctest). Change it together with the app's id.
+-constexpr char kBaseBundleID[] = "org.openarc.browser";
++// The release app's placeholder bundle id (CLAUDE.md, decision Q5). The base
++// bundle id of every engine process when the framework is not embedded in one
++// of our apps (openarc_shell_test, xctest, a bare SwiftPM executable).
++constexpr char kReleaseBundleID[] = "org.openarc.browser";
++
++// True for the release id and for "<release id>.<variant>" with a variant of
++// lowercase letters, digits and hyphens (the development build,
++// "org.openarc.browser.dev"). Matches PersistenceDefaults.isOwnBundleIdentifier
++// in the app.
++bool IsOwnBundleID(NSString* bundle_id) {
++  NSString* release = @(kReleaseBundleID);
++  if ([bundle_id isEqualToString:release]) {
++    return true;
++  }
++  NSString* prefix = [release stringByAppendingString:@"."];
++  if (![bundle_id hasPrefix:prefix] || bundle_id.length == prefix.length) {
++    return false;
++  }
++  NSCharacterSet* allowed = [NSCharacterSet
++      characterSetWithCharactersInString:
++          @"abcdefghijklmnopqrstuvwxyz0123456789-"];
++  NSString* variant = [bundle_id substringFromIndex:prefix.length];
++  return [variant rangeOfCharacterFromSet:allowed.invertedSet].location ==
++         NSNotFound;
++}
++
++// The bundle id of the app that embeds the framework
++// (<app>.app/Contents/Frameworks/OpenArcCore.framework/Versions/A), when it is
++// one of ours; else the release id. Every process computes it from the same
++// file, the framework it runs, so the browser process and its unbundled
++// helpers agree on it without passing it around, and the release and
++// development apps get distinct Mach rendezvous names and sandbox bundle ids.
++// The helpers call this after their seatbelt is up; the sandbox allows reads
++// below the app bundle (common.sb, bundle-path).
++std::string ComputeBaseBundleID() {
++  const base::FilePath frameworks =
++      GetFrameworkVersionDirectory().DirName().DirName().DirName();
++  const base::FilePath contents = frameworks.DirName();
++  const base::FilePath app = contents.DirName();
++  if (frameworks.BaseName().value() != "Frameworks" ||
++      contents.BaseName().value() != "Contents" ||
++      app.Extension() != ".app") {
++    return kReleaseBundleID;
++  }
++  NSString* bundle_id =
++      [NSBundle bundleWithURL:base::apple::FilePathToNSURL(app)]
++          .bundleIdentifier;
++  if (!bundle_id || !IsOwnBundleID(bundle_id)) {
++    return kReleaseBundleID;
++  }
++  return base::SysNSStringToUTF8(bundle_id);
++}
+ 
+ }  // namespace
+ 
+@@ -54,7 +104,7 @@ void ConfigureBundleOverrides() {
+   // framework's versioned directory the same way).
+   base::apple::SetOverrideFrameworkBundlePath(GetFrameworkVersionDirectory());
+ 
+-  base::apple::SetBaseBundleIDOverride(kBaseBundleID);
++  base::apple::SetBaseBundleIDOverride(ComputeBaseBundleID());
+ }
+ 
+ }  // namespace openarc
