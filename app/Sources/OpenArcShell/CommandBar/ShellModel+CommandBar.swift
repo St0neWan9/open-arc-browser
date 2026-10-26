@@ -17,7 +17,14 @@ extension ShellModel {
             canGoBack: sidebar.canGoBack,
             canGoForward: sidebar.canGoForward,
             isSidebarVisible: isSidebarVisible,
-            movableTabID: selectedTabID
+            movableTabID: selectedTabID,
+            isSelectedTabPinned: selectedTabID.flatMap { workspace.tabs[$0] }.flatMap { tab in
+                switch tab.location {
+                case .pinned: return true
+                case .today: return false
+                case .favorite: return nil
+                }
+            }
         )
     }
 

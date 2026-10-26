@@ -108,17 +108,42 @@ public struct SettingsProfileRow: Identifiable, Hashable, Sendable {
     /// (`WorkspaceState.defaultProfileID`).
     public let isDefault: Bool
 
-    public var detail: String { spaceCount == 1 ? "1 Space" : "\(spaceCount) Spaces" }
+    /// "Not used" for a profile no Space uses. [06 §16.3] observed.
+    public var detail: String {
+        switch spaceCount {
+        case 0: return "Not used"
+        case 1: return "1 Space"
+        default: return "\(spaceCount) Spaces"
+        }
+    }
 }
 
 /// Where crash reports are kept. Plan decision Q8: stored locally only, never uploaded. D8 points
-/// Chromium's crash database here; the folder may not exist before the first report.
+/// Chromium's Crashpad database here (`ChromiumEngine(crashReportsDirectory:)`): `.dmp` minidumps
+/// of the app (browser) process and every helper stay in its `pending/` subfolder (nothing
+/// uploads them). The folder
+/// may not exist before the engine first starts.
 public enum CrashReportLocation {
     /// Persisted folder name; never rename.
     public static let folderName = "Crash Reports"
 
-    public static func directory(in base: URL = PersistenceDefaults.defaultDirectory) -> URL {
+    /// `<app data dir>/Crash Reports`; the app data dir honours `OPENARC_DATA_DIR`.
+    public static func directory(in base: URL = AppDataLocation.directory()) -> URL {
         base.appendingPathComponent(folderName, isDirectory: true)
+    }
+
+    /// Environment variable that shows the Debug ▸ Crash menu (plan D8 verification).
+    public static let debugCrashEnvironmentKey = "OPENARC_DEBUG_CRASH"
+
+    /// True only for the development build (`AppIdentity.developmentBundleIdentifier`) started
+    /// with `OPENARC_DEBUG_CRASH=1`: the menu that crashes the app on purpose never shows in the
+    /// release build.
+    public static func isDebugCrashMenuEnabled(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleIdentifier: String = AppIdentity.bundleIdentifier
+    ) -> Bool {
+        bundleIdentifier == AppIdentity.developmentBundleIdentifier
+            && environment[debugCrashEnvironmentKey]?.trimmingCharacters(in: .whitespaces) == "1"
     }
 }
 
@@ -132,6 +157,8 @@ public final class SettingsModel: ObservableObject {
     @Published public var selectedPane: SettingsPane = .account
     /// Profile whose settings the Profiles pane shows; nil means the current window's profile.
     @Published public var selectedProfileID: UUID?
+    /// Profile whose "Delete this Profile" confirmation is showing; nil when none. [06 §16.3].
+    @Published public var profilePendingDeletion: UUID?
     /// Text typed into the Shortcuts pane search field.
     @Published public var shortcutQuery = ""
 
@@ -220,27 +247,56 @@ public final class SettingsModel: ObservableObject {
     }
 
     /// Why the "−" button is disabled for the edited profile, or nil when it can be deleted.
-    /// [03 §Profiles] observed: "The Default Profile cannot be deleted."; the in-use rule is
-    /// inferred (`TreeOps.deleteProfile`).
+    /// [06 §16.3] observed: the button is disabled for the Default profile ("The Default Profile
+    /// cannot be deleted.") and for a profile any Space uses ("Only Profiles not assigned to any
+    /// Spaces can be deleted."). Arc does not move or delete those Spaces.
     public var profileDeletionBlockedReason: String? {
         guard let id = editedProfileID else { return "Select a Profile." }
         switch TreeOps.profileDeletionBlocker(shell.workspace, id: id) {
         case nil: return nil
         case .defaultProfileNotDeletable?: return "The Default Profile cannot be deleted."
-        case .profileHasSpaces(let count)?:
-            let spaces = count == 1 ? "1 Space uses" : "\(count) Spaces use"
-            return "\(spaces) this Profile. Move them to another Profile or delete them first."
+        case .profileHasSpaces?: return "Only Profiles not assigned to any Spaces can be deleted."
         case .some: return "This Profile cannot be deleted."
         }
     }
 
     public var canDeleteEditedProfile: Bool { profileDeletionBlockedReason == nil }
 
-    /// "−" under the profile list. Deletes the edited profile through TreeOps and selects the
-    /// Default profile. Returns false when refused.
+    /// "−" under the profile list: opens the "Delete this Profile" confirmation for the edited
+    /// profile. [06 §16.3] observed. Returns false when the profile cannot be deleted.
     @discardableResult
-    public func deleteEditedProfile() -> Bool {
+    public func requestDeleteEditedProfile() -> Bool {
         guard let id = editedProfileID, canDeleteEditedProfile else { return false }
+        profilePendingDeletion = id
+        return true
+    }
+
+    /// Name of the profile awaiting confirmation; the user must type it exactly.
+    public var profilePendingDeletionName: String? {
+        profilePendingDeletion.flatMap { shell.workspace.profiles[$0]?.name }
+    }
+
+    /// Body of the confirmation. [06 §16.3] observed text.
+    public static func profileDeletionMessage(name: String) -> String {
+        "Deleting \(name) will permanently remove any cookies, history, preferences, and logins that belong to this Profile.\nTo continue, please type the name of this Profile:"
+    }
+
+    /// The red "Delete" button is enabled only once the typed text equals the profile's name.
+    /// [06 §16.3] observed (a prefix keeps it disabled; case and whitespace handling: inferred exact).
+    public func canConfirmProfileDeletion(typed: String) -> Bool {
+        guard let name = profilePendingDeletionName else { return false }
+        return typed == name
+    }
+
+    public func cancelProfileDeletion() { profilePendingDeletion = nil }
+
+    /// "Delete" in the confirmation: deletes the profile through TreeOps (its engine data is
+    /// removed too) and selects the Default profile. Returns false when refused.
+    @discardableResult
+    public func confirmProfileDeletion(typed: String) -> Bool {
+        guard let id = profilePendingDeletion, canConfirmProfileDeletion(typed: typed) else { return false }
+        profilePendingDeletion = nil
+        guard TreeOps.profileDeletionBlocker(shell.workspace, id: id) == nil else { return false }
         objectWillChange.send()
         guard shell.sidebar.deleteProfile(id) else { return false }
         selectedProfileID = nil
@@ -305,7 +361,7 @@ public final class SettingsModel: ObservableObject {
     }
 
     /// Creates the crash report folder if needed (so Finder has something to show) and reveals it.
-    public func showCrashReports(base: URL = PersistenceDefaults.defaultDirectory) {
+    public func showCrashReports(base: URL = AppDataLocation.directory()) {
         let directory = CrashReportLocation.directory(in: base)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         revealInFinder(directory)

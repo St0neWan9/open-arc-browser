@@ -238,12 +238,14 @@ final class SettingsTests: XCTestCase {
 
     // MARK: [03 §Profiles] delete profile
 
-    /// "−" is disabled for the Default profile and for a profile Spaces still use, with the reason
-    /// shown; an unused profile can be deleted and its favorites are archived.
-    func testRemoveProfileButtonRules() throws {
+    /// [06 §16.3] observed: "−" is disabled for the Default profile and for a profile any Space
+    /// uses, with Arc's reasons; an unused profile shows "Not used", "−" asks for its name and only
+    /// the exact name enables Delete; deleting removes it and its engine data.
+    func testRemoveProfileButtonRules() async throws {
         // An advancing clock: "Default" is the oldest profile, so creation times must differ.
         var tick = clock
-        let deps = AppDependencies(engine: FakeEngine(), sync: DisabledSyncStore(), preferences: .inMemory())
+        let engine = FakeEngine()
+        let deps = AppDependencies(engine: engine, sync: DisabledSyncStore(), preferences: .inMemory())
         let shell = ShellModel(dependencies: deps, workspace: .demo(now: clock), now: {
             tick = tick.addingTimeInterval(1)
             return tick
@@ -251,20 +253,53 @@ final class SettingsTests: XCTestCase {
         let settings = SettingsModel(shell: shell)
         XCTAssertFalse(settings.canDeleteEditedProfile)
         XCTAssertEqual(settings.profileDeletionBlockedReason, "The Default Profile cannot be deleted.")
-        XCTAssertFalse(settings.deleteEditedProfile())
+        XCTAssertFalse(settings.requestDeleteEditedProfile())
+        XCTAssertNil(settings.profilePendingDeletion)
 
         let work = settings.addProfile()
         XCTAssertTrue(settings.canDeleteEditedProfile)
+        XCTAssertEqual(settings.profileRows.first { $0.id == work }?.detail, "Not used")
         let spaceID = UUID()
         shell.sidebar.replaceWorkspace(try TreeOps.createSpace(shell.workspace, id: spaceID, profileID: work, name: "Work", now: clock))
+        XCTAssertEqual(settings.profileRows.first { $0.id == work }?.detail, "1 Space")
         XCTAssertFalse(settings.canDeleteEditedProfile)
-        XCTAssertEqual(settings.profileDeletionBlockedReason, "1 Space uses this Profile. Move them to another Profile or delete them first.")
+        XCTAssertEqual(settings.profileDeletionBlockedReason, "Only Profiles not assigned to any Spaces can be deleted.")
+        XCTAssertFalse(settings.requestDeleteEditedProfile())
 
         shell.sidebar.replaceWorkspace(try TreeOps.deleteSpace(shell.workspace, id: spaceID, now: clock))
-        XCTAssertTrue(settings.deleteEditedProfile())
+        XCTAssertTrue(settings.requestDeleteEditedProfile())
+        XCTAssertEqual(settings.profilePendingDeletion, work)
+        let name = try XCTUnwrap(settings.profilePendingDeletionName)
+        XCTAssertEqual(SettingsModel.profileDeletionMessage(name: name),
+                       "Deleting \(name) will permanently remove any cookies, history, preferences, and logins that belong to this Profile.\nTo continue, please type the name of this Profile:")
+        XCTAssertFalse(settings.canConfirmProfileDeletion(typed: String(name.dropLast())))
+        XCTAssertFalse(settings.confirmProfileDeletion(typed: String(name.dropLast())))
+        XCTAssertEqual(shell.workspace.profiles[work]?.meta.isTombstone, false)
+        XCTAssertTrue(settings.canConfirmProfileDeletion(typed: name))
+        XCTAssertTrue(settings.confirmProfileDeletion(typed: name))
+        XCTAssertNil(settings.profilePendingDeletion)
         XCTAssertEqual(shell.workspace.profiles[work]?.meta.isTombstone, true)
         XCTAssertEqual(settings.profileRows.map(\.name), ["Default"])
         XCTAssertNotEqual(settings.editedProfileID, work)
+        await shell.sidebar.settleEngineWork()
+        XCTAssertEqual(engine.deletedProfileIDs, [work])
+        shell.stop()
+    }
+
+    /// [06 §16.3]: Cancel closes the confirmation and keeps the profile.
+    func testCancelProfileDeletionKeepsProfile() {
+        var tick = clock
+        let deps = AppDependencies(engine: FakeEngine(), sync: DisabledSyncStore(), preferences: .inMemory())
+        let shell = ShellModel(dependencies: deps, workspace: .demo(now: clock), now: {
+            tick = tick.addingTimeInterval(1)
+            return tick
+        })
+        let settings = SettingsModel(shell: shell)
+        let extra = settings.addProfile()
+        XCTAssertTrue(settings.requestDeleteEditedProfile())
+        settings.cancelProfileDeletion()
+        XCTAssertNil(settings.profilePendingDeletion)
+        XCTAssertEqual(shell.workspace.profiles[extra]?.meta.isTombstone, false)
         shell.stop()
     }
 
@@ -405,6 +440,25 @@ final class SettingsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: expected.path, isDirectory: &isDirectory))
         XCTAssertTrue(isDirectory.boolValue)
         shell.stop()
+    }
+
+    /// Plan D8: the crash folder follows the app data dir, so `OPENARC_DATA_DIR` isolates it too.
+    func testCrashReportFolderFollowsDataDirectoryOverride() {
+        let base = AppDataLocation.directory(environment: [AppDataLocation.environmentKey: "/tmp/d8-data"])
+        XCTAssertEqual(CrashReportLocation.directory(in: base).path, "/tmp/d8-data/Crash Reports")
+    }
+
+    /// Plan D8: Debug ▸ Crash exists only in the development build started with
+    /// `OPENARC_DEBUG_CRASH=1`.
+    func testDebugCrashMenuOnlyInDevelopmentBuildWithSwitch() {
+        let on = [CrashReportLocation.debugCrashEnvironmentKey: "1"]
+        let dev = AppIdentity.developmentBundleIdentifier
+        let release = AppIdentity.releaseBundleIdentifier
+        XCTAssertTrue(CrashReportLocation.isDebugCrashMenuEnabled(environment: on, bundleIdentifier: dev))
+        XCTAssertFalse(CrashReportLocation.isDebugCrashMenuEnabled(environment: on, bundleIdentifier: release))
+        XCTAssertFalse(CrashReportLocation.isDebugCrashMenuEnabled(environment: [:], bundleIdentifier: dev))
+        XCTAssertFalse(CrashReportLocation.isDebugCrashMenuEnabled(
+            environment: [CrashReportLocation.debugCrashEnvironmentKey: "0"], bundleIdentifier: dev))
     }
 
     // MARK: Rendering

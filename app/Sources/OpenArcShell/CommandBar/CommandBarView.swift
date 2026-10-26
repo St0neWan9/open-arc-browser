@@ -21,6 +21,9 @@ enum CommandBarStyle {
     static let infoGlyphPointSize: CGFloat = 15
     /// Arrow glyph inside the 24 pt box. unknown.
     static let arrowGlyphPointSize: CGFloat = 11
+    /// Shortcut hint: right edge 13 pt from the row's right edge ([06 §16.2] observed, AX), i.e.
+    /// 2 pt less than the 15 pt the row's trailing padding already gives.
+    static let shortcutHintTrailing: CGFloat = -2
 }
 
 private extension RGBAColor {
@@ -228,7 +231,19 @@ struct CommandBarRow: View {
                     .lineLimit(1)
                     .padding(.trailing, c.resultActionToArrowGap)
             }
-            arrowBox
+            // [06 §16.2] observed: a command row shows its shortcut at the right end, where other
+            // rows have the arrow box (the hint's right edge sits 13 pt from the row's edge, over
+            // the box's place); so the hint replaces the box (inferred).
+            if let hint = result.visibleShortcutHint(for: presentation) {
+                Text(hint)
+                    .font(Typography.commandBarActionLabel.font)
+                    .foregroundStyle(dimmed)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.trailing, CommandBarStyle.shortcutHintTrailing)
+            } else {
+                arrowBox
+            }
         }
         .padding(.leading, c.resultIconLeading)
         .padding(.trailing, c.resultArrowBoxTrailing)
