@@ -14,6 +14,7 @@
 #import <OpenArcCore/OACProfile.h>
 #import <OpenArcCore/OACTab.h>
 #import <OpenArcCore/OACTabDelegate.h>
+#import <OpenArcCore/OACCapture.h>
 #import <OpenArcCore/OACDialogDelegate.h>
 #import <OpenArcCore/OACAutofill.h>
 #import <OpenArcCore/OACSiteSettings.h>

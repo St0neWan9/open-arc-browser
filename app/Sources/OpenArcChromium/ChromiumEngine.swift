@@ -15,7 +15,8 @@ import OpenArcCore
 // favicon, load progress, navigation state, audio, security, zoom, fullscreen, theme color, hovered
 // link, find results, crash, close requests), new-tab requests (plain URL requests and
 // script-opened windows as `PendingTabToken`s), NSView hosting, preferred color scheme, zoom, find,
-// edit commands, selected text, snapshots, view source, exit fullscreen, the beforeunload close
+// edit commands, selected text, snapshots, page capture (B51: a rectangle of the visible page and
+// the full page beyond the viewport), view source, exit fullscreen, the beforeunload close
 // path, shell-drawn dialogs (C12: JavaScript alert / confirm / prompt / beforeunload, permission
 // prompts, HTTP auth, file chooser, external protocol), downloads (C12), and the page tools of
 // C15: DevTools (its own window per tab), printing (the macOS print panel), Save Page As (complete

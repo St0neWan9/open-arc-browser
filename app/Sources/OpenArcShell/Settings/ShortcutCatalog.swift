@@ -56,6 +56,7 @@ public enum ShortcutCatalog {
             ShortcutEntry(action: "Find Next", keys: "⌘G"),
             ShortcutEntry(action: "Find Previous", keys: "⇧⌘G"),
             ShortcutEntry(action: "Print", keys: "⌘P"),
+            ShortcutEntry(action: "Capture…", keys: "⇧⌘2"),
         ]),
         // [02 §窗口与应用] Hide / Hide Others / Minimize / Quit / Full Screen come from the
         // standard macOS app and window menus.

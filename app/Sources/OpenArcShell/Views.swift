@@ -76,6 +76,12 @@ struct MainWindowContent: View {
                     )
                 }
 
+                // Capture tools over the page and the web panel. [06 §24] observed. B51.
+                if !model.library.isActive {
+                    PageCaptureLayer(capture: model.pageCapture, pageFrame: model.capturePageFrame(in: layout),
+                                     panelFrame: layout.webPanelFrame, palette: palette)
+                }
+
                 // First-run onboarding cards over the themed background (D9, own design).
                 OnboardingLayer(model: model, onboarding: model.controller.onboarding, palette: palette)
 

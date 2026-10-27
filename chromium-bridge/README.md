@@ -23,7 +23,8 @@ chromium-bridge/
     ├── OACSiteSettings.h          per-site settings (SiteSettingsProvider)
     ├── OACDownloads.h             a profile's downloads (C12, Library ▸ Downloads)
     ├── OACExtensions.h            a profile's extensions, action popups, install confirmation (C14)
-    └── OACTranslation.h           page translation state and commands, translation settings reset (B47)
+    ├── OACTranslation.h           page translation state and commands, translation settings reset (B47)
+    └── OACCapture.h               visible-rectangle and full-page capture (B51)
 ```
 
 The design is our own. It uses only Chromium's public embedder concepts (the content API and the `//chrome` layer's services); it does not follow any other browser's bridge.
@@ -158,6 +159,7 @@ What we replace:
 | C16 ad blocking | `OACApplication.adBlockingEnabled` / `adBlockingRulesetVersion`, `OACSiteSettings setAdBlockingEnabled:forOrigin:` / `isAdBlockingEnabledForOrigin:`, `OACTab.blockedAdCount` | `BrowserEngine.adBlocking` (`EngineAdBlocking`), `SiteSettingChange.adBlocking`, `isAdBlockingOn` | done (§Ad blocking) |
 | B45 page top color (toolbar) | `OACTabState.pageTopColorKind` / `pageTopColor`, `tabDidSamplePageTopColor:` (sampled after each load, patch 0022) | `BrowserTabState.pageTopColor` (`PageTopColor`), `TabEvent.pageTopColorChanged` | done (B45) |
 | B47 page translation | `OACTranslation.h`: `OACTab.translationState` (`OACTranslationState`), `translateToLanguage:`, `revertTranslation`, `neverTranslateSite`, `tabDidChangeTranslationState:`; `-[OACProfile resetTranslationSettings]`; `OACApplication.translationTargetLanguages` | `BrowserTabState.translation` (`PageTranslation`), `TabEvent.translationChanged`, `BrowserTab.translate(to:) / revertTranslation() / neverTranslateSite()`, `BrowserEngine.translation` (`EngineTranslation`) | done (B47, patches 0027–0028; §Translation) |
+| B51 page capture | `OACCapture.h`: `-[OACTab captureVisibleRect:completionHandler:]`, `-[OACTab captureFullPageWithMaximumAspectRatio:completionHandler:]` (PNG at the screen's density) | `BrowserTab.capture(_:)` with `PageCaptureArea` (`EngineSnapshot`) | done (B51, patch 0030) |
 | C17 window tint from the page | `OACTabState.themeColor`, `tab:didChangeThemeColor:hasThemeColor:` (theme-color meta only) | `themeColor` | not needed: `06 §17.4` (E18) observed that the window and sidebar never follow the page |
 | C18 system codecs | nothing in the API: decoder routing is inside the GPU / media code | none | — |
 | Site Control Center (B13) | `OACSiteSettings` | `SiteSettingsProvider` | 1:1, see `OACSiteSettings.h` header comment; §5 for permission kinds |

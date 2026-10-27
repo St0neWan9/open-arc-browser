@@ -175,10 +175,13 @@ final class SiteControlsTests: XCTestCase {
     }
 
     /// 06 §12 tool buttons: disabled without a handler; with one, they run and close the bubble.
+    /// The shell installs the capture handler (B51); taking it away disables them.
     func testToolButtons() async throws {
         let id = try await selectExampleTab()
         let sc = model.siteControls
         sc.present()
+        XCTAssertTrue(sc.canRunTools)
+        sc.toolHandler = nil
         XCTAssertFalse(sc.canRunTools)
         var ran: [(SiteControlsTool, UUID)] = []
         sc.toolHandler = { ran.append(($0, $1)) }
