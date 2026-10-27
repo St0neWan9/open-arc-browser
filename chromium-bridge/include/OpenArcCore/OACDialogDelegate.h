@@ -22,7 +22,8 @@
 //   `isFinished` turns YES; the shell removes its view.
 // - Dropping the last reference to an unanswered request answers it with its default (alert:
 //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
-//   file chooser: cancel, external protocol: block), so a page never hangs.
+//   file chooser: cancel, external protocol: block, unresponsive page: wait), so a page never
+//   hangs.
 // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
 //   right away.
 //
@@ -35,6 +36,9 @@
 // `WebContentsDelegate::RunFileChooser` (`<input type=file>`; the File System Access pickers keep
 // Chromium's native macOS panel); external protocols from `ExternalProtocolHandler` after its
 // policy decided to ask.
+//
+// Added in F1 step 2: the unresponsive-page prompt (plan C22) from the tab's
+// `WebContentsDelegate::RendererUnresponsive`.
 
 #import <OpenArcCore/OACDefines.h>
 #import <OpenArcCore/OACTab.h>
@@ -202,6 +206,26 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 - (void)openRememberingForOrigin:(BOOL)rememberForOrigin NS_SWIFT_NAME(open(rememberingForOrigin:));
 @end
 
+// MARK: - Unresponsive page (plan C22)
+
+/// The page's renderer stopped answering input (an endless script, for example) for the engine's
+/// hang delay (Chromium: 15 s), while the tab was visible. The shell offers to wait or to leave the
+/// page. The engine withdraws the request when the page answers again, navigates, or its renderer
+/// goes away. Waiting restarts the engine's hang timer: if the page is still stuck after another
+/// delay, a new request comes.
+///
+/// Default answer (dropped or cancelled): wait.
+OAC_EXPORT NS_SWIFT_UI_ACTOR
+@interface OACUnresponsivePageRequest : OACDialogRequest
+/// Keep waiting for the page.
+- (void)wait;
+/// Leaves the page: stops its renderer process, then goes back to the previous page of the tab's
+/// history in a new process if there is one. Every tab that shared that process gets
+/// `-tab:renderProcessDidTerminate:` (`OACRenderProcessTerminationKilled`); a tab with nothing
+/// to go back to stays crashed until it is reloaded.
+- (void)leavePage;
+@end
+
 // MARK: - Delegate
 
 @class OACPasswordSavePrompt;
@@ -226,6 +250,9 @@ NS_SWIFT_UI_ACTOR
 /// The dropdown's rows or highlighted row changed (the user typed, or pressed ↑ / ↓).
 - (void)tab:(OACTab *)tab didUpdateAutofillPopup:(OACAutofillPopup *)popup
     NS_SWIFT_NAME(tab(_:didUpdateAutofillPopup:));
+/// The page stopped responding (plan C22).
+- (BOOL)tab:(OACTab *)tab pageBecameUnresponsive:(OACUnresponsivePageRequest *)request
+    NS_SWIFT_NAME(tab(_:pageBecameUnresponsive:));
 
 /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
 - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;

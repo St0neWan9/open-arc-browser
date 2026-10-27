@@ -598,6 +598,20 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         })
     }
 
+    /// C22: the page stopped responding.
+    func tab(_ tab: OACTab, pageBecameUnresponsive request: OACUnresponsivePageRequest) -> Bool {
+        deliver(request, default: UnresponsivePageReply.wait, answer: { request, answer in
+            switch answer {
+            case .wait: request.wait()
+            case .leave: request.leavePage()
+            }
+        }, make: { id, reply in
+            .unresponsivePage(UnresponsivePagePrompt(
+                id: id, origin: request.origin.map(SiteOrigin.init(bridge:)), reply: reply
+            ))
+        })
+    }
+
     func tab(_ tab: OACTab, offerToSavePassword prompt: OACPasswordSavePrompt) -> Bool {
         deliver(prompt, default: PasswordSaveReply.dismiss, answer: { prompt, answer in
             switch answer {
