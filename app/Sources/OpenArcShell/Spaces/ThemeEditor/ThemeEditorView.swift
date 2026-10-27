@@ -50,7 +50,7 @@ struct ThemeEditorView: View {
         let palette = palette(for: theme, systemAppearance: systemAppearance)
         return FloatingBubbleStyle(width: ThemeEditorMetrics.size.width, height: ThemeEditorMetrics.size.height,
                                    cornerRadius: ThemeEditorMetrics.cornerRadius,
-                                   tint: palette.floatingPanelBackground, isDark: palette.isDark)
+                                   tint: palette.floatingPanelBackground, isDark: palette.isDark, usesGradient: true)
     }
 
     /// Ink for icons, labels and tracks: black in light, white in dark.
@@ -65,7 +65,8 @@ struct ThemeEditorView: View {
         }
         .padding(M.padding)
         .frame(width: M.size.width, height: M.size.height)
-        .background(drawsBackground ? palette.floatingPanelBackground.swiftUI : Color.clear)
+        // Opaque here (no blur behind): the gradient's fills at full opacity. [07 §8.4] finding 3.
+        .background(drawsBackground ? AnyShapeStyle(palette.floatingPanelGradient(opacity: 1).swiftUI) : AnyShapeStyle(Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
         .environment(\.colorScheme, palette.isDark ? .dark : .light)
         .accessibilityElement(children: .contain)

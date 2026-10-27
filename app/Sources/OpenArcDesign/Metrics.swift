@@ -370,12 +370,17 @@ public enum Metrics {
         public static let resultActionToArrowGap: Double = 7
         /// The backdrop is NOT dimmed. [07 §5] observed.
         public static let dimsBackground = false
-        /// Shadow: large, soft, offset down. [07 §5] inferred (profile fit: black ≈ 37 %, blur ≈ 48, y + 12).
-        public static let shadowOpacity: Double = 0.37
-        public static let shadowRadius: Double = 48
-        public static let shadowOffsetY: Double = 12
+        /// Shadow, in SwiftUI `.shadow` terms. [07 §5] measured profile: luminance at the edge
+        /// left −21 % / top −13 % / bottom −31 %, decaying to half at ≈ 32 / 21 / 43 pt (its rough
+        /// fit "black 35–40 %, blur 45–50, y + 10–15" is a guess, not SwiftUI values). SwiftUI's
+        /// `radius` acts as a Gaussian sigma, not a CSS / Figma blur (= 2 sigma), so the old
+        /// `blur 48 → radius 24` halved the reach (half-decay left 17 / bottom 21 pt on screen).
+        /// Calibrated on screen like [07 §7.1] (our panel over #EEEEEE, own-window capture, ≥ 20
+        /// samples per edge): black 52 %, radius 47, y + 26 gives edge −21.1 / −12.1 / −30.9 % and
+        /// half-decay 31 / 24 / 42 pt, within 1 % and 3 pt of Arc. inferred (B92).
+        public static let shadow = PanelShadow(opacity: 0.52, radius: 47, offsetY: 26)
         /// Outline: light = an outer 0.5 pt hairline of black ≈ 25 %; dark = an inner 0.5 pt light
-        /// line (≈ #565656). [07 §5] observed.
+        /// line (≈ #565656) plus an outer near-black one. [07 §5] observed.
         public static let outlineThickness: Double = 0.5
 
         /// Bottom padding under the last row, from 327 = 64 + 4 + 5 × 50 + 9. [07 §5] inferred.

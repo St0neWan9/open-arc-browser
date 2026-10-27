@@ -69,20 +69,32 @@ public struct CommandBarView: View {
         .background(shape.fill(palette.commandBarBackground.commandBarColor))
         .clipShape(shape)
         .overlay(outline(shape))
-        .shadow(color: .black.opacity(c.shadowOpacity), radius: c.shadowRadius / 2, x: 0, y: c.shadowOffsetY)
+        // SwiftUI's radius is a Gaussian sigma (not a CSS/Figma blur = 2σ); the token holds the on-screen calibrated radius, used as is.
+        .shadow(color: .black.opacity(c.shadow.opacity), radius: c.shadow.radius, x: c.shadow.offsetX, y: c.shadow.offsetY)
         .accessibilityElement(children: .contain)
     }
 
-    /// Light: a 0.5 pt dark hairline on the outer edge; dark: a 0.5 pt light line inside. [07 §5] observed.
+    /// Light: a 0.5 pt dark hairline on the outer edge; dark: a 0.5 pt light line inside plus a
+    /// near-black one outside. [07 §5] observed.
     @ViewBuilder
     private func outline(_ shape: RoundedRectangle) -> some View {
         let width = Metrics.CommandBar.outlineThickness
         if palette.isDark {
-            shape.strokeBorder(palette.commandBarOutline.commandBarColor, lineWidth: width)
+            ZStack {
+                shape.strokeBorder(palette.commandBarOutline.commandBarColor, lineWidth: width)
+                if let outer = palette.commandBarOuterOutline {
+                    outerHairline(shape, color: outer, width: width)
+                }
+            }
         } else {
-            shape.stroke(palette.commandBarOutline.commandBarColor, lineWidth: width * 2)
-                .mask(shape.inset(by: -width).stroke(lineWidth: width * 2))
+            outerHairline(shape, color: palette.commandBarOutline, width: width)
         }
+    }
+
+    /// A line of `width` just outside the panel edge.
+    private func outerHairline(_ shape: RoundedRectangle, color: RGBAColor, width: CGFloat) -> some View {
+        shape.stroke(color.commandBarColor, lineWidth: width * 2)
+            .mask(shape.inset(by: -width).stroke(lineWidth: width * 2))
     }
 
     // MARK: Input row

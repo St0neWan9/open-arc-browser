@@ -122,6 +122,80 @@ final class FloatingBubbleTests: XCTestCase {
         }
     }
 
+    // MARK: Motion (B92, [07 §11])
+
+    /// The bubble grows from its anchor: the arrow tip when attached, the bottom-left corner from
+    /// a menu. [07 §11] observed (bottom-left anchor for Edit Theme…); arrow tip inferred.
+    func testGrowthOrigin() {
+        let size = CGSize(width: 366.5, height: 508)
+        XCTAssertEqual(FloatingBubbleMotion.growthOrigin(arrow: nil, size: size), .zero)
+        XCTAssertEqual(FloatingBubbleMotion.growthOrigin(arrow: FloatingBubbleArrow(edge: .leading, position: 100), size: size),
+                       CGPoint(x: 0, y: 408), "leading arrow tip (bottom-left origin)")
+        XCTAssertEqual(FloatingBubbleMotion.growthOrigin(arrow: FloatingBubbleArrow(edge: .top, position: 50), size: size),
+                       CGPoint(x: 50, y: 508), "top arrow tip")
+        // The collapsed transform keeps the origin in place.
+        let bounds = CGRect(origin: .zero, size: size)
+        let t = FloatingBubbleMotion.transform(scale: 0.01, about: CGPoint(x: 0, y: 408), bounds: bounds, anchorPoint: CGPoint(x: 0.5, y: 0.5))
+        let pivot = CGPoint(x: bounds.midX, y: bounds.midY)
+        let p = CGPoint(x: 0 - pivot.x, y: 408 - pivot.y)
+        let mapped = CGPoint(x: p.x * t.m11 + p.y * t.m21 + t.m41 + pivot.x, y: p.x * t.m12 + p.y * t.m22 + t.m42 + pivot.y)
+        XCTAssertEqual(mapped.x, 0, accuracy: 1e-9)
+        XCTAssertEqual(mapped.y, 408, accuracy: 1e-9)
+    }
+
+    /// The springs carry the tokens' constants: open 0.31 s / 0.81, close 0.35 s / 0.85, scale
+    /// and alpha on the same curve. [07 §11] observed.
+    func testSpringsUseMotionTokens() throws {
+        for (phase, token) in [(FloatingBubbleMotion.Phase.open, Motion.themeBubbleOpen), (.close, Motion.themeBubbleClose)] {
+            let constants = try XCTUnwrap(token.curve.springConstants)
+            for key in ["transform", "opacity"] {
+                let spring = FloatingBubbleMotion.spring(key, from: 0, to: 1, phase: phase)
+                XCTAssertEqual(spring.stiffness, constants.stiffness, accuracy: 1e-9)
+                XCTAssertEqual(spring.damping, constants.damping, accuracy: 1e-9)
+                XCTAssertEqual(spring.mass, 1)
+                XCTAssertEqual(spring.duration, spring.settlingDuration)
+            }
+        }
+        XCTAssertEqual(FloatingBubbleMotion.token(.open), Motion.themeBubbleOpen)
+        XCTAssertEqual(FloatingBubbleMotion.token(.close), Motion.themeBubbleClose)
+    }
+
+    /// The panel controller runs the open spring when a bubble appears and keeps the panel on
+    /// screen while the close spring runs, ordering it out once it settles. [07 §11] observed:
+    /// open grows with alpha; close shrinks and fades (≈ 270 ms to alpha 0).
+    func testControllerAnimatesOpenAndClose() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 900, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = FloatingBubbleAnchor.AnchorView(frame: NSRect(x: 20, y: 300, width: 200, height: 36))
+        window.contentView?.addSubview(anchor)
+        window.orderFront(nil)
+        addTeardownBlock { @MainActor in window.close() }
+
+        let controller = FloatingBubbleController()
+        controller.anchorView = anchor
+        controller.request = FloatingBubbleRequest(
+            placement: .attached(.trailing),
+            style: FloatingBubbleStyle(width: 200, height: 160, cornerRadius: 20, tint: RGBAColor(hex: 0xFDF1FA), isDark: false, usesGradient: true),
+            content: AnyView(Color.clear), onDismiss: { _ in })
+        controller.schedule()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let panel = try XCTUnwrap(controller.panel)
+        let layer = try XCTUnwrap(panel.contentView?.layer)
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertNotNil(layer.animation(forKey: FloatingBubbleMotion.scaleKey), "grows from the anchor")
+        XCTAssertNotNil(layer.animation(forKey: FloatingBubbleMotion.opacityKey), "fades in on the same spring")
+
+        controller.request = nil
+        controller.hide()
+        XCTAssertTrue(controller.isClosing)
+        XCTAssertTrue(panel.isVisible, "still shrinking")
+        XCTAssertTrue(panel.ignoresMouseEvents, "a closing bubble lets clicks through")
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        XCTAssertFalse(panel.isVisible, "ordered out after the close spring")
+        XCTAssertFalse(controller.isClosing)
+        XCTAssertNil(layer.animation(forKey: FloatingBubbleMotion.scaleKey), "reset for the next open")
+    }
+
     /// B42: the sheet card is clipped to its radius 26 corners and its window is made clear.
     func testModalCardWindowIsClear() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
