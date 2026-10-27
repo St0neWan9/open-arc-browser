@@ -107,7 +107,7 @@ struct SidebarDragImageView: View {
                     .padding(.trailing, SidebarLayout().rowTitleGap)
                 title(size: CGFloat(Typography.tabRowTitle.size))
                 Spacer(minLength: 4)
-                accessory(glyph: 11, box: SidebarLocalTokens.rowAccessoryButtonSize)
+                accessory(glyph: SidebarLocalTokens.rowAccessoryGlyphSize, box: SidebarLocalTokens.rowAccessoryButtonSize)
             }
             .padding(.leading, SidebarLayout().rowIconLeading - CGFloat(Metrics.Sidebar.selectedRowHorizontalInset) - 1)
             .padding(.trailing, SidebarLocalTokens.rowAccessoryTrailingPadding - 1)
@@ -179,8 +179,8 @@ struct SidebarDragImageView: View {
             EmptyView()
         case .close, .unload:
             Image(systemName: content.accessory == .close ? "xmark" : "minus")
-                .font(.system(size: glyph, weight: .semibold))
-                .foregroundStyle(style.text.swiftUI.opacity(0.7))
+                .font(.system(size: glyph, weight: SidebarLocalTokens.rowAccessoryGlyphWeight))
+                .foregroundStyle(style.text.swiftUI.opacity(SidebarLocalTokens.rowAccessoryInkOpacity))
                 .frame(width: box, height: box)
         }
     }

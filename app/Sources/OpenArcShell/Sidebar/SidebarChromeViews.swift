@@ -299,6 +299,20 @@ struct SidebarFavoritesView: View {
         return frames
     }
 
+    /// The hovered favorite's card, right of its block. [07 §12] observed (B89).
+    private var tooltip: some View {
+        let id = viewModel.favoriteTooltipTabID
+        let index = id.flatMap { id in favorites.firstIndex { $0.id == id } }
+        let slots = self.slots
+        let tab = index.map { favorites[$0] }
+        return SidebarFavoritesTooltipPresenter(block: index.flatMap { slots.indices.contains($0) ? slots[$0] : nil },
+                                                title: tab?.displayTitle ?? "",
+                                                detail: id.flatMap { viewModel.favoriteHoverTip($0) })
+            .frame(width: layout.favoritesTilesFrame.width, height: layout.favoritesTilesFrame.height)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
     var body: some View {
         let palette = viewModel.palette
         let block = layout.favoritesTilesFrame
@@ -320,6 +334,7 @@ struct SidebarFavoritesView: View {
                     .frame(width: slot.width, height: slot.height)
                     .offset(x: slot.minX, y: slot.minY)
             }
+            tooltip
         }
         .frame(width: block.width, height: block.height, alignment: .topLeading)
         .animation(ShellMotion.favoriteMakeRoom, value: viewModel.dropTarget)
@@ -345,28 +360,25 @@ struct SidebarFavoritesEmptyCard: View {
         let ink = palette.primaryText.swiftUI
         ZStack(alignment: .topTrailing) {
             RoundedRectangle(cornerRadius: CGFloat(g.emptyStateCornerRadius), style: .continuous)
-                .strokeBorder(ink.opacity(0.25),
+                .strokeBorder(ink.opacity(g.emptyStateBorderOpacity),
                               style: StrokeStyle(lineWidth: CGFloat(g.emptyStateBorderWidth), dash: g.emptyStateDash.map { CGFloat($0) }))
-            VStack(spacing: 4) {
+            VStack(spacing: CGFloat(g.emptyStateLineSpacing)) {
                 Image(systemName: "star.circle.fill")
                     .resizable()
                     .frame(width: CGFloat(g.emptyStateStarSize), height: CGFloat(g.emptyStateStarSize))
-                    .foregroundStyle(ink.opacity(0.8))
+                    .foregroundStyle(ink.opacity(g.emptyStateStarOpacity))
                 Text(Self.title)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(ink)
+                    .textStyle(Typography.favoritesEmptyTitle, ink: palette.primaryText)
                 Text(Self.detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(ink.opacity(0.55))
+                    .textStyle(Typography.favoritesEmptyDetail, ink: palette.primaryText)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, CGFloat(g.emptyStateDetailPadding))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Button { viewModel.dismissFavoritesEmptyCard() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(ink.opacity(0.5))
+                    .textStyle(Typography.favoritesEmptyDismiss, ink: palette.primaryText)
                     .frame(width: CGFloat(g.emptyStateDismissSize), height: CGFloat(g.emptyStateDismissSize))
                     .contentShape(Rectangle())
             }
@@ -422,9 +434,12 @@ struct SidebarFavoriteCell: View {
             .contentShape(Rectangle())
             .onTapGesture { viewModel.selectTab(tab.id) }
             .contextMenu { SidebarTabMenu(viewModel: viewModel, tab: tab, kind: .favorite) }
-            // With the badge on, the hover tip reports the unread state ("No unread emails, you can
-            // exhale! 🌿", [06 §12] observed); otherwise the title. B77.
-            .help(viewModel.favoriteHoverTip(tab.id) ?? tab.displayTitle)
+            // Hovering shows the favorites card (title, plus the unread tip when the badge is on:
+            // "No unread emails, you can exhale! 🌿", [06 §12] observed) right of the block instead
+            // of a system tooltip. [07 §12] observed (B89).
+            .onHover { hovering in
+                if hovering { viewModel.favoriteHoverBegan(tab.id) } else { viewModel.favoriteHoverEnded(tab.id) }
+            }
             .accessibilityLabel(tab.displayTitle)
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier("openarc.sidebar.favorite.\(tab.id.uuidString)")

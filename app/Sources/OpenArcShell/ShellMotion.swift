@@ -51,6 +51,8 @@ enum ShellMotion {
     static var sidebarPeekSlide: Animation? { Motion.sidebarPeekSlide.curve.swiftUI }
     /// Favorites making room for a drag. `Motion.favoriteMakeRoom` (unknown).
     static var favoriteMakeRoom: Animation? { Motion.favoriteMakeRoom.curve.swiftUI }
+    /// Sidebar list scroller fade on hover. `Motion.sidebarScrollerFade` (unknown, B89).
+    static var sidebarScrollerFade: Animation? { Motion.sidebarScrollerFade.curve.swiftUI }
     /// Little Arc content scale 98 % → 100 % on open. `Motion.littleArcOpen`.
     static var littleArcOpen: Animation? { Motion.littleArcOpen.curve.swiftUI }
     /// Little Arc content scale to 98 % on close. `Motion.littleArcClose`.

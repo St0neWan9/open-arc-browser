@@ -274,8 +274,10 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
             pending = (hit.item, point)
             pendingFrame = hit.frame
             // [06 §15.1] observed: the press alone selects the tab and brings it to the front.
-            if clickCount == 1, let select = hit.selectRect, select.contains(point) {
-                viewModel?.pressSelect(hit.item)
+            if let select = hit.selectRect, select.contains(point) {
+                // A held, already selected row darkens ≈ 1 %. [07 §7] observed.
+                viewModel?.pressBegan(hit.item)
+                if clickCount == 1 { viewModel?.pressSelect(hit.item) }
             }
             return false
         case .leftMouseDragged:
@@ -283,9 +285,11 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
             guard SidebarDragThreshold.isExceeded(dx: point.x - pending.start.x, dy: point.y - pending.start.y) else { return false }
             self.pending = nil
             dragToStart = pending
+            viewModel?.pressEnded()
             return true
         case .leftMouseUp:
             pending = nil
+            viewModel?.pressEnded()
             return false
         default:
             return false
