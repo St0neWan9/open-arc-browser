@@ -162,8 +162,8 @@ public final class AppPreferences: @unchecked Sendable {
     static let javaScriptFromAppleEventsKey = "\(keyPrefix)developer.allowJavaScriptFromAppleEvents"
 
     /// View ▸ Developer ▸ Allow JavaScript from Apple Events. [01 §View] observed menu item; off
-    /// by default (inferred). Per device. It only gates our future AppleScript support (running
-    /// JavaScript in a page from an Apple Event); nothing reads it until that exists.
+    /// by default ([06 §29.4] inferred). Per device. Gates AppleScript's `execute` (running
+    /// JavaScript in a page from an Apple Event, B70).
     public var allowsJavaScriptFromAppleEvents: Bool {
         get { boolValue(Self.javaScriptFromAppleEventsKey) ?? false }
         set { setBool(newValue, Self.javaScriptFromAppleEventsKey) }
