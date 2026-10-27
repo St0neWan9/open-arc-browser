@@ -130,6 +130,19 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(model.pinMenuTitle, "Unpin Tab")
     }
 
+    /// 01 §Archive (B69), E20 archive-crop.png: Go Back · Go Forward ‖ View History · View Archive… ·
+    /// Clear Archive, no icons; ⌘[ / ⌘] [02 §页面与导航]. Clear Archive is disabled with an empty archive.
+    func testArchiveMenuGroups() throws {
+        let model = makeModel()
+        let built = try items(ArchiveMenuItems(model: model, hasWindow: true))
+        XCTAssertEqual(groups(built), MenuBarCatalog.archiveGroups)
+        assertNoOwnIcons(built)
+        XCTAssertEqual(built.first { $0.title == "Go Back" }?.keyEquivalent, "[")
+        XCTAssertEqual(built.first { $0.title == "Go Forward" }?.keyEquivalent, "]")
+        let clear = try XCTUnwrap(built.first { $0.title == "Clear Archive" })
+        XCTAssertEqual(clear.isEnabled, model.sidebar.canClearArchive)
+    }
+
     /// [02] keys in no [01] menu: they live in the hidden key-only menu.
     func testKeyOnlyItems() throws {
         let model = makeModel()
@@ -142,7 +155,7 @@ final class MenuBarTests: XCTestCase {
 
     /// 01 §Archive / §Extensions / §Window / §菜单项图标与缩进.
     func testArchiveExtensionsAndWindowGroups() {
-        XCTAssertEqual(MenuBarCatalog.archiveGroups, [["Go Back", "Go Forward"], ["View Archive…"]])
+        XCTAssertEqual(MenuBarCatalog.archiveGroups, [["Go Back", "Go Forward"], ["View History", "View Archive…", "Clear Archive"]])
         XCTAssertEqual(MenuBarCatalog.extensionsGroups, [["Add Extension…", "Manage Extensions…"]])
         XCTAssertEqual(MenuBarCatalog.windowGroups, [["Open Library…", "View Downloads…", "View Easels…", "View Media…", "View Boosts…"]])
     }

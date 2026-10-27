@@ -18,3 +18,23 @@ extension ShellModel {
     /// Whether the window shows the Library instead of the browser view.
     public var isLibraryActive: Bool { library.isActive }
 }
+
+// MARK: - Archive menu (B69)
+
+/// Where Archive ▸ View History goes. [01 §Archive] observed item; the spec does not record its
+/// surface, and the Library has no history section ([06 §8] observed rail), so it opens the
+/// engine's own history page in a new tab, as Manage Extensions… opens the extensions page.
+/// inferred.
+enum HistoryPage {
+    static let url = URL(string: "chrome://history/")!
+    static let title = "History"
+}
+
+extension ShellModel {
+    /// Archive ▸ View History: the history page in a new Today tab, out of the Library.
+    public func openHistory() {
+        if isCommandBarPresented { dismissCommandBar() }
+        library.exit()
+        sidebar.newTab(url: HistoryPage.url, title: HistoryPage.title)
+    }
+}

@@ -187,4 +187,101 @@ final class QuitSequenceTests: XCTestCase {
         let termination = AppTermination(releaseDragData: {})
         XCTAssertEqual(termination.begin {}, .terminateNow)
     }
+
+    // MARK: Warn before quitting (B68, 03 §General observed: on by default)
+
+    private func confirmingTermination(
+        _ answer: QuitConfirmation,
+        asked: @escaping @MainActor () -> Void,
+        isSystemQuit: Bool = false,
+        center: NotificationCenter = NotificationCenter()
+    ) -> AppTermination {
+        AppTermination(
+            deadline: 0.5, releaseDragData: {},
+            confirmQuit: { asked(); return answer },
+            isSystemQuit: { isSystemQuit },
+            notificationCenter: center
+        )
+    }
+
+    /// On (the default): the user is asked; Cancel keeps the app running and nothing is shut down.
+    func testWarnBeforeQuittingCancelKeepsTheAppOpen() {
+        let engine = QuitProbeEngine(.needsMainActor)
+        let model = makeModel(engine: engine, persistence: nil)
+        XCTAssertTrue(model.dependencies.preferences.warnsBeforeQuitting, "03 §General: on by default")
+        var asked = 0
+        let termination = confirmingTermination(.cancel) { asked += 1 }
+        termination.attach(model.controller)
+        XCTAssertEqual(termination.request {}, .terminateCancel)
+        XCTAssertEqual(asked, 1)
+        XCTAssertFalse(model.controller.isTerminationPrepared)
+        XCTAssertFalse(engine.base.shutdownCalled)
+    }
+
+    /// On: Quit runs the normal quit sequence (store flush, engine shutdown).
+    func testWarnBeforeQuittingQuitRunsTheQuitSequence() async throws {
+        let engine = QuitProbeEngine(.needsMainActor)
+        let model = makeModel(engine: engine, persistence: nil)
+        var asked = 0
+        let termination = confirmingTermination(.quit) { asked += 1 }
+        termination.attach(model.controller)
+        let replied = expectation(description: "replied")
+        XCTAssertEqual(termination.request { replied.fulfill() }, .terminateLater)
+        await fulfillment(of: [replied], timeout: 2)
+        XCTAssertEqual(asked, 1)
+        XCTAssertTrue(engine.base.shutdownCalled)
+        XCTAssertTrue(model.dependencies.preferences.warnsBeforeQuitting)
+    }
+
+    /// "Don't ask again" quits and turns the setting off.
+    func testDontAskAgainTurnsTheSettingOff() async throws {
+        let model = makeModel(engine: QuitProbeEngine(.needsMainActor), persistence: nil)
+        let termination = confirmingTermination(.quitAndStopWarning) {}
+        termination.attach(model.controller)
+        let replied = expectation(description: "replied")
+        XCTAssertEqual(termination.request { replied.fulfill() }, .terminateLater)
+        await fulfillment(of: [replied], timeout: 2)
+        XCTAssertFalse(model.dependencies.preferences.warnsBeforeQuitting)
+    }
+
+    /// Off: no question, the app quits at once.
+    func testWarnBeforeQuittingOffQuitsWithoutAsking() async throws {
+        let engine = QuitProbeEngine(.needsMainActor)
+        let model = makeModel(engine: engine, persistence: nil)
+        model.dependencies.preferences.warnsBeforeQuitting = false
+        var asked = 0
+        let termination = confirmingTermination(.cancel) { asked += 1 }
+        termination.attach(model.controller)
+        let replied = expectation(description: "replied")
+        XCTAssertEqual(termination.request { replied.fulfill() }, .terminateLater)
+        await fulfillment(of: [replied], timeout: 2)
+        XCTAssertEqual(asked, 0)
+        XCTAssertTrue(engine.base.shutdownCalled)
+    }
+
+    /// Logout / restart / shut down and an update relaunch are never questioned (inferred).
+    func testSystemQuitAndUpdateRelaunchAreNotQuestioned() async throws {
+        let model = makeModel(engine: QuitProbeEngine(.needsMainActor), persistence: nil)
+        var asked = 0
+        let system = confirmingTermination(.cancel, asked: { asked += 1 }, isSystemQuit: true)
+        system.attach(model.controller)
+        let replied = expectation(description: "system quit replied")
+        XCTAssertEqual(system.request { replied.fulfill() }, .terminateLater)
+        await fulfillment(of: [replied], timeout: 2)
+
+        let center = NotificationCenter()
+        let update = confirmingTermination(.cancel, asked: { asked += 1 }, center: center)
+        update.attach(model.controller)
+        center.post(name: QuitConfirmationAlert.updateRelaunchNotification, object: nil)
+        XCTAssertNotEqual(update.request {}, .terminateCancel)
+        XCTAssertEqual(asked, 0)
+    }
+
+    /// The alert's wording names our app, and only its first button (Quit) quits. inferred.
+    func testQuitAlertTextsAndAnswers() {
+        XCTAssertEqual(QuitConfirmationAlert.title, "Quit Open Arc?")
+        XCTAssertEqual(QuitConfirmationAlert.answer(for: .alertFirstButtonReturn, suppressed: false), .quit)
+        XCTAssertEqual(QuitConfirmationAlert.answer(for: .alertFirstButtonReturn, suppressed: true), .quitAndStopWarning)
+        XCTAssertEqual(QuitConfirmationAlert.answer(for: .alertSecondButtonReturn, suppressed: true), .cancel)
+    }
 }

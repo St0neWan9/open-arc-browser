@@ -218,18 +218,36 @@ public final class AppTermination {
     private weak var controller: WorkspaceController?
     private let deadline: TimeInterval
     private let releaseDragData: @MainActor () -> Void
+    private let confirmQuit: @MainActor () -> QuitConfirmation
+    private let isSystemQuit: @MainActor () -> Bool
     private var isRunning = false
+    /// An update is about to relaunch the app: its quit is never questioned.
+    private var isUpdateRelaunch = false
+    private var updateObserver: QuitNotificationObservation?
 
     /// - Parameters:
     ///   - deadline: the latest the app replies, whatever is still running.
     ///   - releaseDragData: drops drag-pasteboard data this process still promises. Tests pass
     ///     their own, so they never touch the system pasteboard.
+    ///   - confirmQuit: asks the user whether to quit ("Warn before quitting", B68). Tests pass
+    ///     their own, so no alert runs.
+    ///   - isSystemQuit: whether the quit comes from logout, restart or shut down, which are never
+    ///     questioned.
     public init(
         deadline: TimeInterval = TerminationTiming.quitDeadline,
-        releaseDragData: @escaping @MainActor () -> Void = AppTermination.releaseDragPasteboard
+        releaseDragData: @escaping @MainActor () -> Void = AppTermination.releaseDragPasteboard,
+        confirmQuit: @escaping @MainActor () -> QuitConfirmation = QuitConfirmationAlert.run,
+        isSystemQuit: @escaping @MainActor () -> Bool = AppTermination.currentQuitIsFromSystem,
+        notificationCenter: NotificationCenter = .default
     ) {
         self.deadline = deadline
         self.releaseDragData = releaseDragData
+        self.confirmQuit = confirmQuit
+        self.isSystemQuit = isSystemQuit
+        // Posted on the main thread by the updater just before it quits the app to install.
+        updateObserver = QuitNotificationObservation(center: notificationCenter, name: QuitConfirmationAlert.updateRelaunchNotification) { [weak self] in
+            self?.isUpdateRelaunch = true
+        }
     }
 
     /// The app's workspace controller. Its quit work runs on termination.
@@ -239,7 +257,34 @@ public final class AppTermination {
 
     /// For `NSApplicationDelegate.applicationShouldTerminate`.
     public func shouldTerminate(_ application: NSApplication) -> NSApplication.TerminateReply {
-        begin { application.reply(toApplicationShouldTerminate: true) }
+        request { application.reply(toApplicationShouldTerminate: true) }
+    }
+
+    /// A quit request (⌘Q, Open Arc ▸ Quit, the Dock): first asks the user when "Warn before
+    /// quitting" is on ([03 §General] observed, default on), then runs the quit sequence.
+    /// `.terminateCancel` when the user keeps the app open. Logout, restart, shut down and an
+    /// update relaunch quit without asking (inferred: the system and the updater cannot wait for an
+    /// answer).
+    @discardableResult
+    public func request(reply: @escaping @MainActor () -> Void) -> NSApplication.TerminateReply {
+        if !isRunning, let preferences = controller?.dependencies.preferences, preferences.warnsBeforeQuitting,
+           !isUpdateRelaunch, !isSystemQuit() {
+            switch confirmQuit() {
+            case .cancel: return .terminateCancel
+            case .quit: break
+            case .quitAndStopWarning: preferences.warnsBeforeQuitting = false
+            }
+        }
+        return begin(reply: reply)
+    }
+
+    /// Whether the quit Apple event being handled carries a reason (logout, restart, shut down).
+    /// ⌘Q, the menu and the Dock send none.
+    public static func currentQuitIsFromSystem() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == AEEventClass(kCoreEventClass), event.eventID == AEEventID(kAEQuitApplication) else { return false }
+        return event.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason)) != nil
+            || event.paramDescriptor(forKeyword: AEKeyword(kAEQuitReason)) != nil
     }
 
     /// Starts the quit sequence and calls `reply` once it finished or `deadline` passed. Returns

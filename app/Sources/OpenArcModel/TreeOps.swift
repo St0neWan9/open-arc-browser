@@ -519,6 +519,18 @@ public enum TreeOps {
         return s
     }
 
+    /// Archive ▸ Clear Archive ([01 §Archive] observed item): tombstones every live archive item.
+    /// Tabs, folders and Spaces are left alone; nothing new is archived. Which items it removes
+    /// (all of them, not only one Space's or Profile's) is inferred. Already tombstoned items are
+    /// not stamped again.
+    public static func clearArchive(_ state: WorkspaceState, now: Date) -> WorkspaceState {
+        var s = state
+        for (id, item) in s.archive where !item.meta.isTombstone {
+            s.archive[id]?.meta.markDeleted(at: now)
+        }
+        return s
+    }
+
     // MARK: Split view
 
     /// Adds `newTabID` as a pane next to `existingTabID`. If the existing tab is not in a split

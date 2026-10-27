@@ -225,6 +225,30 @@ final class SidebarDragTests: XCTestCase {
         XCTAssertEqual(vm.workspace.today(spaceID: f.home).map(\.id), [f.today3, f.today1, f.today2])
     }
 
+    /// [03 §Advanced] "Haptic feedback when reordering tabs" (observed, on by default; B68): one tap
+    /// per new drop position of an in-app drag, none while the pointer stays, none when off.
+    func testReorderHapticFollowsTheSetting() {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        let (g, _) = geometry(f)
+        var taps = 0
+        vm.playReorderHaptic = { taps += 1 }
+        vm.beginDrag(.tab(f.today1))
+        let y = rowFrame(f.today2, in: g).minY + 3
+        vm.updateDropTarget(at: CGPoint(x: listX, y: y), in: g)
+        vm.updateDropTarget(at: CGPoint(x: listX, y: y + 1), in: g)
+        XCTAssertEqual(taps, 1)
+        vm.updateDropTarget(at: CGPoint(x: listX, y: rowFrame(f.today3, in: g).minY + 3), in: g)
+        XCTAssertEqual(taps, 2)
+        vm.endDrag()
+
+        vm.controller.dependencies.preferences.playsReorderHaptics = false
+        vm.beginDrag(.tab(f.today1))
+        vm.updateDropTarget(at: CGPoint(x: listX, y: y), in: g)
+        XCTAssertEqual(taps, 2, "off: no haptic")
+        vm.endDrag()
+    }
+
     /// Reorder inside the pinned area: a pinned tab dropped on the lower half of a folder row's
     /// edge band goes after that folder (inferred), still at the top level.
     func testReorderInsidePinnedArea() {

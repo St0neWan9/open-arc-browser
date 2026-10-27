@@ -119,8 +119,8 @@ public enum SettingsCatalog {
         // Observed: a toggle whose row starts with "Info"; what it controls was not recorded
         // (unknown). No plan task covers it yet.
         SettingsControl("general.info", "Info", .toggle(defaultValue: false), .pending(task: "unknown (spec gap)")),
-        // Observed, default on. Needs a quit-confirmation hook in the app target (D1 app project).
-        SettingsControl("general.warnBeforeQuitting", "Warn before quitting", .toggle(defaultValue: true), .pending(task: "D1")),
+        // Observed, default on. Live (B68): ⌘Q asks first (`AppTermination`, `QuitConfirmationAlert`).
+        SettingsControl("general.warnBeforeQuitting", "Warn before quitting", .toggle(defaultValue: true), .live),
         // Previews = Peek (E2 spec gap).
         SettingsControl("general.previewsSettings", "Previews Settings…", .button, .pending(task: "E2")),
         // Observed hint: search engine, auto-archive and download location live in Profile settings.
@@ -158,8 +158,8 @@ public enum SettingsCatalog {
     // was recorded only as a paraphrase, so these labels are inferred.
 
     static let links: [SettingsControl] = [
-        // A system-wide hot key needs the app bundle (D1).
-        SettingsControl("links.littleArcHotKey", "Press ⌥⌘N in any app to open Little Arc", .toggle(defaultValue: true), .pending(task: "D1")),
+        // A system-wide hot key; the app bundle exists (D1) but no plan task builds the hot key yet.
+        SettingsControl("links.littleArcHotKey", "Press ⌥⌘N in any app to open Little Arc", .toggle(defaultValue: true), .pending(task: "unplanned (global hot key)")),
         // Modifier-clicks on page links come from the engine.
         SettingsControl("links.littleArcModifierClick", "Open Little Arc when you ⌥⌘-click a link", .toggle(defaultValue: true), .pending(task: "C9")),
         // Live (B24): web links from other apps open in a new expanded Little Arc window. The spec
@@ -199,13 +199,18 @@ public enum SettingsCatalog {
     // MARK: Advanced [03 §Advanced]
 
     static let advanced: [SettingsControl] = [
-        SettingsControl("advanced.soundEffects", "Play Open Arc sound effects", .toggle(defaultValue: true), .pending(task: "B16")),
-        SettingsControl("advanced.reorderHaptics", "Haptic feedback when reordering tabs", .toggle(defaultValue: true), .pending(task: "B19")),
+        // We have no sounds of our own yet ([00 §音效与触感]: Arc's sounds are not copied).
+        SettingsControl("advanced.soundEffects", "Play Open Arc sound effects", .toggle(defaultValue: true), .pending(task: "unplanned (own sound effects)")),
+        // Live (B68): a trackpad tap at each new drop position of a sidebar drag.
+        SettingsControl("advanced.reorderHaptics", "Haptic feedback when reordering tabs", .toggle(defaultValue: true), .live),
         SettingsControl("advanced.restoreWindows", "When opening Open Arc, restore windows from previous session", .toggle(defaultValue: false), .live),
-        SettingsControl("advanced.windowDragging", "Allow window dragging from the top of webpages", .toggle(defaultValue: true), .pending(task: "C8")),
+        // The page-top drag handle ([06 §13] observed) is not built; no plan task yet.
+        SettingsControl("advanced.windowDragging", "Allow window dragging from the top of webpages", .toggle(defaultValue: true), .pending(task: "unplanned (page-top drag handle)")),
         SettingsControl("advanced.showFullURL", "Show full URL when Toolbar is enabled", .toggle(defaultValue: false), .live),
         SettingsControl("advanced.pictureInPicture", "Enable Picture in Picture when you leave a video tab", .toggle(defaultValue: true), .live),
-        SettingsControl("advanced.themeData", "Allow websites to get your theme data", .toggle(defaultValue: true), .pending(task: "C17")),
+        // What websites receive is unknown ([04] observed setting, mechanism not recorded); C17 (page
+        // colors → window tint) was the opposite direction and is closed "not needed".
+        SettingsControl("advanced.themeData", "Allow websites to get your theme data", .toggle(defaultValue: true), .pending(task: "unknown (spec gap)")),
         SettingsControl("advanced.boosts", "Enable Boosts on websites you visit", .toggle(defaultValue: true), .pending(task: "E1")),
         // Chromium's own settings pages.
         SettingsControl("advanced.moreSettings", "More Settings…", .button, .pending(task: "C12")),

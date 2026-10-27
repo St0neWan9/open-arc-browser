@@ -87,10 +87,10 @@ enum MenuBarCatalog {
     ]
 
     /// Archive. [01 §Archive] observed; E20 (archive-crop.png): Go Back · Go Forward ‖ View History ·
-    /// View Archive… · Clear Archive. View History and Clear Archive are not built.
+    /// View Archive… · Clear Archive. All built (B69).
     static let archiveGroups: [[String]] = [
         ["Go Back", "Go Forward"],
-        ["View Archive…"],
+        ["View History", "View Archive…", "Clear Archive"],
     ]
 
     /// Extensions. [01 §Extensions] observed: one group, no icons.

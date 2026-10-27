@@ -147,6 +147,17 @@ public final class AppPreferences: @unchecked Sendable {
         set { setValue(newValue, Self.syncFullUploadKey) }
     }
 
+    // MARK: App-level settings: General
+
+    static let warnBeforeQuittingKey = "\(keyPrefix)general.warnBeforeQuitting"
+
+    /// "Warn before quitting". [03 §General] observed toggle, on by default. Per device. Read by
+    /// `AppTermination` when the user quits (B68).
+    public var warnsBeforeQuitting: Bool {
+        get { boolValue(Self.warnBeforeQuittingKey) ?? true }
+        set { setBool(newValue, Self.warnBeforeQuittingKey) }
+    }
+
     // MARK: App-level settings: Links
 
     static let littleArcExternalKey = "\(keyPrefix)links.littleArcExternal"
@@ -161,6 +172,14 @@ public final class AppPreferences: @unchecked Sendable {
     // MARK: App-level settings: Advanced
 
     static let pictureInPictureKey = "\(keyPrefix)advanced.pictureInPicture"
+    static let reorderHapticsKey = "\(keyPrefix)advanced.reorderHaptics"
+
+    /// "Haptic feedback when reordering tabs". [03 §Advanced] observed toggle, on by default. Per
+    /// device. Read by the sidebar while a row is dragged (B68).
+    public var playsReorderHaptics: Bool {
+        get { boolValue(Self.reorderHapticsKey) ?? true }
+        set { setBool(newValue, Self.reorderHapticsKey) }
+    }
 
     /// "Enable Picture in Picture when you leave a video tab". [03 §Advanced] observed toggle, on
     /// by default. Per device. Read by `AutoPictureInPicture` (plan C15).
