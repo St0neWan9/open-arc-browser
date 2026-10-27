@@ -278,6 +278,27 @@ public final class ShellModel: ObservableObject {
 
     public func selectSpace(_ id: UUID) { sidebar.selectSpace(id) }
 
+    // MARK: Window title (B74)
+
+    /// Title of an incognito window before it shows a page. [06 §20.1] observed: "Space 1" (the
+    /// sidebar row reads "Incognito Tabs" all the same).
+    static let incognitoWindowTitle = "Space 1"
+
+    /// The window's title (Window menu, Mission Control, AppleScript `name`): the selected tab's
+    /// page title, else the Space's name. [06 §1] observed: after Create Space the title is the
+    /// Space name; [06 §20.1] observed: an incognito window reads "Space 1", then the page title.
+    /// inferred: the page title, not a tab's custom name (a rename only changes the sidebar row);
+    /// a tab without a title yet falls back to the Space name.
+    public var windowTitle: String {
+        if let tabID = selectedTabID, let tab = workspace.tabs[tabID], !tab.meta.isTombstone {
+            if let live = sidebar.liveState(for: tabID)?.title, !live.isEmpty { return live }
+            if !tab.title.isEmpty { return tab.title }
+        }
+        if isIncognito { return Self.incognitoWindowTitle }
+        if let name = selectedSpace?.name, !name.isEmpty { return name }
+        return AppIdentity.displayName
+    }
+
     // MARK: Command bar
 
     /// ⌘T opens an empty bar for a new tab; ⌘L prefills the current address. [02] observed.

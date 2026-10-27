@@ -104,14 +104,11 @@ extension ScriptingHost {
         (try? model(forWindow: windowID))?.selectedSpaceID
     }
 
-    /// The window's full title: its selected tab's title, else the window's own. inferred.
+    /// The window's full title ([06 §29.2] observed): the title the window shows, the page title
+    /// else the Space name ("Space 1" in an incognito window). [06 §1, §20.1] observed (B74).
     func windowName(_ windowID: UUID) -> String {
-        guard let entry = window(withID: windowID) else { return "" }
-        if let tabID = activeTabID(inWindow: windowID) {
-            let title = tabTitle(tabID, inWindow: windowID)
-            if !title.isEmpty { return title }
-        }
-        return entry.window?.title ?? AppIdentity.displayName
+        guard let model = try? model(forWindow: windowID) else { return "" }
+        return model.windowTitle
     }
 
     /// 1-based place in the front-to-back order.
