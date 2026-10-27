@@ -181,6 +181,25 @@ final class BrowserProfileDiscoveryTests: XCTestCase {
         XCTAssertEqual(try ChromiumBookmarksParser.parse(Data(contentsOf: try XCTUnwrap(found.first).bookmarksFile)).bookmarkCount, 7)
     }
 
+    /// D3b: profiles with history or saved passwords but no bookmarks are listed too, with which
+    /// files they have; Edge's password key is "Microsoft Edge Safe Storage". inferred.
+    func testProfilesWithHistoryOrPasswordsAreListed() throws {
+        let support = "Library/Application Support"
+        try write("", to: "\(support)/Google/Chrome/Default/History")
+        try write("", to: "\(support)/Google/Chrome/Profile 1/Login Data For Account")
+        try write(BookmarkParserTests.chromeJSON, to: "\(support)/Microsoft Edge/Default/Bookmarks")
+        try write("", to: "\(support)/Microsoft Edge/Default/Login Data")
+        let found = BrowserProfileDiscovery.discover(home: home)
+        XCTAssertEqual(found.map(\.id), ["chrome/Default", "chrome/Profile 1", "edge/Default"])
+        XCTAssertEqual(found.map(\.hasBookmarks), [false, false, true])
+        XCTAssertEqual(found.map(\.hasHistory), [true, false, false])
+        XCTAssertEqual(found.map(\.hasPasswords), [false, true, true])
+        XCTAssertEqual(found[0].browser.keychainService, "Chrome Safe Storage")
+        XCTAssertEqual(found[0].browser.keychainAccount, "Chrome")
+        XCTAssertEqual(found[2].browser.keychainService, "Microsoft Edge Safe Storage")
+        XCTAssertEqual(found[2].directory.lastPathComponent, "Default")
+    }
+
     func testEmptyHomeFindsNothing() {
         XCTAssertTrue(BrowserProfileDiscovery.discover(home: home).isEmpty)
     }

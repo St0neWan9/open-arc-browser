@@ -384,11 +384,15 @@ public protocol BrowserEngine: AnyObject, Sendable {
     var adBlocking: any EngineAdBlocking { get }
     /// Page translation (plan B47). Engines without it get `UnavailableTranslation`.
     var translation: any EngineTranslation { get }
+    /// History and password import from other browsers (plan D3b). Engines without one get
+    /// `UnavailableImporter`.
+    var importer: any EngineImporter { get }
 }
 
 extension BrowserEngine {
     public var adBlocking: any EngineAdBlocking { UnavailableAdBlocking.shared }
     public var translation: any EngineTranslation { UnavailableTranslation.shared }
+    public var importer: any EngineImporter { UnavailableImporter.shared }
 }
 
 /// One live web contents.
