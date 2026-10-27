@@ -483,6 +483,25 @@ public enum Metrics {
         public static let popoverWidth: Double = 236
         /// Bubble corner radius. [07 §12] observed (corner profile fits r = 20).
         public static let cornerRadius: Double = 20
+
+        /// The site controls icon in the URL box (the bubble's anchor): a 30 × 30 box at window
+        /// x 234–264, y 49–79, i.e. vertically centered in the 36 pt box (y 46–82) and 4 pt in
+        /// from its right edge (268). [07 §12] observed (AX); the inset is derived from it.
+        public static let urlBoxButtonSize: Double = 30
+        public static let urlBoxButtonTrailingInset: Double = 4
+        /// Window of the bubble in the toolbar case: 262 × 280, the 236 × 254 bubble 13 pt inside
+        /// it on every side. [04 §网页工具栏 (E16)] observed (AX); [06 §17.3] observed.
+        public static let windowSize = Size2D(width: 262, height: 280)
+        public static let windowMargin: Double = 13
+        /// The bubble inside that window (the toolbar case's content). [04 §网页工具栏 (E16)] observed.
+        public static var toolbarCaseBubbleSize: Size2D {
+            Size2D(width: windowSize.width - 2 * windowMargin, height: windowSize.height - 2 * windowMargin)
+        }
+        /// The four top tool buttons: 48 × 32 at a 56 pt pitch. [04 §网页工具栏 (E16)] observed.
+        public static let toolButtonSize = Size2D(width: 48, height: 32)
+        public static let toolButtonPitch: Double = 56
+        /// "Secure" / "Insecure" pill and "⋯" button height. [06 §17.3] observed (94 × 32, 32 × 32).
+        public static let footerHeight: Double = 32
     }
 
     /// Floating bubbles drawn by us (theme bubble, Site Control Center, hover card): placement

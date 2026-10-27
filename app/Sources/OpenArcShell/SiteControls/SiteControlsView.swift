@@ -19,54 +19,108 @@ extension EnvironmentValues {
     }
 }
 
-/// The two icons at the right end of the URL box: copy link (chain) and site controls (sliders).
-/// They show while the box is hovered, and stay while the bubble is open so it keeps its anchor.
-/// [06 §12] observed.
+/// The two icons at the right end of the URL box: copy link (chain) and site controls (sliders),
+/// each a 30 × 30 `URLBoxIconButton`. Site controls sits at window x 234–264, y 49–79, so the
+/// bubble's arrow points at its center and the bubble top lands 12 pt below it (y 91). [07 §12]
+/// observed. They show while the box is hovered, and stay while the bubble is open so it keeps its
+/// anchor. [06 §12] observed. Without a model (previews of the bare sidebar) copy link uses
+/// `copyFallback` and no bubble is anchored.
 struct SiteControlsURLBoxAccessories: View {
-    @ObservedObject var model: SiteControlsModel
+    let model: SiteControlsModel?
     let isHovering: Bool
     let tint: Color
     /// Palette of the window: the bubble takes its floating-panel tint. [07 §12] observed.
     let chrome: ThemePalette
+    let copyFallback: () -> Void
     let openSiteControls: () -> Void
 
     var body: some View {
-        if isHovering || model.isPresented || model.isLinkCopied || model.extensionPopup != nil {
-            HStack(spacing: 2) {
-                Spacer()
-                SiteControlsIconButton(
-                    symbol: model.isLinkCopied ? "checkmark" : "link",
-                    label: model.isLinkCopied ? "Copied" : "Copy link",
-                    id: "openarc.sidebar.copyLinkButton",
-                    tint: tint
-                ) {
-                    model.copyLink()
-                }
-                .help(model.isLinkCopied ? "Copied" : "Copy Link")
-                SiteControlsIconButton(symbol: "slider.horizontal.3", label: "Site controls",
-                                       id: "openarc.sidebar.siteControlsButton", tint: tint, action: openSiteControls)
-                    .onHover { inside in inside ? model.pointerEntered() : model.pointerExited() }
-                    // Below the icon with an arrow pointing up at it, 12 pt below the icon,
-                    // centered on it. [07 §12] observed. Our own panel, not a popover (B42).
-                    .floatingBubble(isPresented: model.isPresented) {
-                        FloatingBubbleRequest(
-                            placement: .attached(.below),
-                            style: FloatingBubbleStyle(width: SiteControlsLocalTokens.width, height: nil,
-                                                       cornerRadius: SiteControlsLocalTokens.cornerRadius,
-                                                       tint: chrome.floatingPanelBackground, isDark: chrome.isDark, usesGradient: true),
-                            content: AnyView(SiteControlsView(model: model).environment(\.colorScheme, chrome.isDark ? .dark : .light)),
-                            onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
-                        )
-                    }
-                    // Extension popups open from the same button (C14). inferred.
-                    .extensionPopupBubble(model, tabID: model.extensionPopup?.tabID, palette: chrome)
+        if let model {
+            ModelBacked(model: model, isHovering: isHovering, tint: tint, chrome: chrome, openSiteControls: openSiteControls)
+        } else if isHovering {
+            URLBoxIconRow {
+                URLBoxIconButton(symbol: "link", label: "Copy link", id: URLBoxIconButton.copyLinkID, tint: tint,
+                                 action: copyFallback)
+                    .help("Copy Link")
+            } siteControls: {
+                URLBoxIconButton(symbol: "slider.horizontal.3", label: "Site controls", id: URLBoxIconButton.siteControlsID,
+                                 tint: tint, action: openSiteControls)
             }
-            .padding(.trailing, 6)
+        }
+    }
+
+    private struct ModelBacked: View {
+        @ObservedObject var model: SiteControlsModel
+        let isHovering: Bool
+        let tint: Color
+        let chrome: ThemePalette
+        let openSiteControls: () -> Void
+
+        var body: some View {
+            if isHovering || model.isPresented || model.isLinkCopied || model.extensionPopup != nil {
+                URLBoxIconRow {
+                    URLBoxIconButton(symbol: model.isLinkCopied ? "checkmark" : "link",
+                                     label: model.isLinkCopied ? "Copied" : "Copy link",
+                                     id: URLBoxIconButton.copyLinkID, tint: tint) {
+                        model.copyLink()
+                    }
+                    .help(model.isLinkCopied ? "Copied" : "Copy Link")
+                } siteControls: {
+                    URLBoxIconButton(symbol: "slider.horizontal.3", label: "Site controls",
+                                     id: URLBoxIconButton.siteControlsID, tint: tint, action: openSiteControls)
+                        .onHover { inside in inside ? model.pointerEntered() : model.pointerExited() }
+                        // Below the icon with an arrow pointing up at it, 12 pt below the icon,
+                        // centered on it. [07 §12] observed. Our own panel, not a popover (B42).
+                        .siteControlsBubble(model, isPresented: model.isPresented, palette: chrome)
+                        // Extension popups open from the same button (C14). inferred.
+                        .extensionPopupBubble(model, tabID: model.extensionPopup?.tabID, palette: chrome)
+                }
+            }
         }
     }
 }
 
-struct SiteControlsIconButton: View {
+/// Places the URL box icons: right-aligned `urlBoxButtonTrailingInset` in from the box's right
+/// edge and vertically centered in it, copy link directly left of site controls. [07 §12] observed
+/// for the site controls icon; copy link's place inferred.
+struct URLBoxIconRow<CopyLink: View, SiteControls: View>: View {
+    @ViewBuilder let copyLink: () -> CopyLink
+    @ViewBuilder let siteControls: () -> SiteControls
+
+    var body: some View {
+        HStack(spacing: SiteControlsLocalTokens.urlBoxButtonSpacing) {
+            Spacer(minLength: 0)
+            copyLink()
+            siteControls()
+        }
+        .padding(.trailing, SiteControlsLocalTokens.urlBoxButtonTrailingInset)
+        .frame(maxHeight: .infinity)
+    }
+}
+
+/// Frames of the URL box icons for a URL box at `box` (same coordinates). [07 §12] observed: the
+/// box at x 8–268, y 46–82 puts site controls at x 234–264, y 49–79; copy link directly left of
+/// it, inferred.
+enum URLBoxIconLayout {
+    static func siteControlsFrame(inURLBox box: CGRect) -> CGRect {
+        let size = SiteControlsLocalTokens.urlBoxButtonSize
+        return CGRect(x: box.maxX - SiteControlsLocalTokens.urlBoxButtonTrailingInset - size,
+                      y: box.midY - size / 2, width: size, height: size)
+    }
+
+    static func copyLinkFrame(inURLBox box: CGRect) -> CGRect {
+        let site = siteControlsFrame(inURLBox: box)
+        return site.offsetBy(dx: -(site.width + SiteControlsLocalTokens.urlBoxButtonSpacing), dy: 0)
+    }
+}
+
+/// One icon button at the right end of the URL box: a 30 × 30 box with a centered glyph. Both URL
+/// box icons use it, with or without a Site Control Center model, so the bubble always anchors
+/// to the measured box. [07 §12] observed size.
+struct URLBoxIconButton: View {
+    static let copyLinkID = "openarc.sidebar.copyLinkButton"
+    static let siteControlsID = "openarc.sidebar.siteControlsButton"
+
     let symbol: String
     let label: String
     let id: String
@@ -76,9 +130,9 @@ struct SiteControlsIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: SiteControlsLocalTokens.urlBoxGlyphSize, weight: .medium))
                 .foregroundStyle(tint.opacity(Metrics.IconOpacity.enabled))
-                .frame(width: 24, height: 24)
+                .frame(width: SiteControlsLocalTokens.urlBoxButtonSize, height: SiteControlsLocalTokens.urlBoxButtonSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -87,35 +141,97 @@ struct SiteControlsIconButton: View {
     }
 }
 
-/// The bubble. Top to bottom: 4 square tool buttons; "Extensions" ("+", and "Manage" when
-/// extensions exist); "Settings" rows; "Secure" pill and "⋯". [06 §12] observed.
+/// Geometry of the bubble's content, top to bottom: tool row, "Extensions", "Settings", footer,
+/// `padding` on every side. Heights are fixed so the bubble size follows the content without
+/// measuring it. [04 §网页工具栏 (E16)] observed: one settings row and no extension give the
+/// 236 × 254 bubble in its 262 × 280 window; [07 §12] observed ≈ 296 with two rows.
+struct SiteControlsLayout: Equatable {
+    var extensionCount: Int
+    var settingRowCount: Int
+
+    private typealias T = SiteControlsLocalTokens
+
+    var width: CGFloat { T.width }
+
+    /// The four tool buttons, relative to the bubble: 48 × 32 at a 56 pt pitch.
+    var toolFrames: [CGRect] {
+        (0..<SiteControlsTool.allCases.count).map { gridFrame(column: $0, top: T.padding) }
+    }
+
+    /// Extension buttons plus the trailing "+", 4 per line on the tools' grid. [06 §17.3] observed
+    /// "+" 48 × 32; extension buttons share its size, inferred.
+    var extensionCellCount: Int { extensionCount + 1 }
+    var extensionLines: Int { (extensionCellCount + T.toolColumns - 1) / T.toolColumns }
+
+    var extensionsHeaderTop: CGFloat { T.padding + T.toolButtonSize.height + T.sectionSpacing }
+    var extensionsGridTop: CGFloat { extensionsHeaderTop + T.headerHeight + T.headerSpacing }
+    var extensionsGridHeight: CGFloat {
+        CGFloat(extensionLines) * T.toolButtonSize.height + CGFloat(extensionLines - 1) * T.toolSpacing
+    }
+
+    func extensionCellFrame(index: Int) -> CGRect {
+        let line = CGFloat(index / T.toolColumns)
+        return gridFrame(column: index % T.toolColumns,
+                         top: extensionsGridTop + line * (T.toolButtonSize.height + T.toolSpacing))
+    }
+
+    var settingsHeaderTop: CGFloat { extensionsGridTop + extensionsGridHeight + T.sectionSpacing }
+    var settingsRowsTop: CGFloat { settingsHeaderTop + T.headerHeight + T.headerSpacing }
+
+    var footerFrame: CGRect {
+        CGRect(x: T.padding, y: settingsRowsTop + CGFloat(settingRowCount) * T.rowHeight + T.sectionSpacing,
+               width: width - 2 * T.padding, height: T.footerHeight)
+    }
+
+    /// Height of the bubble.
+    var height: CGFloat { footerFrame.maxY + T.padding }
+
+    /// The window around the bubble in the reference: `windowMargin` on every side.
+    /// [04 §网页工具栏 (E16)] observed (262 × 280 around 236 × 254).
+    var referenceWindowSize: CGSize {
+        let margin = CGFloat(Metrics.SiteControls.windowMargin)
+        return CGSize(width: width + 2 * margin, height: height + 2 * margin)
+    }
+
+    private func gridFrame(column: Int, top: CGFloat) -> CGRect {
+        CGRect(x: T.padding + CGFloat(column) * T.toolPitch, y: top,
+               width: T.toolButtonSize.width, height: T.toolButtonSize.height)
+    }
+}
+
+/// The bubble. Top to bottom: 4 tool buttons; "Extensions" ("+", and "Manage" when extensions
+/// exist); "Settings" rows; "Secure" pill and "⋯". [06 §12] observed; geometry from
+/// `SiteControlsLayout`.
 struct SiteControlsView: View {
     @ObservedObject var model: SiteControlsModel
 
+    private typealias T = SiteControlsLocalTokens
+
     var body: some View {
-        VStack(alignment: .leading, spacing: SiteControlsLocalTokens.sectionSpacing) {
+        let layout = model.contentLayout
+        VStack(alignment: .leading, spacing: T.sectionSpacing) {
             tools
-            extensionsSection
+            extensionsSection(layout)
             settingsSection
             footer
         }
-        .padding(SiteControlsLocalTokens.padding)
-        .frame(width: SiteControlsLocalTokens.width)
+        .padding(T.padding)
+        .frame(width: layout.width, height: layout.height, alignment: .top)
         .onHover { inside in inside ? model.pointerEntered() : model.pointerExited() }
         .onExitCommand { model.close(.escape) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.siteControls")
     }
 
+    /// Four 48 × 32 buttons at a 56 pt pitch. [04 §网页工具栏 (E16)] observed.
     private var tools: some View {
-        HStack(spacing: SiteControlsLocalTokens.toolSpacing) {
+        HStack(spacing: T.toolSpacing) {
             ForEach(SiteControlsTool.allCases, id: \.self) { tool in
                 Button { model.run(tool) } label: {
                     Image(systemName: tool.symbol)
                         .font(.system(size: 15))
-                        .frame(maxWidth: .infinity)
-                        .aspectRatio(1, contentMode: .fit)
-                        .background(RoundedRectangle(cornerRadius: SiteControlsLocalTokens.toolCornerRadius).fill(Color.primary.opacity(0.06)))
+                        .frame(width: T.toolButtonSize.width, height: T.toolButtonSize.height)
+                        .background(RoundedRectangle(cornerRadius: T.toolCornerRadius).fill(Color.primary.opacity(0.06)))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -128,10 +244,11 @@ struct SiteControlsView: View {
                 }
             }
         }
+        .frame(height: T.toolButtonSize.height)
     }
 
-    private var extensionsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func extensionsSection(_ layout: SiteControlsLayout) -> some View {
+        VStack(alignment: .leading, spacing: T.headerSpacing) {
             HStack {
                 header("Extensions")
                 Spacer()
@@ -144,47 +261,66 @@ struct SiteControlsView: View {
                         .accessibilityIdentifier("openarc.siteControls.manageExtensions")
                 }
             }
-            HStack(spacing: SiteControlsLocalTokens.toolSpacing) {
-                ForEach(model.settings.extensions) { ext in
-                    Button { model.runExtension(ext.id) } label: { ExtensionActionIcon(action: ext) }
-                        .buttonStyle(.plain)
-                        .disabled(!ext.isEnabled)
-                        .help(ext.title)
-                        .accessibilityLabel(ext.name)
-                        .accessibilityIdentifier("openarc.siteControls.extension.\(ext.id)")
+            .frame(height: T.headerHeight)
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(model.settings.extensions.enumerated()), id: \.element.id) { index, ext in
+                    Button { model.runExtension(ext.id) } label: {
+                        ExtensionActionIcon(action: ext)
+                            .frame(width: T.toolButtonSize.width, height: T.toolButtonSize.height)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!ext.isEnabled)
+                    .help(ext.title)
+                    .accessibilityLabel(ext.name)
+                    .accessibilityIdentifier("openarc.siteControls.extension.\(ext.id)")
+                    .offset(cellOffset(layout, index: index))
                 }
                 Button { model.addExtensionHandler?() } label: {
-                    Image(systemName: "plus").font(.system(size: 12, weight: .medium)).frame(width: 24, height: 24)
+                    Image(systemName: "plus").font(.system(size: 12, weight: .medium))
+                        .frame(width: T.toolButtonSize.width, height: T.toolButtonSize.height)
+                        .background(RoundedRectangle(cornerRadius: T.toolCornerRadius).fill(Color.primary.opacity(0.06)))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(model.addExtensionHandler == nil)
                 .accessibilityLabel("Add Extension")
                 .accessibilityIdentifier("openarc.siteControls.addExtension")
+                .offset(cellOffset(layout, index: layout.extensionCount))
             }
+            .frame(width: T.toolRowWidth, height: layout.extensionsGridHeight, alignment: .topLeading)
         }
     }
 
+    private func cellOffset(_ layout: SiteControlsLayout, index: Int) -> CGSize {
+        let frame = layout.extensionCellFrame(index: index)
+        return CGSize(width: frame.minX - T.padding, height: frame.minY - layout.extensionsGridTop)
+    }
+
     private var settingsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            header("Settings")
-            ForEach(model.settingRows) { row in
-                Button { model.activate(row.kind) } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: row.symbol)
-                            .font(.system(size: 12))
-                            .frame(width: SiteControlsLocalTokens.rowIconSize, height: SiteControlsLocalTokens.rowIconSize)
-                            .background(Circle().fill(Color.primary.opacity(0.08)))
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(row.title).font(Typography.panelRowTitle.font).lineLimit(1)
-                            Text(row.status).font(Typography.panelRowDetail.font).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: T.headerSpacing) {
+            header("Settings").frame(height: T.headerHeight)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(model.settingRows) { row in
+                    Button { model.activate(row.kind) } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: row.symbol)
+                                .font(.system(size: 12))
+                                .frame(width: T.rowIconSize, height: T.rowIconSize)
+                                .background(Circle().fill(Color.primary.opacity(0.08)))
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(row.title).font(Typography.panelRowTitle.font).lineLimit(1)
+                                Text(row.status).font(Typography.panelRowDetail.font).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        Spacer(minLength: 0)
+                        .frame(height: T.rowHeight)
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .help(row.title)
+                    .accessibilityLabel("\(row.title), \(row.status)")
                 }
-                .buttonStyle(.plain)
-                .help(row.title)
-                .accessibilityLabel("\(row.title), \(row.status)")
             }
         }
     }
@@ -198,7 +334,7 @@ struct SiteControlsView: View {
                 Image(systemName: model.site?.isSecure == false ? "lock.slash" : "lock.fill").font(.system(size: 10))
                 Text(model.securityLabel).font(Typography.panelRowDetail.font)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 10)
             .frame(height: SiteControlsLocalTokens.footerHeight)
             .background(Capsule().fill(Color.primary.opacity(0.06)))
             .accessibilityElement(children: .combine)
@@ -218,10 +354,11 @@ struct SiteControlsView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .frame(height: SiteControlsLocalTokens.footerHeight)
+            .frame(width: SiteControlsLocalTokens.footerHeight, height: SiteControlsLocalTokens.footerHeight)
             .accessibilityLabel("More")
             .accessibilityIdentifier("openarc.siteControls.more")
         }
+        .frame(height: SiteControlsLocalTokens.footerHeight)
     }
 
     private func header(_ text: String) -> some View {
@@ -229,6 +366,37 @@ struct SiteControlsView: View {
             .font(Typography.panelHeader.font)
             .foregroundStyle(.secondary)
     }
+}
+
+extension SiteControlsModel {
+    /// Geometry of the bubble for the current site: its extensions and settings rows.
+    var contentLayout: SiteControlsLayout {
+        SiteControlsLayout(extensionCount: settings.extensions.count, settingRowCount: settingRows.count)
+    }
+}
+
+extension View {
+    /// Anchors the Site Control Center bubble to this view (the URL box icon or the toolbar
+    /// button): below it, centered, arrow up, 12 pt gap. [07 §12] observed; [06 §17.3] observed
+    /// that in the toolbar it points at the site controls button. The height comes from
+    /// `SiteControlsLayout`, so the bubble is never measured.
+    func siteControlsBubble(_ model: SiteControlsModel, isPresented: Bool, palette: ThemePalette) -> some View {
+        floatingBubble(isPresented: isPresented) { siteControlsBubbleRequest(model, palette: palette) }
+    }
+}
+
+/// The Site Control Center bubble request, shared by the URL box icon and the toolbar button.
+@MainActor
+func siteControlsBubbleRequest(_ model: SiteControlsModel, palette: ThemePalette) -> FloatingBubbleRequest {
+    let layout = model.contentLayout
+    return FloatingBubbleRequest(
+        placement: .attached(.below),
+        style: FloatingBubbleStyle(width: layout.width, height: layout.height,
+                                   cornerRadius: SiteControlsLocalTokens.cornerRadius,
+                                   tint: palette.floatingPanelBackground, isDark: palette.isDark, usesGradient: true),
+        content: AnyView(SiteControlsView(model: model).environment(\.colorScheme, palette.isDark ? .dark : .light)),
+        onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
+    )
 }
 
 // MARK: - Share (B80)

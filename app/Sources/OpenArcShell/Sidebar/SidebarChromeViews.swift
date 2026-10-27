@@ -186,22 +186,15 @@ struct SidebarURLBoxView: View {
                     .padding(.leading, textLeading + SidebarLocalTokens.textInkInset)
                     .offset(y: TranslationLocalTokens.entryLineHeight - translationShift)
             }
-            if case .domain = content, let siteControls {
-                // Site Control Center anchor (B13, SiteControls/). [06 §12] observed.
-                SiteControlsURLBoxAccessories(model: siteControls, isHovering: isHovering, tint: palette.primaryText.swiftUI, chrome: palette) {
+            if case .domain = content {
+                // Site Control Center anchor (B13, B90; SiteControls/): one 30 × 30 icon at
+                // x 234–264, y 49–79. [06 §12], [07 §12] observed.
+                SiteControlsURLBoxAccessories(model: siteControls, isHovering: isHovering, tint: palette.primaryText.swiftUI,
+                                              chrome: palette) {
+                    if let url = viewModel.selectedURL { SidebarPasteboard.copy(url) }
+                } openSiteControls: {
                     viewModel.requestFromMenu(.showSiteControls)
                 }
-            } else if isHovering, case .domain = content {
-                HStack(spacing: 2) {
-                    Spacer()
-                    affordance("link", label: "Copy link", id: "openarc.sidebar.copyLinkButton") {
-                        if let url = viewModel.selectedURL { SidebarPasteboard.copy(url) }
-                    }
-                    affordance("slider.horizontal.3", label: "Site controls", id: "openarc.sidebar.siteControlsButton") {
-                        viewModel.requestFromMenu(.showSiteControls)
-                    }
-                }
-                .padding(.trailing, 6)
             }
         }
         .contentShape(Rectangle())
@@ -247,19 +240,6 @@ struct SidebarURLBoxView: View {
         case .placeholder: return SidebarURLBoxContent.placeholderText
         case .domain(let host, _): return host
         }
-    }
-
-    private func affordance(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(viewModel.palette.primaryText.swiftUI.opacity(Metrics.IconOpacity.enabled))
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityIdentifier(id)
     }
 }
 
