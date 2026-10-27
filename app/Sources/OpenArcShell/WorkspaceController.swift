@@ -209,7 +209,8 @@ public final class WorkspaceController: ObservableObject {
             sync: DisabledSyncStore(),
             persistence: nil,
             preferences: parent.dependencies.preferences,
-            systemAppearance: parent.dependencies.systemAppearance
+            systemAppearance: parent.dependencies.systemAppearance,
+            mediaFolders: parent.dependencies.mediaFolders
         )
         self.systemAppearance = parent.systemAppearance
         self.now = parent.now

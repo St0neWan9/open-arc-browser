@@ -85,7 +85,8 @@ extension AppDependencies {
             persistence: WorkspaceStore(directory: dataDirectory),
             preferences: .standard,
             defaultBrowser: SystemDefaultBrowserService(),
-            systemAppearance: ApplicationSystemAppearance()
+            systemAppearance: ApplicationSystemAppearance(),
+            mediaFolders: .live(environment: environment)
         )
     }
 

@@ -40,6 +40,9 @@ public struct AppDependencies: Sendable {
     /// light setting, so tests and previews never depend on the machine; the app passes
     /// `ApplicationSystemAppearance`.
     public var systemAppearance: any SystemAppearanceSource
+    /// Folders Library ▸ Media lists (B57). The default lists none, so tests and previews never
+    /// look at the user's files; the app passes `LibraryMediaFolders.live()`.
+    public var mediaFolders: LibraryMediaFolders
 
     public init(
         engine: any BrowserEngine,
@@ -48,7 +51,8 @@ public struct AppDependencies: Sendable {
         preferences: AppPreferences = .inMemory(),
         defaultBrowser: (any DefaultBrowserService)? = nil,
         updateChecker: (any UpdateChecker)? = nil,
-        systemAppearance: (any SystemAppearanceSource)? = nil
+        systemAppearance: (any SystemAppearanceSource)? = nil,
+        mediaFolders: LibraryMediaFolders = .none
     ) {
         self.engine = engine
         self.sync = sync
@@ -57,6 +61,7 @@ public struct AppDependencies: Sendable {
         self.defaultBrowser = defaultBrowser ?? InMemoryDefaultBrowserService()
         self.updateChecker = updateChecker ?? UnavailableUpdateChecker()
         self.systemAppearance = systemAppearance ?? ManualSystemAppearance(.light)
+        self.mediaFolders = mediaFolders
     }
 
     /// FakeEngine + sync disabled + no persistence (never touches the disk). Used for UI

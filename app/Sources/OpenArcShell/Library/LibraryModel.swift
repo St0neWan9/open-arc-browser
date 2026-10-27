@@ -21,11 +21,13 @@ public final class LibraryModel: ObservableObject {
     @Published public private(set) var lastError: Error?
     /// Library ▸ Downloads (C12): the current profile's downloads from the engine.
     public let downloads: LibraryDownloads
+    /// Library ▸ Media (B57): screenshots, images and videos from the Mac's usual folders.
+    public let media: LibraryMediaModel
 
     /// Calendar for the date groups of Archived Tabs. Settable so tests can fix the time zone.
     public var calendar: Calendar = .current
 
-    private let sidebar: SidebarViewModel
+    let sidebar: SidebarViewModel
     private let now: () -> Date
     /// Last section shown, reopened by Open Library. inferred.
     private(set) var lastSection: LibrarySection?
@@ -37,14 +39,19 @@ public final class LibraryModel: ObservableObject {
         self.sidebar = sidebar
         self.now = now
         self.downloads = LibraryDownloads(engine: sidebar.controller.dependencies.engine.downloads)
+        self.media = LibraryMediaModel(folders: sidebar.controller.dependencies.mediaFolders)
     }
 
     public var isActive: Bool { section != nil }
+
+    /// The injected clock (date groups).
+    var currentDate: Date { now() }
 
     /// Applies the values saved at the last quit. Does not notify `onPersistentStateChange`.
     /// An unknown section name (e.g. from a newer build) is ignored.
     func restorePersistentState(mediaIntroDismissed: Bool, lastSectionName: String?) {
         isMediaIntroVisible = !mediaIntroDismissed
+        updateMediaActivity()
         lastSection = lastSectionName.flatMap(LibrarySection.init(rawValue:))
     }
 
@@ -54,6 +61,7 @@ public final class LibraryModel: ObservableObject {
     public func open(_ section: LibrarySection) {
         self.section = section
         if section == .downloads { downloads.observe(profileID: sidebar.currentProfileID) }
+        updateMediaActivity()
         guard lastSection != section else { return }
         lastSection = section
         onPersistentStateChange?()
@@ -69,17 +77,19 @@ public final class LibraryModel: ObservableObject {
     public func exit() {
         section = nil
         draggingSpaceID = nil
+        updateMediaActivity()
     }
 
     func query(for section: LibrarySection) -> String { searchText[section] ?? "" }
 
     // MARK: Media
 
-    /// ✕ on the intro card, or its "Show Media" button: there is no media source yet, so both
-    /// only hide the card. inferred.
+    /// ✕ on the intro card, or its "Show Media" button: both hide the card for good, and the page
+    /// starts listing media (B57; the card is the opt-in, see LibraryMedia.swift). inferred.
     public func dismissMediaIntro() {
         guard isMediaIntroVisible else { return }
         isMediaIntroVisible = false
+        updateMediaActivity()
         onPersistentStateChange?()
     }
 

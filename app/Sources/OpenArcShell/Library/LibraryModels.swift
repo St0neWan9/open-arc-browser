@@ -111,6 +111,10 @@ public enum LibraryTexts {
     }
     public static let mediaIntroButton = "Show Media"
     public static let mediaPrivacyNote = "Media never leaves your computer and is not viewable by anyone but you."
+    /// Media list with no files, and with no file matching the search. Not observed (the spec
+    /// records no Media list): inferred.
+    public static let mediaEmpty = "No screenshots, images or videos yet."
+    public static let mediaNoMatches = "No matching media."
 
     public static let filterButton = "Filter"
 }

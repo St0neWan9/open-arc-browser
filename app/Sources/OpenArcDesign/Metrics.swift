@@ -440,6 +440,10 @@ public enum Metrics {
         public static var listColumnWidth: Double { leftPaneWidth - iconRailWidth }
         /// Selected rail block corner radius. [07 §6] observed (≈ 10).
         public static let railCornerRadius: Double = 10
+        /// Media rows (B57): [06 §8] observed "thumbnail rows"; sizes not measured. unknown.
+        public static let mediaRowHeight: Double = 52
+        public static let mediaThumbnailSize = Size2D(width: 56, height: 40)
+        public static let mediaThumbnailCornerRadius: Double = 5
     }
 
     public enum SiteControls {
