@@ -350,6 +350,19 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
         await delegate?.driverHandle(event)
     }
 
+    /// Replays one automatic engine sync (`SyncReason.scheduled`) the way CKSyncEngine reports
+    /// it: nothing is thrown, even when an internal operation such as the database subscription
+    /// save failed; only the events below reach the delegate. Pending changes are left alone.
+    func emitAutomaticCycle(fetchEvents: [SyncDriverEvent] = [], sendEvents: [SyncDriverEvent] = []) async {
+        guard let delegate else { return }
+        await delegate.driverHandle(.willFetchChanges)
+        for event in fetchEvents { await delegate.driverHandle(event) }
+        await delegate.driverHandle(.didFetchChanges(.scheduled))
+        await delegate.driverHandle(.willSendChanges)
+        for event in sendEvents { await delegate.driverHandle(event) }
+        await delegate.driverHandle(.didSendChanges(.scheduled))
+    }
+
     // MARK: SyncEngineDriver
 
     func accountStatus() async throws -> CKAccountStatus {
@@ -384,7 +397,7 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
         guard let delegate else { return }
         await delegate.driverHandle(.willFetchChanges)
         for event in events { await delegate.driverHandle(event) }
-        await delegate.driverHandle(.didFetchChanges)
+        await delegate.driverHandle(.didFetchChanges(.manual))
     }
 
     func sendChanges() async throws {
@@ -419,7 +432,7 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
             let result = await (sendHandler ?? defaultResult)(batch)
             await delegate.driverHandle(.sentRecordChanges(result))
         }
-        await delegate.driverHandle(.didSendChanges)
+        await delegate.driverHandle(.didSendChanges(.manual))
     }
 
     func cancel() async {
