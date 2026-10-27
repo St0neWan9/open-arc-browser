@@ -1,27 +1,44 @@
 import SwiftUI
 import AppKit
+import OpenArcModel
 import OpenArcDesign
 
 // Window background of a Space (plan B21): the theme color or gradient, with the grain overlay.
 
 /// The themed window background: a solid color for a one-color theme, a gradient across the dots
 /// for several ([06 §2] observed several dots; the gradient direction is inferred), plus the grain
-/// overlay when `palette.grain > 0`.
+/// overlay when `palette.grain > 0`. On a see-through surface (B64, [07 §8.4]) the colors are the
+/// solved tints at `windowOpacity` over a blur of what is behind the window.
 struct WindowBackgroundView: View {
     let palette: ThemePalette
+    var surface: WindowSurface = .opaque
 
     /// The grain overlay is drawn (for tests).
     var showsGrain: Bool { GrainNoise.overlayOpacity(for: palette.grain) != nil }
+    /// The blur of the desktop is drawn (for tests).
+    var showsBlur: Bool { surface.isTranslucent }
+
+    /// The colors painted: the opaque palette, or its tints over the blur.
+    var paintedColors: [RGBAColor] {
+        if surface.isTranslucent {
+            return palette.backgroundGradientColors.count > 1 ? palette.backgroundGradientTints : [palette.windowTint]
+        }
+        return palette.backgroundGradientColors.count > 1 ? palette.backgroundGradientColors : [palette.windowBackground]
+    }
 
     var body: some View {
+        let colors = paintedColors
         ZStack {
-            if palette.backgroundGradientColors.count > 1 {
+            if showsBlur {
+                BehindWindowBlur()
+            }
+            if colors.count > 1 {
                 LinearGradient(
-                    colors: palette.backgroundGradientColors.map(\.swiftUI),
+                    colors: colors.map(\.swiftUI),
                     startPoint: .topLeading, endPoint: .bottomTrailing
                 )
             } else {
-                palette.windowBackground.swiftUI
+                (colors.first ?? palette.windowBackground).swiftUI
             }
             if let opacity = GrainNoise.overlayOpacity(for: palette.grain) {
                 GrainOverlay(opacity: opacity)

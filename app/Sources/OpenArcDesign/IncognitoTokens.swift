@@ -41,7 +41,7 @@ public enum IncognitoTokens {
 }
 
 extension ThemeDerivation {
-    /// The incognito window's palette in `appearance`. Dark: the observed fixed colors of
+    /// The incognito window's palette in `appearance`, with an opaque window (B64). Dark: the observed fixed colors of
     /// [06 §20] on top of the dark derivation of the window color (light ink, dark command bar
     /// text); light: [06 §20.5] unknown, a neutral light fallback. Both use the fixed blue-violet
     /// command bar selection (dark observed; light inferred: a fixed incognito accent).
@@ -52,6 +52,7 @@ extension ThemeDerivation {
             var light = palette(forStyle: ThemeStyle(appearance: .light, colors: [t.lightFallbackBase]), appearance: .light)
             light.commandBarSelection = t.commandBarSelection
             light.commandBarSelectedText = RGBAColor(hex: 0xFFFFFF)
+            light.makeWindowOpaque()
             return light
         }
         var p = palette(forStyle: ThemeStyle(appearance: .dark, colors: [t.windowBackground]), appearance: .dark)
@@ -75,6 +76,10 @@ extension ThemeDerivation {
         p.inkOpacity.spaceName = t.sidebarTextWhiteOpacity
         p.inkOpacity.newTabRow = t.sidebarTextWhiteOpacity
         p.secondaryText = RGBAColor(hex: 0xFFFFFF, alpha: t.sidebarTextWhiteOpacity)
+        // Opaque window (B64): the observed #0C0F14 is darker than an 81 % tint can show over the
+        // [07 §8.4] reference desktop, and whether Arc's incognito window is translucent was not
+        // measured ([06 §20] unknown). The light fallback stays opaque too.
+        p.makeWindowOpaque()
         return p
     }
 }

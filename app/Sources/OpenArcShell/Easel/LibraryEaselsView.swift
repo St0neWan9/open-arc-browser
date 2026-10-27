@@ -106,6 +106,7 @@ enum EaselIcon {
 /// observed. Inert: sharing and collaboration are out of scope (B56).
 struct EaselShareURLBox: View {
     @ObservedObject var viewModel: SidebarViewModel
+    @Environment(\.windowSurface) private var surface
 
     var body: some View {
         let palette = viewModel.palette
@@ -120,7 +121,7 @@ struct EaselShareURLBox: View {
                 .foregroundStyle(palette.ink(\.addressText).swiftUI)
                 .padding(.horizontal, 12)
                 .frame(height: 26)
-                .background(Capsule().fill(palette.controlFill.swiftUI))
+                .background(Capsule().fill(palette.windowFills(on: surface).controlFill.swiftUI))
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -132,7 +133,7 @@ struct EaselShareURLBox: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: CGFloat(s.addressFieldCornerRadius), style: .continuous)
-                .fill(palette.controlFill.swiftUI.opacity(0.5))
+                .fill(palette.windowFills(on: surface).controlFill.swiftUI.opacity(0.5))
         )
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.urlBox")

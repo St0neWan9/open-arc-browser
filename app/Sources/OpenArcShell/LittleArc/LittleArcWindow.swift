@@ -83,9 +83,14 @@ struct LittleArcBrowsingView: View {
     /// "Copied Current URL" after the copy link icon ([06 §17.3] observed in the main window; the
     /// same notice here is inferred).
     @StateObject private var copyToast = WebToolbarCopyToast()
+    /// See-through like the main window (B64, [07 §8.4]; for Little Arc inferred), opaque in full
+    /// screen and with Reduce Transparency.
+    @State private var isFullScreen = false
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         let palette = model.palette
+        let surface = WindowSurface(palette: palette, isFullScreen: isFullScreen, reduceTransparency: reduceTransparency)
         VStack(spacing: 0) {
             LittleArcTopBar(model: model, palette: palette, onCopy: { if model.copyLink() { copyToast.show() } })
                 .frame(height: LittleArcTokens.topBarHeight)
@@ -110,7 +115,9 @@ struct LittleArcBrowsingView: View {
                     .allowsHitTesting(false)
             }
         }
-        .background(palette.windowBackground.swiftUI)
+        .environment(\.windowSurface, surface)
+        .background(WindowBackgroundView(palette: palette, surface: surface))
+        .background(TranslucentWindowConfigurator { isFullScreen = $0 })
         // Traffic lights centered on the 47 pt bar: the main window's measured spot (center y 24,
         // [07 §2] observed) suits it; using it here is inferred.
         .background(MainWindowChromeConfigurator(placement: .pinned))
@@ -133,6 +140,7 @@ struct LittleArcTopBar: View {
     @ObservedObject var model: LittleArcModel
     let palette: ThemePalette
     var onCopy: () -> Void = {}
+    @Environment(\.windowSurface) private var surface
 
     var body: some View {
         ZStack {
@@ -159,7 +167,7 @@ struct LittleArcTopBar: View {
         .foregroundStyle(palette.primaryText.swiftUI)
         .padding(.horizontal, 9)
         .frame(height: LittleArcTopBarLayout.capsuleHeight)
-        .background(Capsule().fill(palette.controlFill.swiftUI))
+        .background(Capsule().fill(palette.windowFills(on: surface).controlFill.swiftUI))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("openarc.littlearc.profile")
     }
@@ -505,8 +513,9 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
                 }
             }
             // Compact: the command bar draws its own rounded panel; the window itself is clear.
-            set(\.isOpaque, !compact)
-            let background: NSColor = compact ? .clear : .windowBackgroundColor
+            // Expanded: clear too, the view draws the see-through window background (B64).
+            set(\.isOpaque, false)
+            let background: NSColor = .clear
             if !window.backgroundColor.isEqual(background) {
                 window.backgroundColor = background
                 changed = true

@@ -131,6 +131,7 @@ struct SidebarURLBoxView: View {
     @ObservedObject var viewModel: SidebarViewModel
     @Environment(\.siteControlsModel) private var siteControls
     @Environment(\.translationModel) private var translation
+    @Environment(\.windowSurface) private var surface
     @State private var isHovering = false
 
     var body: some View {
@@ -149,7 +150,7 @@ struct SidebarURLBoxView: View {
         let icon = s.addressFieldIconFrame
         ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: CGFloat(s.addressFieldCornerRadius), style: .continuous)
-                .fill(palette.controlFill.swiftUI)
+                .fill(palette.windowFills(on: surface).controlFill.swiftUI)
                 // The box itself: a 260 × 36 button that opens the command bar.
                 .accessibilityElement()
                 .accessibilityAddTraits(.isButton)
@@ -270,6 +271,7 @@ struct SidebarFavoritesView: View {
     @ObservedObject var viewModel: SidebarViewModel
     let favorites: [TabNode]
     let layout: SidebarLayout
+    @Environment(\.windowSurface) private var surface
 
     /// Tile frames, relative to the block. While a tab hovers the block the other tiles give way
     /// live: a new tile opens an empty slot at the gap (no line, no placeholder fill, [06 §15.5]
@@ -308,7 +310,7 @@ struct SidebarFavoritesView: View {
                 if viewModel.showsFavoritesEmptyCard {
                     SidebarFavoritesEmptyCard(viewModel: viewModel)
                 } else {
-                    RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.controlFill.swiftUI)
+                    RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.windowFills(on: surface).controlFill.swiftUI)
                 }
             }
             ForEach(Array(zip(favorites, slots)), id: \.0.id) { fav, slot in
@@ -380,6 +382,7 @@ struct SidebarFavoritesEmptyCard: View {
 struct SidebarFavoriteCell: View {
     @ObservedObject var viewModel: SidebarViewModel
     let tab: TabNode
+    @Environment(\.windowSurface) private var surface
 
     var body: some View {
         let palette = viewModel.palette
@@ -388,7 +391,7 @@ struct SidebarFavoriteCell: View {
         SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: SidebarLocalTokens.favoriteIconSize,
                            tint: palette.ink(\.faviconPlaceholder).swiftUI, placeholder: .roundedSquare)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.fill(palette: palette, isSelected: isSelected).swiftUI))
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.fill(palette: palette, isSelected: isSelected, surface: surface).swiftUI))
             .overlay {
                 if isSelected {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -414,8 +417,10 @@ struct SidebarFavoriteCell: View {
     /// Tile fill: the control fill; selected in the dark appearance a clearly lighter gray (window
     /// + ≈ 47 % white, ≈ #8F9099 on the default dark theme). [06 §21.3] observed (dark only; the
     /// light appearance keeps the control fill, inferred).
-    static func fill(palette: ThemePalette, isSelected: Bool) -> RGBAColor {
-        guard isSelected, palette.isDark else { return palette.controlFill }
+    /// On a see-through window both are layers over the window (B64, [07 §8.4]).
+    static func fill(palette: ThemePalette, isSelected: Bool, surface: WindowSurface = .opaque) -> RGBAColor {
+        guard isSelected, palette.isDark else { return palette.windowFills(on: surface).controlFill }
+        if surface.isTranslucent { return RGBAColor(hex: 0xFFFFFF, alpha: Metrics.FavoritesGrid.selectedTileWhiteDark) }
         return ThemeDerivation.overlayWhite(palette.windowBackground, amount: Metrics.FavoritesGrid.selectedTileWhiteDark)
     }
 }

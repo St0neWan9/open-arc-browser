@@ -9,6 +9,7 @@ import OpenArcDesign
 struct NewSpaceView: View {
     @ObservedObject var flow: SpaceFlowModel
     let palette: ThemePalette
+    @Environment(\.windowSurface) private var surface
 
     @State private var isIconPopoverShown = false
     @State private var isThemePopoverShown = false
@@ -110,7 +111,7 @@ struct NewSpaceView: View {
         }
         .padding(.horizontal, 8)
         .frame(width: T.contentWidth, height: T.fieldHeight)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.controlFill.swiftUI))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.windowFills(on: surface).controlFill.swiftUI))
     }
 
     private var profileRow: some View {

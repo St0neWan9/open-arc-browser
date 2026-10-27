@@ -15,6 +15,8 @@ public struct SidebarView: View {
     @State private var regions: [SidebarDropRegion: CGRect] = [:]
     /// The floating peek panel's deeper fill instead of the window color. [06 §14] B34.
     @Environment(\.sidebarFillOverride) private var fillOverride
+    /// See-through window: no own background, controls as layers. [07 §8.4] B64.
+    @Environment(\.windowSurface) private var surface
     /// View ▸ Show Toolbar: no URL box or navigation buttons here, content 46 pt higher. [06 §17.1] B43.
     @Environment(\.isWebToolbarShown) private var isWebToolbarShown
 
@@ -38,7 +40,7 @@ public struct SidebarView: View {
         let listHeight = max(0, layout.dockFrame.minY - layout.listTop)
 
         return ZStack(alignment: .topLeading) {
-            (fillOverride ?? palette.windowBackground).swiftUI
+            fillOverride.map(\.swiftUI) ?? palette.sidebarBackground(on: surface)
 
             SidebarTopBarView(viewModel: viewModel, layout: layout)
 
@@ -201,6 +203,7 @@ struct SidebarListView: View {
     let isSidebarHovered: Bool
     let layout: SidebarLayout
     @State private var edges = SidebarScrollEdges()
+    @Environment(\.windowSurface) private var surface
 
     var body: some View {
         GeometryReader { viewport in
@@ -220,7 +223,7 @@ struct SidebarListView: View {
     private func edgeLine(visible: Bool) -> some View {
         if visible {
             Rectangle()
-                .fill(viewModel.palette.scrollEdgeLine.swiftUI)
+                .fill(viewModel.palette.windowFills(on: surface).scrollEdgeLine.swiftUI)
                 .frame(width: layout.width, height: SidebarLocalTokens.scrollEdgeLineThickness)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

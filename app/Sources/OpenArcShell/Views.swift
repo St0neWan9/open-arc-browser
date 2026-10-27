@@ -34,6 +34,10 @@ struct MainWindowContent: View {
     @ObservedObject var webToolbar: WebToolbarSettings
     /// "Copied Current URL" after the toolbar's copy link button (B43, [06 §17.3]).
     @StateObject private var copyToast = WebToolbarCopyToast()
+    /// The window is in full screen: no desktop behind it, so the chrome is opaque (B64, inferred).
+    @State private var isFullScreen = false
+    /// System setting Reduce Transparency: opaque chrome (B64, inferred).
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     init(model: ShellModel, sidebar: SidebarViewModel, webToolbar: WebToolbarSettings? = nil) {
         self.model = model
@@ -44,6 +48,8 @@ struct MainWindowContent: View {
     var body: some View {
         // While the Create Space view is up the window uses the default light neutral theme. [06 §1] observed.
         let palette = model.windowPalette
+        // See-through chrome over the blurred desktop. [07 §8.4] B64.
+        let surface = WindowSurface(palette: palette, isFullScreen: isFullScreen, reduceTransparency: reduceTransparency)
         GeometryReader { proxy in
             let baseLayout = model.windowLayout(size: proxy.size)
             // Peek shrinks the page behind it (B49, [06 §22.2] observed).
@@ -51,7 +57,7 @@ struct MainWindowContent: View {
             let layout = showsLinkPeek ? baseLayout.withPeekInset() : baseLayout
             ZStack(alignment: .topLeading) {
                 // The window background is the space theme color, with no separate title bar. [04 §window structure]
-                WindowBackgroundView(palette: palette)
+                WindowBackgroundView(palette: palette, surface: surface)
 
                 if model.library.isActive {
                     // The whole window switches to the Library view. [06 §8] observed.
@@ -111,6 +117,7 @@ struct MainWindowContent: View {
                         .allowsHitTesting(false)
                 }
             }
+            .environment(\.windowSurface, surface)
             .environment(\.dialogCenter, model.controller.dialogs)
             .environment(\.translationModel, model.translation)
             .environment(\.isWebToolbarShown, layout.isWebToolbarShown)
@@ -140,6 +147,8 @@ struct MainWindowContent: View {
         .overlay(alignment: .topLeading) { themeEditorAnchor }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.
         .background(WindowAppearanceApplier(appearance: palette.appearance))
+        // A clear, non-opaque window so the blur and the tint show the desktop. [07 §8.4] B64.
+        .background(TranslucentWindowConfigurator { isFullScreen = $0 })
     }
 
     /// The engine tab whose permission bubble goes under the URL box: the selected tab's, while
