@@ -25,7 +25,8 @@ public struct SidebarView: View {
     public var body: some View {
         GeometryReader { proxy in
             content(layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height),
-                                          isWebToolbarShown: isWebToolbarShown, hidesFavorites: viewModel.isIncognito))
+                                          isWebToolbarShown: isWebToolbarShown, hidesFavorites: viewModel.isIncognito,
+                                          favoritesTilesHeight: viewModel.favoritesTilesHeight))
         }
         .frame(width: CGFloat(Metrics.Sidebar.width))
     }
@@ -33,7 +34,7 @@ public struct SidebarView: View {
     private func content(layout: SidebarLayout) -> some View {
         let palette = viewModel.palette
         let snapshot = viewModel.snapshot
-        let url = layout.urlBoxFrame, favorites = layout.favoritesFrame
+        let url = layout.urlBoxFrame, favorites = layout.favoritesTilesFrame
         let listHeight = max(0, layout.dockFrame.minY - layout.listTop)
 
         return ZStack(alignment: .topLeading) {
@@ -134,13 +135,16 @@ public struct SidebarView: View {
     }
 
     private func dropGeometry(_ snapshot: SidebarSnapshot, layout: SidebarLayout) -> SidebarDropGeometry {
-        SidebarDropGeometry.make(
+        var geometry = SidebarDropGeometry.make(
             snapshot: snapshot,
             dockSpaceIDs: viewModel.dockSpaces.map(\.id),
             rowFrames: rowFrames,
             regions: regions,
             width: layout.width
         )
+        // Reordering a favorite keeps the grid's tile count. [06 §21.4] B55.
+        geometry.favoriteDraggedIndex = viewModel.draggedFavoriteIndex
+        return geometry
     }
 
     private func dragSourceItems(_ snapshot: SidebarSnapshot, layout: SidebarLayout) -> [SidebarDragSourceItem] {

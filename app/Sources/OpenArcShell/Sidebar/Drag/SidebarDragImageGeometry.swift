@@ -58,7 +58,8 @@ enum SidebarDragImageGeometry {
     /// (collection y 82–145).
     static func favoritesBand(_ layout: SidebarLayout) -> CGRect {
         let s = Metrics.Sidebar.self
-        let top = CGFloat(s.favoritesCollectionTop) - layout.contentShift
+        // The collection top does not move with more favorite rows (B55); the header below does.
+        let top = CGFloat(s.favoritesCollectionTop) - layout.contentShift - layout.favoritesExtraHeight
         let bottom = CGFloat(s.spaceHeaderTop) - layout.contentShift
         return CGRect(x: 0, y: top, width: layout.width, height: bottom - top)
     }

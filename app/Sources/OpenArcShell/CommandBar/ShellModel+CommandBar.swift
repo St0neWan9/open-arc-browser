@@ -8,6 +8,15 @@ import OpenArcModel
 extension ShellModel {
     /// What the command rows depend on right now.
     var commandBarCommandState: CommandBarCommandState {
+        var state = baseCommandBarCommandState
+        // "Favorite Tab" only for a Today tab of a normal window. [06 §21.4] B55.
+        state.canFavoriteSelectedTab = !isIncognito && selectedTabID.flatMap { workspace.tabs[$0] }.map { tab in
+            if case .today = tab.location { return true } else { return false }
+        } == true
+        return state
+    }
+
+    private var baseCommandBarCommandState: CommandBarCommandState {
         CommandBarCommandState(
             hasSelectedTab: selectedTabID != nil,
             hasSelectedSpace: selectedSpaceID != nil,

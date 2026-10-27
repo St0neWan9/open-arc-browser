@@ -714,7 +714,10 @@ public final class SidebarViewModel: ObservableObject {
         switch tab.location {
         case .today: pinTab(id)
         case .pinned: unpinTab(id)
-        case .favorite: removeFavorite(id)
+        case .favorite:
+            // ⌘D on a favorite is not captured ([06 §21.8]); it goes back to the top of Today. inferred.
+            guard let spaceID = selectedSpaceID else { return }
+            mutate { try TreeOps.moveTab($0, id: id, to: .today(spaceID: spaceID), position: .first, now: now()) }
         }
     }
 
@@ -724,10 +727,11 @@ public final class SidebarViewModel: ObservableObject {
         mutate { try TreeOps.moveTab($0, id: id, to: .favorite(profileID: profileID), position: .last, now: now()) }
     }
 
-    /// "Remove Favorite": back to the top of Today in the current space. inferred.
+    /// "Remove Favorite": the tile goes away and its page closes; it does not move back to Today,
+    /// and there is no confirmation. [06 §21.4] observed. The tab is archived (closed by the user).
     public func removeFavorite(_ id: UUID) {
-        guard let spaceID = selectedSpaceID else { return }
-        mutate { try TreeOps.moveTab($0, id: id, to: .today(spaceID: spaceID), position: .first, now: now()) }
+        guard let tab = workspace.tabs[id], case .favorite = tab.location else { return }
+        closeTab(id)
     }
 
     /// Move to ▸ <Space>. [05 §context menus] observed. Pinned tabs stay pinned (top level of

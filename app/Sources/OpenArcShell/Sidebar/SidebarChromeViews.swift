@@ -260,40 +260,61 @@ struct SidebarURLBoxView: View {
     }
 }
 
-/// Favorites: one filled block per favorite (47 pt tall, radius ≈ 12, control fill), sharing
-/// x 8–268 with 8 pt gaps (one = 260 wide, two = 126 each); the favicon (18 × 18) is centered.
-/// The selected favorite gets a colored gradient outline. [07 §4] observed, [06 §12] observed.
-/// With no favorites an empty block keeps the drop target (inferred).
+/// Favorites: a grid of filled tiles (47 pt tall, radius ≈ 12, control fill) over x 8–268 with
+/// 8 pt gaps both ways; rows = ⌈n / 4⌉, columns = ⌈n / rows⌉, the last row left-aligned; the
+/// favicon (18 × 18) is centered and there is no title. [06 §21.3] observed (B55), [07 §4]
+/// observed. With no favorites the empty-state card shows ([06 §21.2] observed); after it was
+/// dismissed an empty block keeps the drop target (inferred). The gaps between tiles open the
+/// Space menu ([06 §21.5] observed).
 struct SidebarFavoritesView: View {
     @ObservedObject var viewModel: SidebarViewModel
     let favorites: [TabNode]
     let layout: SidebarLayout
 
-    /// While a tab hovers the block, the tiles move aside to open an empty slot at the drop gap
-    /// (no line, no placeholder fill). [06 §15.5] observed with one favorite; the slot follows the
-    /// hit-tested gap (inferred for several favorites).
+    /// Tile frames, relative to the block. While a tab hovers the block the other tiles give way
+    /// live: a new tile opens an empty slot at the gap (no line, no placeholder fill, [06 §15.5]
+    /// observed with one favorite); a reordered favorite already sits in its new place while the
+    /// others shift ([06 §21.4] observed).
     private var slots: [CGRect] {
+        let block = layout.favoritesTilesFrame
+        let width = block.width
         guard case .favoriteGap(let gap) = viewModel.dropTarget, !favorites.isEmpty else {
-            return layout.favoriteSlotFrames(count: favorites.count)
+            return SidebarFavoritesGrid.slotFrames(count: favorites.count, width: width)
         }
-        // The dragged favorite itself keeps its tile (the source does not move, [06 §15.1]).
-        var frames = layout.favoriteSlotFrames(count: favorites.count + 1)
+        if let dragged = viewModel.draggedFavoriteIndex {
+            var order = Array(favorites.indices)
+            order.remove(at: dragged)
+            order.insert(dragged, at: min(SidebarFavoritesGrid.targetIndex(gap: gap, draggedIndex: dragged), order.count))
+            let frames = SidebarFavoritesGrid.slotFrames(count: favorites.count, width: width)
+            var result = frames
+            for (slot, index) in order.enumerated() { result[index] = frames[slot] }
+            return result
+        }
+        var frames = SidebarFavoritesGrid.slotFrames(count: favorites.count + 1, width: width)
         frames.remove(at: min(max(gap, 0), favorites.count))
         return frames
     }
 
     var body: some View {
         let palette = viewModel.palette
-        let block = layout.favoritesFrame
+        let block = layout.favoritesTilesFrame
         let radius = CGFloat(Metrics.Sidebar.favoritesCornerRadius)
         ZStack(alignment: .topLeading) {
+            // The gaps between tiles belong to the Space background. [06 §21.5] observed.
+            Color.clear
+                .contentShape(Rectangle())
+                .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
             if favorites.isEmpty {
-                RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.controlFill.swiftUI)
+                if viewModel.showsFavoritesEmptyCard {
+                    SidebarFavoritesEmptyCard(viewModel: viewModel)
+                } else {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.controlFill.swiftUI)
+                }
             }
             ForEach(Array(zip(favorites, slots)), id: \.0.id) { fav, slot in
                 SidebarFavoriteCell(viewModel: viewModel, tab: fav)
                     .frame(width: slot.width, height: slot.height)
-                    .offset(x: slot.minX - block.minX)
+                    .offset(x: slot.minX, y: slot.minY)
             }
         }
         .frame(width: block.width, height: block.height, alignment: .topLeading)
@@ -301,6 +322,58 @@ struct SidebarFavoritesView: View {
         .sidebarDropRegion(.favorites)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.favorites")
+    }
+}
+
+/// The empty-state card: dashed rounded border in a light tint of the theme, a 16 pt filled star
+/// badge, bold "Drag to add Favorites", two secondary lines "Favorites keep your most used sites
+/// and apps close", and a 14 pt ✕ ("Dismiss") 8 pt from the top-right corner. [06 §21.2] observed;
+/// font sizes and the dash pattern are inferred.
+struct SidebarFavoritesEmptyCard: View {
+    @ObservedObject var viewModel: SidebarViewModel
+
+    static let title = "Drag to add Favorites"
+    static let detail = "Favorites keep your most used sites and apps close"
+
+    var body: some View {
+        let g = Metrics.FavoritesGrid.self
+        let palette = viewModel.palette
+        let ink = palette.primaryText.swiftUI
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: CGFloat(g.emptyStateCornerRadius), style: .continuous)
+                .strokeBorder(ink.opacity(0.25),
+                              style: StrokeStyle(lineWidth: CGFloat(g.emptyStateBorderWidth), dash: g.emptyStateDash.map { CGFloat($0) }))
+            VStack(spacing: 4) {
+                Image(systemName: "star.circle.fill")
+                    .resizable()
+                    .frame(width: CGFloat(g.emptyStateStarSize), height: CGFloat(g.emptyStateStarSize))
+                    .foregroundStyle(ink.opacity(0.8))
+                Text(Self.title)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(ink)
+                Text(Self.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ink.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, 24)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Button { viewModel.dismissFavoritesEmptyCard() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(ink.opacity(0.5))
+                    .frame(width: CGFloat(g.emptyStateDismissSize), height: CGFloat(g.emptyStateDismissSize))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("openarc.sidebar.favorites.emptyDismiss")
+            .padding(.top, CGFloat(g.emptyStateDismissInset))
+            .padding(.trailing, CGFloat(g.emptyStateDismissInset))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("openarc.sidebar.favorites.empty")
     }
 }
 
@@ -315,7 +388,7 @@ struct SidebarFavoriteCell: View {
         SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: SidebarLocalTokens.favoriteIconSize,
                            tint: palette.ink(\.faviconPlaceholder).swiftUI, placeholder: .roundedSquare)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.controlFill.swiftUI))
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.fill(palette: palette, isSelected: isSelected).swiftUI))
             .overlay {
                 if isSelected {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -325,6 +398,10 @@ struct SidebarFavoriteCell: View {
                         )
                 }
             }
+            // The favorite whose Peek is open carries a small corner badge. [06 §22.2] observed (B49).
+            .overlay(alignment: .topTrailing) {
+                if viewModel.linkPeekSourceTabID == tab.id { LinkPeekSourceBadge() }
+            }
             .contentShape(Rectangle())
             .onTapGesture { viewModel.selectTab(tab.id) }
             .contextMenu { SidebarTabMenu(viewModel: viewModel, tab: tab, kind: .favorite) }
@@ -332,6 +409,14 @@ struct SidebarFavoriteCell: View {
             .accessibilityLabel(tab.displayTitle)
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier("openarc.sidebar.favorite.\(tab.id.uuidString)")
+    }
+
+    /// Tile fill: the control fill; selected in the dark appearance a clearly lighter gray (window
+    /// + ≈ 47 % white, ≈ #8F9099 on the default dark theme). [06 §21.3] observed (dark only; the
+    /// light appearance keeps the control fill, inferred).
+    static func fill(palette: ThemePalette, isSelected: Bool) -> RGBAColor {
+        guard isSelected, palette.isDark else { return palette.controlFill }
+        return ThemeDerivation.overlayWhite(palette.windowBackground, amount: Metrics.FavoritesGrid.selectedTileWhiteDark)
     }
 }
 
@@ -398,10 +483,6 @@ struct SidebarSpaceNameRowView: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .frame(width: moreWidth, height: CGFloat(more.height))
-            // The favorite whose Peek is open carries a small corner badge. [06 §22.2] observed (B49).
-            .overlay(alignment: .topTrailing) {
-                if viewModel.linkPeekSourceTabID == tab.id { LinkPeekSourceBadge() }
-            }
             .accessibilityElement(children: .ignore)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("More")

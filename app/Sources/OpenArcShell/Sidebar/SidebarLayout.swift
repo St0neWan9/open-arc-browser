@@ -24,12 +24,22 @@ struct SidebarLayout: Equatable {
     /// The favorites block is absent (incognito window): the Space header and the list sit
     /// `IncognitoTokens.sidebarContentShift` higher. [06 §20.2] observed (B48).
     var hidesFavorites: Bool
+    /// Height of the favorites tiles block (one row: 47). More rows, or the empty-state card, push
+    /// the Space header and the list down by the difference. [06 §21.2, §21.3] observed (B55).
+    var favoritesTilesHeight: CGFloat
 
     init(windowSize: CGSize = CGSize(width: Metrics.referenceWindowSize.width, height: Metrics.referenceWindowSize.height),
-         isWebToolbarShown: Bool = false, hidesFavorites: Bool = false) {
+         isWebToolbarShown: Bool = false, hidesFavorites: Bool = false,
+         favoritesTilesHeight: CGFloat = CGFloat(Metrics.FavoritesGrid.tileHeight)) {
         self.windowSize = windowSize
         self.isWebToolbarShown = isWebToolbarShown
         self.hidesFavorites = hidesFavorites
+        self.favoritesTilesHeight = favoritesTilesHeight
+    }
+
+    /// How much taller the favorites block is than one row of tiles (0 without favorites). B55.
+    var favoritesExtraHeight: CGFloat {
+        hidesFavorites ? 0 : favoritesTilesHeight - CGFloat(Metrics.FavoritesGrid.tileHeight)
     }
 
     private var window: MainWindowLayout { MainWindowLayout(windowSize: windowSize, isWebToolbarShown: isWebToolbarShown) }
@@ -37,7 +47,7 @@ struct SidebarLayout: Equatable {
     /// Upward shift of the favorites, Space header and list (0 with the toolbar off). [06 §17.1] observed (46).
     /// Without favorites the header and list move up another 60. [06 §20.2] observed (B48).
     var contentShift: CGFloat {
-        CGFloat(window.sidebarContentShift + (hidesFavorites ? IncognitoTokens.sidebarContentShift : 0))
+        CGFloat(window.sidebarContentShift + (hidesFavorites ? IncognitoTokens.sidebarContentShift : 0)) - favoritesExtraHeight
     }
 
     /// Whether the URL box and the back / forward / reload buttons are in the sidebar. [06 §17.1] observed.
@@ -73,6 +83,13 @@ struct SidebarLayout: Equatable {
     var urlBoxFrame: CGRect { window.addressFieldFrame }
 
     var favoritesFrame: CGRect { window.favoritesFrame }
+
+    /// The whole favorites tiles block: x 8–268 from the favorites top, `favoritesTilesHeight` tall.
+    /// [06 §21.3] observed (B55).
+    var favoritesTilesFrame: CGRect {
+        let first = favoritesFrame
+        return CGRect(x: first.minX, y: first.minY, width: first.width, height: favoritesTilesHeight)
+    }
 
     /// The Space header line: 26 pt icon at (13, 150), name from x 41 (13 without an icon) to 259,
     /// "More" strip at 261. [07 §4] observed.
@@ -174,16 +191,12 @@ struct SidebarLayout: Equatable {
 
     // MARK: Favorites
 
-    /// Favorite blocks: the row is split evenly with an 8 pt gap between blocks (one block = 260,
-    /// two = 126 + 8 + 126). [07 §4] observed for one and two; more is inferred.
+    /// Favorite tiles in the grid of `SidebarFavoritesGrid` (rows = ⌈n / 4⌉, columns = ⌈n / rows⌉,
+    /// 47 tall, 8 pt gaps, last row left-aligned), in window coordinates. [07 §4] observed for one
+    /// and two, [06 §21.3] observed for 1, 2, 4–9 (B55).
     func favoriteSlotFrames(count: Int) -> [CGRect] {
-        guard count > 0 else { return [] }
         let block = favoritesFrame
-        let gap = CGFloat(Metrics.Sidebar.favoritesGap)
-        let slotWidth = (block.width - gap * CGFloat(count - 1)) / CGFloat(count)
-        return (0..<count).map {
-            CGRect(x: block.minX + CGFloat($0) * (slotWidth + gap), y: block.minY, width: slotWidth, height: block.height)
-        }
+        return SidebarFavoritesGrid.slotFrames(count: count, origin: block.origin, width: block.width)
     }
 
     /// Insertion gap (0...count) nearest to a point at `x` (block-relative).

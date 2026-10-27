@@ -58,6 +58,9 @@ struct SidebarDropGeometry: Equatable {
     var spaceName: CGRect = .null
     /// Sidebar width, for the edge Space switching. [06 §15.6] observed.
     var width: CGFloat = 0
+    /// Index of the favorite being dragged (reordering), nil for any other drag. The grid then
+    /// keeps its tile count and the slot under the pointer is the new place. [06 §21.4] B55.
+    var favoriteDraggedIndex: Int? = nil
 
     /// Assembles the geometry from the snapshot and the reported frames. Entries whose frame has
     /// not been reported yet are skipped.
@@ -122,7 +125,8 @@ enum SidebarDropHitTester {
     /// The drop target under `point`, or nil when the point is over no drop region.
     ///
     /// - Dock icon: move to that Space. [06 §15.6] observed.
-    /// - Favorites block: insertion gap by x (the block accepts drops even when empty, inferred).
+    /// - Favorites block: insertion gap of the grid slot under the pointer (the block accepts drops
+    ///   even when empty, inferred). [06 §21.4] B55.
     /// - Space-name row: first pinned item. [06 §15.4] observed.
     /// - Row: bands of `SidebarDropZone.zone`. `allowsSplit` is false while dragging something
     ///   that cannot form a split (a folder, a split group, a favorite): the middle of a tab row
@@ -141,10 +145,12 @@ enum SidebarDropHitTester {
             return .dockSpace(item.spaceID)
         }
         if geometry.favorites.contains(point) {
-            return .favoriteGap(SidebarLayout.favoriteGapIndex(
-                forX: point.x - geometry.favorites.minX,
-                count: geometry.favoriteCount,
-                blockWidth: geometry.favorites.width
+            // The grid slot under the pointer, row by row. [06 §21.3, §21.4] B55.
+            return .favoriteGap(SidebarFavoritesGrid.dropGap(
+                at: CGPoint(x: point.x - geometry.favorites.minX, y: point.y - geometry.favorites.minY),
+                favoriteCount: geometry.favoriteCount,
+                draggedIndex: geometry.favoriteDraggedIndex,
+                width: geometry.favorites.width
             ))
         }
         if geometry.spaceName.contains(point) { return .pinnedAreaTop }

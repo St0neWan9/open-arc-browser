@@ -73,6 +73,8 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     // Tabs
     case archiveTab
     case togglePin
+    /// "Favorite Tab": the current Today tab goes to the end of the favorites. [06 §21.4] observed (B55).
+    case favoriteTab
     case newFolder
     case nextTab
     case previousTab
@@ -118,6 +120,7 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .manageSpaces: return "Manage Spaces…"
         case .archiveTab: return "Archive Tab"
         case .togglePin: return "Pin/Unpin Tab"
+        case .favoriteTab: return "Favorite Tab"
         case .newFolder: return "New Folder…"
         case .nextTab: return "Next Tab"
         case .previousTab: return "Previous Tab"
@@ -170,6 +173,7 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .manageSpaces: return ["spaces", "library"]
         case .archiveTab: return ["close tab", "archive"]
         case .togglePin: return ["pin", "unpin", "favorite"]
+        case .favoriteTab: return ["favorite", "favorites", "add to favorites"]
         case .newFolder: return ["folder", "organize"]
         case .nextTab: return ["tab", "next"]
         case .previousTab: return ["tab", "previous"]
@@ -212,7 +216,7 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .goForward: return "⌘]"
         case .openLibrary: return "⇧⌘L"
         case .openSettings: return "⌘,"
-        case .toggleSidebar, .separateFromSplit, .expandSplit, .newSpace, .editTheme, .renameSpace,
+        case .toggleSidebar, .favoriteTab, .separateFromSplit, .expandSplit, .newSpace, .editTheme, .renameSpace,
              .manageSpaces, .newFolder, .collapseAllFolders, .expandAllFolders, .viewArchive,
              .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .contactTheTeam:
             return nil
@@ -229,6 +233,8 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
             return state.hasSelectedTab
         case .restoreLastClosedTab:
             return state.canRestoreLastClosedTab
+        case .favoriteTab:
+            return state.hasSelectedTab && state.canFavoriteSelectedTab
         case .closeSplitPane, .separateFromSplit, .expandSplit:
             return state.hasActiveSplit
         case .goBack:
@@ -263,6 +269,9 @@ public struct CommandBarCommandState: Hashable, Sendable {
     /// Whether the selected tab is pinned (true) or in Today (false); nil for no tab or a favorite.
     /// Picks the "Pin Tab" / "Unpin Tab" title.
     public var isSelectedTabPinned: Bool?
+    /// Whether "Favorite Tab" applies: the selected tab is a Today tab of a normal window.
+    /// [06 §21.4] observed for a Today tab; pinned tabs and incognito windows inferred (B55).
+    public var canFavoriteSelectedTab: Bool = true
 
     public init(
         hasSelectedTab: Bool = true,
