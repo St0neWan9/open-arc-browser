@@ -976,14 +976,15 @@ struct OnboardingWindowConfigurator: NSViewRepresentable {
 // MARK: - Menu and layer
 
 /// Help ▸ Show Welcome Again: re-runs onboarding in the key browser window. The menu placement
-/// is inferred (D9 own design). It replaces the system "<App> Help" item: [01 §Help] observed no
-/// such item (and no icons in the Help menu, [01 §菜单项图标与缩进]); we ship no help book. B62.
+/// is inferred (D9 own design): its own group after the [01 §Help] items, which replace the
+/// system "<App> Help" item (`MenuBarExtrasCommands`; [01 §Help] observed no such item). B62, B72.
 struct OnboardingCommands: Commands {
     let controller: WorkspaceController
     @FocusedObject private var focused: ShellModel?
 
     var body: some Commands {
-        CommandGroup(replacing: .help) {
+        CommandGroup(after: .help) {
+            Divider()
             Button(OnboardingTokens.showAgainMenuItem) {
                 if let window = focused ?? controller.activeWindow { controller.onboarding.showAgain(in: window) }
             }

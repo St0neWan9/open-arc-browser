@@ -101,7 +101,9 @@ public enum RecordMerge {
 
     static func copyProfile(_ m: inout Profile, _ l: Profile, _ g: Profile.FieldGroup) {
         switch g {
-        case .naming: m.name = l.name
+        case .naming:
+            m.name = l.name
+            m.icon = l.icon
         case .settings: m.settings = l.settings
         }
     }

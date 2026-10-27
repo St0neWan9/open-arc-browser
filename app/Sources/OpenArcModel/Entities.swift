@@ -46,19 +46,24 @@ public struct Profile: SyncableEntity, Hashable {
 
     public let id: UUID
     public var name: String
+    /// Part of the `naming` group: an emoji or an icon name, like `Space.icon`; nil means the
+    /// default icon. Chosen in the New Profile sheet (plan B72; [06 §16.3] observed sheet with a
+    /// name field, the icon is ours). Files written before this field existed decode with nil.
+    public var icon: String?
     /// Part of the `settings` group. Files and records written before this field existed decode
     /// with `ProfileSettings.default`.
     public var settings: ProfileSettings
     public var meta: SyncMetadata
 
-    public init(id: UUID, name: String, settings: ProfileSettings = .default, now: Date) {
+    public init(id: UUID, name: String, icon: String? = nil, settings: ProfileSettings = .default, now: Date) {
         self.id = id
         self.name = name
+        self.icon = icon
         self.settings = settings
         self.meta = .new(at: now, groups: FieldGroup.self)
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, settings, meta }
+    private enum CodingKeys: String, CodingKey { case id, name, icon, settings, meta }
 
     /// Decodes a profile; a missing `settings` (data written before the field existed) becomes
     /// the default. Its group timestamp is then missing too and falls back to `createdAt`, so any
@@ -67,6 +72,7 @@ public struct Profile: SyncableEntity, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
+        icon = try c.decodeIfPresent(String.self, forKey: .icon)
         settings = try c.decodeIfPresent(ProfileSettings.self, forKey: .settings) ?? .default
         meta = try c.decode(SyncMetadata.self, forKey: .meta)
     }

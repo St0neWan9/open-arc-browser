@@ -360,9 +360,9 @@ public final class WorkspaceController: ObservableObject {
 
     /// New Profile… Returns the new profile id. [01, 05 §context menus] observed menu items.
     @discardableResult
-    public func createProfile(name: String) -> UUID {
+    public func createProfile(name: String, icon: String? = nil) -> UUID {
         let id = makeID()
-        commit(TreeOps.createProfile(workspace, id: id, name: name, now: now()), origin: nil)
+        commit(TreeOps.createProfile(workspace, id: id, name: name, icon: icon, now: now()), origin: nil)
         return id
     }
 

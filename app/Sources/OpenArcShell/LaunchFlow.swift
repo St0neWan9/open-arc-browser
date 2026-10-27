@@ -89,7 +89,8 @@ extension AppDependencies {
             mediaFolders: .live(environment: environment),
             feedbackOutput: SystemFeedbackOutput(),
             appIconDisplay: SystemAppIconDisplay(),
-            exportPicker: SavePanelExportPicker()
+            exportPicker: SavePanelExportPicker(),
+            desktop: SystemDesktopServices()
         )
     }
 

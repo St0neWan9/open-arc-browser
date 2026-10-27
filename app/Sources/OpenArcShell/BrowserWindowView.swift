@@ -125,6 +125,9 @@ struct BrowserWindowObserver: NSViewRepresentable {
                     guard let self, let window = self.window else { return }
                     BrowserWindowObserver.applyTitle(of: self.model, to: window)
                 }
+            // Window ▸ Stay On Top (B72): floating above other apps' windows while on.
+            model.applyWindowLevel = { [weak window] floating in window?.level = floating ? .floating : .normal }
+            if model.staysOnTop { window.level = .floating }
             // AppleScript sees the window from now on (B70).
             ScriptingHost.shared.register(model, window: window)
             if window.isKeyWindow { model.windowDidBecomeKey() }
@@ -156,6 +159,7 @@ struct BrowserWindowObserver: NSViewRepresentable {
         @objc private func willClose(_ notification: Notification) {
             titleChanges = nil
             model.focusWindow = nil
+            model.applyWindowLevel = nil
             model.windowDidClose()
         }
     }

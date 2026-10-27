@@ -21,6 +21,9 @@ public final class ShellModel: ObservableObject {
     public let paneCommandBar: CommandBarViewModel
     /// Create Space, Rename Space and Change Space Icon surfaces. [06 §1] observed.
     public let spaceFlow: SpaceFlowModel
+    /// New Profile and Change Profile sheets (File ▸ New Profile, Spaces ▸ Change Profile).
+    /// [06 §16.3] observed. B72.
+    public let profileFlow: ProfileFlowModel
     /// The Library mode of this window (rail, list column, web panel). [06 §8] observed.
     public let library: LibraryModel
     /// Site Control Center bubble and URL box copy link. [06 §12] observed.
@@ -67,6 +70,10 @@ public final class ShellModel: ObservableObject {
     public var openSettingsWindow: (() -> Void)?
     /// Brings this window to the front. Installed by the window's view; nil in tests.
     public var focusWindow: (() -> Void)?
+    /// Window ▸ Stay On Top is on for this window ([01 §Window] observed item; B72).
+    @Published public internal(set) var staysOnTop = false
+    /// Sets the window's level (floating or normal). Installed by the window's view; nil in tests.
+    public var applyWindowLevel: ((_ floating: Bool) -> Void)?
     /// How often another window asked this one to come to the front (one-window-per-tab rule).
     /// For tests and diagnostics.
     public private(set) var focusRequestCount = 0
@@ -83,6 +90,7 @@ public final class ShellModel: ObservableObject {
     private var isStopped = false
     private var sidebarChanges: AnyCancellable?
     private var spaceFlowChanges: AnyCancellable?
+    private var profileFlowChanges: AnyCancellable?
     private var libraryChanges: AnyCancellable?
     private var libraryFlagChanges: AnyCancellable?
     private var peekChanges: AnyCancellable?
@@ -108,6 +116,7 @@ public final class ShellModel: ObservableObject {
             presentation: .pane
         )
         self.spaceFlow = SpaceFlowModel(sidebar: sidebar, now: controller.now, makeID: controller.makeID)
+        self.profileFlow = ProfileFlowModel(sidebar: sidebar)
         self.library = LibraryModel(sidebar: sidebar, now: controller.now)
         // The engine's ad blocker (C16) over fake site settings until the bridge provides the
         // rest (plan C12 / C14).
@@ -144,6 +153,7 @@ public final class ShellModel: ObservableObject {
         // Menu enablement (split items, back/forward) reads sidebar state through this model.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        profileFlowChanges = profileFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         libraryChanges = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         peekChanges = sidebarPeek.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         linkPeekChanges = linkPeek.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -458,8 +468,8 @@ public final class ShellModel: ObservableObject {
         case .openSettings:
             if let open = openSettingsWindow { open() } else { lastUnhandledCommand = command }
         case .contactTheTeam:
-            // No help surface yet; the row stays because it closes the empty-query list ([04 §command bar] observed).
-            lastUnhandledCommand = command
+            // Same as Help ▸ Contact the Team (B72). The row closes the empty-query list ([04 §command bar] observed).
+            contactTheTeam()
         case .airTrafficControl:
             // Settings ▸ Links with the Air Traffic Control sheet ([06 §25] observed sheet). B61.
             controller.requestAirTrafficControl()
@@ -543,7 +553,7 @@ public final class ShellModel: ObservableObject {
         // An incognito window has no Spaces to create, edit or manage. inferred.
         if isIncognito {
             switch request {
-            case .newSpace, .renameSpace, .changeSpaceIcon, .editSpaceTheme, .manageSpaces: return
+            case .newSpace, .renameSpace, .changeSpaceIcon, .editSpaceTheme, .manageSpaces, .newProfile: return
             default: break
             }
         }
@@ -560,6 +570,7 @@ public final class ShellModel: ObservableObject {
         case .manageSpaces: openLibrary(.spaces)
         case .openLibrary: openLibrary()
         case .showSiteControls: siteControls.present()
+        case .newProfile(let spaceID): profileFlow.beginNewProfile(forSpace: spaceID)
         default:
             // Share, theme editor, profiles… have no surface yet.
             break

@@ -127,8 +127,8 @@ final class SettingsProfileDataTests: XCTestCase {
         let shell = makeShell()
         let settings = SettingsModel(shell: shell)
         let id = try XCTUnwrap(settings.openProfilesHelp())
-        XCTAssertEqual(shell.workspace.tabs[id]?.url, HelpPages.profiles)
-        XCTAssertEqual(HelpPages.profiles.host, "openarc.github.io")
+        XCTAssertEqual(shell.workspace.tabs[id]?.url, ProfileHelpLinks.profiles)
+        XCTAssertEqual(ProfileHelpLinks.profiles.host, "openarc.github.io")
         shell.stop()
     }
 

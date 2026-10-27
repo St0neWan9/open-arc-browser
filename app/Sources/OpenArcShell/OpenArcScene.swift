@@ -53,6 +53,7 @@ public struct OpenArcScene: Scene {
         .commands {
             BrowserCommands(controller: controller)
             AppMenuCommands(controller: controller)
+            MenuBarExtrasCommands(controller: controller)
             ExternalOpenCommands(inbox: externalOpenInbox, controller: controller)
             OnboardingCommands(controller: controller)
         }
@@ -139,17 +140,15 @@ struct ShellCommands: Commands {
             FilePageMenuItems(model: model, hasWindow: hasWindow)
         }
 
-        // Edit: Copy URL / Copy URL as Markdown follow the pasteboard group; Find ▸ opens the
-        // group before the system text-editing items. [01 §Edit] observed order. B25, B62.
+        // Edit: Copy URL … Paste and Match Style and Find ▸ follow the pasteboard group, the only
+        // place SwiftUI keeps a Find of ours next to `TextEditingCommands` (in a `.textEditing`
+        // group it drops ours for the system one). `MenuBarAdjuster` moves the copy items after
+        // Copy, Paste and Match Style after Paste, and our Find into the hidden system Find's
+        // place, before Spelling and Grammar. [01 §Edit] observed order. B25, B62, B72 (plan Q15).
         CommandGroup(after: .pasteboard) {
             EditCopyURLMenuItems(model: model, hasWindow: hasWindow)
-        }
-        CommandGroup(before: .textEditing) {
             FindMenu(model: model, findBar: model.findBar, hasWindow: hasWindow)
         }
-        // No `TextEditingCommands`: with it SwiftUI drops this Find menu for the system one, whose
-        // items never reach the page. So the standard Spelling and Grammar / Substitutions /
-        // Transformations / Speech submenus of [01 §Edit] are not shown (B62 report).
 
         // View: our groups replace the system sidebar group (its own "Show Sidebar" would add a
         // sidebar icon and indent its group) and the toolbar group (system tab-bar items). Enter
@@ -183,7 +182,10 @@ struct SpacesAndTabsCommands: Commands {
     }
 }
 
-/// Edit ▸ Find ▸. Observes the find bar so Find Next / Previous follow its state. B25.
+/// Edit ▸ Find ▸. Observes the find bar so Find Next / Previous follow its state. B25. Items
+/// [01 §Edit] observed; keys [02 §页面与导航] observed: ⌘F, ⌥⌘F (Find and Replace), ⌘G, ⇧⌘G,
+/// ⌘J (Jump to Selection). Find and Replace opens the find bar: a page cannot be edited by
+/// replacing its text, so there is no replace field (inferred; B72).
 struct FindMenu: View {
     @ObservedObject var model: ShellModel
     @ObservedObject var findBar: FindBarModel
@@ -193,11 +195,15 @@ struct FindMenu: View {
         Menu("Find") {
             Button("Find…") { findBar.show() }
                 .keyboardShortcut("f", modifiers: .command)
+            Button("Find and Replace") { findBar.show() }
+                .keyboardShortcut("f", modifiers: [.option, .command])
             Button("Find Next") { findBar.findNext() }
                 .keyboardShortcut("g", modifiers: .command)
             Button("Find Previous") { findBar.findPrevious() }
                 .keyboardShortcut("g", modifiers: [.shift, .command])
             Button("Use Selection to Find") { findBar.useSelectionToFind() }
+            Button("Jump to Selection") { model.jumpToSelection() }
+                .keyboardShortcut("j", modifiers: .command)
         }
         .disabled(!hasWindow || !model.canRunPageCommands)
     }

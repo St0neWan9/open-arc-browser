@@ -43,6 +43,18 @@ final class TreeOpsProfileTests: XCTestCase {
         XCTAssertEqual(decoded.meta, profile.meta)
     }
 
+    /// B72: the New Profile sheet sets an icon (emoji or icon name) in the `naming` group; JSON
+    /// written before the field existed decodes with no icon.
+    func testProfileIcon() throws {
+        let s = TreeOps.createProfile(WorkspaceState(), id: personal, name: "Personal", icon: "🦊", now: t0)
+        XCTAssertEqual(s.profiles[personal]?.icon, "🦊")
+        let profile = try XCTUnwrap(s.profiles[personal])
+        XCTAssertEqual(try JSONDecoder().decode(Profile.self, from: JSONEncoder().encode(profile)), profile)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as? [String: Any])
+        XCTAssertNotNil(json.removeValue(forKey: "icon"))
+        XCTAssertNil(try JSONDecoder().decode(Profile.self, from: JSONSerialization.data(withJSONObject: json)).icon)
+    }
+
     /// Partial or unknown settings decode leniently: missing keys and unknown engines (from a
     /// newer build) give defaults, a non-positive lifetime gives the default.
     func testSettingsDecodeLeniently() throws {

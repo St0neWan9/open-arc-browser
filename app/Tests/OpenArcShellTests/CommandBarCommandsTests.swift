@@ -343,8 +343,11 @@ final class CommandBarCommandsTests: XCTestCase {
             RoutingCase(command: .viewMedia) { m in XCTAssertEqual(m.library.section, .media) },
             RoutingCase(command: .viewBoosts) { m in XCTAssertEqual(m.library.section, .boosts) },
             RoutingCase(command: .openSettings) { m in XCTAssertEqual(m.lastUnhandledCommand, .openSettings) },
-            // No help surface yet; the row is kept because it closes the empty list ([04 §command bar] observed).
-            RoutingCase(command: .contactTheTeam) { m in XCTAssertEqual(m.lastUnhandledCommand, .contactTheTeam) },
+            // B72: the same as Help ▸ Contact the Team, a new mail to the team.
+            RoutingCase(command: .contactTheTeam) { m in
+                let desktop = try XCTUnwrap(m.dependencies.desktop as? RecordingDesktopServices)
+                XCTAssertEqual(desktop.opened, [OpenArcLinks.contactTheTeam])
+            },
             // B61: Settings ▸ Links with the Air Traffic Control sheet; no Settings opener in tests.
             RoutingCase(command: .airTrafficControl) { m in
                 XCTAssertEqual(m.controller.airTrafficControlRequests, 1)
@@ -417,7 +420,7 @@ final class CommandBarCommandsTests: XCTestCase {
             try await routing.setUp(model)
             model.perform(.runCommand(routing.command))
             try await routing.check(model)
-            if ![.newWindow, .newIncognitoWindow, .newLittleArcWindow, .openSettings, .contactTheTeam, .airTrafficControl].contains(routing.command) {
+            if ![.newWindow, .newIncognitoWindow, .newLittleArcWindow, .openSettings, .airTrafficControl].contains(routing.command) {
                 XCTAssertNil(model.lastUnhandledCommand, "\(routing.command)")
             }
             model.stop()

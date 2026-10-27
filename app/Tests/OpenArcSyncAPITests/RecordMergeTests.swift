@@ -54,6 +54,18 @@ final class RecordMergeTests: XCTestCase {
         XCTAssertTrue(outcome.needsUpload)
     }
 
+    /// B72: `Profile.icon` belongs to `naming`, so it travels with the name.
+    func testProfileIconMergesWithName() throws {
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let local = Profile(id: id, name: "Personal", now: t0)
+        var server = Profile(id: id, name: "Home", icon: "house", now: t0)
+        server.meta.stamp([Profile.FieldGroup.naming], at: t(10))
+        let outcome = try XCTUnwrap(RecordMerge.merge(local: .profile(local), server: .profile(server)))
+        guard case .profile(let merged) = outcome.merged else { return XCTFail("wrong type") }
+        XCTAssertEqual(merged.name, "Home")
+        XCTAssertEqual(merged.icon, "house")
+    }
+
     /// Merging a record with itself is a no-op (`SyncLocalDatabase.apply` must be idempotent).
     func testIdenticalCopiesMergeToTheLocalCopy() throws {
         let record = SyncRecord.theme(theme())

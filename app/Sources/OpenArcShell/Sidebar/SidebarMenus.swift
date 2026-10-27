@@ -10,7 +10,7 @@ import OpenArcDesign
 //
 // Items whose feature does not exist yet stay visible and disabled (B55): Change Icon…, Customize
 // Page…, Edit Pinned Page ▸ Edit…, Share Folder…, Turn “<name>” into Space, Share Split View…,
-// a split row's Change Icon… / Rename…, Set Profile ▸ New Profile…, Live Folders ▸, Share Space…,
+// a split row's Change Icon… / Rename…, Live Folders ▸, Share Space…,
 // Export “<name>” into Folder ▸, and Move to ▸ Profile ▸ for pinned tabs.
 
 /// Which tab menu a row shows.
@@ -202,7 +202,8 @@ struct SidebarSpaceMenu: View {
                     ))
                 }
                 Divider()
-                Button("New Profile…") {}.disabled(true)
+                // The New Profile sheet with this Space preselected (B72).
+                Button("New Profile…") { viewModel.requestFromMenu(.newProfile(spaceID: space.id)) }.disabled(!canRequest)
             }
             Divider()
             Button("New Folder") { viewModel.requestNewFolder() }
