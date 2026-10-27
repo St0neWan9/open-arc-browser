@@ -61,9 +61,9 @@ public final class WorkspaceController: ObservableObject {
         set { ownWindowOpener = newValue }
     }
     private var ownWindowOpener: ((BrowserWindowRequest) -> Void)?
-    /// Where links and files from other apps open (D2). Reads the Links setting for Little Arc
-    /// (B24). Air Traffic Control (E5) replaces it.
-    public lazy var externalLinkRouter: any ExternalLinkRouting = DefaultExternalLinkRouter(preferences: dependencies.preferences)
+    /// Where links and files from other apps open (D2): the Air Traffic Control rules and their
+    /// Default row, which includes the Links setting for Little Arc (B24, B52).
+    public lazy var externalLinkRouter: any ExternalLinkRouting = AirTrafficControlRouter(preferences: dependencies.preferences)
     /// External URLs waiting for a browser window to register (none was open). D2.
     var pendingExternalURLs: [URL] = []
     /// Opens a Little Arc window with the given window id. Installed by the scene's views, where

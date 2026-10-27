@@ -302,6 +302,8 @@ struct ProfilesPane: View {
 
 struct LinksPane: View {
     @ObservedObject var model: SettingsModel
+    /// The Air Traffic Control sheet is showing (B52).
+    @State private var showsAirTrafficControl = false
 
     var body: some View {
         Form {
@@ -324,11 +326,14 @@ struct LinksPane: View {
             } header: { Text("Peek") }
             Section {
                 LabeledContent("Choose where links open inside Open Arc") {
-                    CatalogButton(id: "links.airTrafficControl")
+                    CatalogButton(id: "links.airTrafficControl") { showsAirTrafficControl = true }
                 }
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showsAirTrafficControl, onDismiss: { model.airTrafficControlDidClose() }) {
+            AirTrafficControlSheet(model: model.makeAirTrafficControlModel()) { showsAirTrafficControl = false }
+        }
     }
 }
 
