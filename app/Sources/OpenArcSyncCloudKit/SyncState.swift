@@ -120,6 +120,10 @@ struct PersistedSyncState: Codable, Hashable, Sendable {
     /// Server copies whose local apply failed; merged and applied again before the next fetch.
     var deferredUpserts: [SyncRecord] = []
     var deferredDeletions: [SyncRecordID] = []
+    /// Archived `CKServerChangeToken` of the store's own zone poll (`SyncEngineDriver.pollZoneChanges`),
+    /// separate from the engine's tokens. nil: the next poll reads the whole zone. Optional, so a
+    /// state saved before it existed still decodes. (B86)
+    var zonePollToken: Data?
 
     static func decode(_ data: Data?) -> PersistedSyncState {
         guard let data,
