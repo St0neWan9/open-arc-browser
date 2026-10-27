@@ -401,6 +401,7 @@ public final class ShellModel: ObservableObject {
         // Tabs
         case .archiveTab: if let id = selectedTabID { sidebar.closeOrUnloadTab(id) }
         case .togglePin: if let id = selectedTabID { sidebar.togglePin(id) }
+        case .favoriteTab: if let id = selectedTabID { sidebar.addFavorite(id) }
         case .newFolder: sidebar.requestNewFolder()
         case .nextTab: sidebar.stepTab(by: 1)
         case .previousTab: sidebar.stepTab(by: -1)
@@ -541,8 +542,8 @@ public final class ShellModel: ObservableObject {
         siteControls.stop()
         pageCapture.stop()
         translation.stop()
-        sidebar.stop()
         linkPeek.stop()
+        sidebar.stop()
         if ownsController { controller.stop() }
     }
 }

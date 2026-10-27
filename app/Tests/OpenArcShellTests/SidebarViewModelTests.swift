@@ -193,7 +193,8 @@ final class SidebarViewModelTests: XCTestCase {
         vm.stop()
     }
 
-    /// Favorites: add (Today -> favorites), remove (back to Today). [06 §12] observed shared.
+    /// Favorites: add (Today -> end of favorites), remove (the page closes, not back to Today).
+    /// [06 §12] observed shared; [06 §21.4] observed add / remove (B55).
     func testFavorites() {
         let f = SidebarFixture()
         let (vm, _) = makeSidebarViewModel(f)
@@ -201,7 +202,8 @@ final class SidebarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.snapshot.favorites.map(\.id), [f.fav1, f.fav2, f.today1])
         vm.removeFavorite(f.fav1)
         XCTAssertEqual(vm.snapshot.favorites.map(\.id), [f.fav2, f.today1])
-        XCTAssertEqual(vm.snapshot.today.first?.id, f.fav1)
+        XCTAssertNotEqual(vm.snapshot.today.first?.id, f.fav1)
+        XCTAssertEqual(vm.workspace.tabs[f.fav1]?.meta.isTombstone, true)
     }
 
     /// [01 §Spaces, 02 §Space] Next/Previous Space wrap; Go to Space N is 1-based; switching

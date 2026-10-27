@@ -215,6 +215,8 @@ struct SidebarSplitGroupRowView: View {
         }
         .onHover { isHovering = $0 }
         .onTapGesture { viewModel.selectSplitGroup(group.layoutID) }
+        // The split row's own menu. [06 §21.5] observed (B55).
+        .contextMenu { SidebarSplitGroupMenu(viewModel: viewModel, group: group) }
         .sidebarRowInteraction(viewModel: viewModel, id: group.layoutID)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])

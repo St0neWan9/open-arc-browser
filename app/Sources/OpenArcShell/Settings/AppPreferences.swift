@@ -169,6 +169,17 @@ public final class AppPreferences: @unchecked Sendable {
         set { setBool(newValue, Self.javaScriptFromAppleEventsKey) }
     }
 
+    // MARK: Sidebar
+
+    static let favoritesEmptyCardDismissedKey = "\(keyPrefix)sidebar.favoritesEmptyCardDismissed"
+
+    /// The favorites empty-state card was dismissed with its ✕. [06 §21.2] observed button; that
+    /// it stays dismissed, per device, is inferred (B55).
+    public var isFavoritesEmptyCardDismissed: Bool {
+        get { boolValue(Self.favoritesEmptyCardDismissedKey) ?? false }
+        set { setBool(newValue, Self.favoritesEmptyCardDismissedKey) }
+    }
+
     // MARK: Storage
 
     func boolValue(_ key: String) -> Bool? { value(key) as? Bool }

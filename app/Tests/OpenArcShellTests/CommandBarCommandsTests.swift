@@ -57,7 +57,7 @@ final class CommandBarCommandsTests: XCTestCase {
             .separateFromSplit: "Separate Page from Split View", .expandSplit: "Expand Current Split",
             .newSpace: "New Space…", .editTheme: "Edit Theme…", .renameSpace: "Rename Space",
             .nextSpace: "Next Space", .previousSpace: "Previous Space", .manageSpaces: "Manage Spaces…",
-            .archiveTab: "Archive Tab", .togglePin: "Pin/Unpin Tab", .newFolder: "New Folder…",
+            .archiveTab: "Archive Tab", .togglePin: "Pin/Unpin Tab", .favoriteTab: "Favorite Tab", .newFolder: "New Folder…",
             .nextTab: "Next Tab", .previousTab: "Previous Tab", .clearToday: "Clear Today",
             .collapseAllFolders: "Collapse All Folders", .expandAllFolders: "Expand All Folders",
             .goBack: "Go Back", .goForward: "Go Forward", .viewArchive: "View Archive…",
@@ -230,6 +230,11 @@ final class CommandBarCommandsTests: XCTestCase {
             RoutingCase(command: .togglePin, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
                 let id = try XCTUnwrap(m.selectedTabID)
                 guard case .pinned = try XCTUnwrap(m.workspace.tabs[id]).location else { return XCTFail("not pinned") }
+            },
+            // [06 §21.4] observed: Favorite Tab moves the Today tab to the end of the favorites (B55).
+            RoutingCase(command: .favoriteTab, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
+                let id = try XCTUnwrap(m.selectedTabID)
+                guard case .favorite = try XCTUnwrap(m.workspace.tabs[id]).location else { return XCTFail("not a favorite") }
             },
             RoutingCase(command: .newFolder) { m in XCTAssertTrue(m.sidebar.isNewFolderSheetPresented) },
             RoutingCase(command: .nextTab, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
