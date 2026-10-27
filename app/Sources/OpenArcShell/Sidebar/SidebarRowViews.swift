@@ -74,7 +74,12 @@ struct SidebarTabRowView: View {
 
         SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth, splitPreview: viewModel.splitPreviewSide(for: tab.id), splitPreviewFill: palette.splitPreviewFill.swiftUI) {
             Group {
-                if live?.isLoading == true {
+                if viewModel.isEaselRow(tab.id) {
+                    // An Easel row has the Easel icon. [06 §4] observed. B56.
+                    Image(systemName: EaselIcon.symbol)
+                        .font(.system(size: iconSize * 0.8, weight: .medium))
+                        .foregroundStyle(textColor)
+                } else if live?.isLoading == true {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
                 } else {
                     SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: iconSize, tint: placeholderTint(isSelected: isSelected, palette: palette), placeholder: .roundedSquare)

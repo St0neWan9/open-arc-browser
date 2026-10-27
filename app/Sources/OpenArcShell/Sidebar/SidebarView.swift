@@ -43,9 +43,16 @@ public struct SidebarView: View {
 
             ZStack(alignment: .topLeading) {
                 if layout.showsAddressControls {
-                    SidebarURLBoxView(viewModel: viewModel)
-                        .frame(width: url.width, height: url.height)
-                        .offset(x: url.minX, y: url.minY)
+                    if viewModel.selectedEaselID != nil {
+                        // An Easel's URL box is a locked "Share" button. [06 §4, §9] observed. B56.
+                        EaselShareURLBox(viewModel: viewModel)
+                            .frame(width: url.width, height: url.height)
+                            .offset(x: url.minX, y: url.minY)
+                    } else {
+                        SidebarURLBoxView(viewModel: viewModel)
+                            .frame(width: url.width, height: url.height)
+                            .offset(x: url.minX, y: url.minY)
+                    }
                 }
 
                 // An incognito window has no favorites: the block keeps its place empty. inferred (B14).

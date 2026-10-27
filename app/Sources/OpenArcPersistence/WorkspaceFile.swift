@@ -34,6 +34,27 @@ struct PersistedWorkspace: Codable, Hashable, Sendable {
     var tabs: [TabNode]
     var archive: [ArchiveItem]
     var splits: [SplitLayout]
+    /// Added with Easels (B56). Files written before have no such keys and decode with none, so
+    /// the schema version stays 1 (older builds ignore the unknown keys).
+    var easels: [Easel]
+    var easelElements: [EaselElement]
+
+    private enum CodingKeys: String, CodingKey {
+        case profiles, themes, spaces, folders, tabs, archive, splits, easels, easelElements
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        profiles = try c.decode([Profile].self, forKey: .profiles)
+        themes = try c.decode([Theme].self, forKey: .themes)
+        spaces = try c.decode([Space].self, forKey: .spaces)
+        folders = try c.decode([Folder].self, forKey: .folders)
+        tabs = try c.decode([TabNode].self, forKey: .tabs)
+        archive = try c.decode([ArchiveItem].self, forKey: .archive)
+        splits = try c.decode([SplitLayout].self, forKey: .splits)
+        easels = try c.decodeIfPresent([Easel].self, forKey: .easels) ?? []
+        easelElements = try c.decodeIfPresent([EaselElement].self, forKey: .easelElements) ?? []
+    }
 
     init(_ state: WorkspaceState) {
         func sorted<T: Identifiable>(_ values: Dictionary<UUID, T>.Values) -> [T] where T.ID == UUID {
@@ -46,6 +67,8 @@ struct PersistedWorkspace: Codable, Hashable, Sendable {
         tabs = sorted(state.tabs.values)
         archive = sorted(state.archive.values)
         splits = sorted(state.splits.values)
+        easels = sorted(state.easels.values)
+        easelElements = sorted(state.easelElements.values)
     }
 
     var state: WorkspaceState {
@@ -59,7 +82,9 @@ struct PersistedWorkspace: Codable, Hashable, Sendable {
             folders: keyed(folders),
             tabs: keyed(tabs),
             archive: keyed(archive),
-            splits: keyed(splits)
+            splits: keyed(splits),
+            easels: keyed(easels),
+            easelElements: keyed(easelElements)
         )
     }
 }

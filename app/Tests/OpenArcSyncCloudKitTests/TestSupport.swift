@@ -96,6 +96,26 @@ enum Fx {
         return SplitLayout(id: id, spaceID: variant == 0 ? uuid(3) : uuid(103), root: root, now: t0)
     }
 
+    static func easel(_ id: UUID = uuid(8), variant: Int = 0) -> Easel {
+        Easel(id: id, title: variant == 0 ? "Moodboard" : "Plan", now: t0)
+    }
+
+    static func easelElement(_ id: UUID = uuid(9), variant: Int = 0) -> EaselElement {
+        variant == 0
+            ? EaselElement(
+                id: id, easelID: uuid(8), zKey: key("i"), frame: EaselRect(x: 10, y: 20, width: 30, height: 40),
+                content: .text(string: "Hello"),
+                style: EaselStyle(strokeColor: RGBAColor(hex: 0x111111), fillColor: RGBAColor(hex: 0xEEEEEE), strokeWidth: 2, fontSize: 16),
+                now: t0
+            )
+            : EaselElement(
+                id: id, easelID: uuid(108), zKey: key("r"), frame: EaselRect(x: 1, y: 2, width: 3, height: 4),
+                content: .pen(points: [EaselPoint(x: 0, y: 0), EaselPoint(x: 0.5, y: 1)]),
+                style: EaselStyle(strokeColor: RGBAColor(hex: 0x2255FF), strokeWidth: 4, fontSize: 20),
+                now: t0
+            )
+    }
+
     /// One record of every type, every optional field filled.
     static func fullRecords(variant: Int = 0) -> [SyncRecord] {
         [
@@ -106,6 +126,8 @@ enum Fx {
             .tab(tab(variant: variant)),
             .archiveItem(archiveItem(variant: variant)),
             .splitLayout(splitLayout(variant: variant)),
+            .easel(easel(variant: variant)),
+            .easelElement(easelElement(variant: variant)),
         ]
     }
 
@@ -165,6 +187,8 @@ extension SyncRecord {
         case .tab(var v): transform(&v.meta); return .tab(v)
         case .archiveItem(var v): transform(&v.meta); return .archiveItem(v)
         case .splitLayout(var v): transform(&v.meta); return .splitLayout(v)
+        case .easel(var v): transform(&v.meta); return .easel(v)
+        case .easelElement(var v): transform(&v.meta); return .easelElement(v)
         }
     }
 

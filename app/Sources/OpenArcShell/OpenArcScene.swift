@@ -144,7 +144,11 @@ struct ShellCommands: Commands {
             Button("Open Command Bar") { model.presentCommandBar(.currentTab) }
                 .keyboardShortcut("l", modifiers: .command)
                 .disabled(!hasWindow)
-            // New Profile and New Easel come with their surfaces. Close Window closes whichever
+            // [01 §File] observed: New Easel follows New Profile; ⌃⇧E [02] observed. B56.
+            Button("New Easel") { model.newEasel() }
+                .keyboardShortcut("e", modifiers: [.control, .shift])
+                .disabled(!hasWindow || !model.canCreateEasel)
+            // New Profile comes with its surface. Close Window closes whichever
             // window is key (browser, Little Arc or Settings). [01 §File, 02] observed.
             Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
                 .keyboardShortcut("w", modifiers: [.shift, .command])

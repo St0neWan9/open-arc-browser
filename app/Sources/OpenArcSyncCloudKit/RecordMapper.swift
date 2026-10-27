@@ -128,6 +128,14 @@ struct RecordMapper: Sendable {
         case .splitLayout(let v):
             w.set(SplitLayoutFields.spaceID, v.spaceID.uuidString)
             w.set(SplitLayoutFields.root, Self.json(v.root))
+        case .easel(let v):
+            w.set(EaselFields.title, v.title)
+        case .easelElement(let v):
+            w.set(EaselElementFields.easelID, v.easelID.uuidString)
+            w.set(EaselElementFields.zKey, v.zKey.rawValue)
+            w.set(EaselElementFields.frame, Self.json(v.frame))
+            w.set(EaselElementFields.content, Self.json(v.content))
+            w.set(EaselElementFields.style, Self.json(v.style))
         }
         writeMeta(record.meta, type: id.type, to: w)
         return ck
@@ -258,6 +266,22 @@ struct RecordMapper: Sendable {
             )
             v.meta = meta
             return .splitLayout(v)
+        case .easel:
+            var v = Easel(id: uuid, title: try r.required(EaselFields.title), now: now)
+            v.meta = meta
+            return .easel(v)
+        case .easelElement:
+            var v = EaselElement(
+                id: uuid,
+                easelID: try r.requiredUUID(EaselElementFields.easelID),
+                zKey: try r.sortKey(EaselElementFields.zKey),
+                frame: try r.json(EaselElementFields.frame),
+                content: try r.json(EaselElementFields.content),
+                style: try r.json(EaselElementFields.style),
+                now: now
+            )
+            v.meta = meta
+            return .easelElement(v)
         }
     }
 

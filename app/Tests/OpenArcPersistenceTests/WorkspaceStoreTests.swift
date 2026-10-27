@@ -62,7 +62,29 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(json["schemaVersion"] as? Int, 1)
         XCTAssertNotNil(json["savedAt"])
         let workspace = try XCTUnwrap(json["workspace"] as? [String: Any])
-        XCTAssertEqual(Set(workspace.keys), ["profiles", "themes", "spaces", "folders", "tabs", "archive", "splits"])
+        // `easels` / `easelElements` were added by B56 without a schema bump (older files lack them
+        // and load with none; see `testFileWithoutEaselsLoadsWithNone`).
+        XCTAssertEqual(Set(workspace.keys), ["profiles", "themes", "spaces", "folders", "tabs", "archive", "splits", "easels", "easelElements"])
+    }
+
+    /// [06 §9] B56: a file written before Easels existed still loads, with no Easels. The format
+    /// change is additive, so the schema version stays 1.
+    func testFileWithoutEaselsLoadsWithNone() async throws {
+        let original = try Sample.workspace()
+        let store = makeStore()
+        await store.update(original)
+        try await store.flush()
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: dir.workspaceFile)) as? [String: Any])
+        var workspace = try XCTUnwrap(json["workspace"] as? [String: Any])
+        workspace["easels"] = nil
+        workspace["easelElements"] = nil
+        json["workspace"] = workspace
+        try JSONSerialization.data(withJSONObject: json).write(to: dir.workspaceFile)
+
+        let reloaded = makeStore()
+        XCTAssertEqual(reloaded.loadResult.outcome, .loaded)
+        XCTAssertEqual(reloaded.loadResult.workspace, original)
+        XCTAssertTrue(reloaded.loadResult.workspace.easels.isEmpty)
     }
 
     /// A file written before `Theme.brightness` existed still loads; its themes get the neutral

@@ -10,6 +10,9 @@ public enum SyncRecordType: String, Codable, CaseIterable, Hashable, Sendable {
     case tab = "Tab"
     case archiveItem = "ArchiveItem"
     case splitLayout = "SplitLayout"
+    /// Easels and their elements (B56).
+    case easel = "Easel"
+    case easelElement = "EaselElement"
 
     /// Field groups whose values must be end-to-end encrypted by the backend (URLs, titles,
     /// names). docs/arc-spec/03-settings.md: "Arc Sync is end-to-end encrypted" (observed); the
@@ -23,6 +26,10 @@ public enum SyncRecordType: String, Codable, CaseIterable, Hashable, Sendable {
         case .tab: return Set([TabNode.FieldGroup.content, .naming, .pin].map(\.rawValue))
         case .archiveItem: return [ArchiveItem.FieldGroup.content.rawValue]
         case .splitLayout: return []
+        // The title, and what an element draws (text, image bytes, stroke shapes), are user
+        // content. Geometry, stacking and style stay plain.
+        case .easel: return [Easel.FieldGroup.naming.rawValue]
+        case .easelElement: return [EaselElement.FieldGroup.content.rawValue]
         }
     }
 }
@@ -52,6 +59,8 @@ public enum SyncRecord: Hashable, Codable, Sendable {
     case tab(TabNode)
     case archiveItem(ArchiveItem)
     case splitLayout(SplitLayout)
+    case easel(Easel)
+    case easelElement(EaselElement)
 
     public var id: SyncRecordID {
         switch self {
@@ -62,6 +71,8 @@ public enum SyncRecord: Hashable, Codable, Sendable {
         case .tab(let v): return SyncRecordID(type: .tab, uuid: v.id)
         case .archiveItem(let v): return SyncRecordID(type: .archiveItem, uuid: v.id)
         case .splitLayout(let v): return SyncRecordID(type: .splitLayout, uuid: v.id)
+        case .easel(let v): return SyncRecordID(type: .easel, uuid: v.id)
+        case .easelElement(let v): return SyncRecordID(type: .easelElement, uuid: v.id)
         }
     }
 
@@ -74,6 +85,8 @@ public enum SyncRecord: Hashable, Codable, Sendable {
         case .tab(let v): return v.meta
         case .archiveItem(let v): return v.meta
         case .splitLayout(let v): return v.meta
+        case .easel(let v): return v.meta
+        case .easelElement(let v): return v.meta
         }
     }
 }
