@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Combine
 import UniformTypeIdentifiers
+import OpenArcModel
 import OpenArcEngine
 import OpenArcDesign
 
@@ -14,8 +15,21 @@ import OpenArcDesign
 //   as the captured image and a dark menu opens to its right (Send To… · Save to Library · Copy ·
 //   Save… · Send via iMessage… · Edit · Retake · New Easel). Copy puts the image on the clipboard
 //   and shows "Copied Image" with the menu still open. Escape leaves at any stage. Only Copy was
-//   tried in the capture; Save… (panel) and Retake (select again) are inferred; Send To, Save to
-//   Library, iMessage, Edit and New Easel were never opened (unknown) and stay inert here.
+//   tried in the capture; the other items were never opened ([06 §24.5] unknown), so what they do
+//   is inferred (B81):
+//   - Save… (panel) and Retake (select again).
+//   - Save to Library: the image goes into our captures folder, which Library ▸ Media lists as a
+//     screenshot (`LibraryMediaFolders.captures`); a "Saved to Library" pill shows and the menu
+//     stays (like Copy).
+//   - Send via iMessage…: the system Messages share service with the image file; the capture ends.
+//   - Edit: opens the image in Preview (the system's markup editor); the capture ends. Of the two
+//     options the plan names (a new Easel or Preview) Preview is taken, so Edit and New Easel differ.
+//   - New Easel: a new "Untitled Easel" in the current Space with the image on it, shown at once;
+//     the capture ends. Disabled in an incognito window (it keeps no Easels).
+//   Send To… (its candidates were not captured) stays inert.
+// - ⇧⌘ + drag anywhere on the page starts a region capture with that drag as the selection
+//   ([06 §24.1] observed tip text; [06 §24.4] behavior untested, so inferred). A ⇧⌘ click without
+//   a drag reaches the page unchanged (⇧⌘-click on a link still works).
 // - Full page (§24.2, observed): no selection; the whole page goes to the clipboard within a second
 //   or two and a bar "Screenshot Copied to Clipboard · Save · share" appears at the panel's top
 //   right. Save writes the image to the user's Downloads folder (inferred; the spec does not say
@@ -43,12 +57,15 @@ public enum PageCapturePhase: Equatable, Sendable {
 public enum PageCaptureToast: Equatable, Sendable {
     /// "Copied Image" after the result menu's Copy (a dark purple pill).
     case copiedImage
+    /// "Saved to Library" after Save to Library: our own text in the same pill. inferred (B81).
+    case savedToLibrary
     /// "Screenshot Copied to Clipboard" with Save and share (full page and portrait mode).
     case screenshotCopied
 
     public var text: String {
         switch self {
         case .copiedImage: "Copied Image"
+        case .savedToLibrary: "Saved to Library"
         case .screenshotCopied: "Screenshot Copied to Clipboard"
         }
     }
@@ -80,15 +97,6 @@ public enum PageCaptureMenuItem: String, CaseIterable, Sendable {
         case .edit: "pencil"
         case .retake: "arrow.counterclockwise"
         case .newEasel: "plus"
-        }
-    }
-
-    /// Items with behavior. Copy is observed; Save… and Retake are inferred. The others were never
-    /// opened in the capture (unknown) and stay inert.
-    public var isAvailable: Bool {
-        switch self {
-        case .copy, .save, .retake: true
-        case .saveToLibrary, .sendViaMessages, .edit, .newEasel: false
         }
     }
 
@@ -161,6 +169,22 @@ public final class PageCaptureModel: ObservableObject {
     var chooseSaveURL: (@MainActor (String, URL?) async -> URL?)?
     /// Seconds a notice stays. unknown ([06 §24.5]).
     var toastDuration: Double = Metrics.Capture.toastDuration
+    /// Folder for the files Send via iMessage… and Edit hand to other apps. Tests use a temp dir.
+    var handoffDirectory: @MainActor () -> URL? = {
+        FileManager.default.temporaryDirectory.appendingPathComponent("OpenArc Captures", isDirectory: true)
+    }
+    /// Shares an image file with Messages; false when the service is unavailable. Tests record.
+    var sendViaMessages: @MainActor (URL) -> Bool = { PageCaptureHandoff.sendViaMessages($0) }
+    /// Opens an image file in the image editor (Preview); false when it cannot. Tests record.
+    var openInEditor: @MainActor (URL) -> Bool = { PageCaptureHandoff.openInPreview($0) }
+    /// Where the last Save to Library wrote (tests, diagnostics).
+    public private(set) var lastLibraryURL: URL?
+    /// The Easel the last New Easel made (tests, diagnostics).
+    public private(set) var lastEaselID: UUID?
+    /// The page's visible size (points) at the last selection, for placing the image on an Easel.
+    private var pageSize: CGSize?
+    /// The ⇧⌘ drag in progress: its start in page points. [06 §24.4]
+    private(set) var shortcutDragStart: CGPoint?
 
     private let sidebar: SidebarViewModel
     private let preferences: AppPreferences
@@ -194,12 +218,47 @@ public final class PageCaptureModel: ObservableObject {
     /// Capture… (⇧⌘2) and the Site Control Center's camera button: dims the page and waits for
     /// a drag. Does nothing without a live page.
     public func beginRegionCapture() {
+        beginRegionCapture(showingTip: true)
+    }
+
+    private func beginRegionCapture(showingTip: Bool) {
         guard let target = selectedTarget() else { return }
         cancel()
         bind(target)
         phase = .selecting
-        showsShortcutTip = !preferences.hasShownCaptureShortcutTip
+        showsShortcutTip = showingTip && !preferences.hasShownCaptureShortcutTip
         preferences.hasShownCaptureShortcutTip = true
+    }
+
+    // MARK: ⇧⌘ + drag (06 §24.4)
+
+    /// Whether a ⇧⌘ drag now would start a capture: none runs and the selected tab is a live page.
+    public var canStartShortcutCapture: Bool { phase == .idle && selectedTarget() != nil }
+
+    /// A ⇧⌘ press moved past the drag threshold: enters region capture with this drag as its
+    /// selection, without the first-run tip (the shortcut is what the tip teaches). Returns whether
+    /// the capture started. inferred ([06 §24.4] untested).
+    @discardableResult
+    public func beginShortcutDrag(from start: CGPoint, to current: CGPoint, in bounds: CGRect) -> Bool {
+        guard canStartShortcutCapture else { return false }
+        beginRegionCapture(showingTip: false)
+        guard phase == .selecting else { return false }
+        shortcutDragStart = start
+        dragChanged(from: start, to: current, in: bounds)
+        return true
+    }
+
+    /// The ⇧⌘ drag moved.
+    public func shortcutDragChanged(to current: CGPoint, in bounds: CGRect) {
+        guard let start = shortcutDragStart else { return }
+        dragChanged(from: start, to: current, in: bounds)
+    }
+
+    /// The ⇧⌘ drag ended: the selection is captured as after a normal drag.
+    public func shortcutDragEnded(at end: CGPoint, in bounds: CGRect) {
+        guard let start = shortcutDragStart else { return }
+        shortcutDragStart = nil
+        dragEnded(from: start, to: end, in: bounds)
     }
 
     /// The drag moved: `start` and `current` in page points, `bounds` the visible page.
@@ -217,6 +276,7 @@ public final class PageCaptureModel: ObservableObject {
             return
         }
         selection = rect
+        pageSize = bounds.size
         phase = .capturingSelection
         let area = PageCaptureArea.visible(EngineRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height))
         let token = generation
@@ -233,15 +293,70 @@ public final class PageCaptureModel: ObservableObject {
         })
     }
 
-    /// A result menu item. Inert items do nothing (see `PageCaptureMenuItem.isAvailable`).
-    public func perform(_ item: PageCaptureMenuItem) {
-        guard phase == .selected else { return }
+    /// Whether a result menu item can act in this window. New Easel needs a window that keeps
+    /// Easels; Save to Library needs a captures folder.
+    public func canPerform(_ item: PageCaptureMenuItem) -> Bool {
         switch item {
+        case .newEasel: !sidebar.isIncognito && sidebar.selectedSpaceID != nil
+        case .saveToLibrary: sidebar.controller.dependencies.mediaFolders.captures != nil
+        case .copy, .save, .sendViaMessages, .edit, .retake: true
+        }
+    }
+
+    /// A result menu item.
+    public func perform(_ item: PageCaptureMenuItem) {
+        guard phase == .selected, canPerform(item) else { return }
+        switch item {
+        case .saveToLibrary: saveRegionToLibrary()
         case .copy: copyRegion()
         case .save: saveRegionWithPanel()
+        case .sendViaMessages: sendRegionViaMessages()
+        case .edit: editRegion()
         case .retake: retake()
-        case .saveToLibrary, .sendViaMessages, .edit, .newEasel: break
+        case .newEasel: placeRegionOnNewEasel()
         }
+    }
+
+    /// Save to Library: the image into the captures folder Library ▸ Media lists; "Saved to
+    /// Library" shows and the menu stays. inferred (B81, see the file header).
+    public func saveRegionToLibrary() {
+        guard phase == .selected, let image = regionImage else { return }
+        do {
+            let folders = sidebar.controller.dependencies.mediaFolders
+            guard let url = try folders.saveCapture(image.pngData, name: suggestedFileName()) else { return }
+            lastLibraryURL = url
+            show(.savedToLibrary, image: image)
+        } catch {
+            lastError = .engineFailure(error.localizedDescription)
+        }
+    }
+
+    /// Send via iMessage…: the image file to the system Messages share service; the capture ends.
+    /// inferred (B81).
+    public func sendRegionViaMessages() {
+        guard phase == .selected, let url = writeHandoffFile() else { return }
+        if sendViaMessages(url) { cancel() } else { lastError = .engineFailure("Messages is not available") }
+    }
+
+    /// Edit: the image opens in Preview; the capture ends. inferred (B81).
+    public func editRegion() {
+        guard phase == .selected, let url = writeHandoffFile() else { return }
+        if openInEditor(url) { cancel() } else { lastError = .engineFailure("No image editor is available") }
+    }
+
+    /// + New Easel: a new Easel in the current Space with the image on it, shown at once; the
+    /// capture ends. The image keeps the selection's size in points (scaled down past
+    /// `Metrics.Easel.maxPlacedImageSide`), centered across the page under the title. inferred (B81).
+    @discardableResult
+    public func placeRegionOnNewEasel() -> UUID? {
+        guard phase == .selected, canPerform(.newEasel), let image = regionImage, let selection,
+              let bitmap = NSImage(data: image.pngData), let encoded = EaselImageEncoder.encode(bitmap) else { return nil }
+        let size = Size2D(width: selection.width, height: selection.height)
+        let viewportWidth = Double((pageSize ?? selection.size).width)
+        cancel()
+        guard let easelID = sidebar.newEasel(placing: encoded, size: size, viewportWidth: viewportWidth) else { return nil }
+        lastEaselID = easelID
+        return easelID
     }
 
     /// Copy: the image goes to the clipboard, "Copied Image" shows, the menu stays. [06 §24.1] observed.
@@ -278,6 +393,7 @@ public final class PageCaptureModel: ObservableObject {
     public func cancel() {
         generation += 1
         phase = .idle
+        shortcutDragStart = nil
         selection = nil
         regionImage = nil
         portraitPage = nil
@@ -387,6 +503,20 @@ public final class PageCaptureModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.toast = nil
             self?.toastImage = nil
+        }
+    }
+
+    /// The frozen image as a dated PNG in `handoffDirectory`, for another app to open.
+    private func writeHandoffFile() -> URL? {
+        guard let image = regionImage, let folder = handoffDirectory() else { return nil }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = PageCaptureGeometry.uniqueURL(in: folder, name: suggestedFileName())
+            try image.pngData.write(to: url, options: .atomic)
+            return url
+        } catch {
+            lastError = .engineFailure(error.localizedDescription)
+            return nil
         }
     }
 
@@ -548,6 +678,48 @@ enum PortraitCaptureComposer {
         let textSize = text.size()
         text.draw(at: CGPoint(x: CGFloat(width) - CGFloat(margin) - textSize.width, y: (CGFloat(margin) - textSize.height) / 2))
         NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+// MARK: - Hand-off to other apps (B81)
+
+@MainActor
+enum PageCaptureHandoff {
+    /// The system Messages compose service with the file. false when Messages cannot take it.
+    static func sendViaMessages(_ url: URL) -> Bool {
+        guard let service = NSSharingService(named: .composeMessage), service.canPerform(withItems: [url]) else { return false }
+        service.perform(withItems: [url])
+        return true
+    }
+
+    /// Bundle id of Preview, the system image editor that Edit opens captures in.
+    static let previewBundleIdentifier = "com.apple.Preview"
+
+    /// Opens the file in Preview, else in the default app for PNG.
+    static func openInPreview(_ url: URL) -> Bool {
+        let workspace = NSWorkspace.shared
+        guard let app = workspace.urlForApplication(withBundleIdentifier: previewBundleIdentifier) else {
+            return workspace.open(url)
+        }
+        workspace.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        return true
+    }
+}
+
+// MARK: - ⇧⌘ + drag (06 §24.4)
+
+enum PageCaptureShortcut {
+    /// Movement (points) after which a ⇧⌘ press is a capture drag rather than a click. inferred.
+    static let dragThreshold: CGFloat = 4
+
+    /// Exactly ⇧ and ⌘ held (Caps Lock and the function/keypad flags are ignored).
+    static func matches(_ flags: NSEvent.ModifierFlags) -> Bool {
+        flags.intersection([.shift, .command, .option, .control]) == [.shift, .command]
+    }
+
+    /// Whether the pointer moved far enough from the press to count as a drag.
+    static func isDrag(from start: CGPoint, to current: CGPoint) -> Bool {
+        hypot(current.x - start.x, current.y - start.y) >= dragThreshold
     }
 }
 

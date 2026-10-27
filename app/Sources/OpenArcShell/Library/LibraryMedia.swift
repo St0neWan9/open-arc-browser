@@ -68,11 +68,39 @@ public struct LibraryMediaGroup: Equatable, Sendable {
 
 /// The folders the Media page lists. Resolved each time the page refreshes, so a changed
 /// screenshot location is picked up.
+///
+/// `captures` is our own folder for the capture menu's Save to Library (B81, [06 §24.1] observed
+/// item; where it lands is [06 §24.5] unknown: Library ▸ Media per the plan). It lives in the app's
+/// data directory, so listing it needs no folder-access prompt; its files are always screenshots.
 public struct LibraryMediaFolders: Sendable {
     public var resolve: @Sendable () -> [URL]
+    /// Where Save to Library writes; nil keeps nothing (previews, tests that do not ask for it).
+    public var captures: URL?
 
-    public init(resolve: @escaping @Sendable () -> [URL]) {
+    public init(captures: URL? = nil, resolve: @escaping @Sendable () -> [URL]) {
+        self.captures = captures
         self.resolve = resolve
+    }
+
+    /// Folder name of saved captures inside the app's data directory. Persisted location; never rename.
+    public static let capturesFolderName = "Library Captures"
+
+    /// The saved captures folder first, then `resolve()`, without duplicates. Creates the captures
+    /// folder, so the page's folder watch sees the first save.
+    public func allFolders() -> [URL] {
+        var folders = resolve()
+        if let captures {
+            try? FileManager.default.createDirectory(at: captures, withIntermediateDirectories: true)
+            folders.insert(captures, at: 0)
+        }
+        return Self.unique(folders)
+    }
+
+    /// Whether `url` is a saved capture (a file directly in `captures`).
+    public func isSavedCapture(_ url: URL) -> Bool {
+        guard let captures else { return false }
+        return url.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath().path
+            == captures.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     /// No folders: previews and tests never look at the user's files.
@@ -84,11 +112,14 @@ public struct LibraryMediaFolders: Sendable {
 
     /// What the app uses: `OPENARC_MEDIA_DIRS` if set, else the screenshot location, Desktop and
     /// Downloads of the current user.
+    /// Saved captures go to `<data directory>/Library Captures` either way.
     public static func live(environment: [String: String] = ProcessInfo.processInfo.environment) -> LibraryMediaFolders {
+        let captures = AppDataLocation.directory(environment: environment)
+            .appendingPathComponent(capturesFolderName, isDirectory: true)
         if let override = overrideFolders(environment: environment) {
-            return LibraryMediaFolders { override }
+            return LibraryMediaFolders(captures: captures) { override }
         }
-        return LibraryMediaFolders {
+        return LibraryMediaFolders(captures: captures) {
             let files = FileManager.default
             return standard(
                 desktop: files.urls(for: .desktopDirectory, in: .userDomainMask).first,
@@ -274,7 +305,8 @@ public final class LibraryMediaModel: ObservableObject {
         self.scanLimit = scanLimit
         self.pageSize = pageSize
         self.displayLimit = pageSize
-        self.isScreenCapture = isScreenCapture
+        // Saved captures are screenshots whatever Spotlight says (it may not have indexed them yet).
+        self.isScreenCapture = { folders.isSavedCapture($0) || isScreenCapture($0) }
     }
 
     /// The page came on screen: rescans and watches the folders until `deactivate`.
@@ -301,7 +333,7 @@ public final class LibraryMediaModel: ObservableObject {
     @discardableResult
     public func refresh() -> Task<Void, Never> {
         scanTask?.cancel()
-        let folderList = folders.resolve()
+        let folderList = folders.allFolders()
         if isActive { watch = LibraryMediaFolderWatch(folders: folderList) { [weak self] in self?.folderDidChange() } }
         let limit = scanLimit
         let isScreenCapture = self.isScreenCapture
@@ -384,5 +416,20 @@ extension LibraryModel {
     @discardableResult
     public func openMedia(_ item: LibraryMediaItem) -> UUID? {
         sidebar.newTab(url: item.url, title: item.name)
+    }
+}
+
+// MARK: - Saved captures (B81)
+
+extension LibraryMediaFolders {
+    /// Save to Library: writes `png` into `captures` under `name` (" 2", " 3"… when taken) and
+    /// returns the file. nil when there is no captures folder. The Media page lists it as a
+    /// screenshot on its next scan (its folder watch triggers one while it is on screen).
+    func saveCapture(_ png: Data, name: String) throws -> URL? {
+        guard let captures else { return nil }
+        try FileManager.default.createDirectory(at: captures, withIntermediateDirectories: true)
+        let url = PageCaptureGeometry.uniqueURL(in: captures, name: name)
+        try png.write(to: url, options: .atomic)
+        return url
     }
 }

@@ -19,13 +19,15 @@ final class PageCaptureTests: XCTestCase {
     private var tempDir: URL!
 
     override func setUp() async throws {
-        model = ShellModel(dependencies: .fake(), workspace: .demo(now: Date(timeIntervalSince1970: 0)),
+        tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("b51-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        var deps = AppDependencies.fake()
+        deps.mediaFolders = LibraryMediaFolders(captures: tempDir.appendingPathComponent(LibraryMediaFolders.capturesFolderName)) { [] }
+        model = ShellModel(dependencies: deps, workspace: .demo(now: Date(timeIntervalSince1970: 0)),
                            now: { Date(timeIntervalSince1970: 0) })
         pasteboard = RecordingCaptureImagePasteboard()
         model.pageCapture.pasteboard = pasteboard
         model.pageCapture.toastDuration = 0
-        tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("b51-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let dir = tempDir!
         model.pageCapture.saveDirectory = { dir }
     }
@@ -110,12 +112,153 @@ final class PageCaptureTests: XCTestCase {
         XCTAssertEqual(capture.selectionNumber, 2)
     }
 
-    /// 06 §24.1: the menu's items and order; only Copy, Save… and Retake act (the rest unknown).
+    /// 06 §24.1: the menu's items and order; every item acts in a normal window (B81).
     func testResultMenuItems() {
         XCTAssertEqual(PageCaptureMenuItem.allCases.map(\.title),
                        ["Save to Library", "Copy", "Save…", "Send via iMessage…", "Edit", "Retake", "New Easel"])
-        XCTAssertEqual(PageCaptureMenuItem.allCases.filter(\.isAvailable), [.copy, .save, .retake])
+        XCTAssertEqual(PageCaptureMenuItem.allCases.filter { capture.canPerform($0) }, PageCaptureMenuItem.allCases)
         XCTAssertEqual(PageCaptureMenuItem.allCases.filter(\.startsGroup), [.edit, .newEasel])
+    }
+
+    /// A region captured from (0, 0) to (40, 30) of the example page, with the menu open.
+    private func captureRegion() async throws -> EngineSnapshot {
+        try await selectExampleTab()
+        model.beginRegionCapture()
+        capture.dragEnded(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 40, y: 30), in: page)
+        await capture.settle()
+        XCTAssertEqual(capture.phase, .selected)
+        return try XCTUnwrap(capture.regionImage)
+    }
+
+    /// B81, 06 §24.1 Save to Library (inferred: our captures folder): the image lands in the
+    /// captures folder, "Saved to Library" shows, the menu stays, and Library ▸ Media lists the
+    /// file as a screenshot.
+    func testSaveToLibraryAppearsInMedia() async throws {
+        let image = try await captureRegion()
+        capture.perform(.saveToLibrary)
+        let url = try XCTUnwrap(capture.lastLibraryURL)
+        XCTAssertEqual(url.deletingLastPathComponent().lastPathComponent, LibraryMediaFolders.capturesFolderName)
+        XCTAssertEqual(try Data(contentsOf: url), image.pngData)
+        XCTAssertEqual(capture.toast, .savedToLibrary)
+        XCTAssertEqual(capture.toast?.text, "Saved to Library")
+        XCTAssertEqual(capture.phase, .selected, "the menu stays, like Copy")
+
+        capture.perform(.saveToLibrary)
+        XCTAssertEqual(capture.lastLibraryURL?.lastPathComponent, (url.deletingPathExtension().lastPathComponent) + " 2.png",
+                       "a second save never overwrites")
+
+        capture.cancel()
+        let library = model.library
+        model.openLibrary(.media)
+        library.dismissMediaIntro()
+        await library.media.refresh().value
+        let items = library.mediaPage.groups.flatMap(\.items)
+        let saved = try XCTUnwrap(items.first { $0.url.lastPathComponent == url.lastPathComponent })
+        XCTAssertEqual(saved.kind, .screenshot)
+        XCTAssertEqual(items.count, 2)
+        model.exitLibrary()
+    }
+
+    /// B81 Send via iMessage… (inferred: the Messages share service): the image is written to a
+    /// file that goes to Messages, and the capture ends. When Messages is unavailable the capture
+    /// stays and the error is kept.
+    func testSendViaMessages() async throws {
+        let handoff = tempDir.appendingPathComponent("handoff")
+        capture.handoffDirectory = { handoff }
+        var sent: [URL] = []
+        capture.sendViaMessages = { url in sent.append(url); return false }
+        let image = try await captureRegion()
+        capture.perform(.sendViaMessages)
+        XCTAssertEqual(capture.phase, .selected)
+        XCTAssertNotNil(capture.lastError)
+
+        capture.sendViaMessages = { url in sent.append(url); return true }
+        capture.perform(.sendViaMessages)
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertEqual(sent.last?.deletingLastPathComponent().standardizedFileURL.path, handoff.standardizedFileURL.path)
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(sent.last)), image.pngData)
+        XCTAssertEqual(capture.phase, .idle)
+    }
+
+    /// B81 Edit (inferred: Preview): the image file opens in the editor and the capture ends.
+    func testEditOpensTheImage() async throws {
+        let handoff = tempDir.appendingPathComponent("handoff")
+        capture.handoffDirectory = { handoff }
+        var opened: [URL] = []
+        capture.openInEditor = { opened.append($0); return true }
+        let image = try await captureRegion()
+        capture.perform(.edit)
+        XCTAssertEqual(opened.count, 1)
+        XCTAssertEqual(opened.first?.pathExtension, "png")
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(opened.first)), image.pngData)
+        XCTAssertEqual(capture.phase, .idle)
+        XCTAssertTrue(model.workspace.easels.isEmpty, "Edit makes no Easel")
+    }
+
+    /// B81 + New Easel (inferred): a new Easel with its pinned row in the current Space, the image
+    /// on it at the selection's size, selected; the capture ends.
+    func testNewEaselPlacesTheImage() async throws {
+        let spaceID = try XCTUnwrap(model.selectedSpaceID)
+        _ = try await captureRegion()
+        let easelID = try XCTUnwrap(capture.placeRegionOnNewEasel())
+        XCTAssertEqual(capture.phase, .idle)
+        XCTAssertEqual(capture.lastEaselID, easelID)
+        XCTAssertEqual(model.workspace.liveEasel(easelID)?.title, Easel.defaultTitle)
+        XCTAssertEqual(model.sidebar.selectedEaselID, easelID, "the new Easel is shown")
+        XCTAssertEqual(model.workspace.tabs[try XCTUnwrap(model.selectedTabID)]?.location.spaceID, spaceID)
+        let elements = model.workspace.elements(inEasel: easelID)
+        XCTAssertEqual(elements.count, 1)
+        let element = try XCTUnwrap(elements.first)
+        guard case .image(let placed) = element.content else { return XCTFail("an image element") }
+        XCTAssertEqual([placed.pixelWidth, placed.pixelHeight], [40, 30])
+        XCTAssertEqual(element.frame, EaselRect(x: (800 - 40) / 2, y: SidebarViewModel.placedImageTop, width: 40, height: 30),
+                       "the selection's size, centered across the page under the title")
+        XCTAssertNil(capture.placeRegionOnNewEasel(), "no capture runs any more")
+    }
+
+    /// B81: New Easel is off in an incognito window (it keeps no Easels).
+    func testNewEaselNeedsANormalWindow() {
+        let incognito = ShellModel.window(for: BrowserWindowRequest(kind: .incognito), on: model.controller)
+        defer { incognito.stop() }
+        XCTAssertFalse(incognito.pageCapture.canPerform(.newEasel))
+        XCTAssertTrue(incognito.pageCapture.canPerform(.copy))
+    }
+
+    /// 06 §24.4 (tip text observed, behavior inferred): a ⇧⌘ drag on the page starts a region
+    /// capture with that drag as the selection, without the first-run tip, and its release
+    /// captures it as a normal drag does.
+    func testShiftCommandDragStartsRegionCapture() async throws {
+        let live = try await selectExampleTab()
+        XCTAssertTrue(capture.canStartShortcutCapture)
+        XCTAssertTrue(capture.beginShortcutDrag(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 110, y: 105), in: page))
+        XCTAssertEqual(capture.phase, .selecting)
+        XCTAssertFalse(capture.showsShortcutTip, "the shortcut is what the tip teaches")
+        XCTAssertEqual(capture.selection, CGRect(x: 100, y: 100, width: 10, height: 5))
+        XCTAssertFalse(capture.canStartShortcutCapture, "one capture at a time")
+        capture.shortcutDragChanged(to: CGPoint(x: 160, y: 140), in: page)
+        XCTAssertEqual(capture.selection, CGRect(x: 100, y: 100, width: 60, height: 40))
+        capture.shortcutDragEnded(at: CGPoint(x: 180, y: 150), in: page)
+        await capture.settle()
+        XCTAssertEqual(capture.phase, .selected)
+        XCTAssertEqual(live.commands.last, .capture(.visible(EngineRect(x: 100, y: 100, width: 80, height: 50))))
+        XCTAssertNil(capture.shortcutDragStart)
+    }
+
+    /// 06 §24.4: only ⇧⌘ (no ⌥ or ⌃) counts, and a press is a drag after a few points.
+    func testShortcutModifiersAndThreshold() {
+        XCTAssertTrue(PageCaptureShortcut.matches([.shift, .command]))
+        XCTAssertTrue(PageCaptureShortcut.matches([.shift, .command, .capsLock]))
+        XCTAssertFalse(PageCaptureShortcut.matches([.command]))
+        XCTAssertFalse(PageCaptureShortcut.matches([.shift, .command, .option]))
+        XCTAssertFalse(PageCaptureShortcut.isDrag(from: .zero, to: CGPoint(x: 2, y: 2)))
+        XCTAssertTrue(PageCaptureShortcut.isDrag(from: .zero, to: CGPoint(x: 4, y: 0)))
+    }
+
+    /// 06 §24.4: no ⇧⌘ capture without a live page.
+    func testShortcutNeedsALivePage() {
+        XCTAssertFalse(capture.canStartShortcutCapture)
+        XCTAssertFalse(capture.beginShortcutDrag(from: .zero, to: CGPoint(x: 20, y: 20), in: page))
+        XCTAssertEqual(capture.phase, .idle)
     }
 
     /// Save… writes the frozen image where the panel says (a temp dir here).

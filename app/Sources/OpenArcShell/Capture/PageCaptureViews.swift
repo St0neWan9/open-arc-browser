@@ -18,6 +18,14 @@ struct PageCaptureLayer: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            // ⇧⌘ + drag anywhere on the page starts a region capture. [06 §24.4] B81. Transparent
+            // to hit-testing; it watches the window's mouse events.
+            if let pageFrame {
+                CaptureShortcutMonitor(capture: capture, size: pageFrame.size)
+                    .frame(width: pageFrame.width, height: pageFrame.height)
+                    .offset(x: pageFrame.minX, y: pageFrame.minY)
+                    .allowsHitTesting(false)
+            }
             if let pageFrame, capture.phase != .idle, capture.phase != .portrait, capture.tabID != nil {
                 RegionCaptureOverlay(capture: capture, size: pageFrame.size)
                     .frame(width: pageFrame.width, height: pageFrame.height)
@@ -229,7 +237,7 @@ struct PageCaptureResultMenu: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(CaptureMenuRowStyle())
-                .disabled(!item.isAvailable)
+                .disabled(!capture.canPerform(item))
                 .accessibilityIdentifier("openarc.capture.menu.\(item.rawValue)")
             }
             Spacer(minLength: 0)
@@ -348,6 +356,112 @@ final class CaptureDragSurfaceView: NSView {
     override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
 
+// MARK: - ⇧⌘ + drag (06 §24.4)
+
+/// Watches the window's left mouse events over the selected page. A ⇧⌘ press is held back; once
+/// it moves past `PageCaptureShortcut.dragThreshold` the region capture starts with that drag as
+/// its selection, and the drag's events stay with the capture. A ⇧⌘ press released without a drag
+/// is handed to the page after all (press, then release), so ⇧⌘-click on a link still works.
+/// inferred ([06 §24.4] untested).
+struct CaptureShortcutMonitor: NSViewRepresentable {
+    let capture: PageCaptureModel
+    let size: CGSize
+
+    func makeNSView(context: Context) -> CaptureShortcutMonitorView {
+        let view = CaptureShortcutMonitorView()
+        view.capture = capture
+        return view
+    }
+
+    func updateNSView(_ nsView: CaptureShortcutMonitorView, context: Context) {
+        nsView.capture = capture
+    }
+}
+
+final class CaptureShortcutMonitorView: NSView {
+    weak var capture: PageCaptureModel?
+    private var monitor: CaptureEventMonitorToken?
+    /// The held-back ⇧⌘ press and its point (view space).
+    private var pending: (event: NSEvent, start: CGPoint)?
+    private var isCapturing = false
+    /// A held-back press being handed to the page, so the monitor lets it through.
+    private var isReplaying = false
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        monitor = nil
+        pending = nil
+        isCapturing = false
+        guard window != nil else { return }
+        let token = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            let consumed = MainActor.assumeIsolated { self?.consumes(event) ?? false }
+            return consumed ? nil : event
+        }
+        monitor = token.map(CaptureEventMonitorToken.init)
+    }
+
+    /// Whether the capture takes the event (it then goes no further).
+    private func consumes(_ event: NSEvent) -> Bool {
+        guard !isReplaying, let window, event.window === window, let capture else { return false }
+        let point = convert(event.locationInWindow, from: nil)
+        switch event.type {
+        case .leftMouseDown:
+            pending = nil
+            isCapturing = false
+            guard PageCaptureShortcut.matches(event.modifierFlags), bounds.contains(point),
+                  capture.canStartShortcutCapture else { return false }
+            pending = (event, point)
+            return true
+        case .leftMouseDragged:
+            if isCapturing {
+                capture.shortcutDragChanged(to: point, in: bounds)
+                return true
+            }
+            guard let held = pending else { return false }
+            guard PageCaptureShortcut.isDrag(from: held.start, to: point) else { return true }
+            pending = nil
+            isCapturing = capture.beginShortcutDrag(from: held.start, to: point, in: bounds)
+            guard !isCapturing else { return true }
+            replay(held.event, then: event, in: window)
+            return true
+        case .leftMouseUp:
+            if isCapturing {
+                isCapturing = false
+                capture.shortcutDragEnded(at: point, in: bounds)
+                return true
+            }
+            if let held = pending {
+                // A ⇧⌘ click: the page gets its press now, then this release.
+                pending = nil
+                replay(held.event, then: event, in: window)
+                return true
+            }
+            return false
+        default:
+            return false
+        }
+    }
+
+    /// Hands the held press to the page, with `next` queued first so a tracking loop the press
+    /// starts (inside `sendEvent`) receives it.
+    private func replay(_ press: NSEvent, then next: NSEvent, in window: NSWindow) {
+        window.postEvent(next, atStart: true)
+        isReplaying = true
+        defer { isReplaying = false }
+        window.sendEvent(press)
+    }
+}
+
+/// Removes the event monitor when released.
+private final class CaptureEventMonitorToken {
+    private let monitor: Any
+    init(_ monitor: Any) { self.monitor = monitor }
+    deinit { NSEvent.removeMonitor(monitor) }
+}
+
 // MARK: - Notices (06 §24.1, §24.2)
 
 struct PageCaptureNotices: View {
@@ -358,19 +472,21 @@ struct PageCaptureNotices: View {
 
     var body: some View {
         if let toast = capture.toast {
-            let size = toast == .screenshotCopied
-                ? CGSize(width: C.doneToastSize.width, height: C.doneToastSize.height)
-                : CGSize(width: 130, height: C.pillHeight)
+            let size = switch toast {
+            case .screenshotCopied: CGSize(width: C.doneToastSize.width, height: C.doneToastSize.height)
+            case .savedToLibrary: CGSize(width: 150, height: C.pillHeight)
+            case .copiedImage: CGSize(width: 130, height: C.pillHeight)
+            }
             let origin = PageCaptureGeometry.toastOrigin(size: size, in: panelFrame)
             Group {
                 switch toast {
-                case .copiedImage:
+                case .copiedImage, .savedToLibrary:
                     Text(toast.text)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.white)
                         .frame(width: size.width, height: size.height)
                         .background(Capsule().fill(C.toastFill.swiftUI))
-                        .accessibilityIdentifier("openarc.capture.copiedImage")
+                        .accessibilityIdentifier(toast == .copiedImage ? "openarc.capture.copiedImage" : "openarc.capture.savedToLibrary")
                 case .screenshotCopied:
                     ScreenshotCopiedBar(capture: capture)
                         .frame(width: size.width, height: size.height)
