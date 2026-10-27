@@ -110,7 +110,7 @@ public enum SettingsCatalog {
         SettingsControl("account.makeDefault", "Make Open Arc your default", .button, .live),
         // Observed toggle. Live: it stores the choice and starts or stops the sync store. The view
         // disables it when no sync backend is configured (DisabledSyncStore).
-        SettingsControl("account.syncSidebar", "Sync Sidebar", .toggle(defaultValue: true), .live),
+        SettingsControl("account.syncSidebar", "Sync Sidebar", .toggle(defaultValue: false), .live),
     ]
 
     // MARK: General [03 §General]

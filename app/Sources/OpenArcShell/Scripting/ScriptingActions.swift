@@ -88,7 +88,8 @@ extension ScriptingHost {
                 }
             }
         }
-        return workspace.favorites(profileID: space.profileID).map(\.id) + pinned(nil) + workspace.today(spaceID: spaceID).map(\.id)
+        let profileID = workspace.localProfileID(for: space.profileID)
+        return (profileID.map { workspace.favorites(profileID: $0).map(\.id) } ?? []) + pinned(nil) + workspace.today(spaceID: spaceID).map(\.id)
     }
 
     // MARK: Window properties

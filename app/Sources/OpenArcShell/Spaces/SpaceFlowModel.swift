@@ -126,7 +126,7 @@ public final class SpaceFlowModel: ObservableObject {
         draftName = ""
         draftIcon = nil
         draftTheme = SpaceThemeDraft()
-        draftProfileID = sidebar.selectedSpace?.profileID ?? sidebar.workspace.profiles.keys.sorted { $0.uuidString < $1.uuidString }.first
+        draftProfileID = sidebar.currentProfileID
         renamingSpaceID = nil
         iconPickerSpaceID = nil
         isCreating = true
@@ -146,7 +146,7 @@ public final class SpaceFlowModel: ObservableObject {
         // The dock order is kept per profile, so "after the current Space" only applies when the
         // new Space joins the current Space's profile; otherwise it goes to the end of its profile.
         let current = sidebar.selectedSpace
-        let anchor = current?.profileID == profileID ? current?.id : nil
+        let anchor = current.flatMap { sidebar.workspace.localProfileID(for: $0.profileID) } == profileID ? current?.id : nil
         let name = trimmed(draftName), icon = draftIcon, theme = draftTheme, stamp = now()
         guard commit({
             // The Space and its Theme are added in one step. [06 §1] observed: inserted after the current Space.

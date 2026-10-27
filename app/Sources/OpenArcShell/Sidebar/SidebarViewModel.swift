@@ -214,7 +214,8 @@ public final class SidebarViewModel: ObservableObject {
     }
 
     /// The selected Space's profile, else the Default profile (oldest live one).
-    var currentProfileID: UUID? { selectedSpace?.profileID ?? workspace.defaultProfileID }
+    /// A Space whose profile is unknown on this device uses the Default profile (B73).
+    var currentProfileID: UUID? { selectedSpace.flatMap { workspace.localProfileID(for: $0.profileID) } ?? workspace.defaultProfileID }
 
     var theme: Theme? { selectedSpace?.themeID.flatMap { workspace.themes[$0] } }
 

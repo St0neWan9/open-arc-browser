@@ -143,7 +143,7 @@ public final class WorkspaceController: ObservableObject {
         store: dependencies.sync,
         database: dependencies.persistence.flatMap { $0.isReadOnly ? nil : $0 },
         preferences: dependencies.preferences,
-        allRecordIDs: { [weak self] in self?.workspace.allRecordIDs ?? [] },
+        allRecordIDs: { [weak self] in self?.workspace.allSyncedRecordIDs ?? [] },
         now: now,
         notificationCenter: syncNotificationCenter,
         registerForRemoteNotifications: dependencies.registerForRemoteNotifications
@@ -214,6 +214,8 @@ public final class WorkspaceController: ObservableObject {
         // New tabs the pages ask for (window.open, ⌘-click). C7b.
         observeEngineEvents()
         // "Sync Sidebar" decides whether the sync store starts. [03 §账号卡] observed toggle (D5).
+        // Off for new installs (plan Q14); an install from before B73 keeps the "on" it had.
+        dependencies.preferences.pinLegacySidebarSyncDefault(isExistingInstall: persistence?.loadResult.outcome == .loaded)
         sidebarSync.launch()
         observeSystemAppearance()
     }
@@ -451,11 +453,12 @@ public final class WorkspaceController: ObservableObject {
     /// The engine profile a model tab's page belongs to: the favorite's profile, else its Space's
     /// profile. nil when the Space is unknown (the caller's fallback applies). C11: "Profiles help
     /// keep your data separate across Spaces — like history, logins, cookies" ([03 §Profiles]
-    /// observed), so a Space's Profile decides where its tabs' data lives.
+    /// observed), so a Space's Profile decides where its tabs' data lives. A profile reference
+    /// unknown on this device (profiles do not sync, B73) resolves to the Default profile.
     func engineProfileID(forTab tab: TabNode) -> UUID? {
         switch tab.location {
-        case .favorite(let favoriteProfile): return favoriteProfile
-        case .pinned(let spaceID, _), .today(let spaceID): return workspace.spaces[spaceID]?.profileID
+        case .favorite(let favoriteProfile): return workspace.localProfileID(for: favoriteProfile)
+        case .pinned(let spaceID, _), .today(let spaceID): return workspace.profileID(ofSpace: spaceID)
         }
     }
 
@@ -808,7 +811,7 @@ public final class WorkspaceController: ObservableObject {
     }
 
     /// Profile settings for a window of this controller. An incognito window follows its parent
-    /// profile's synced settings (its in-memory profile has the same id but default settings).
+    /// profile's stored settings (its in-memory profile has the same id but default settings).
     /// [03 §Profiles] observed per-profile settings; following them in incognito is inferred. [A19]
     func profileSettings(for profileID: UUID?) -> ProfileSettings {
         if let parent { return parent.profileSettings(for: profileID) }

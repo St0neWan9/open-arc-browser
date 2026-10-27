@@ -65,6 +65,16 @@ extension WorkspaceState {
         ids += easelElements.keys.map { SyncRecordID(type: .easelElement, uuid: $0) }
         return ids.sorted { $0.recordName < $1.recordName }
     }
+
+    /// Ids of every record that syncs (`allRecordIDs` without local-only types), for a full upload.
+    public var allSyncedRecordIDs: [SyncRecordID] {
+        allRecordIDs.filter(\.isSynced)
+    }
+}
+
+extension SyncRecordID {
+    /// False for local-only record types (`SyncRecordType.isLocalOnly`).
+    var isSynced: Bool { !type.isLocalOnly }
 }
 
 /// Which records differ between two workspace values. This is how callers learn which local
@@ -86,9 +96,10 @@ public enum WorkspaceDiff {
         public var isEmpty: Bool { saved.isEmpty && removed.isEmpty }
 
         /// `.save` for every created/changed/tombstoned record, `.delete` for every purged one
-        /// (see `PendingChange`). Sorted by record name.
+        /// (see `PendingChange`). Sorted by record name. Local-only records (Profile, plan Q13)
+        /// are left out: they never go to the sync store.
         public var pendingChanges: [PendingChange] {
-            (saved.map(PendingChange.save) + removed.map(PendingChange.delete))
+            (saved.filter(\.isSynced).map(PendingChange.save) + removed.filter(\.isSynced).map(PendingChange.delete))
                 .sorted { Self.name($0) < Self.name($1) }
         }
 

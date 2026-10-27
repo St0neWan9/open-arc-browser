@@ -107,11 +107,11 @@ final class UIStateTests: XCTestCase {
         let (current, events) = await store.subscribe()
         XCTAssertEqual(current, first)
         var second = first
-        second.profiles[Fx.uuid(900)] = .init(id: Fx.uuid(900), name: "Other", now: Fx.t(1))
+        second.spaces[Sample.ids.space]?.name = "Renamed"
         await store.update(second)
         var iterator = events.makeAsyncIterator()
         let event = await iterator.next()
         XCTAssertEqual(event?.workspace, second)
-        XCTAssertEqual(event?.pendingChanges, [.save(.init(type: .profile, uuid: Fx.uuid(900)))])
+        XCTAssertEqual(event?.pendingChanges, [.save(.init(type: .space, uuid: Sample.ids.space))])
     }
 }

@@ -4,6 +4,7 @@ import AppKit
 import OpenArcModel
 import OpenArcEngine
 import OpenArcSyncAPI
+import OpenArcPersistence
 @testable import OpenArcShell
 
 /// A sync store that reports a fixed list of statuses and then finishes its stream.
@@ -12,11 +13,13 @@ private final class ScriptedSyncStore: SyncStore, @unchecked Sendable {
     let statuses: [SyncStatus]
     private let lock = NSLock()
     private var _stopCount = 0
+    private var _startCount = 0
     var stopCount: Int { lock.withLock { _stopCount } }
+    var startCount: Int { lock.withLock { _startCount } }
 
     init(_ statuses: [SyncStatus]) { self.statuses = statuses }
 
-    func start(database: any SyncLocalDatabase) async throws {}
+    func start(database: any SyncLocalDatabase) async throws { lock.withLock { _startCount += 1 } }
     func stop() async { lock.withLock { _stopCount += 1 } }
     func enqueue(_ changes: [PendingChange]) async {}
     func syncNow() async throws {}
@@ -226,14 +229,73 @@ final class SettingsTests: XCTestCase {
         shell.stop()
     }
 
-    /// The account-level "Sync Sidebar" choice still persists per device.
+    /// The account-level "Sync Sidebar" choice still persists per device. Off until chosen (plan
+    /// Q14, B73: Arc's sync is opt-in).
     func testSidebarSyncPreferencePersistsAcrossInstances() throws {
         let suite = makeSuite()
         let first = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
-        XCTAssertTrue(first.isSidebarSyncEnabled)
-        first.isSidebarSyncEnabled = false
+        XCTAssertFalse(first.isSidebarSyncEnabled, "off for a new install")
+        first.isSidebarSyncEnabled = true
         let second = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
-        XCTAssertFalse(second.isSidebarSyncEnabled)
+        XCTAssertTrue(second.isSidebarSyncEnabled)
+        second.isSidebarSyncEnabled = false
+        let third = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
+        XCTAssertFalse(third.isSidebarSyncEnabled)
+    }
+
+    /// B73: an install from before B73 (a workspace on disk, no stored choice) was syncing under
+    /// the old default and keeps syncing; a stored choice is never changed; a new install stays off.
+    func testLegacySidebarSyncDefaultIsPinnedOnlyForExistingInstalls() throws {
+        let fresh = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: makeSuite())))
+        XCTAssertFalse(fresh.pinLegacySidebarSyncDefault(isExistingInstall: false))
+        XCTAssertFalse(fresh.isSidebarSyncEnabled, "a new install starts with sync off")
+
+        let upgraded = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: makeSuite())))
+        XCTAssertTrue(upgraded.pinLegacySidebarSyncDefault(isExistingInstall: true))
+        XCTAssertTrue(upgraded.isSidebarSyncEnabled, "an existing install keeps the old default (on)")
+
+        let storedOn = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: makeSuite())))
+        storedOn.isSidebarSyncEnabled = true
+        XCTAssertFalse(storedOn.pinLegacySidebarSyncDefault(isExistingInstall: true))
+        XCTAssertTrue(storedOn.isSidebarSyncEnabled, "a stored true is kept")
+
+        let storedOff = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: makeSuite())))
+        storedOff.isSidebarSyncEnabled = false
+        XCTAssertFalse(storedOff.pinLegacySidebarSyncDefault(isExistingInstall: true))
+        XCTAssertFalse(storedOff.isSidebarSyncEnabled, "a stored false is kept")
+    }
+
+    /// B73 through the launch path: a first launch leaves sync off and never starts the store;
+    /// relaunching an install whose workspace is on disk but has no stored choice starts it.
+    func testFirstLaunchSyncOffAndUpgradedInstallKeepsSyncing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("b73-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = clock
+        let store = ScriptedSyncStore([SyncStatus(phase: .idle)])
+
+        let firstPreferences = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: makeSuite())))
+        let firstStore = WorkspaceStore(directory: directory)
+        let first = ShellModel(
+            dependencies: AppDependencies(engine: FakeEngine(), sync: store, persistence: firstStore, preferences: firstPreferences),
+            workspace: .firstLaunch(now: now), now: { now }, notificationCenter: NotificationCenter()
+        )
+        XCTAssertFalse(firstPreferences.isSidebarSyncEnabled)
+        XCTAssertFalse(SettingsModel(shell: first).isSidebarSyncOn, "the toggle shows off on first launch")
+        try await first.flushPersistence()
+        first.stop()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(store.startCount, 0, "sync never starts on a first launch")
+
+        // The same data directory as an install from before B73: workspace on disk, no stored choice.
+        let upgradedPreferences = AppPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: makeSuite())))
+        let upgraded = ShellModel(
+            dependencies: AppDependencies(engine: FakeEngine(), sync: store, persistence: WorkspaceStore(directory: directory), preferences: upgradedPreferences),
+            workspace: .firstLaunch(now: now), now: { now }, notificationCenter: NotificationCenter()
+        )
+        defer { upgraded.stop() }
+        XCTAssertTrue(upgradedPreferences.isSidebarSyncEnabled)
+        for _ in 0..<100 where store.startCount == 0 { await Task.yield() }
+        XCTAssertEqual(store.startCount, 1)
     }
 
     // MARK: [03 §Profiles] delete profile
@@ -346,7 +408,7 @@ final class SettingsTests: XCTestCase {
     /// Turning "Sync Sidebar" off is stored and stops the store.
     func testSyncToggleStoresChoiceAndStopsStore() async {
         let store = ScriptedSyncStore([SyncStatus(phase: .idle)])
-        let preferences = AppPreferences.inMemory()
+        let preferences = AppPreferences.syncOn()
         let shell = makeShell(sync: store, preferences: preferences)
         let settings = SettingsModel(shell: shell)
         XCTAssertTrue(settings.isSidebarSyncOn)

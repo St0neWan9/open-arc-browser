@@ -63,7 +63,7 @@ public enum BookmarkImportMapper {
             s = TreeOps.createTheme(s, id: id, style: theme, now: now)
             themeID = id
         }
-        let anchor = afterSpaceID.flatMap { id in s.spaces[id].map { !$0.meta.isTombstone && $0.profileID == profileID } == true ? id : nil }
+        let anchor = afterSpaceID.flatMap { id in s.spaces[id].map { !$0.meta.isTombstone && s.localProfileID(for: $0.profileID) == profileID } == true ? id : nil }
         s = try TreeOps.createSpace(s, id: spaceID, profileID: profileID, name: name, themeID: themeID, afterSpaceID: anchor, now: now)
         var summary = BookmarkImportSummary(spaceID: spaceID, spaceName: name)
         var writer = Writer(state: s, spaceID: spaceID, now: now)

@@ -127,6 +127,45 @@ final class TreeOpsProfileTests: XCTestCase {
         XCTAssertEqual(s.todayLifetime(forSpace: UUID()), ArchivePolicy.defaultTodayLifetime)
     }
 
+    // MARK: Local profiles (B73)
+
+    /// Profiles do not sync (plan Q13; [06 §16.3] observed "Profiles are not synced between
+    /// computers."), Spaces and favorites do. A Space or favorite naming a profile this device does
+    /// not know counts as the Default profile's (inferred), without rewriting the stored reference,
+    /// so nothing changes in the record and nothing is synced back.
+    func testUnknownProfileReferenceFallsBackToDefault() throws {
+        var s = try base()
+        s = try TreeOps.updateProfileSettings(s, id: personal, settings: ProfileSettings(searchEngine: .bing, todayLifetime: hour), now: t0)
+        let otherMac = UUID(), synced = UUID(), favorite = UUID()
+        // Records as another Mac wrote them: a Space and a favorite of a profile only it has.
+        s.spaces[synced] = Space(id: synced, profileID: otherMac, name: "Synced", dockSortKey: SortKey.sequence(count: 1)[0], now: t0)
+        s = try TreeOps.openTab(s, id: favorite, spaceID: home, url: URL(string: "https://a.example"), title: "a", now: t0)
+        s.tabs[favorite]?.location = .favorite(profileID: otherMac)
+        let before = s
+
+        XCTAssertEqual(s.defaultProfileID, personal)
+        XCTAssertEqual(s.localProfileID(for: otherMac), personal)
+        XCTAssertEqual(s.localProfileID(for: work), work)
+        XCTAssertEqual(s.profileID(ofSpace: synced), personal)
+        XCTAssertEqual(s.profileID(ofSpace: office), work)
+        XCTAssertNil(s.profileID(ofSpace: UUID()))
+        XCTAssertEqual(s.profileSettings(forSpace: synced).searchEngine, .bing, "the Default profile's settings apply")
+        XCTAssertEqual(s.todayLifetime(forSpace: synced), hour)
+        XCTAssertEqual(Set(s.spaces(inProfile: personal).map(\.id)), [home, synced])
+        XCTAssertEqual(s.favorites(profileID: personal).map(\.id), [favorite])
+        XCTAssertEqual(s.favorites(profileID: work), [])
+        XCTAssertEqual(s, before, "queries never rewrite the stored reference")
+        XCTAssertEqual(s.spaces[synced]?.profileID, otherMac)
+
+        // A tombstoned profile resolves to Default too; with no live profile nothing resolves.
+        s.profiles[work]?.meta.markDeleted(at: at(10))
+        XCTAssertEqual(s.profileID(ofSpace: office), personal)
+        var empty = s
+        empty.profiles[personal]?.meta.markDeleted(at: at(10))
+        XCTAssertNil(empty.localProfileID(for: otherMac))
+        XCTAssertEqual(empty.profileSettings(forSpace: synced), .default)
+    }
+
     // MARK: deleteProfile
 
     /// [03 §Profiles] observed: the Default (oldest) profile cannot be deleted.

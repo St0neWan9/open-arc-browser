@@ -44,7 +44,8 @@ public enum SearchEngine: String, CaseIterable, Identifiable, Codable, Sendable 
     }
 }
 
-/// Settings that belong to a profile and sync with it: the `Profile.settings` field group.
+/// Settings that belong to a profile and are stored with it: the `Profile.settings` field group.
+/// Like the profile itself they stay on this device (plan Q13, B73).
 ///
 /// [03 §Profiles] observed: the Profiles pane shows, per profile, "Search engine" (default
 /// Google) and "Archive tabs after" (default 12 hours); [03 §对复刻的含义] observed: search,

@@ -87,3 +87,13 @@ func makeSidebarViewModel(_ fixture: SidebarFixture = SidebarFixture(), engine: 
     )
     return (vm, ids)
 }
+
+extension AppPreferences {
+    /// In-memory preferences with "Sync Sidebar" on. Since B73 the default is off (plan Q14), so
+    /// tests of a running sync store turn it on explicitly.
+    static func syncOn() -> AppPreferences {
+        let preferences = AppPreferences.inMemory()
+        preferences.isSidebarSyncEnabled = true
+        return preferences
+    }
+}

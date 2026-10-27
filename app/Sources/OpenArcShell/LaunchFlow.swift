@@ -317,7 +317,7 @@ extension ShellModel {
         guard let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
         switch tab.location {
         case .favorite(let profileID):
-            guard profileID == sidebar.currentProfileID else { return }
+            guard workspace.localProfileID(for: profileID) == sidebar.currentProfileID else { return }
         case .pinned(let spaceID, _), .today(let spaceID):
             guard spaceID == selectedSpaceID else { return }
         }

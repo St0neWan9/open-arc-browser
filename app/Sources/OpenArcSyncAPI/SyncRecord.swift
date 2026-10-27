@@ -1,8 +1,10 @@
 import Foundation
 import OpenArcModel
 
-/// Kinds of records that sync. Raw values are the stable record type names from the model.
+/// Kinds of sync records. Raw values are the stable record type names from the model.
 public enum SyncRecordType: String, Codable, CaseIterable, Hashable, Sendable {
+    /// Local-only since B73 (see `isLocalOnly`). The case stays: the name is persisted (record
+    /// names, the CloudKit schema) and older builds may still have written such records.
     case profile = "Profile"
     case theme = "Theme"
     case space = "Space"
@@ -13,6 +15,18 @@ public enum SyncRecordType: String, Codable, CaseIterable, Hashable, Sendable {
     /// Easels and their elements (B56).
     case easel = "Easel"
     case easelElement = "EaselElement"
+
+    /// Record types that stay on this device: never uploaded (no save, no delete), and copies
+    /// fetched from the server are ignored. Profiles are local (plan Q13): Arc's New Profile sheet
+    /// says profiles are not synced between computers ([06 §16.3] observed). Records an older
+    /// build already uploaded are left on the server untouched (deleting them would purge the
+    /// profile on devices still running such a build). A synced Space or favorite that names a
+    /// profile this device does not know resolves to the local Default profile
+    /// (`WorkspaceState.localProfileID(for:)`).
+    public var isLocalOnly: Bool { self == .profile }
+
+    /// Every type that syncs, in declaration order.
+    public static var syncedCases: [SyncRecordType] { allCases.filter { !$0.isLocalOnly } }
 
     /// Field groups whose values must be end-to-end encrypted by the backend (URLs, titles,
     /// names). docs/arc-spec/03-settings.md: "Arc Sync is end-to-end encrypted" (observed); the

@@ -76,7 +76,7 @@ final class LaunchFlowTests: XCTestCase {
     ) -> ShellModel {
         // These tests check change forwarding, not the one-time full upload of a first sync start
         // (covered in SyncUITests), so the full upload is marked as done.
-        let preferences = AppPreferences.inMemory()
+        let preferences = AppPreferences.syncOn()
         preferences.needsFullSyncUpload = false
         let deps = AppDependencies(engine: FakeEngine(), sync: sync, persistence: store, preferences: preferences)
         let now = clock
@@ -249,18 +249,24 @@ final class LaunchFlowTests: XCTestCase {
         let recorder = RecordingSyncStore()
         let model = makeModel(makeStore(), sync: recorder)
         let ws = model.workspace
-        // First launch: the default records are announced too.
+        // First launch: the default records are announced too, except the local-only Profile
+        // (plan Q13, B73; [06 §16.3] observed "Profiles are not synced between computers.").
         let profileID = try XCTUnwrap(ws.profiles.keys.first)
         let spaceID = try XCTUnwrap(ws.allLiveSpaces.first?.id)
-        await eventually {
-            Set(recorder.enqueued).isSuperset(of: [
-                .save(SyncRecordID(type: .profile, uuid: profileID)),
-                .save(SyncRecordID(type: .space, uuid: spaceID)),
-            ])
-        }
+        await eventually { recorder.enqueued.contains(.save(SyncRecordID(type: .space, uuid: spaceID))) }
 
         let folder = try XCTUnwrap(model.sidebar.createFolder(title: "Synced"))
         await eventually { recorder.enqueued.contains(.save(SyncRecordID(type: .folder, uuid: folder))) }
+
+        // Profile edits never reach the sync store.
+        XCTAssertTrue(model.controller.updateProfileSettings(profileID, ProfileSettings(searchEngine: .bing)))
+        let marker = try XCTUnwrap(model.sidebar.createFolder(title: "After profile edit"))
+        await eventually { recorder.enqueued.contains(.save(SyncRecordID(type: .folder, uuid: marker))) }
+        XCTAssertFalse(recorder.enqueued.contains { change in
+            if case .save(let id) = change { return id.type == .profile }
+            if case .delete(let id) = change { return id.type == .profile }
+            return false
+        })
     }
 
     /// Nothing is announced for a relaunch that changes nothing.

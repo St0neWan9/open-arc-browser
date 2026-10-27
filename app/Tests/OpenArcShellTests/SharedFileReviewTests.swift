@@ -106,9 +106,9 @@ final class SharedFileReviewTests: XCTestCase {
         // the window between `apply` and `mergeRemote`, held open.
         controller.stop()
 
-        let remoteProfile = Profile(id: SidebarFixture.id(900), name: "From another Mac", now: f.now.addingTimeInterval(50))
-        try await store.apply(RemoteChangeBatch(upserts: [.profile(remoteProfile)]))
-        XCTAssertNil(controller.workspace.profiles[remoteProfile.id])
+        let remoteFolder = Folder(id: SidebarFixture.id(900), spaceID: f.work, title: "From another Mac", sortKey: SortKey.sequence(count: 1)[0], now: f.now.addingTimeInterval(50))
+        try await store.apply(RemoteChangeBatch(upserts: [.folder(remoteFolder)]))
+        XCTAssertNil(controller.workspace.folders[remoteFolder.id])
 
         var settings = ProfileSettings.default
         settings.searchEngine = .duckDuckGo
@@ -116,7 +116,7 @@ final class SharedFileReviewTests: XCTestCase {
         try await store.flush()
 
         let saved = await store.workspace
-        XCTAssertEqual(saved.profiles[remoteProfile.id], remoteProfile, "the remote record survives the local commit")
+        XCTAssertEqual(saved.folders[remoteFolder.id], remoteFolder, "the remote record survives the local commit")
         XCTAssertEqual(saved.profiles[f.profile]?.settings.searchEngine, .duckDuckGo, "the local edit is saved")
     }
 

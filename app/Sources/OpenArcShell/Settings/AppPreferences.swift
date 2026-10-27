@@ -44,7 +44,7 @@ public enum ArchiveLifetime: String, CaseIterable, Identifiable, Sendable {
 ///
 /// [03 §对复刻的含义] observed: settings come in three levels: account (synced), profile (search,
 /// archive, downloads, privacy) and app (General / Links / Advanced). App-level settings stay on
-/// this device. Profile-level settings live in `Profile.settings` and sync with the profile (A18);
+/// this device. Profile-level settings live in `Profile.settings` (A18; local like profiles, B73);
 /// the per-profile keys older builds wrote here are only read once, by
 /// `WorkspaceController.migrateLegacyProfileSettings()`, and then removed.
 ///
@@ -120,11 +120,23 @@ public final class AppPreferences: @unchecked Sendable {
 
     // MARK: Account-level settings
 
-    /// "Sync Sidebar" (account card). [03 §账号卡] observed toggle; on by default (inferred).
-    /// Read at launch by `SidebarSyncController.launch()` before the sync store is started.
+    /// "Sync Sidebar" (account card). [03 §账号卡] observed toggle. Off until the user turns it on
+    /// (plan Q14: Arc's sync is opt-in). Read at launch by `SidebarSyncController.launch()` before
+    /// the sync store is started.
     public var isSidebarSyncEnabled: Bool {
-        get { value(Self.syncSidebarKey) as? Bool ?? true }
+        get { value(Self.syncSidebarKey) as? Bool ?? false }
         set { setValue(newValue, Self.syncSidebarKey) }
+    }
+
+    /// Builds before B73 defaulted "Sync Sidebar" to on without storing it. An install that
+    /// already has a workspace and no stored choice was syncing, so it keeps syncing: the old
+    /// default is written once. A stored choice (either value) is never changed, and a new install
+    /// gets the new default (off). Returns whether it wrote.
+    @discardableResult
+    public func pinLegacySidebarSyncDefault(isExistingInstall: Bool) -> Bool {
+        guard isExistingInstall, value(Self.syncSidebarKey) == nil else { return false }
+        setValue(true, Self.syncSidebarKey)
+        return true
     }
 
     /// True while local changes may exist that no running sync store was told about (sync never
