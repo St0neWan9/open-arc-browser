@@ -124,7 +124,9 @@ struct SidebarTopBarView: View {
 /// in black 60 %, left-aligned from x 20 [07 §3, §4] observed. The "Search or Enter URL…"
 /// placeholder has a magnifier in a 24 pt cell at (14, 52) (ink ≈ 12 × 12 at x 20–32, y 58–70)
 /// and starts at x 41 (ink 42.5): round-1 comparison (B32) observed, AX + PX. Clicking it opens the command bar (it is not an in-place editor) [05];
-/// hovering a loaded page shows copy-link and site-controls icons [06 §12] observed.
+/// hovering a loaded page shows copy-link and site-controls icons [06 §12] observed. On plain http
+/// pages the red struck-through lock (the toolbar's) takes the same 24 pt cell at x 14 and the
+/// domain starts at x 41; a click opens the Site Control Center [06 §17.7, §17.3] observed.
 struct SidebarURLBoxView: View {
     @ObservedObject var viewModel: SidebarViewModel
     @Environment(\.siteControlsModel) private var siteControls
@@ -135,7 +137,8 @@ struct SidebarURLBoxView: View {
         let content = viewModel.urlBoxContent
         let s = Metrics.Sidebar.self
         let showsMagnifier = content == .placeholder
-        let textStart = showsMagnifier ? s.addressFieldTextLeadingAfterIcon : s.addressFieldTextLeading
+        let showsLock = viewModel.urlBoxShowsInsecureLock
+        let textStart = showsMagnifier || showsLock ? s.addressFieldTextLeadingAfterIcon : s.addressFieldTextLeading
         let textLeading = CGFloat(textStart - s.addressFieldHorizontalInset)
         let textWidth = CGFloat(s.addressFieldTextTrailing - textStart)
         let style = showsMagnifier ? Typography.addressPlaceholder : Typography.addressField
@@ -155,6 +158,10 @@ struct SidebarURLBoxView: View {
                     .foregroundStyle(palette.ink(\.addressIcon).swiftUI)
                     .frame(width: CGFloat(icon.width), height: CGFloat(icon.height))
                     .accessibilityBox(label: "Search", identifier: "openarc.sidebar.urlBox.pageIcon", traits: .isButton)
+                    .offset(x: CGFloat(icon.x - s.addressFieldHorizontalInset))
+            }
+            if showsLock {
+                insecureLock(frame: icon)
                     .offset(x: CGFloat(icon.x - s.addressFieldHorizontalInset))
             }
             Text(urlText(content))
@@ -191,6 +198,25 @@ struct SidebarURLBoxView: View {
         .accessibilityElement(children: .contain)
         .accessibilityAction { viewModel.openCommandBar(.currentTab) }
         .accessibilityIdentifier("openarc.sidebar.urlBox")
+    }
+
+    /// The red struck-through lock of insecure pages: the toolbar's glyph and red
+    /// (`ThemeDerivation.webToolbarInsecureLock`), opening the same Site Control Center.
+    /// [06 §17.7, §17.3] observed.
+    private func insecureLock(frame: Rect2D) -> some View {
+        Button {
+            viewModel.requestFromMenu(.showSiteControls)
+        } label: {
+            Image(systemName: "lock.slash")
+                .font(.system(size: WebToolbarLocalTokens.centerGlyphSize, weight: WebToolbarLocalTokens.glyphWeight))
+                .foregroundStyle(ThemeDerivation.webToolbarInsecureLock.swiftUI)
+                .frame(width: CGFloat(frame.width), height: CGFloat(frame.height))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarUndimmedButtonStyle())
+        .help("Not Secure")
+        .accessibilityLabel("Not Secure")
+        .accessibilityIdentifier("openarc.sidebar.urlBox.insecureLock")
     }
 
     private func urlText(_ content: SidebarURLBoxContent) -> String {

@@ -179,7 +179,7 @@ public struct WebToolbarState: Equatable, Sendable {
     }
 
     /// Plain http pages get the red struck-through lock; https shows none. [06 §17.2] observed.
-    public var showsInsecureLock: Bool { url?.scheme?.lowercased() == "http" }
+    public var showsInsecureLock: Bool { SidebarURLBoxContent.showsInsecureLock(url: url) }
 
     /// The center text: the host, or with "Show full URL when Toolbar is enabled" the address
     /// without its scheme (`10.20.0.59:8716/black.html`). [06 §17.2] observed. A tab without a
