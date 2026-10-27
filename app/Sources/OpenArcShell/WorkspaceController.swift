@@ -61,6 +61,17 @@ public final class WorkspaceController: ObservableObject {
         set { ownWindowOpener = newValue }
     }
     private var ownWindowOpener: ((BrowserWindowRequest) -> Void)?
+    /// Counts requests for Settings ▸ Links with the Air Traffic Control sheet open: the command
+    /// bar's "Air Traffic Control" row (B61, [06 §20.1] observed row). The Settings window follows
+    /// the app controller's count; an incognito controller forwards to its parent.
+    @Published public private(set) var airTrafficControlRequests = 0
+    /// The last request a Settings window acted on. A Settings window created by the request
+    /// itself (first open) still finds it pending.
+    var handledAirTrafficControlRequests = 0
+    /// Asks the Settings window for the Air Traffic Control sheet (B61).
+    public func requestAirTrafficControl() {
+        if let parent { parent.requestAirTrafficControl() } else { airTrafficControlRequests += 1 }
+    }
     /// Where links and files from other apps open (D2): the Air Traffic Control rules and their
     /// Default row, which includes the Links setting for Little Arc (B24, B52).
     public lazy var externalLinkRouter: any ExternalLinkRouting = AirTrafficControlRouter(preferences: dependencies.preferences)

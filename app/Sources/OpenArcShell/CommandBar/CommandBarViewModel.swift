@@ -42,6 +42,9 @@ public final class CommandBarViewModel: ObservableObject {
 
     public private(set) var currentSpaceID: UUID?
     public private(set) var currentTabID: UUID?
+    /// An empty query lists only the help commands (the incognito window's bar). [06 §20.1]
+    /// observed (B61).
+    public var listsHelpOnlyWhenEmpty = false
 
     /// True while the field shows the unedited prefill from `open(mode: .currentTab, …)`. The result
     /// list then behaves as for an empty query (inferred; otherwise the viewed tab would match itself).
@@ -145,7 +148,8 @@ public final class CommandBarViewModel: ObservableObject {
             mode: mode,
             presentation: presentation,
             currentSpaceID: currentSpaceID,
-            currentTabID: currentTabID
+            currentTabID: currentTabID,
+            listsHelpOnlyWhenEmpty: listsHelpOnlyWhenEmpty
         )
     }
 

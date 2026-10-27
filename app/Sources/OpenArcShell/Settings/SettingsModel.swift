@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 import OpenArcModel
 import OpenArcSyncAPI
 import OpenArcPersistence
@@ -161,6 +162,9 @@ public final class SettingsModel: ObservableObject {
     @Published public var profilePendingDeletion: UUID?
     /// Text typed into the Shortcuts pane search field.
     @Published public var shortcutQuery = ""
+    /// The Links pane's Air Traffic Control sheet is showing (B52; opened from the command bar, B61).
+    @Published public var isAirTrafficControlShown = false
+    private var airTrafficControlRequests: AnyCancellable?
 
     /// Opens a folder in Finder. Injectable so tests do not open Finder.
     var revealInFinder: (URL) -> Void = { url in
@@ -169,6 +173,20 @@ public final class SettingsModel: ObservableObject {
 
     public init(shell: ShellModel) {
         self.shell = shell
+        // The command bar's "Air Traffic Control" row: Links pane, sheet open (B61). A request made
+        // before this model existed (it opened the Settings window) is still pending.
+        let controller = shell.controller
+        airTrafficControlRequests = controller.$airTrafficControlRequests.sink { [weak self, weak controller] count in
+            guard let controller, count > controller.handledAirTrafficControlRequests else { return }
+            controller.handledAirTrafficControlRequests = count
+            self?.showAirTrafficControl()
+        }
+    }
+
+    /// Shows the Links pane with the Air Traffic Control sheet.
+    public func showAirTrafficControl() {
+        selectedPane = .links
+        isAirTrafficControlShown = true
     }
 
     public var preferences: AppPreferences { shell.dependencies.preferences }
