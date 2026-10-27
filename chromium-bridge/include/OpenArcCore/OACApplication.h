@@ -138,6 +138,22 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// blocker then matches nothing.
 @property (nonatomic, readonly, copy, nullable) NSString *adBlockingRulesetVersion;
 
+/// Loads a newer filter ruleset without a restart (plan C19). `directory` holds `ruleset.pb`,
+/// `ruleset.version` and `ATTRIBUTION` (the shell has already verified the download's signature
+/// and hashes; this call trusts the directory). Chromium indexes a version it has not indexed
+/// before in the background and then publishes it to every renderer: page loads after that use
+/// it, pages already on screen keep their filter until reloaded. `adBlockingRulesetVersion`
+/// reports the new version from the moment the handler runs. The handler gets the loaded version,
+/// or nil and an error when the directory holds no ruleset or the engine is not running.
+///
+/// The engine also picks the download up at the next start: it loads
+/// `<userDataDirectory>/Open Arc Ad Block/Current` when that ruleset was built on the same day as
+/// the bundled one or later.
+- (void)loadAdBlockingRulesetFromDirectory:(NSURL *)directory
+                         completionHandler:(void (^)(NSString *_Nullable version,
+                                                     NSError *_Nullable error))completionHandler
+    NS_SWIFT_NAME(loadAdBlockingRuleset(from:completionHandler:));
+
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
 @end
