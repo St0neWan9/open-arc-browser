@@ -86,6 +86,7 @@ public actor CloudKitSyncStore: SyncStore {
     private let zone: CKRecordZone
     private let injectedStorage: (any SyncStateStorage)?
     private let driverFactory: SyncEngineDriverFactory
+    private let zoneDeleter: ZoneDeleter
     private let clock: @Sendable () -> Date
     private let retryScheduler: any RetryScheduling
     /// Whether this process may use the container. Creating a `CKContainer` without the iCloud
@@ -121,6 +122,7 @@ public actor CloudKitSyncStore: SyncStore {
             configuration: configuration,
             stateStorage: stateStorage,
             driverFactory: CKSyncEngineDriver.factory(containerIdentifier: configuration.containerIdentifier),
+            zoneDeleter: CKSyncEngineDriver.zoneDeleter(containerIdentifier: configuration.containerIdentifier),
             clock: { Date() },
             retryScheduler: TaskRetryScheduler(),
             containerCheck: CloudKitEntitlements.allowsContainer
@@ -131,6 +133,7 @@ public actor CloudKitSyncStore: SyncStore {
         configuration: Configuration,
         stateStorage: (any SyncStateStorage)?,
         driverFactory: @escaping SyncEngineDriverFactory,
+        zoneDeleter: @escaping ZoneDeleter = { _ in },
         clock: @escaping @Sendable () -> Date,
         retryScheduler: any RetryScheduling,
         containerCheck: @escaping @Sendable (String) -> Bool = { _ in true }
@@ -141,6 +144,7 @@ public actor CloudKitSyncStore: SyncStore {
         self.mapper = RecordMapper(zoneID: zoneID)
         self.injectedStorage = stateStorage
         self.driverFactory = driverFactory
+        self.zoneDeleter = zoneDeleter
         self.clock = clock
         self.retryScheduler = retryScheduler
         self.containerCheck = containerCheck
@@ -193,14 +197,19 @@ public actor CloudKitSyncStore: SyncStore {
             case .save(let id):
                 guard configuration.scope.includes(id.type) else { continue }
                 state.pending.add(id, .save)
-                driverChanges.append(.save(mapper.recordID(for: id)))
+                // Held records (D11) stay in our queue only; see `driverNextBatch`.
+                if !isHeld(id) { driverChanges.append(.save(mapper.recordID(for: id))) }
             case .delete(let id):
                 // Deletes are sent even for out-of-scope types so a scope change cleans up the server.
                 state.pending.add(id, .delete)
-                driverChanges.append(.delete(mapper.recordID(for: id)))
+                if !isHeld(id) { driverChanges.append(.delete(mapper.recordID(for: id))) }
             }
         }
-        guard !driverChanges.isEmpty else { return }
+        guard !driverChanges.isEmpty else {
+            await persist()
+            publishStatus()
+            return
+        }
         if let driver {
             if !state.zoneSaved { driver.addPendingZoneSave(zone) }
             driver.addPending(driverChanges)
@@ -254,6 +263,44 @@ public actor CloudKitSyncStore: SyncStore {
         broadcaster.current
     }
 
+    /// "Delete iCloud Data…" (D12). Stops the engine first, so nothing is uploaded into the zone
+    /// while it goes away, then deletes the whole zone (every record this app saved) and drops the
+    /// persisted sync state. Leaves the store stopped (`.disabled`); the app turns "Sync Sidebar"
+    /// off. The workspace itself is never touched: `SyncLocalDatabase.apply` is not called.
+    ///
+    /// Other devices see the zone deleted (`handleZonesDeleted`): they keep their local data and
+    /// drop their queues. Turning sync on again starts a fresh engine, and the app announces every
+    /// record (`needsFullSyncUpload`, Q12), which recreates the zone.
+    ///
+    /// On failure the error is rethrown and a store that was running is brought up again, its
+    /// state unchanged.
+    public func deleteServerData(database: any SyncLocalDatabase) async throws {
+        guard containerCheck(configuration.containerIdentifier) else {
+            throw CloudKitSyncStoreError.unavailable(.notConfigured)
+        }
+        let wasRunning = driver != nil
+        if let driver { await driver.cancel() }
+        driver = nil
+        inFlight.removeAll()
+        do {
+            try await zoneDeleter(zone.zoneID)
+        } catch {
+            SyncLog.logger.error("delete iCloud data failed: \(String(describing: error), privacy: .public)")
+            if wasRunning { try? await bringUpDriver() }
+            throw error
+        }
+        SyncLog.logger.info("deleted the iCloud zone and the local sync state")
+        let storage = self.storage ?? injectedStorage ?? LocalDatabaseSyncStateStorage(database: database)
+        state = PersistedSyncState()
+        state.deletedOwnZone = true
+        cycleFailure = nil
+        retryAttempt = 0
+        try? await storage.saveState(state.encoded())
+        self.database = nil
+        self.storage = nil
+        setPhase(.disabled)
+    }
+
     public nonisolated func statusUpdates() -> AsyncStream<SyncStatus> {
         broadcaster.stream()
     }
@@ -279,7 +326,7 @@ public actor CloudKitSyncStore: SyncStore {
         setPhase(reason.map { .unavailable($0) } ?? .idle)
 
         if !state.zoneSaved { driver.addPendingZoneSave(zone) }
-        let pending = state.pending.entries.map { entry -> DriverRecordChange in
+        let pending = state.pending.entries.filter { !isHeld($0.id) }.map { entry -> DriverRecordChange in
             let id = mapper.recordID(for: entry.id)
             return entry.operation == .save ? .save(id) : .delete(id)
         }
@@ -297,7 +344,42 @@ public actor CloudKitSyncStore: SyncStore {
     }
 
     private func publishStatus() {
-        broadcaster.publish(SyncStatus(phase: phase, lastSyncedAt: state.lastSyncedAt, pendingChangeCount: state.pending.count))
+        broadcaster.publish(SyncStatus(
+            phase: phase,
+            lastSyncedAt: state.lastSyncedAt,
+            pendingChangeCount: state.pending.count,
+            needsAppUpdate: state.newerRecords.values.contains { $0 > RecordSchema.currentVersion }
+        ))
+    }
+
+    // MARK: - Schema version guard (D11)
+
+    /// True if this build must not save or delete the record: its last seen server copy was
+    /// written by a newer sync schema, and rewriting it would drop or garble what that build
+    /// added. The local copy still takes the server's changes (merged as usual); local edits stay
+    /// queued and go up once an updated build runs.
+    private func isHeld(_ id: SyncRecordID) -> Bool {
+        (state.newerRecords[id.recordName] ?? 0) > RecordSchema.currentVersion
+    }
+
+    /// Notes the schema version of a server copy (fetched, or returned with a conflict).
+    private func noteServerVersion(of ck: CKRecord, id: SyncRecordID) {
+        let version = RecordMapper.schemaVersion(of: ck)
+        if version > RecordSchema.currentVersion {
+            if !isHeld(id) {
+                SyncLog.logger.info("schema guard: \(id.recordName, privacy: .public) has schema \(version, privacy: .public), this build \(RecordSchema.currentVersion, privacy: .public); not overwriting it")
+            }
+            state.newerRecords[id.recordName] = version
+        } else if state.newerRecords.removeValue(forKey: id.recordName) != nil {
+            releaseHeld(id)
+        }
+    }
+
+    /// A record is no longer held: hand its queued change back to the engine.
+    private func releaseHeld(_ id: SyncRecordID) {
+        guard let entry = state.pending.entry(for: id) else { return }
+        let ckID = mapper.recordID(for: id)
+        driver?.addPending([entry.operation == .save ? .save(ckID) : .delete(ckID)])
     }
 
     private var isAccountBlocked: Bool {
@@ -534,12 +616,18 @@ public actor CloudKitSyncStore: SyncStore {
         await applyDeferredRemoteChanges()
         var serverRecords: [SyncRecord] = []
         for ck in modified {
+            // The version is noted before decoding: a newer build's record may not decode here,
+            // and must still never be overwritten (D11).
+            if let id = mapper.syncRecordID(from: ck.recordID), !id.type.isLocalOnly {
+                noteServerVersion(of: ck, id: id)
+            }
             // Local-only records (Profile, B73) an older build uploaded are ignored.
             guard let record = try? mapper.decode(ck), !record.id.type.isLocalOnly else { continue }
             state.systemFields[record.id.recordName] = record.meta.backendSystemFields
             serverRecords.append(record)
         }
         let deletions = deleted.compactMap { mapper.syncRecordID(from: $0.recordID) }
+        for id in deletions { state.newerRecords.removeValue(forKey: id.recordName) }
         SyncLog.logger.info("fetched: modified [\(SyncLog.countsByType(serverRecords.map(\.id)), privacy: .public)] (\(modified.count - serverRecords.count, privacy: .public) skipped) deleted [\(SyncLog.countsByType(deletions), privacy: .public)]")
         await applyRemote(serverRecords: serverRecords, deletions: deletions)
     }
@@ -566,6 +654,8 @@ public actor CloudKitSyncStore: SyncStore {
     }
 
     private func keepPending(_ change: DriverRecordChange) {
+        // A record held by the schema guard (D11) stays in our queue only.
+        if let id = mapper.syncRecordID(from: change.recordID), isHeld(id) { return }
         driver?.addPending([change])
     }
 
@@ -651,8 +741,12 @@ public actor CloudKitSyncStore: SyncStore {
         for (id, serverCK) in conflicts {
             let generation = inFlight.removeValue(forKey: id)
             let ckID = mapper.recordID(for: id)
+            // The save was refused, so the server copy is intact. If a newer build wrote it, the
+            // merge below is applied locally and the resend is held (D11).
+            noteServerVersion(of: serverCK, id: id)
             guard let server = try? mapper.decode(serverCK) else {
-                // Undecodable server copy: overwrite it with ours on the next send.
+                // Undecodable server copy: overwrite it with ours on the next send, unless a newer
+                // build wrote it (then it is held and stays as it is).
                 state.systemFields[id.recordName] = RecordMapper.encodeSystemFields(of: serverCK)
                 keepPending(.save(ckID))
                 continue
@@ -690,7 +784,14 @@ public actor CloudKitSyncStore: SyncStore {
         state.systemFields.removeAll()
         state.zoneSaved = false
         state.zonePollToken = nil
+        state.newerRecords = [:]
         inFlight.removeAll()
+        if state.deletedOwnZone == true, reason != .encryptedDataReset {
+            // Our own "Delete iCloud Data…" (D12): the queue holds the full upload the app made
+            // when sync came back on. Keep it; it recreates the zone.
+            driver?.addPendingZoneSave(zone)
+            return
+        }
         switch reason {
         case .encryptedDataReset:
             // The server lost our encrypted data; upload everything we know about again.
@@ -750,7 +851,10 @@ extension CloudKitSyncStore: SyncEngineDriverDelegate {
         case .fetchedRecordChanges(let modified, let deleted):
             await handleFetched(modified: modified, deleted: deleted)
         case .sentZoneChanges(let saved, let failed):
-            if saved.contains(zone.zoneID) { state.zoneSaved = true }
+            if saved.contains(zone.zoneID) {
+                state.zoneSaved = true
+                state.deletedOwnZone = nil
+            }
             if let error = failed[zone.zoneID] {
                 noteFailure("Creating the iCloud zone failed: CloudKit error \(error.code.rawValue)")
                 switch CloudKitErrorPolicy.classify(error) {
@@ -798,6 +902,13 @@ extension CloudKitSyncStore: SyncEngineDriverDelegate {
                 // Never sent, in either direction (B73).
                 unsendable.append(change)
                 state.pending.remove(id)
+                continue
+            }
+            if isHeld(id) {
+                // Written by a newer build (D11): neither saved nor deleted by this one. The
+                // change stays in our queue (not the engine's, which would keep offering it) and
+                // goes up from an updated build, whose start hands the queue to its engine.
+                unsendable.append(change)
                 continue
             }
             switch change {

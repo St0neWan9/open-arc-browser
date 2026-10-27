@@ -157,6 +157,11 @@ protocol SyncEngineDriver: AnyObject, Sendable {
 /// Creates a driver. `engineState` is the last persisted state (nil for a fresh engine).
 typealias SyncEngineDriverFactory = @Sendable (_ engineState: Data?, _ delegate: any SyncEngineDriverDelegate) throws -> any SyncEngineDriver
 
+/// Deletes a zone, with every record in it, from the private database (D12 "Delete iCloud
+/// Data…"). Works without an engine, so it also runs while sync is off. A zone that does not
+/// exist counts as deleted.
+typealias ZoneDeleter = @Sendable (_ zoneID: CKRecordZone.ID) async throws -> Void
+
 // MARK: - CKSyncEngine adapter
 
 /// Production driver. Not covered by unit tests: it needs a signed app with the iCloud
@@ -187,6 +192,20 @@ final class CKSyncEngineDriver: SyncEngineDriver, CKSyncEngineDelegate, @uncheck
     static func factory(containerIdentifier: String) -> SyncEngineDriverFactory {
         { state, delegate in
             try CKSyncEngineDriver(containerIdentifier: containerIdentifier, engineState: state, delegate: delegate)
+        }
+    }
+
+    /// Production `ZoneDeleter`: one zone delete on the private database, outside CKSyncEngine.
+    /// The container is created only when called (creating it without the entitlement traps; the
+    /// store checks the entitlement first).
+    static func zoneDeleter(containerIdentifier: String) -> ZoneDeleter {
+        { zoneID in
+            let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
+            do {
+                _ = try await database.deleteRecordZone(withID: zoneID)
+            } catch let error as CKError where error.code == .zoneNotFound || error.code == .userDeletedZone {
+                // Already gone: nothing left to delete.
+            }
         }
     }
 

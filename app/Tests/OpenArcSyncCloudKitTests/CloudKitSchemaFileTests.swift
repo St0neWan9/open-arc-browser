@@ -85,13 +85,24 @@ final class CloudKitSchemaFileTests: XCTestCase {
             }
         }
         for type in SyncRecordType.allCases {
-            for spec in RecordSchema.fields(of: type) {
+            let legacyKeys = Set(RecordSchema.legacyFields(of: type).map(\.key))
+            for spec in RecordSchema.fields(of: type) where !legacyKeys.contains(spec.key) {
                 let label = "\(type.rawValue).\(spec.key)"
                 guard let actual = seen[type]?[spec.key] else {
                     XCTFail("\(label): no fixture writes a value; extend Fx so the type check covers it")
                     continue
                 }
                 XCTAssertEqual(schema[type.rawValue]?[spec.key]?.type, actual, "\(label): schema.ckdb type differs from the written value")
+            }
+            // D10: a legacy plain key is never written (always cleared) but still read, so it is
+            // declared with the plain form of its encrypted replacement's type.
+            for spec in RecordSchema.contentFields(of: type) {
+                guard let legacy = spec.legacy else { continue }
+                let label = "\(type.rawValue).\(legacy.key)"
+                let replacement = try XCTUnwrap(schema[type.rawValue]?[spec.key]?.type, label)
+                XCTAssertTrue(spec.encrypted, "\(label): only a plain key moves to an encrypted one")
+                XCTAssertEqual(schema[type.rawValue]?[legacy.key]?.type,
+                               replacement.replacingOccurrences(of: "ENCRYPTED ", with: ""), label)
             }
         }
     }

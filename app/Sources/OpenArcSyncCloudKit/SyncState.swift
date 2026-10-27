@@ -124,6 +124,22 @@ struct PersistedSyncState: Codable, Hashable, Sendable {
     /// separate from the engine's tokens. nil: the next poll reads the whole zone. Optional, so a
     /// state saved before it existed still decodes. (B86)
     var zonePollToken: Data?
+    /// Record name → sync schema version (`MetaFields.schemaVersion`) of its last seen server
+    /// copy, kept only for copies newer than the build that saw them. A build reads such records
+    /// but never saves or deletes them while the version is above its own
+    /// `RecordSchema.currentVersion` (D11); after an app update the same entries no longer hold.
+    /// Optional, so a state saved before it existed still decodes.
+    var newerRecordVersions: [String: Int64]?
+    /// Set by "Delete iCloud Data…" (D12) until the zone is saved again: a zone deletion the
+    /// engine reports meanwhile is our own, not another device's, and must not drop the full
+    /// upload queued when sync is turned back on. Optional, so older states still decode.
+    var deletedOwnZone: Bool?
+
+    /// `newerRecordVersions`, empty when unset.
+    var newerRecords: [String: Int64] {
+        get { newerRecordVersions ?? [:] }
+        set { newerRecordVersions = newValue.isEmpty ? nil : newValue }
+    }
 
     static func decode(_ data: Data?) -> PersistedSyncState {
         guard let data,

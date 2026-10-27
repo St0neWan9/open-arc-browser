@@ -152,9 +152,16 @@ struct RecordMapper: Sendable {
         w.set(MetaFields.version, meta.version)
         w.set(MetaFields.isTombstone, Int64(meta.isTombstone ? 1 : 0))
         w.set(MetaFields.deletedAt, meta.deletedAt)
+        w.set(MetaFields.schemaVersion, RecordSchema.currentVersion)
         for group in RecordSchema.groups(of: type) {
             w.set(MetaFields.groupTime(group), meta.fieldGroupModifiedAt[group])
         }
+    }
+
+    /// The sync schema version of the build that last saved `ck` (D11). A record without the key
+    /// was saved before the version existed: version 1.
+    static func schemaVersion(of ck: CKRecord) -> Int64 {
+        (ck[MetaFields.schemaVersion.key] as? Int64) ?? 1
     }
 
     // MARK: - Decoding
@@ -324,7 +331,8 @@ struct RecordMapper: Sendable {
     }
 }
 
-/// Writes one field to the plain or encrypted side of a record, as the schema says.
+/// Writes one field to the plain or encrypted side of a record, as the schema says. A field that
+/// replaced a plain key (D10) also clears that key, so the plain copy leaves the server.
 private struct FieldWriter {
     let record: CKRecord
 
@@ -334,15 +342,21 @@ private struct FieldWriter {
         } else {
             record[field.key] = value
         }
+        if let legacyKey = field.legacyKey {
+            record[legacyKey] = nil as T?
+        }
     }
 }
 
-/// Reads one field from the plain or encrypted side of a record, as the schema says.
+/// Reads one field from the plain or encrypted side of a record, as the schema says. A value under
+/// the field's legacy plain key (D10) wins: only a build from before the migration writes it, and
+/// such a build never updates the new key.
 private struct FieldReader {
     let record: CKRecord
 
     func optional<T: CKRecordValueProtocol>(_ field: FieldSpec) -> T? {
-        field.encrypted ? record.encryptedValues[field.key] : record[field.key]
+        if let legacyKey = field.legacyKey, let value = record[legacyKey] as? T { return value }
+        return field.encrypted ? record.encryptedValues[field.key] : record[field.key]
     }
 
     func required<T: CKRecordValueProtocol>(_ field: FieldSpec) throws -> T {

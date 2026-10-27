@@ -542,6 +542,27 @@ final class FakeDriverFactory: @unchecked Sendable {
     }
 }
 
+// MARK: - Zone deleter
+
+/// Records "Delete iCloud Data…" zone deletions (D12); can be told to fail.
+// @unchecked: every mutable stored property is read and written only under `lock` (`Mutex` needs macOS 15).
+final class FakeZoneDeleter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _deleted: [CKRecordZone.ID] = []
+    private var _failures: [any Error] = []
+
+    var deleted: [CKRecordZone.ID] { lock.withLock { _deleted } }
+    func failNext(_ error: any Error) { lock.withLock { _failures.append(error) } }
+
+    var deleter: ZoneDeleter {
+        { [self] zoneID in
+            let failure: (any Error)? = lock.withLock { _failures.isEmpty ? nil : _failures.removeFirst() }
+            if let failure { throw failure }
+            lock.withLock { _deleted.append(zoneID) }
+        }
+    }
+}
+
 // MARK: - Store harness
 
 /// A store wired to fakes: fixed clock, in-memory state, fake scheduler and driver.
@@ -551,6 +572,7 @@ struct StoreHarness {
     let storage: InMemoryStateStorage
     let scheduler: FakeRetryScheduler
     let drivers: FakeDriverFactory
+    let zoneDeleter: FakeZoneDeleter
 
     init(
         records: [SyncRecord] = [],
@@ -563,10 +585,12 @@ struct StoreHarness {
         self.storage = storage
         scheduler = FakeRetryScheduler()
         drivers = FakeDriverFactory(configure: configureDriver)
+        zoneDeleter = FakeZoneDeleter()
         store = CloudKitSyncStore(
             configuration: CloudKitSyncStore.Configuration(scope: scope),
             stateStorage: storage,
             driverFactory: drivers.factory,
+            zoneDeleter: zoneDeleter.deleter,
             clock: { Fx.t(1000) },
             retryScheduler: scheduler,
             containerCheck: { _ in isEntitled }
