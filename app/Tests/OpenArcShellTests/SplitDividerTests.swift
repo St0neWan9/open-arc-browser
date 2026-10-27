@@ -148,7 +148,7 @@ final class SplitDividerTests: XCTestCase {
         let (model, base, new) = try await splitModel()
         let layoutID = try XCTUnwrap(model.activeSplitLayout?.id)
         let divider = try XCTUnwrap(model.splitDividerFrames(in: shown).first)
-        model.dragSplitDivider(divider, pointer: 464)
+        model.dragSplitDivider(divider, pointer: 464, in: shown)
         XCTAssertEqual(model.splitPaneFrames(in: shown)[0].frame.width, 459, accuracy: 1e-6, "live")
         XCTAssertEqual(model.workspace.splits[layoutID]?.root, model.activeSplitLayout?.root)
         guard case .split(_, let before)? = model.workspace.splits[layoutID]?.root else { return XCTFail() }
@@ -167,13 +167,26 @@ final class SplitDividerTests: XCTestCase {
     }
 
     /// Releasing without moving stores nothing (a click or double-click on the gap does nothing,
-    /// [06 §21.6] observed); an expanded split has no dividers.
-    func testNoDragNoChangeAndNoDividersWhenExpanded() async throws {
+    /// [06 §21.6] observed).
+    func testNoDragNoChange() async throws {
         let (model, _, _) = try await splitModel()
         let before = model.workspace
         model.endSplitDividerDrag()
         XCTAssertEqual(model.workspace, before)
-        model.toggleExpandCurrentSplit()
-        XCTAssertTrue(model.splitDividerFrames(in: shown).isEmpty)
+    }
+
+    /// After Expand Current Split ([06 §21.6] observed) the divider sits next to the 220 pt pane
+    /// and stays draggable (inferred); releasing stores the dragged ratio and ends the expansion.
+    func testExpandedSplitDragStoresRatio() async throws {
+        let (model, _, _) = try await splitModel()
+        let layoutID = try XCTUnwrap(model.activeSplitLayout?.id)
+        model.expandCurrentSplit()
+        let divider = try XCTUnwrap(model.splitDividerFrames(in: shown).first)
+        XCTAssertEqual(divider.frame.minX, 220, accuracy: 1e-9)
+        model.dragSplitDivider(divider, pointer: 464, in: shown)
+        model.endSplitDividerDrag()
+        XCTAssertNil(model.splitExpansion)
+        guard case .split(_, let after)? = model.workspace.splits[layoutID]?.root else { return XCTFail() }
+        XCTAssertEqual(after[0].fraction, 459.0 / 1624.0, accuracy: 1e-9)
     }
 }

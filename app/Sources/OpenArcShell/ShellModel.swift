@@ -52,8 +52,9 @@ public final class ShellModel: ObservableObject {
     /// The split pane (its tab id) that hosts the command bar; nil when the bar floats over the
     /// window. [06 §5, §6] observed.
     @Published public internal(set) var commandBarPaneTabID: UUID?
-    /// "Expand Current Split" is on: only the focused pane shows. inferred.
-    @Published public internal(set) var isSplitExpanded = false
+    /// View ▸ Expand Current Split is in effect (B79, [06 §21.6] observed): the expanded pane is
+    /// drawn maximal and the others at the 220 pt minimum. Window-local, not stored.
+    @Published public internal(set) var splitExpansion: SplitExpansion?
     /// The split tree while a divider is being dragged; stored on release. B58.
     @Published public internal(set) var splitResizePreview: SplitResizePreview?
     /// Sidebar visibility (View ▸ Hide Sidebar). [01 §View] observed.
@@ -431,7 +432,7 @@ public final class ShellModel: ObservableObject {
         case .clearCookiesAndRefresh: clearCookiesAndRefresh()
         case .closeSplitPane: closeSplitPane()
         case .separateFromSplit: separatePageFromSplitView()
-        case .expandSplit: toggleExpandCurrentSplit()
+        case .expandSplit: expandCurrentSplit()
         // Spaces
         case .newSpace: spaceFlow.beginCreate()
         case .editTheme: if let id = selectedSpaceID { spaceFlow.beginEditTheme(spaceID: id) }

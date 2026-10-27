@@ -48,7 +48,7 @@ struct SplitWebArea: View {
                         dividerStart: divider.axis == .horizontal
                             ? divider.frame.minX - divider.splitFrame.minX
                             : divider.frame.minY - divider.splitFrame.minY,
-                        onDrag: { model.dragSplitDivider(divider, pointer: $0) },
+                        onDrag: { model.dragSplitDivider(divider, pointer: $0, in: container) },
                         onEnd: { model.endSplitDividerDrag() }
                     )
                 }

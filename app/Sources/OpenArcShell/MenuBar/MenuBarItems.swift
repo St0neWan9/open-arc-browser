@@ -128,7 +128,9 @@ struct ViewMenuItems: View {
         }
         .disabled(!hasWindow)
         // ⇧⌘D, title Hide Toolbar while shown [06 §17.1] observed. Global: every window follows. B43.
+        // Disabled while a split is shown [06 §21.6] observed (B79).
         WebToolbarMenuItem(settings: model.webToolbar)
+            .disabled(!model.canToggleWebToolbar)
         // Hides the current Space's pinned rows in this window (B72, inferred behavior).
         Button(model.collapsePinnedMenuTitle) { model.sidebar.toggleCollapsePinned() }
             .disabled(!hasWindow || !(model.sidebar.canCollapsePinned || model.sidebar.isPinnedAreaCollapsed))
@@ -153,7 +155,8 @@ struct ViewMenuItems: View {
                 .disabled(!model.hasActiveSplit)
             Button("Separate Page from Split View") { model.separatePageFromSplitView() }
                 .disabled(!model.hasActiveSplit)
-            Button("Expand Current Split") { model.toggleExpandCurrentSplit() }
+            // Current pane maximal, the others 220 pt; again changes nothing. [06 §21.6] observed (B79).
+            Button("Expand Current Split") { model.expandCurrentSplit() }
                 .disabled(!model.hasActiveSplit)
             Divider()
             // Indented: Zoom In / Zoom Out get the system magnifier icons (`MenuBarAdjuster`);
