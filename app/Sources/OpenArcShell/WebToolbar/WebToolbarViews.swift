@@ -268,23 +268,8 @@ struct WebToolbarSplitMenu: View {
     }
 }
 
-extension View {
-    /// Anchors the Site Control Center bubble to this view: below it, centered, arrow up.
-    /// [07 §12] observed (12 pt gap, centered on the anchor); [06 §17.3] observed that in the
-    /// toolbar it points at the site controls button.
-    func siteControlsBubble(_ model: SiteControlsModel, isPresented: Bool, palette: ThemePalette) -> some View {
-        floatingBubble(isPresented: isPresented) {
-            FloatingBubbleRequest(
-                placement: .attached(.below),
-                style: FloatingBubbleStyle(width: SiteControlsLocalTokens.width, height: nil,
-                                           cornerRadius: SiteControlsLocalTokens.cornerRadius,
-                                           tint: palette.floatingPanelBackground, isDark: palette.isDark, usesGradient: true),
-                content: AnyView(SiteControlsView(model: model).environment(\.colorScheme, palette.isDark ? .dark : .light)),
-                onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
-            )
-        }
-    }
-}
+// `siteControlsBubble(_:isPresented:palette:)` lives with the Site Control Center
+// (SiteControls/SiteControlsView.swift); the URL box icon anchors the same bubble.
 
 // MARK: - Single page
 
