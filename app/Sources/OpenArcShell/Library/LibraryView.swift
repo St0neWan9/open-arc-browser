@@ -81,6 +81,14 @@ struct LibraryRail: View {
     @ObservedObject var model: ShellModel
     @ObservedObject var library: LibraryModel
     let palette: ThemePalette
+    @Environment(\.windowSurface) private var surface
+
+    /// Selected section block: window × 0.90; on a see-through window the same as a 10 % black
+    /// layer (B64, [07 §8.4]).
+    private var railSelectedFill: RGBAColor {
+        surface.isTranslucent ? RGBAColor(hex: 0x000000, alpha: 1 - LibraryLocalTokens.railSelectedShade)
+            : ThemeDerivation.shade(palette.windowBackground, by: LibraryLocalTokens.railSelectedShade)
+    }
 
     var body: some View {
         let text = palette.primaryText.swiftUI
@@ -129,7 +137,7 @@ struct LibraryRail: View {
         .frame(width: LibraryLocalTokens.railItemSize.width, height: LibraryLocalTokens.railItemSize.height)
         .background(
             RoundedRectangle(cornerRadius: LibraryLocalTokens.railItemCornerRadius, style: .continuous)
-                .fill(isSelected ? ThemeDerivation.shade(palette.windowBackground, by: LibraryLocalTokens.railSelectedShade).swiftUI : .clear)
+                .fill(isSelected ? railSelectedFill.swiftUI : .clear)
         )
         .contentShape(Rectangle())
         .onTapGesture { library.open(section) }
@@ -146,6 +154,7 @@ struct LibraryListColumn: View {
     @ObservedObject var library: LibraryModel
     let section: LibrarySection
     let palette: ThemePalette
+    @Environment(\.windowSurface) private var surface
 
     var body: some View {
         let text = palette.primaryText.swiftUI
@@ -174,7 +183,7 @@ struct LibraryListColumn: View {
             .frame(height: LibraryLocalTokens.searchFieldHeight)
             .background(
                 RoundedRectangle(cornerRadius: LibraryLocalTokens.searchFieldCornerRadius)
-                    .fill(palette.controlFill.swiftUI)
+                    .fill(palette.windowFills(on: surface).controlFill.swiftUI)
             )
             .accessibilityIdentifier("openarc.library.search")
             if section.hasFilterButton {

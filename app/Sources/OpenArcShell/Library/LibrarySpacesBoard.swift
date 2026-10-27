@@ -51,6 +51,7 @@ struct LibraryBoardColumnView: View {
     @ObservedObject var sidebar: SidebarViewModel
     @ObservedObject var library: LibraryModel
     let column: LibraryBoardColumn
+    @Environment(\.windowSurface) private var surface
 
     /// A tab row's favicon; split groups show their first member's. C9.
     private func iconData(_ item: SidebarItemModel) -> Data? {
@@ -81,7 +82,8 @@ struct LibraryBoardColumnView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: LibraryLocalTokens.boardColumnCornerRadius, style: .continuous)
-                .fill(palette.windowBackground.swiftUI)
+                // On a see-through window the window under it already shows this color (B64).
+                .fill(palette.sidebarBackground(on: surface))
         )
         .opacity(library.draggingSpaceID == column.id ? SidebarLocalTokens.draggedRowOpacity : 1)
         .onDrop(of: [LibraryBoardDragPayload.columnType], delegate: LibraryBoardDropDelegate(library: library, target: column.id))

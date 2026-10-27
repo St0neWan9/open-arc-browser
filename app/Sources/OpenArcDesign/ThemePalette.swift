@@ -12,8 +12,10 @@ public enum ResolvedAppearance: String, Hashable, Sendable, CaseIterable {
 /// The derivation follows docs/arc-spec/07-design-system.md §8 (E11, refitted by E12 / B38 / B46 and
 /// checked on lossless captures by E8, §8.4) (`ThemeDerivation`). The rules are inferred; the sample
 /// values they reproduce are observed. Arc's window is slightly translucent ([07 §8.4]: ≈ 11 % light /
-/// 19 % dark of the blurred desktop shows through); these opaque colors match Arc over a mid-gray
-/// desktop (the E12 / E8 reference), not over every wallpaper.
+/// 19 % dark of the blurred desktop shows through); the opaque colors here are what the window
+/// shows over the mid-gray reference desktop (the E12 / E8 reference). The window paints
+/// `windowTint` at `windowOpacity` over a blur of the desktop and draws its controls as
+/// `windowLayers` on top (B64, `WindowTranslucency`), so over that reference it shows these colors.
 /// Window, sidebar, controls and separators are one color family per Space [07 §8] observed; the
 /// command bar, sheets and menus do not follow the theme color, only light or dark [07 §8] observed.
 public struct ThemePalette: Hashable, Sendable {
@@ -94,6 +96,16 @@ public struct ThemePalette: Hashable, Sendable {
     /// `Theme.grain` clamped to 0...1: strength of the noise overlay on the window background.
     /// 0 = none. [06 §2] wavy slider; the meaning is inferred.
     public var grain: Double = 0
+
+    // MARK: B64 additions (window translucency, [07 §8.4])
+
+    /// Opacity of the window tint over the blurred desktop: 0.886 light, 0.812 dark ([07 §8.4]
+    /// observed); 1 = an opaque window (no desktop shows through).
+    public var windowOpacity: Double = 1
+    /// Sidebar controls, separators and the selected row as layers over the window, so the desktop
+    /// shows through them like through the window ([07 §8.4]). Over the opaque window color each
+    /// gives `controlFill`, `separator`, `selectedTabFill` and `scrollEdgeLine`.
+    public var windowLayers: WindowLayers = .derived(lightInk: false)
 
     // MARK: B16 additions (E11 design system, 07)
 
@@ -489,6 +501,9 @@ public enum ThemeDerivation {
         palette.scrollEdgeLine = separator
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
         palette.webPanelBackground = contentBackground(theme, appearance: appearance)
+        // The see-through window [07 §8.4]: content, command bar and bubbles stay opaque.
+        palette.windowOpacity = WindowTranslucency.opacity(for: appearance)
+        palette.windowLayers = .derived(lightInk: lightInk)
         palette.selectedTabText = lightInk ? withAlpha(white, inkOpacity.rowTitle) : rowText
         palette.dropTargetFill = dropTargetFill(window: window, isDark: isDark)
         palette.splitPreviewFill = splitPreviewFill(window: window, isDark: isDark)

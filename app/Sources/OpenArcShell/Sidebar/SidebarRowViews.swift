@@ -60,6 +60,7 @@ struct SidebarTabRowView: View {
     let depth: Int
     let area: SidebarArea
 
+    @Environment(\.windowSurface) private var surface
     @State private var isHovering = false
     @State private var renameText = ""
     @FocusState private var renameFocused: Bool
@@ -144,7 +145,7 @@ struct SidebarTabRowView: View {
     }
 
     private func fill(isSelected: Bool, palette: ThemePalette) -> Color {
-        if isSelected { return palette.selectedTabFill.swiftUI }
+        if isSelected { return palette.windowFills(on: surface).selectedRowFill.swiftUI }
         if isHovering { return Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) }
         return .clear
     }
@@ -195,6 +196,7 @@ struct SidebarSplitGroupRowView: View {
     let depth: Int
     let area: SidebarArea
 
+    @Environment(\.windowSurface) private var surface
     @State private var isHovering = false
 
     var body: some View {
@@ -248,7 +250,7 @@ struct SidebarSplitGroupRowView: View {
     }
 
     private func fill(isSelected: Bool, palette: ThemePalette) -> Color {
-        if isSelected { return palette.selectedTabFill.swiftUI }
+        if isSelected { return palette.windowFills(on: surface).selectedRowFill.swiftUI }
         if isHovering { return Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) }
         return .clear
     }
@@ -338,6 +340,7 @@ struct SidebarDividerRowView: View {
     @ObservedObject var viewModel: SidebarViewModel
     let canClear: Bool
     let isSidebarHovered: Bool
+    @Environment(\.windowSurface) private var surface
 
     var body: some View {
         let palette = viewModel.palette
@@ -347,7 +350,7 @@ struct SidebarDividerRowView: View {
         let showsClear = isSidebarHovered && canClear
         ZStack(alignment: .leading) {
             Rectangle()
-                .fill(palette.separator.swiftUI)
+                .fill(palette.windowFills(on: surface).separator.swiftUI)
                 .frame(width: showsClear ? lineWidth - SidebarLocalTokens.clearButtonWidth : lineWidth, height: CGFloat(s.dividerLineThickness))
                 .offset(x: CGFloat(s.dividerLineLeading))
             if showsClear {
