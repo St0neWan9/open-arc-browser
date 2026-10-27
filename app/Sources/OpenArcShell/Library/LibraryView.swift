@@ -200,6 +200,8 @@ struct LibraryListColumn: View {
         case .media:
             if library.isMediaIntroVisible {
                 LibraryMediaIntroCard(library: library, palette: palette)
+            } else {
+                LibraryMediaList(library: library, media: library.media, palette: palette)
             }
         case .downloads:
             LibraryDownloadsList(library: library, downloads: library.downloads, palette: palette)
