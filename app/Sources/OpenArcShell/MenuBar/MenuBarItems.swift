@@ -15,26 +15,26 @@ struct FileMenuItems: View {
 
     var body: some View {
         Button("New Tab…") { model.presentCommandBar(.newTab) }
-            .keyboardShortcut("t", modifiers: .command)
+            .appShortcut(.newTab)
             .disabled(!hasWindow)
         Button("New Window") { openBrowserWindow(.newWindow) }
-            .keyboardShortcut("n", modifiers: .command)
+            .appShortcut(.newWindow)
         Button("Blank Window") { openBrowserWindow(.blank) }
-            .keyboardShortcut("n", modifiers: [.control, .command])
+            .appShortcut(.blankWindow)
         Button("New Incognito Window") { openBrowserWindow(.incognito) }
-            .keyboardShortcut("n", modifiers: [.shift, .command])
+            .appShortcut(.newIncognitoWindow)
         Button("New Little Arc Window") {
             // Keys typed before the new window has the keyboard wait for it (B29).
             NewWindowTypeAhead.shared.begin(.littleArc)
             openWindow(id: LittleArcScene.id, value: model.controller.issueLittleArcWindowID())
         }
-        .keyboardShortcut("n", modifiers: [.option, .command])
+        .appShortcut(.newLittleArcWindow)
         Button("Restore Last Closed Tab") { model.sidebar.restoreLastClosedTab() }
-            .keyboardShortcut("t", modifiers: [.shift, .command])
+            .appShortcut(.restoreLastClosedTab)
             .disabled(!hasWindow || !model.sidebar.canRestoreLastClosedTab)
         Divider()
         Button("Open Command Bar") { model.presentCommandBar(.currentTab) }
-            .keyboardShortcut("l", modifiers: .command)
+            .appShortcut(.openCommandBar)
             .disabled(!hasWindow)
         Divider()
         // The New Profile sheet ([06 §16.3] observed steps). Not in an incognito window (inferred). B72.
@@ -42,12 +42,12 @@ struct FileMenuItems: View {
             .disabled(!hasWindow || model.isIncognito)
         // ⌃⇧E [02] observed. B56.
         Button("New Easel") { model.newEasel() }
-            .keyboardShortcut("e", modifiers: [.control, .shift])
+            .appShortcut(.newEasel)
             .disabled(!hasWindow || !model.canCreateEasel)
         Divider()
         // Closes whichever window is key (browser, Little Arc or Settings). ⇧⌘W [02] observed.
         Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
-            .keyboardShortcut("w", modifiers: [.shift, .command])
+            .appShortcut(.closeWindow)
     }
 
     /// Opens a browser window from the menu, on the key window's Space (inferred).
@@ -70,7 +70,7 @@ struct FilePageMenuItems: View {
         Button("Share…") { model.shareCurrentPage() }
             .disabled(!hasWindow || model.sidebar.selectedURL == nil)
         Button("Capture…") { model.beginRegionCapture() }
-            .keyboardShortcut("2", modifiers: [.shift, .command])
+            .appShortcut(.capture)
             .disabled(!hasWindow || !model.canCapturePage)
         Button("Capture Full Page") { model.captureFullPage() }
             .disabled(!hasWindow || !model.canCapturePage)
@@ -79,7 +79,7 @@ struct FilePageMenuItems: View {
         Button("Save Page As") { model.savePageAs() }
             .disabled(!hasWindow || !model.canRunPageCommands)
         Button("Print") { model.printPage() }
-            .keyboardShortcut("p", modifiers: .command)
+            .appShortcut(.print)
             .disabled(!hasWindow || !model.canRunPageCommands)
     }
 }
@@ -95,18 +95,18 @@ struct EditCopyURLMenuItems: View {
 
     var body: some View {
         Button("Copy URL") { model.copySelectedURL() }
-            .keyboardShortcut("c", modifiers: [.shift, .command])
+            .appShortcut(.copyURL)
             .disabled(!hasWindow || model.sidebar.selectedURL == nil)
         Button("Copy URL as Markdown") { model.copySelectedURLAsMarkdown() }
-            .keyboardShortcut("c", modifiers: [.option, .shift, .command])
+            .appShortcut(.copyURLAsMarkdown)
             .disabled(!hasWindow || model.sidebar.selectedURL == nil)
         Button("Copy URL as Quote") { model.copySelectedURLAsQuote() }
-            .keyboardShortcut("c", modifiers: [.control, .shift, .command])
+            .appShortcut(.copyURLAsQuote)
             .disabled(!hasWindow || model.sidebar.selectedURL == nil)
         // Pastes into the page as plain text. The menu bar runs our command, so it reaches the
         // page even when the engine's web view, not a text view of ours, has the keyboard.
         Button("Paste and Match Style") { model.pasteAndMatchStyle() }
-            .keyboardShortcut("v", modifiers: [.option, .shift, .command])
+            .appShortcut(.pasteAndMatchStyle)
             .disabled(!hasWindow || !model.canRunPageCommands)
     }
 }
@@ -124,7 +124,7 @@ struct ViewMenuItems: View {
         Group {
             // ⌘S toggles the sidebar. [02 §tabs] observed 2026-10-25.
             Button(model.sidebarToggleTitle) { model.toggleSidebar() }
-                .keyboardShortcut("s", modifiers: .command)
+                .appShortcut(.toggleSidebar)
         }
         .disabled(!hasWindow)
         // ⇧⌘D, title Hide Toolbar while shown [06 §17.1] observed. Global: every window follows. B43.
@@ -138,20 +138,20 @@ struct ViewMenuItems: View {
         Group {
             // ⌘. [01 §菜单项图标与缩进] view-crop.png observed.
             Button("Stop Loading") { model.sidebar.reloadOrStop() }
-                .keyboardShortcut(".", modifiers: .command)
+                .appShortcut(.stopLoading)
                 .disabled(model.sidebar.reloadMode != .stop)
             Button("Refresh the Page") { model.sidebar.reloadOrStop() }
-                .keyboardShortcut("r", modifiers: .command)
+                .appShortcut(.reload)
                 .disabled(model.selectedTabID == nil)
             Button("Force Refresh the Page") { model.forceReload() }
-                .keyboardShortcut("r", modifiers: [.shift, .command])
+                .appShortcut(.forceReload)
                 .disabled(model.selectedLiveTab == nil)
             Divider()
             Button("Add Split View") { model.addSplitView() }
-                .keyboardShortcut("=", modifiers: [.control, .shift])
+                .appShortcut(.addSplitView)
             // Available only while a split exists. ⌃⇧- [02 §split] observed.
             Button("Close this Split Pane") { model.closeSplitPane() }
-                .keyboardShortcut("-", modifiers: [.control, .shift])
+                .appShortcut(.closeSplitPane)
                 .disabled(!model.hasActiveSplit)
             Button("Separate Page from Split View") { model.separatePageFromSplitView() }
                 .disabled(!model.hasActiveSplit)
@@ -162,13 +162,13 @@ struct ViewMenuItems: View {
             // Indented: Zoom In / Zoom Out get the system magnifier icons (`MenuBarAdjuster`);
             // Zoom to Actual Size has none ([01 §菜单项图标与缩进] observed).
             Button("Zoom to Actual Size") { model.resetZoom() }
-                .keyboardShortcut("0", modifiers: .command)
+                .appShortcut(.actualSize)
                 .disabled(!model.canResetZoom)
             Button("Zoom In") { model.zoomIn() }
-                .keyboardShortcut("+", modifiers: .command)
+                .appShortcut(.zoomIn)
                 .disabled(!model.canZoomIn)
             Button("Zoom Out") { model.zoomOut() }
-                .keyboardShortcut("-", modifiers: .command)
+                .appShortcut(.zoomOut)
                 .disabled(!model.canZoomOut)
         }
         .disabled(!hasWindow)
@@ -204,9 +204,9 @@ struct SpacesMenuItems: View {
                 .disabled(model.selectedSpaceID == nil)
             Divider()
             Button("Next Space") { model.sidebar.stepSpace(by: 1) }
-                .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
+                .appShortcut(.nextSpace)
             Button("Previous Space") { model.sidebar.stepSpace(by: -1) }
-                .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
+                .appShortcut(.previousSpace)
             Divider()
             // One item per Space; the current one has a check, and each shows the Space's own icon
             // before its name ([01 §菜单项图标与缩进] observed; a Space without an icon shows none).
@@ -232,26 +232,26 @@ struct TabsMenuItems: View {
     var body: some View {
         Group {
             Button("New Tab…") { model.presentCommandBar(.newTab) }
-                .keyboardShortcut("t", modifiers: .command)
+                .appShortcut(.newTab)
             // tabs-crop.png observed "Pin Tab"; "Unpin Tab" for a pinned tab [06 §16.2] observed.
             Button(model.pinMenuTitle) { if let id = model.selectedTabID { model.sidebar.togglePin(id) } }
-                .keyboardShortcut("d", modifiers: .command)
+                .appShortcut(.togglePin)
                 .disabled(model.selectedTabID == nil)
             Button("New Folder…") { model.sidebar.requestNewFolder() }
             Divider()
             Button("Next Tab") { model.sidebar.stepTab(by: 1) }
-                .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+                .appShortcut(.nextTab)
             Button("Previous Tab") { model.sidebar.stepTab(by: -1) }
-                .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+                .appShortcut(.previousTab)
             // ⌃Space [02 §标签与侧边栏] observed ("Reveal Current Tab"). B72.
             Button("Reveal Tab in Sidebar") { model.revealSelectedTabInSidebar() }
-                .keyboardShortcut(.space, modifiers: .control)
+                .appShortcut(.revealCurrentTab)
                 .disabled(model.selectedTabID == nil)
             // The three-item split submenu of [01 §Tabs] is not built: its title and items were not
             // recorded (`MenuBarCatalog.omittedItems`).
             Divider()
             Button("Clear Today") { model.sidebar.clearToday() }
-                .keyboardShortcut("k", modifiers: [.shift, .command])
+                .appShortcut(.clearToday)
             // No key ([02 §Space] observed). B72.
             Button("Reset all tabs in this Space") { model.sidebar.resetAllPinnedTabsInSpace() }
                 .disabled(!model.sidebar.canResetPinnedTabs)
@@ -277,7 +277,7 @@ struct SpaceMenuItem: View {
             }
         }
         if number <= 9 {
-            toggle.keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .control)
+            toggle.appShortcut(.goToSpace, number - 1)
         } else {
             toggle
         }
@@ -363,8 +363,10 @@ struct PrivacyPolicyMenuItem: View {
     }
 }
 
-/// Shortcuts in [02] that no [01] menu lists: Archive Tab ⌘W, Go to Sidebar Item ⌘1…⌘9, Open
-/// Extensions ⌘E. They sit in a menu the menu bar hides (`MenuBarAdjuster`); the keys still work.
+/// Shortcuts in [02] that no [01] menu lists (plan Q16: keyboard-only, like Arc): Archive Tab ⌘W,
+/// Go to Sidebar Item ⌘1…⌘9, Open Extensions ⌘E, and the [02] aliases of visible items (plan B85):
+/// ⌘} / ⌘{ Next / Previous Tab, ⌘← / ⌘→ Go Back / Go Forward, F12 Developer Tools. They sit in a
+/// menu the menu bar hides (`MenuBarAdjuster`); the keys still work. Keys from `ShortcutCatalog`.
 struct KeyOnlyMenuItems: View {
     @ObservedObject var model: ShellModel
     let hasWindow: Bool
@@ -372,19 +374,75 @@ struct KeyOnlyMenuItems: View {
     var body: some View {
         Group {
             Button("Archive Tab") { if let id = model.selectedTabID { model.sidebar.closeOrUnloadTab(id) } }
-                .keyboardShortcut("w", modifiers: .command)
+                .appShortcut(.archiveTab)
                 .disabled(model.selectedTabID == nil)
-            ForEach(1...9, id: \.self) { number in
-                Button(number == 9 ? "Go to Last Sidebar Item" : "Go to Sidebar Item \(number)") {
-                    model.sidebar.goToSidebarItem(number: number)
-                }
-                .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
+            ForEach(1...8, id: \.self) { number in
+                Button("Go to Sidebar Item \(number)") { model.sidebar.goToSidebarItem(number: number) }
+                    .appShortcut(.goToSidebarItem, number - 1)
             }
+            Button("Go to Last Sidebar Item") { model.sidebar.goToSidebarItem(number: 9) }
+                .appShortcut(.goToLastSidebarItem)
             Button("Open Extensions") { model.openExtensions() }
-                .keyboardShortcut("e", modifiers: .command)
+                .appShortcut(.openExtensions)
                 .disabled(model.selectedTabID == nil || model.isIncognito)
+            // Aliases: the visible items' commands under the [02] alternative keys.
+            Button("Next Tab") { model.sidebar.stepTab(by: 1) }
+                .appShortcut(.nextTab, 1)
+            Button("Previous Tab") { model.sidebar.stepTab(by: -1) }
+                .appShortcut(.previousTab, 1)
+            // Enabled whenever a window is, so the key always reaches `PageKeyAlias`, which leaves
+            // it to a focused text field of ours.
+            Button("Go Back") { PageKeyAlias.perform(.back, model: model) }
+                .appShortcut(.goBack, 1)
+            Button("Go Forward") { PageKeyAlias.perform(.forward, model: model) }
+                .appShortcut(.goForward, 1)
+            Button("Developer Tools") { model.showDeveloperTools() }
+                .appShortcut(.developerTools, 1)
+                .disabled(!model.canRunPageCommands)
         }
         .disabled(!hasWindow)
+    }
+}
+
+/// ⌘← / ⌘→ as Go Back / Go Forward, only when the focused element does not take the key ([02
+/// §页面与导航] observed keys; plan B85). In the page: Chromium offers a key to the menu only when the
+/// page left it unhandled, so an editable field in the page keeps ⌘← / ⌘→ for its caret. In our own
+/// text fields (command bar, find bar, rename) the menu's key equivalent would come first, so the
+/// alias hands the key back to the field: it moves the caret to the line's start or end, as
+/// everywhere on macOS (inferred).
+@MainActor
+enum PageKeyAlias {
+    enum Direction { case back, forward }
+
+    /// The editable text view of ours that has the keyboard (a text field's field editor or a text
+    /// view), or nil.
+    static func editableText(_ responder: NSResponder?) -> NSTextView? {
+        guard let text = responder as? NSTextView, text.isEditable else { return nil }
+        return text
+    }
+
+    /// Navigates `model`'s current tab, or gives the key to the focused text view of ours.
+    /// (`NSApplication.shared` rather than `NSApp`, which is nil until the app object exists.)
+    static func perform(
+        _ direction: Direction, model: ShellModel,
+        responder: NSResponder? = NSApplication.shared.keyWindow?.firstResponder,
+        event: NSEvent? = NSApplication.shared.currentEvent
+    ) {
+        if let text = editableText(responder) {
+            if let event, event.type == .keyDown {
+                // The text view's own key bindings (the user's too), as without the menu item.
+                text.interpretKeyEvents([event])
+            } else if direction == .back {
+                text.moveToLeftEndOfLine(nil)
+            } else {
+                text.moveToRightEndOfLine(nil)
+            }
+            return
+        }
+        switch direction {
+        case .back: model.sidebar.goBack()
+        case .forward: model.sidebar.goForward()
+        }
     }
 }
 

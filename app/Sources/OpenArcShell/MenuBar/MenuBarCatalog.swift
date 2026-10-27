@@ -9,7 +9,8 @@ import Foundation
 
 enum MenuBarCatalog {
     /// Title of the hidden menu that carries [02] shortcuts no [01] menu lists (Archive Tab ⌘W,
-    /// Go to Sidebar Item ⌘1…⌘9, Open Extensions ⌘E). `MenuBarAdjuster` hides it; its keys still work.
+    /// Go to Sidebar Item ⌘1…⌘9, Open Extensions ⌘E) and the [02] aliases of visible items
+    /// (`keyOnlyAliases`, B85). `MenuBarAdjuster` hides it; its keys still work.
     static let keyOnlyMenuTitle = "OpenArcShortcuts"
 
     /// Our Edit ▸ Find ▸ submenu; any other "Find" submenu is a system duplicate.
@@ -158,7 +159,16 @@ enum MenuBarCatalog {
     /// Help ▸ Troubleshooting ▸ ([01 §Help] observed "Reveal Arc Data", "Copy Arc Info"; our name).
     static let troubleshootingItems = ["Reveal Open Arc Data", "Copy Open Arc Info"]
 
-    /// Key-only commands ([02] observed keys, in no [01] menu).
-    static let keyOnlyItems: [String] = ["Archive Tab", "Open Extensions"]
-        + (1...8).map { "Go to Sidebar Item \($0)" } + ["Go to Last Sidebar Item"]
+    /// Key-only commands ([02] observed keys, in no [01] menu; plan Q16), in menu order.
+    static let keyOnlyItems: [String] = ["Archive Tab"] + (1...8).map { "Go to Sidebar Item \($0)" }
+        + ["Go to Last Sidebar Item", "Open Extensions"] + keyOnlyAliases.map(\.title)
+
+    /// The [02] alternative keys of visible items, in the key-only menu (plan B85): each item's
+    /// title and the table entry whose second key it binds. ⌘} / ⌘{ [02 §标签与侧边栏], ⌘← / ⌘→
+    /// [02 §页面与导航], F12 [02 §开发者], all observed.
+    static let keyOnlyAliases: [(title: String, shortcut: AppShortcut)] = [
+        ("Next Tab", .nextTab), ("Previous Tab", .previousTab),
+        ("Go Back", .goBack), ("Go Forward", .goForward),
+        ("Developer Tools", .developerTools),
+    ]
 }
