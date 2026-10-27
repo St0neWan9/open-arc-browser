@@ -466,8 +466,9 @@ struct LinksPane: View {
 
 // MARK: - Shortcuts
 
-/// Read-only list of the shortcuts Open Arc implements, grouped as in `02`. Customization is out
-/// of scope for now (plan B12, inferred), so its controls are disabled.
+/// Read-only list of every key Open Arc binds, grouped as in `02` and generated from the table the
+/// menus bind from (`ShortcutCatalog`, B85). No custom shortcuts in v1 (plan Q17), so those
+/// controls are disabled.
 struct ShortcutsPane: View {
     @ObservedObject var model: SettingsModel
 
@@ -489,7 +490,7 @@ struct ShortcutsPane: View {
             .listStyle(.bordered)
             .frame(minHeight: 260)
             HStack {
-                CatalogButton(id: "shortcuts.basics")
+                CatalogButton(id: "shortcuts.basics") { model.startWithTheBasics() }
                 Spacer()
                 PendingPicker(id: "shortcuts.priority").fixedSize()
                 CatalogButton(id: "shortcuts.custom")

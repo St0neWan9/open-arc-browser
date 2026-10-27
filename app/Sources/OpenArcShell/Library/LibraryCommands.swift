@@ -16,17 +16,27 @@ struct LibraryCommands: Commands {
         // Its own group, without icons (so not indented), between the system window groups and
         // Bring All to Front. [01 §菜单项图标与缩进] observed.
         CommandGroup(before: .windowList) {
-            Group {
-                Button("Open Library…") { model.openLibrary() }
-                    .keyboardShortcut("l", modifiers: [.shift, .command])
-                Button("View Downloads…") { model.openLibrary(.downloads) }
-                Button("View Easels…") { model.openLibrary(.easels) }
-                Button("View Media…") { model.openLibrary(.media) }
-                Button("View Boosts…") { model.openLibrary(.boosts) }
-            }
-            .disabled(!hasWindow)
+            WindowLibraryMenuItems(model: model, hasWindow: hasWindow)
             Divider()
         }
+    }
+}
+
+/// Window ▸ Open Library… … View Boosts… ([01 §Window] observed). A view so tests can render it.
+struct WindowLibraryMenuItems: View {
+    @ObservedObject var model: ShellModel
+    let hasWindow: Bool
+
+    var body: some View {
+        Group {
+            Button("Open Library…") { model.openLibrary() }
+                .appShortcut(.openLibrary)
+            Button("View Downloads…") { model.openLibrary(.downloads) }
+            Button("View Easels…") { model.openLibrary(.easels) }
+            Button("View Media…") { model.openLibrary(.media) }
+            Button("View Boosts…") { model.openLibrary(.boosts) }
+        }
+        .disabled(!hasWindow)
     }
 }
 
@@ -41,10 +51,10 @@ struct ArchiveMenuItems: View {
     var body: some View {
         Group {
             Button("Go Back") { model.sidebar.goBack() }
-                .keyboardShortcut("[", modifiers: .command)
+                .appShortcut(.goBack)
                 .disabled(!model.sidebar.canGoBack)
             Button("Go Forward") { model.sidebar.goForward() }
-                .keyboardShortcut("]", modifiers: .command)
+                .appShortcut(.goForward)
                 .disabled(!model.sidebar.canGoForward)
             Divider()
             // The engine's history page in a new tab (`HistoryPage`, inferred).

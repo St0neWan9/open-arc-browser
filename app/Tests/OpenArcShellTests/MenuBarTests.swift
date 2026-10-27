@@ -191,8 +191,8 @@ final class MenuBarTests: XCTestCase {
         let model = makeModel()
         let built = try items(KeyOnlyMenuItems(model: model, hasWindow: true))
         XCTAssertEqual(built.map(\.title), ["Archive Tab"] + (1...8).map { "Go to Sidebar Item \($0)" }
-            + ["Go to Last Sidebar Item", "Open Extensions"])
-        XCTAssertEqual(Set(built.map(\.title)), Set(MenuBarCatalog.keyOnlyItems))
+            + ["Go to Last Sidebar Item", "Open Extensions", "Next Tab", "Previous Tab", "Go Back", "Go Forward", "Developer Tools"])
+        XCTAssertEqual(built.map(\.title), MenuBarCatalog.keyOnlyItems)
         XCTAssertEqual(built.first?.keyEquivalent, "w", "⌘W archives [02]")
     }
 

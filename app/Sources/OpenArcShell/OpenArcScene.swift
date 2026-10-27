@@ -194,16 +194,16 @@ struct FindMenu: View {
     var body: some View {
         Menu("Find") {
             Button("Find…") { findBar.show() }
-                .keyboardShortcut("f", modifiers: .command)
+                .appShortcut(.find)
             Button("Find and Replace") { findBar.show() }
-                .keyboardShortcut("f", modifiers: [.option, .command])
+                .appShortcut(.findAndReplace)
             Button("Find Next") { findBar.findNext() }
-                .keyboardShortcut("g", modifiers: .command)
+                .appShortcut(.findNext)
             Button("Find Previous") { findBar.findPrevious() }
-                .keyboardShortcut("g", modifiers: [.shift, .command])
+                .appShortcut(.findPrevious)
             Button("Use Selection to Find") { findBar.useSelectionToFind() }
             Button("Jump to Selection") { model.jumpToSelection() }
-                .keyboardShortcut("j", modifiers: .command)
+                .appShortcut(.jumpToSelection)
         }
         .disabled(!hasWindow || !model.canRunPageCommands)
     }
@@ -231,7 +231,7 @@ struct AppearanceMenu: View {
 
 /// View ▸ Developer ▸. [01 §View] observed items and order; keys [02 §开发者] observed: ⌥⌘U, ⌥⌘I,
 /// ⌥⌘C, ⌥⌘J; Network Inspector has none. [02] also lists F12 for Developer Tools; a menu item
-/// carries one key, so F12 is not bound yet. B25.
+/// carries one key, so F12 is a hidden alias in `KeyOnlyMenuItems` (B85). B25.
 struct DeveloperMenu: View {
     @ObservedObject var model: ShellModel
     let hasWindow: Bool
@@ -240,13 +240,13 @@ struct DeveloperMenu: View {
         Menu("Developer") {
             Group {
                 Button("View Source") { model.viewPageSource() }
-                    .keyboardShortcut("u", modifiers: [.option, .command])
+                    .appShortcut(.viewSource)
                 Button("Developer Tools") { model.showDeveloperTools() }
-                    .keyboardShortcut("i", modifiers: [.option, .command])
+                    .appShortcut(.developerTools)
                 Button("Inspect Elements") { model.inspectElements() }
-                    .keyboardShortcut("c", modifiers: [.option, .command])
+                    .appShortcut(.inspectElements)
                 Button("JavaScript Console") { model.showJavaScriptConsole() }
-                    .keyboardShortcut("j", modifiers: [.option, .command])
+                    .appShortcut(.javaScriptConsole)
                 Button("Network Inspector") { model.showNetworkInspector() }
             }
             .disabled(!hasWindow || !model.canRunPageCommands)

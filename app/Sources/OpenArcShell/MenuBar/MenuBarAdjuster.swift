@@ -10,7 +10,8 @@ import AppKit
 //   separators in a row or one at the end. Runs of separators collapse to one, and a separator at
 //   the top or bottom of a menu is hidden, so each menu's groups are exactly the observed ones.
 // - Key-only menu. Tabs ▸ Archive Tab (⌘W), Go to Sidebar Item 1–9 (⌘1…⌘9) and Open Extensions
-//   (⌘E) are in [02] but in no [01] menu. They live in a hidden top-level menu
+//   (⌘E) are in [02] but in no [01] menu, and so are the [02] aliases ⌘} / ⌘{, ⌘← / ⌘→ and F12
+//   (B85). They live in a hidden top-level menu
 //   (`MenuBarCatalog.keyOnlyMenuTitle`) whose key equivalents still work.
 // - Edit ▸ Find and the system text submenus (plan Q15). `TextEditingCommands` brings back Spelling
 //   and Grammar / Substitutions / Transformations / Speech ([01 §Edit] observed) together with a

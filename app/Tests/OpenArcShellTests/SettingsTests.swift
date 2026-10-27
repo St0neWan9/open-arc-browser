@@ -446,6 +446,8 @@ final class SettingsTests: XCTestCase {
             "profiles.autofill", "profiles.clearBrowsingData", "advanced.moreSettings",
             // B66: per-profile search suggestions in the command bar (03 §Profiles).
             "profiles.searchSuggestions",
+            // B85: Start with the basics opens Essential Keyboard Shortcuts (02 §其他).
+            "shortcuts.basics",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {
@@ -527,7 +529,7 @@ final class SettingsTests: XCTestCase {
     /// The list follows the `02` groups and keys, and the search matches names and keys.
     func testShortcutListGroupsAndSearch() {
         XCTAssertEqual(ShortcutCatalog.groups.map(\.title),
-                       ["Tabs and Sidebar", "Spaces", "Split View", "Page and Navigation", "Windows and App", "Developer"])
+                       ["Tabs and Sidebar", "Spaces", "Split View", "Page and Navigation", "Copy Links", "Windows and App", "Developer"])
         let all = ShortcutCatalog.groups.flatMap(\.entries)
         XCTAssertEqual(all.first { $0.action == "Archive Tab" }?.keys, "⌘W")
         XCTAssertEqual(all.first { $0.action == "Settings…" }?.keys, "⌘,")

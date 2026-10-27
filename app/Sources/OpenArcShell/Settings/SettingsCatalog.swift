@@ -188,12 +188,12 @@ public enum SettingsCatalog {
     static let shortcuts: [SettingsControl] = [
         SettingsControl("shortcuts.search", "Search shortcuts", .searchField, .live),
         SettingsControl("shortcuts.defaults", "Default Shortcuts", .list, .live),
-        // Customization is out of scope for now (plan B12): the list is read-only (inferred).
+        // No custom shortcuts in v1 (plan Q17): the list is read-only.
         SettingsControl("shortcuts.custom", "Custom Shortcuts", .button, .pending(task: "after v1")),
         SettingsControl("shortcuts.priority", "Shortcut priority", .picker(defaultValue: "Open Arc first"), .pending(task: "after v1")),
         SettingsControl("shortcuts.reset", "Reset All Shortcuts", .button, .pending(task: "after v1")),
-        // Opens a help page; we have no help site yet.
-        SettingsControl("shortcuts.basics", "Start with the basics", .button, .pending(task: "D9")),
+        // Live (B85): opens Help ▸ Essential Keyboard Shortcuts ([02 §其他] observed).
+        SettingsControl("shortcuts.basics", "Start with the basics", .button, .live),
     ]
 
     // MARK: Icon [03 §Icon]
