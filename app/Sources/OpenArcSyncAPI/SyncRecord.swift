@@ -29,22 +29,25 @@ public enum SyncRecordType: String, Codable, CaseIterable, Hashable, Sendable {
     public static var syncedCases: [SyncRecordType] { allCases.filter { !$0.isLocalOnly } }
 
     /// Field groups whose values must be end-to-end encrypted by the backend (URLs, titles,
-    /// names). docs/arc-spec/03-settings.md: "Arc Sync is end-to-end encrypted" (observed); the
-    /// exact field split is our own decision.
+    /// names, a theme's colors, drawings). docs/arc-spec/03-settings.md: "Arc Sync is end-to-end
+    /// encrypted" (observed); Arc encrypts its whole sidebar payload (inferred (analysis)). The
+    /// exact field split is our own decision (plan D10, see OpenArcSyncCloudKit/RecordSchema.swift):
+    /// tree structure (ids, sort keys, kinds, flags) and timestamps stay plain.
     public var encryptedFieldGroups: Set<String> {
         switch self {
         case .profile: return [Profile.FieldGroup.naming.rawValue]
-        case .theme: return []
+        // D10: the colors, grain and brightness the user picked for a Space.
+        case .theme: return [Theme.FieldGroup.style.rawValue]
         case .space: return [Space.FieldGroup.naming.rawValue]
         case .folder: return [Folder.FieldGroup.naming.rawValue]
         case .tab: return Set([TabNode.FieldGroup.content, .naming, .pin].map(\.rawValue))
         case .archiveItem: return [ArchiveItem.FieldGroup.content.rawValue]
         // The split row's own title and icon (B77) are user content; the pane tree stays plain.
         case .splitLayout: return [SplitLayout.FieldGroup.naming.rawValue]
-        // The title, and what an element draws (text, image bytes, stroke shapes), are user
-        // content. Geometry, stacking and style stay plain.
+        // The title, and everything an element draws: content (text, image bytes, strokes), and
+        // since D10 its frame and style. Only the stacking order (placement) stays plain.
         case .easel: return [Easel.FieldGroup.naming.rawValue]
-        case .easelElement: return [EaselElement.FieldGroup.content.rawValue]
+        case .easelElement: return Set([EaselElement.FieldGroup.content, .geometry, .style].map(\.rawValue))
         }
     }
 }

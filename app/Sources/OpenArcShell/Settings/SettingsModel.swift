@@ -46,16 +46,22 @@ public struct SyncCardState: Hashable, Sendable {
     ///   - backendAvailable: false when the app runs with `DisabledSyncStore` (no sync backend).
     ///   - isSyncOn: the "Sync Sidebar" preference.
     ///   - actionError: why the last start or "Sync Now" threw, if it did.
+    ///   - deleteError: why the last "Delete iCloud Data…" failed, if it did (D12).
     ///   - formatDate: formats `lastSyncedAt`; the app passes a relative format with its clock.
     public static func make(
         status: SyncStatus,
         backendAvailable: Bool,
         isSyncOn: Bool = true,
         actionError: String? = nil,
+        deleteError: String? = nil,
         formatDate: (Date) -> String = SyncCardState.defaultDateFormat
     ) -> SyncCardState {
         guard backendAvailable else {
             return SyncCardState(isToggleEnabled: false, statusLine: "iCloud sync is not available in this version.", isWarning: false)
+        }
+        if let deleteError {
+            // "Delete iCloud Data…" (D12) failed; nothing was changed.
+            return warning("Deleting iCloud data failed: \(deleteError)")
         }
         guard isSyncOn else {
             return SyncCardState(isToggleEnabled: true, statusLine: "Sync is off.", isWarning: false)
@@ -80,6 +86,10 @@ public struct SyncCardState: Hashable, Sendable {
         case _ where actionError != nil:
             // The store threw (start or "Sync Now") without reporting a status of its own.
             return warning("Sync failed: \(actionError ?? ""). \(lastSynced)", action: .syncNow)
+        case _ where status.needsAppUpdate:
+            // D11: a newer version wrote some records; this build reads but does not overwrite
+            // them. [03 §账号卡] inferred (analysis); the wording is ours.
+            return warning("Some items were synced by a newer version of \(AppIdentity.displayName). Update \(AppIdentity.displayName) to sync your changes to them. \(lastSynced)")
         case .disabled:
             // On, but the store has not reported since it was asked to start.
             return SyncCardState(isToggleEnabled: true, statusLine: "Starting sync…", isWarning: false)
@@ -96,6 +106,16 @@ public struct SyncCardState: Hashable, Sendable {
 
     public static func defaultDateFormat(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// "Delete iCloud Data…" on the account card and its confirmation (plan D12; [03 §账号卡]
+    /// inferred (analysis): Arc has a way to wipe its synced data, entry point unknown). Our own
+    /// wording.
+    public enum DeleteServerData {
+        public static let buttonTitle = "Delete iCloud Data…"
+        public static let confirmTitle = "Delete your sidebar from iCloud?"
+        public static let confirmMessage = "This removes everything \(AppIdentity.displayName) has synced to iCloud and turns off Sync Sidebar on this Mac. The sidebar on this Mac stays as it is. If you turn sync on again, this Mac uploads its sidebar again."
+        public static let confirmButton = "Delete"
     }
 }
 
@@ -239,6 +259,12 @@ public final class SettingsModel: ObservableObject {
         case .syncNow: sync.syncNow()
         case .useNewAccount: sync.resumeAfterAccountChange()
         }
+    }
+
+    /// "Delete iCloud Data…" (D12), after the confirmation.
+    public func deleteICloudData() {
+        objectWillChange.send()
+        sync.deleteServerData()
     }
 
     // MARK: Profiles

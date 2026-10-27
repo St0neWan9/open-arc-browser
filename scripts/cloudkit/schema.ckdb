@@ -18,7 +18,12 @@
 // User content lives in CKRecord.encryptedValues -> ENCRYPTED <type>.
 //
 // Every record type also carries sync metadata: meta_createdAt, meta_modifiedAt, meta_version,
-// meta_isTombstone, meta_deletedAt, plus one groupTime_<group> TIMESTAMP per field group.
+// meta_isTombstone, meta_deletedAt, meta_schemaVersion (D11: the writer's sync schema version,
+// INT64), plus one groupTime_<group> TIMESTAMP per field group.
+//
+// D10 migration: fields first deployed plain that are now encrypted got a new key ending in "Enc";
+// the old plain key stays declared (removal would fail the deploy). New builds clear the old key
+// on every save and read it only when an older build wrote it (RecordSchema.swift `legacyKey`).
 //
 // Indexes: CKSyncEngine fetches by zone change token and needs no query index. The only index
 // is "___recordID" QUERYABLE, which the CloudKit Console needs to list records.
@@ -53,21 +58,28 @@ DEFINE SCHEMA
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_naming        TIMESTAMP,
         groupTime_settings      TIMESTAMP
     );
 
     RECORD TYPE Theme (
         "___recordID"           REFERENCE QUERYABLE,
+        // Legacy plain keys (D10): read-only, cleared on every save.
         style_appearance        STRING,
         style_colors            BYTES,
         style_grain             DOUBLE,
         style_brightness        DOUBLE,
+        style_appearanceEnc     ENCRYPTED STRING,
+        style_colorsEnc         ENCRYPTED BYTES,
+        style_grainEnc          ENCRYPTED DOUBLE,
+        style_brightnessEnc     ENCRYPTED DOUBLE,
         meta_createdAt          TIMESTAMP,
         meta_modifiedAt         TIMESTAMP,
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_style         TIMESTAMP
     );
 
@@ -83,6 +95,7 @@ DEFINE SCHEMA
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_naming        TIMESTAMP,
         groupTime_theme         TIMESTAMP,
         groupTime_profile       TIMESTAMP,
@@ -102,6 +115,7 @@ DEFINE SCHEMA
         meta_version              INT64,
         meta_isTombstone          INT64,
         meta_deletedAt            TIMESTAMP,
+        meta_schemaVersion        INT64,
         groupTime_placement       TIMESTAMP,
         groupTime_naming          TIMESTAMP,
         groupTime_display         TIMESTAMP
@@ -126,6 +140,7 @@ DEFINE SCHEMA
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_placement     TIMESTAMP,
         groupTime_content       TIMESTAMP,
         groupTime_naming        TIMESTAMP,
@@ -147,6 +162,7 @@ DEFINE SCHEMA
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_content       TIMESTAMP
     );
 
@@ -161,6 +177,7 @@ DEFINE SCHEMA
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_layout        TIMESTAMP,
         groupTime_naming        TIMESTAMP
     );
@@ -173,6 +190,7 @@ DEFINE SCHEMA
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_naming        TIMESTAMP
     );
 
@@ -180,14 +198,18 @@ DEFINE SCHEMA
         "___recordID"           REFERENCE QUERYABLE,
         placement_easelID       STRING,
         placement_zKey          STRING,
+        // Legacy plain keys (D10): read-only, cleared on every save.
         geometry_frame          BYTES,
-        content_payload         ENCRYPTED BYTES,
         style_style             BYTES,
+        geometry_frameEnc       ENCRYPTED BYTES,
+        content_payload         ENCRYPTED BYTES,
+        style_styleEnc          ENCRYPTED BYTES,
         meta_createdAt          TIMESTAMP,
         meta_modifiedAt         TIMESTAMP,
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
+        meta_schemaVersion      INT64,
         groupTime_placement     TIMESTAMP,
         groupTime_geometry      TIMESTAMP,
         groupTime_content       TIMESTAMP,

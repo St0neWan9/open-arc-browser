@@ -66,6 +66,6 @@ final class EaselMergeTests: XCTestCase {
         XCTAssertEqual(SyncRecord.easel(Easel(id: easelID, now: t0)).id.recordName, "Easel/\(easelID.uuidString)")
         XCTAssertEqual(SyncRecord.easelElement(element()).id.recordName, "EaselElement/\(elementID.uuidString)")
         XCTAssertEqual(SyncRecordType.easel.encryptedFieldGroups, ["naming"])
-        XCTAssertEqual(SyncRecordType.easelElement.encryptedFieldGroups, ["content"])
+        XCTAssertEqual(SyncRecordType.easelElement.encryptedFieldGroups, ["content", "geometry", "style"])
     }
 }

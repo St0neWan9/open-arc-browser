@@ -161,8 +161,19 @@ struct SyncCardView: View {
             Text("Your sidebar syncs through your private iCloud account.")
                 .font(Typography.settingsBody.font)
                 .foregroundStyle(.secondary)
+            if sync.canDeleteServerData {
+                // D12: wipes our iCloud data after a confirmation.
+                Button(SyncCardState.DeleteServerData.buttonTitle, role: .destructive) { isConfirmingDelete = true }
+                    .confirmationDialog(SyncCardState.DeleteServerData.confirmTitle, isPresented: $isConfirmingDelete) {
+                        Button(SyncCardState.DeleteServerData.confirmButton, role: .destructive) { model.deleteICloudData() }
+                    } message: {
+                        Text(SyncCardState.DeleteServerData.confirmMessage)
+                    }
+            }
         }
     }
+
+    @State private var isConfirmingDelete = false
 }
 
 // MARK: - General

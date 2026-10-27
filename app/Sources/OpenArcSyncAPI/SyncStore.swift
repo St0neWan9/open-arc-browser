@@ -71,11 +71,16 @@ public struct SyncStatus: Hashable, Sendable {
     public var lastSyncedAt: Date?
     /// Local changes not yet confirmed by the server.
     public var pendingChangeCount: Int
+    /// True when the server holds records written by a newer version of the app. This build
+    /// still reads them but does not overwrite them, so local edits to them wait until the app is
+    /// updated (plan D11; [03 §账号卡] inferred (analysis)).
+    public var needsAppUpdate: Bool
 
-    public init(phase: Phase, lastSyncedAt: Date? = nil, pendingChangeCount: Int = 0) {
+    public init(phase: Phase, lastSyncedAt: Date? = nil, pendingChangeCount: Int = 0, needsAppUpdate: Bool = false) {
         self.phase = phase
         self.lastSyncedAt = lastSyncedAt
         self.pendingChangeCount = pendingChangeCount
+        self.needsAppUpdate = needsAppUpdate
     }
 
     public static let disabled = SyncStatus(phase: .disabled)
@@ -106,10 +111,27 @@ public protocol SyncStore: AnyObject, Sendable {
     func syncNow() async throws
     /// Drops all local sync state (account switch, "turn sync off and remove data").
     func resetLocalSyncState() async
+    /// "Delete iCloud Data…" (plan D12; [03 §账号卡] inferred (analysis)): deletes everything this
+    /// app stored on the server, then drops the local sync state and leaves the store stopped.
+    /// The local workspace is not touched. `database` supplies the persisted sync state when the
+    /// store is not running. Throws, changing nothing, when the server data could not be deleted.
+    func deleteServerData(database: any SyncLocalDatabase) async throws
     /// Current status.
     func currentStatus() async -> SyncStatus
     /// Status changes. Every call returns a new independent stream that starts with the current status.
     func statusUpdates() -> AsyncStream<SyncStatus>
+}
+
+/// Thrown by a backend that cannot delete its server data.
+public struct SyncServerDataDeletionUnsupported: Error, Hashable, Sendable {
+    public init() {}
+}
+
+extension SyncStore {
+    /// Default for backends without server data deletion: throws, changing nothing.
+    public func deleteServerData(database: any SyncLocalDatabase) async throws {
+        throw SyncServerDataDeletionUnsupported()
+    }
 }
 
 /// The store used when sync is turned off, and in previews and tests. Accepts every call and
@@ -122,6 +144,8 @@ public final class DisabledSyncStore: SyncStore {
     public func enqueue(_ changes: [PendingChange]) async {}
     public func syncNow() async throws {}
     public func resetLocalSyncState() async {}
+    /// No server, so nothing to delete.
+    public func deleteServerData(database: any SyncLocalDatabase) async throws {}
     public func currentStatus() async -> SyncStatus { .disabled }
 
     public func statusUpdates() -> AsyncStream<SyncStatus> {

@@ -43,16 +43,17 @@ final class RecordMapperTests: XCTestCase {
         XCTAssertEqual(try mapper.decode(mapper.makeCKRecord(favorite, systemFields: nil)).withoutSystemFields, favorite)
     }
 
-    /// `Theme.brightness` (the [06 §2] ring knob, inferred) syncs as the plain `style_brightness`
-    /// key in the `style` group. A record saved before the key existed decodes with the default.
+    /// `Theme.brightness` (the [06 §2] ring knob, inferred) syncs in the `style` group, encrypted
+    /// since D10 (`style_brightnessEnc`). A record saved before brightness existed has neither key
+    /// and decodes with the default.
     func testThemeBrightnessSyncsAndOldRecordsDecodeWithDefault() throws {
         let theme = Fx.theme(variant: 1)
         let ck = mapper.makeCKRecord(.theme(theme), systemFields: nil)
-        XCTAssertEqual(ck[ThemeFields.brightness.key] as? Double, 0.8)
-        XCTAssertFalse(ThemeFields.brightness.encrypted)
+        XCTAssertEqual(ck.encryptedValues[ThemeFields.brightness.key] as Double?, 0.8)
+        XCTAssertTrue(ThemeFields.brightness.encrypted)
         XCTAssertEqual(ThemeFields.brightness.group, Theme.FieldGroup.style.rawValue)
 
-        ck[ThemeFields.brightness.key] = nil
+        ck.encryptedValues[ThemeFields.brightness.key] = nil as Double?
         guard case .theme(let decoded) = try mapper.decode(ck) else { return XCTFail("wrong type") }
         XCTAssertEqual(decoded.brightness, Theme.defaultBrightness)
         XCTAssertEqual(decoded.grain, theme.grain)

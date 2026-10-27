@@ -17,13 +17,29 @@ import OpenArcSyncAPI
 //   fields carries no values, and CloudKit uploads only changed keys, so an omitted key would keep
 //   a stale server value.
 //
-// Encryption choice: user-visible content (titles, URLs, favicon URLs, names, icons, folder
-// paths) goes into `encryptedValues`, which CloudKit encrypts with keys from the user's iCloud
-// Keychain. Ids, sort keys, enums, colors and timestamps stay plain: they reveal no browsing
-// content, and keeping them plain leaves structure debuggable in the CloudKit console and
-// queryable later. The encrypted groups match `SyncRecordType.encryptedFieldGroups`
-// (docs/arc-spec/03-settings.md "Arc Sync is end-to-end encrypted", observed); the per-field split
-// is our own decision.
+// Encryption choice (plan D10): what the user made or chose goes into `encryptedValues`, which
+// CloudKit encrypts with keys from the user's iCloud Keychain: titles, URLs, favicon URLs, names,
+// icons, folder paths, a theme's appearance and colors, and everything an easel element draws
+// (content, frame, style). Plain, each with its reason:
+// - ids and references (random UUIDs), sort keys, the tab location kind, a folder's expanded
+//   flag, an archive item's reason and a split's pane tree (tab ids and fractions): tree
+//   structure only, no content; the record names ("Tab/<UUID>") are plain anyway, and a plain
+//   tree keeps sync problems diagnosable in the CloudKit Console;
+// - timestamps (`activity_lastActiveAt`, `content_archivedAt`, `meta_*At`, `groupTime_*`):
+//   CloudKit's own creation and modification dates, which no client can hide, give the server
+//   the same times, so encrypting them would hide nothing;
+// - the sync metadata (`meta_*`), including the writer's schema version (D11), which the store
+//   reads before it can decode a record and the Console must show for mixed-version setups.
+// No field needs a query index: CKSyncEngine and the zone poll fetch by change token. The
+// encrypted groups match `SyncRecordType.encryptedFieldGroups`. docs/arc-spec/03-settings.md
+// §账号卡: "Arc Sync is end-to-end encrypted" (observed); Arc encrypting its whole sidebar payload
+// is inferred (analysis). The per-field split is ours.
+//
+// Migration (D10): a field first deployed plain cannot become encrypted, so it gets a new key
+// (`<old key>Enc`) and keeps the old one as its `legacyKey`. Every write sets the new key and
+// clears the old one (the plain copy leaves the server on the record's next save). Reading prefers
+// the old key when it holds a value: only a build from before D10 writes it, and such a build
+// never touches the new key, so a present old key is always the newer value.
 
 /// One CloudKit field of a record type.
 struct FieldSpec: Hashable, Sendable {
@@ -33,17 +49,34 @@ struct FieldSpec: Hashable, Sendable {
     let group: String?
     /// True if the value is stored in `encryptedValues`.
     let encrypted: Bool
+    /// The plain key this field replaced (D10 migration), or nil. Persisted: it stays declared in
+    /// the schema, is cleared on every write and is read when an older build wrote it.
+    let legacyKey: String?
 
-    init<G: SyncFieldGroup>(_ key: String, _ group: G, encrypted: Bool = false) {
+    init<G: SyncFieldGroup>(_ key: String, _ group: G, encrypted: Bool = false, replacing legacyKey: String? = nil) {
         self.key = key
         self.group = group.rawValue
         self.encrypted = encrypted
+        self.legacyKey = legacyKey
     }
 
     init(metaKey key: String) {
         self.key = key
         self.group = nil
         self.encrypted = false
+        self.legacyKey = nil
+    }
+
+    private init(plainKey key: String, group: String?) {
+        self.key = key
+        self.group = group
+        self.encrypted = false
+        self.legacyKey = nil
+    }
+
+    /// The replaced plain field, as declared in the schema; nil when nothing was replaced.
+    var legacy: FieldSpec? {
+        legacyKey.map { FieldSpec(plainKey: $0, group: group) }
     }
 }
 
@@ -54,6 +87,11 @@ enum MetaFields {
     static let version = FieldSpec(metaKey: "meta_version")
     static let isTombstone = FieldSpec(metaKey: "meta_isTombstone")
     static let deletedAt = FieldSpec(metaKey: "meta_deletedAt")
+    /// The writer's sync schema version (`RecordSchema.currentVersion`) as Int64. Added in D11;
+    /// a record saved before it has none and counts as version 1. A build never overwrites a
+    /// record whose server copy has a higher version (`CloudKitSyncStore`). Sync metadata, like
+    /// `meta_version`: it is not a model value, so it joins no field group and is never merged.
+    static let schemaVersion = FieldSpec(metaKey: "meta_schemaVersion")
 
     /// Timestamp of one field group.
     static func groupTime(_ group: String) -> FieldSpec {
@@ -61,7 +99,7 @@ enum MetaFields {
     }
 
     static func all(groups: [String]) -> [FieldSpec] {
-        [createdAt, modifiedAt, version, isTombstone, deletedAt] + groups.map(groupTime)
+        [createdAt, modifiedAt, version, isTombstone, deletedAt, schemaVersion] + groups.map(groupTime)
     }
 }
 
@@ -81,13 +119,15 @@ enum ProfileFields {
 
 enum ThemeFields {
     typealias G = Theme.FieldGroup
-    static let appearance = FieldSpec("style_appearance", G.style)
+    // Encrypted since D10: the colors a user picks for a Space are their own choice. The plain
+    // keys of the first schema are the legacy keys.
+    static let appearance = FieldSpec("style_appearanceEnc", G.style, encrypted: true, replacing: "style_appearance")
     /// JSON-encoded `[RGBAColor]`.
-    static let colors = FieldSpec("style_colors", G.style)
-    static let grain = FieldSpec("style_grain", G.style)
-    /// Added after the first schema. Records saved before it lack the key and decode with
-    /// `Theme.defaultBrightness`. Plain: a slider value is not user content.
-    static let brightness = FieldSpec("style_brightness", G.style)
+    static let colors = FieldSpec("style_colorsEnc", G.style, encrypted: true, replacing: "style_colors")
+    static let grain = FieldSpec("style_grainEnc", G.style, encrypted: true, replacing: "style_grain")
+    /// Records saved before brightness existed have neither key and decode with
+    /// `Theme.defaultBrightness`.
+    static let brightness = FieldSpec("style_brightnessEnc", G.style, encrypted: true, replacing: "style_brightness")
     static let all = [appearance, colors, grain, brightness]
 }
 
@@ -166,18 +206,24 @@ enum EaselElementFields {
     typealias G = EaselElement.FieldGroup
     static let easelID = FieldSpec("placement_easelID", G.placement)
     static let zKey = FieldSpec("placement_zKey", G.placement)
-    /// JSON-encoded `EaselRect`.
-    static let frame = FieldSpec("geometry_frame", G.geometry)
+    /// JSON-encoded `EaselRect`. Encrypted since D10: where and how large the user drew.
+    static let frame = FieldSpec("geometry_frameEnc", G.geometry, encrypted: true, replacing: "geometry_frame")
     /// JSON-encoded `EaselElementContent` (text, inline image bytes, arrow ends, stroke points).
     /// Encrypted: it is what the user drew or wrote. Inline images are capped at
     /// `EaselImage.maxEncodedBytes`, which keeps the record under CloudKit's 1 MB limit.
     static let content = FieldSpec("content_payload", G.content, encrypted: true)
-    /// JSON-encoded `EaselStyle` (colors and sizes, no user content).
-    static let style = FieldSpec("style_style", G.style)
+    /// JSON-encoded `EaselStyle` (colors and sizes). Encrypted since D10: part of the drawing.
+    static let style = FieldSpec("style_styleEnc", G.style, encrypted: true, replacing: "style_style")
     static let all = [easelID, zKey, frame, content, style]
 }
 
 enum RecordSchema {
+    /// Sync schema version this build writes (`MetaFields.schemaVersion`). Bump it when an older
+    /// build would read a record of the new layout wrongly, or lose data by rewriting it.
+    /// 1: records without the key (before D11). 2: D10 (encrypted theme style, easel geometry and
+    /// style) and D11.
+    static let currentVersion: Int64 = 2
+
     /// Raw values of the field groups of a record type.
     static func groups(of type: SyncRecordType) -> [String] {
         switch type {
@@ -208,8 +254,14 @@ enum RecordSchema {
         }
     }
 
-    /// Every CloudKit field of a record type: content fields plus metadata.
+    /// Plain fields replaced by encrypted ones (D10). Still declared in the schema; every write
+    /// clears them.
+    static func legacyFields(of type: SyncRecordType) -> [FieldSpec] {
+        contentFields(of: type).compactMap(\.legacy)
+    }
+
+    /// Every CloudKit field of a record type: content fields, legacy fields and metadata.
     static func fields(of type: SyncRecordType) -> [FieldSpec] {
-        contentFields(of: type) + MetaFields.all(groups: groups(of: type))
+        contentFields(of: type) + legacyFields(of: type) + MetaFields.all(groups: groups(of: type))
     }
 }

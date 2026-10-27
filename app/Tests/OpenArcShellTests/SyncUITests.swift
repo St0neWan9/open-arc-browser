@@ -10,7 +10,7 @@ import OpenArcPersistence
 /// so tests that read the status stream stay bounded).
 private actor RecordingSyncStore: SyncStore {
     enum Call: Equatable {
-        case start, stop, enqueue([PendingChange]), syncNow, reset
+        case start, stop, enqueue([PendingChange]), syncNow, reset, deleteServerData
     }
 
     struct Failure: Error, LocalizedError {
@@ -20,6 +20,7 @@ private actor RecordingSyncStore: SyncStore {
     private(set) var calls: [Call] = []
     private var startFails = false
     private var syncNowFails = false
+    private var deleteFails = false
     nonisolated let scripted: [SyncStatus]
 
     init(statuses: [SyncStatus] = [SyncStatus(phase: .idle)]) {
@@ -28,6 +29,12 @@ private actor RecordingSyncStore: SyncStore {
 
     func failStart(_ fails: Bool) { startFails = fails }
     func failSyncNow(_ fails: Bool) { syncNowFails = fails }
+    func failDelete(_ fails: Bool) { deleteFails = fails }
+
+    func deleteServerData(database: any SyncLocalDatabase) async throws {
+        calls.append(.deleteServerData)
+        if deleteFails { throw Failure() }
+    }
 
     func start(database: any SyncLocalDatabase) async throws {
         calls.append(.start)
@@ -322,6 +329,71 @@ final class SyncUITests: XCTestCase {
         XCTAssertEqual(calls, [.reset, .enqueue([.save(recordA), .save(recordB)])])
     }
 
+    // MARK: Delete iCloud Data (D12) [03 §账号卡] inferred (analysis)
+
+    /// Deletes the server data, turns "Sync Sidebar" off and marks the workspace for a full
+    /// upload; turning sync on again uploads every record (plan Q12).
+    func testDeleteICloudDataTurnsSyncOffAndReuploadsOnNextStart() async {
+        let store = RecordingSyncStore()
+        let preferences = AppPreferences.syncOn()
+        let sync = makeController(store, preferences: preferences)
+        sync.launch()
+        await sync.settle()
+        XCTAssertFalse(preferences.needsFullSyncUpload)
+        XCTAssertTrue(sync.canDeleteServerData)
+
+        sync.deleteServerData()
+        await sync.settle()
+        XCTAssertFalse(preferences.isSidebarSyncEnabled)
+        XCTAssertFalse(sync.isEnabled)
+        XCTAssertFalse(sync.isRunning)
+        XCTAssertTrue(preferences.needsFullSyncUpload)
+        XCTAssertNil(sync.deleteError)
+        XCTAssertEqual(sync.card.statusLine, "Sync is off.")
+
+        sync.setEnabled(true)
+        await sync.settle()
+        let calls = await store.calls
+        XCTAssertEqual(calls, [
+            .start, .enqueue([.save(recordA), .save(recordB)]),
+            .deleteServerData,
+            .start, .enqueue([.save(recordA), .save(recordB)]),
+        ])
+    }
+
+    /// A failed deletion changes nothing and says why on the card.
+    func testFailedDeleteICloudDataKeepsSyncOnAndShowsWhy() async {
+        let store = RecordingSyncStore()
+        await store.failDelete(true)
+        let preferences = AppPreferences.syncOn()
+        let sync = makeController(store, preferences: preferences)
+        sync.launch()
+        await sync.settle()
+        await sync.observeStatus()
+        sync.deleteServerData()
+        await sync.settle()
+        XCTAssertTrue(preferences.isSidebarSyncEnabled)
+        XCTAssertTrue(sync.isRunning)
+        XCTAssertEqual(sync.deleteError, "offline")
+        XCTAssertEqual(sync.card, SyncCardState(isToggleEnabled: true, statusLine: "Deleting iCloud data failed: offline", isWarning: true))
+        // The next toggle clears it.
+        sync.setEnabled(false)
+        XCTAssertNil(sync.deleteError)
+    }
+
+    /// Without a workspace store or a backend there is nothing to delete.
+    func testDeleteICloudDataNeedsBackendAndDatabase() async {
+        let store = RecordingSyncStore()
+        let sync = makeController(store, database: nil)
+        XCTAssertFalse(sync.canDeleteServerData)
+        sync.deleteServerData()
+        await sync.settle()
+        let calls = await store.calls
+        XCTAssertEqual(calls, [])
+        XCTAssertFalse(makeController(DisabledSyncStore()).canDeleteServerData)
+        XCTAssertEqual(SyncCardState.DeleteServerData.buttonTitle, "Delete iCloud Data…")
+    }
+
     // MARK: Card states [03 §账号卡]
 
     func testEveryCardStateText() {
@@ -352,6 +424,11 @@ final class SyncUITests: XCTestCase {
              SyncCardState(isToggleEnabled: true, statusLine: "Sync failed: CloudKit error 4. Last synced: 5 minutes ago", isWarning: true, action: .syncNow)),
             (.disabled, true,
              SyncCardState(isToggleEnabled: true, statusLine: "Starting sync…", isWarning: false)),
+            // D11 [03 §账号卡] inferred (analysis): records from a newer version are not overwritten.
+            (SyncStatus(phase: .idle, lastSyncedAt: synced, needsAppUpdate: true), true,
+             SyncCardState(isToggleEnabled: true, statusLine: "Some items were synced by a newer version of Open Arc. Update Open Arc to sync your changes to them. Last synced: 5 minutes ago", isWarning: true)),
+            (SyncStatus(phase: .failed(message: "CloudKit error 4"), needsAppUpdate: true), true,
+             SyncCardState(isToggleEnabled: true, statusLine: "Sync failed: CloudKit error 4. Not synced yet", isWarning: true, action: .syncNow)),
         ]
         for (status, isOn, expected) in cases {
             XCTAssertEqual(make(status, isOn), expected, "\(status.phase) on=\(isOn)")

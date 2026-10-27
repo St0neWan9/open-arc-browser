@@ -28,6 +28,9 @@ public final class SidebarSyncController: ObservableObject {
     /// Why the last "Sync Now" (or resume) failed, when the store threw instead of reporting a
     /// status. Cleared by the next attempt.
     @Published public private(set) var actionError: String?
+    /// Why the last "Delete iCloud Data…" failed (D12). Cleared by the next attempt and by the
+    /// "Sync Sidebar" toggle.
+    @Published public private(set) var deleteError: String?
 
     public let store: any SyncStore
     private let database: (any SyncLocalDatabase)?
@@ -102,6 +105,7 @@ public final class SidebarSyncController: ObservableObject {
             backendAvailable: isBackendAvailable,
             isSyncOn: preferences.isSidebarSyncEnabled,
             actionError: actionError,
+            deleteError: deleteError,
             formatDate: { SyncTimeFormat.relative($0, now: reference) }
         )
     }
@@ -121,6 +125,7 @@ public final class SidebarSyncController: ObservableObject {
         objectWillChange.send()
         preferences.isSidebarSyncEnabled = isOn
         actionError = nil
+        deleteError = nil
         if isOn {
             guard database != nil else { return }
             perform { await self.startStore() }
@@ -168,6 +173,36 @@ public final class SidebarSyncController: ObservableObject {
             self.actionError = nil
             await self.store.resetLocalSyncState()
             await self.store.enqueue(self.allRecordIDs().map(PendingChange.save))
+        }
+    }
+
+    // MARK: Delete iCloud Data (D12)
+
+    /// Whether "Delete iCloud Data…" can be offered: a sync backend and a workspace store exist.
+    public var canDeleteServerData: Bool { isBackendAvailable && database != nil }
+
+    /// "Delete iCloud Data…" after the user confirmed (plan D12; [03 §账号卡] inferred (analysis):
+    /// Arc can wipe its synced data). Deletes everything this app keeps in iCloud and the local
+    /// sync state, turns "Sync Sidebar" off and keeps the local workspace as it is. Turning sync on
+    /// again uploads every record (`needsFullSyncUpload`, plan Q12). When the deletion fails,
+    /// nothing changes and the reason shows on the card (`deleteError`).
+    public func deleteServerData() {
+        guard canDeleteServerData, let database else { return }
+        perform {
+            self.deleteError = nil
+            let wasRunning = self.isRunning
+            self.isRunning = false
+            do {
+                try await self.store.deleteServerData(database: database)
+            } catch {
+                self.isRunning = wasRunning
+                self.deleteError = Self.describe(error)
+                return
+            }
+            self.objectWillChange.send()
+            self.actionError = nil
+            self.preferences.isSidebarSyncEnabled = false
+            self.preferences.needsFullSyncUpload = true
         }
     }
 
