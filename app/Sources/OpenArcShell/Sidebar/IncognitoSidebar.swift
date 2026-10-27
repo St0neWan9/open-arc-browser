@@ -11,6 +11,14 @@ import OpenArcDesign
 // - a tab menu without Pin, Move to Space or Add to Favorites;
 // - the Spaces menu disabled.
 
+/// What a click on the dock's "+" did (see `SidebarViewModel.dockPlusClicked`).
+enum DockPlusOutcome: Equatable {
+    /// Normal window: the dock opens or closes the New menu. [06 §23] observed.
+    case toggleNewMenu
+    /// Incognito window: the command bar opened for a new tab. [06 §20.2] observed.
+    case openedCommandBar
+}
+
 extension SidebarViewModel {
     /// The incognito window's palette: the fixed colors of [06 §20.1] (observed, dark), in the
     /// appearance its pages use (View ▸ Appearance; Automatic follows the system). Which setting
@@ -32,10 +40,15 @@ extension SidebarViewModel {
         }
     }
 
-    /// The dock's "+": New Space in a normal window; the command bar for a new tab in an incognito
-    /// window. [06 §20.2] observed ("点「+」打开命令栏(新标签),不是新建 Space").
-    func dockPlusClicked() {
-        requestFromMenu(isIncognito ? .openCommandBar(.newTab) : .newSpace)
+    /// The dock's "+". In a normal window it opens the New menu (New Space · New Folder ‖ New Easel
+    /// · New Boost ‖ New Split · New Tab), which the dock shows: [06 §23] observed (B75). In an
+    /// incognito window it opens the command bar for a new tab: [06 §20.2] observed ("点「+」打开
+    /// 命令栏(新标签),不是新建 Space").
+    @discardableResult
+    func dockPlusClicked() -> DockPlusOutcome {
+        guard isIncognito else { return .toggleNewMenu }
+        requestFromMenu(.openCommandBar(.newTab))
+        return .openedCommandBar
     }
 
     /// Today tabs before / after `id`, in list order. For the incognito tab menu.

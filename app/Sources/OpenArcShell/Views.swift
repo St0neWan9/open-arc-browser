@@ -39,6 +39,10 @@ struct MainWindowContent: View {
     @State private var isFullScreen = false
     /// System setting Reduce Transparency: opaque chrome (B64, inferred).
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    /// The Space current when the creation view opened, to tell Create from Cancel (B75).
+    @State private var spaceBeforeCreate: UUID?
+    /// A just-created, empty Space showing its faint illustration. [06 §1] observed. B75.
+    @State private var greetedSpaceID: UUID?
 
     init(model: ShellModel, sidebar: SidebarViewModel, webToolbar: WebToolbarSettings? = nil) {
         self.model = model
@@ -131,6 +135,8 @@ struct MainWindowContent: View {
             .environment(\.translationModel, model.translation)
             .environment(\.isWebToolbarShown, layout.isWebToolbarShown)
             .environment(\.webToolbarCopyToast, copyToast)
+            // The dock "+" New menu runs its rows on this window. [06 §23] B75.
+            .environment(\.sidebarNewMenuTarget, model)
             // The window command bar and onboarding cover the sidebar: presses go to them.
             .environment(\.sidebarAcceptsPointer, !(model.isCommandBarPresented && model.commandBarPaneTabID == nil)
                          && !model.controller.onboarding.isShown(in: model))
@@ -152,6 +158,17 @@ struct MainWindowContent: View {
         }
         .ignoresSafeArea()
         .animation(ShellMotion.spaceCreateFade, value: model.spaceFlow.isCreating)
+        .onChange(of: model.spaceFlow.isCreating) { _, isCreating in
+            if isCreating {
+                spaceBeforeCreate = sidebar.selectedSpaceID
+                greetedSpaceID = nil
+            } else {
+                greetedSpaceID = NewSpaceIllustrationTrigger.spaceToGreet(
+                    startSpaceID: spaceBeforeCreate, selectedSpaceID: sidebar.selectedSpaceID,
+                    isSelectedSpaceEmpty: sidebar.snapshot.isEmptySpace
+                )
+            }
+        }
         .modifier(SpaceFlowSheets(flow: model.spaceFlow, workspace: sidebar.workspace, palette: model.windowPalette))
         .overlay(alignment: .topLeading) { themeEditorAnchor }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.
@@ -181,14 +198,24 @@ struct MainWindowContent: View {
     /// Sidebar (or the Create Space view) and the web panel: the normal browser view.
     @ViewBuilder
     private func browserContent(layout: MainWindowLayout, palette: ThemePalette) -> some View {
+        let sidebarSize = layout.sidebarFrame.size
         if model.spaceFlow.isCreating {
-            NewSpaceView(flow: model.spaceFlow, palette: palette)
-                .frame(width: layout.sidebarFrame.width, height: layout.sidebarFrame.height)
+            // The dock stays at the bottom with a "Create Space" placeholder item. [06 §1] observed.
+            let dockLayout = SidebarLayout(windowSize: sidebarSize, isWebToolbarShown: layout.isWebToolbarShown)
+            ZStack(alignment: .topLeading) {
+                NewSpaceView(flow: model.spaceFlow, palette: palette)
+                    .frame(width: sidebarSize.width, height: max(0, dockLayout.dockFrame.minY))
+                SidebarDockView(viewModel: sidebar, layout: dockLayout, isCreatingSpace: true, paletteOverride: palette)
+                    .frame(width: dockLayout.width, height: dockLayout.dockFrame.height)
+                    .offset(y: dockLayout.dockFrame.minY)
+            }
+            .frame(width: sidebarSize.width, height: sidebarSize.height, alignment: .topLeading)
         } else if model.isSidebarVisible {
             // Slides out to the left while the web panel expands. Timing: `ShellMotion.sidebarToggle`.
             SidebarView(viewModel: sidebar)
                 .environment(\.siteControlsModel, model.siteControls)
-                .frame(width: layout.sidebarFrame.width, height: layout.sidebarFrame.height)
+                .frame(width: sidebarSize.width, height: sidebarSize.height)
+                .overlay(alignment: .topLeading) { newSpaceIllustration(sidebarSize: sidebarSize, layout: layout, palette: palette) }
                 .transition(.move(edge: .leading))
         }
 
@@ -223,6 +250,24 @@ struct MainWindowContent: View {
             WebPanelWithToolbar(model: model, sidebar: sidebar, size: layout.webPanelFrame.size) { page }
         } else {
             page
+        }
+    }
+
+    /// The faint illustration of a just-created, empty Space, centered in its list area until it
+    /// fades. [06 §1] observed. B75.
+    @ViewBuilder
+    private func newSpaceIllustration(sidebarSize: CGSize, layout: MainWindowLayout, palette: ThemePalette) -> some View {
+        if let spaceID = greetedSpaceID, spaceID == sidebar.selectedSpaceID, sidebar.snapshot.isEmptySpace {
+            let list = SidebarLayout(windowSize: sidebarSize, isWebToolbarShown: layout.isWebToolbarShown,
+                                     favoritesTilesHeight: sidebar.favoritesTilesHeight)
+            // Below the "+ New Tab" row, centered in the rest of the list. inferred.
+            let top = list.firstRowTop + list.rowPitch
+            NewSpaceIllustration(tint: palette.primaryText.swiftUI) {
+                if greetedSpaceID == spaceID { greetedSpaceID = nil }
+            }
+            .id(spaceID)
+            .frame(width: sidebarSize.width, height: max(0, list.dockFrame.minY - top))
+            .offset(y: top)
         }
     }
 
