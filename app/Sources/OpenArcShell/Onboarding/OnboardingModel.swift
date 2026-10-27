@@ -4,8 +4,9 @@ import OpenArcModel
 import OpenArcDesign
 import OpenArcPersistence
 
-// First-run onboarding (plan D9). OWN DESIGN: Arc's onboarding was never captured (plan E6), so
-// nothing here copies it. Steps, wording, sizes and timing are ours; each step is optional and the
+// First-run onboarding (plan D9, restyled in B53). The steps and their wording are our own (D9);
+// the look follows the captured onboarding ([06 §27.1–27.4]): a full-window welcome screen, then a
+// split layout with one D9 step per screen in the white left column. Each step is optional and the
 // whole flow can be skipped at any point. No network, no AI.
 //
 // The flow is app-level (one per `WorkspaceController`) and shown in one browser window at a time
@@ -31,6 +32,16 @@ public final class OnboardingModel: ObservableObject {
     /// The steps in order. Own design (D9).
     public enum Step: Int, CaseIterable, Sendable {
         case welcome, space, importBookmarks, defaultBrowser, sync, done
+    }
+
+    /// The two screens of the flow. [06 §27.1] observed: a full-window welcome screen first;
+    /// [06 §27.2] observed: then a split layout. [06 §27.4] inferred: our D9 steps after the
+    /// welcome go into the split layout's left column, one step per screen.
+    public enum Screen: Sendable {
+        /// Full-window gradient, headline and the arrow button. [06 §27.1]
+        case welcome
+        /// White left column with the step, gradient right column with the demo. [06 §27.2]
+        case split
     }
 
     /// The flow wants to be on screen (first launch, or Help ▸ Show Welcome Again).
@@ -94,6 +105,24 @@ public final class OnboardingModel: ObservableObject {
     // MARK: Navigation
 
     public var canGoBack: Bool { step != .welcome && step != .done }
+
+    /// The screen that shows `step`. [06 §27.4] inferred.
+    public static func screen(for step: Step) -> Screen { step == .welcome ? .welcome : .split }
+
+    /// The screen of the current step.
+    public var screen: Screen { Self.screen(for: step) }
+
+    /// Whether the primary button is enabled. On the Space step it needs a name (the button's
+    /// disabled state is [06 §27.3] observed; requiring a name is our own rule). `next()` itself
+    /// still accepts an empty name and keeps the old one.
+    public var isContinueEnabled: Bool {
+        step != .space || !spaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The right column's demo shows the Space being named, with its live theme, instead of
+    /// cycling through the sample Spaces. Our own choice: the window background is covered by
+    /// the split layout ([06 §27.2] observed), so this is where the theme pick shows. inferred.
+    public var showsLiveSpaceDemo: Bool { step == .space }
 
     /// Continue: applies the current step's pending input, then moves on. Continue on the last
     /// step finishes the flow.
@@ -196,5 +225,27 @@ public final class OnboardingModel: ObservableObject {
             preferences.isSidebarSyncEnabled = isOn
             if !isOn { preferences.needsFullSyncUpload = true }
         }
+    }
+}
+
+/// The demo card in the split layout's right column cycles through sample Spaces. [06 §27.2]
+/// observed: about every 3 s, with a crossfade. Pure: the view passes the dates of its timeline,
+/// tests pass their own.
+enum OnboardingCarousel {
+    /// Time each sample stays up. [06 §27.2] observed ≈ 3 s.
+    static let interval: TimeInterval = 3
+    /// Crossfade between two samples. unknown (our choice, shorter than the interval).
+    static let crossfade: TimeInterval = 0.6
+    /// Slack for timeline dates that land a hair before a tick (floating point).
+    private static let tolerance: TimeInterval = 0.001
+
+    /// Index of the sample on screen at `now` for a carousel started at `start`: one step per
+    /// `interval`, wrapping after the last of `count` samples; 0 before `start` or when empty.
+    static func index(start: Date, now: Date, count: Int, interval: TimeInterval = interval) -> Int {
+        guard count > 0, interval > 0 else { return 0 }
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed > 0 else { return 0 }
+        let ticks = Int((elapsed + tolerance) / interval)
+        return ticks % count
     }
 }
