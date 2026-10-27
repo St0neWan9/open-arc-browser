@@ -158,3 +158,54 @@ struct NewSpaceView: View {
         }.padding(.trailing, -T.themeRowAnchorOutset))
     }
 }
+
+// MARK: - New empty Space illustration
+
+/// When the faint illustration of a new, empty Space shows. [06 §1] observed: "创建后侧边栏用约
+/// 0.3 秒淡入过渡,新 Space 空状态先显示一个淡色双手插画再消失".
+enum NewSpaceIllustrationTrigger {
+    /// The Space to show the illustration in when the creation view closes: the selected Space if
+    /// "Create Space" made it (the selection moved away from the Space current when the view
+    /// opened) and it is empty. Cancel leaves the selection, so nothing shows. inferred.
+    static func spaceToGreet(startSpaceID: UUID?, selectedSpaceID: UUID?, isSelectedSpaceEmpty: Bool) -> UUID? {
+        guard let selectedSpaceID, selectedSpaceID != startSpaceID, isSelectedSpaceEmpty else { return nil }
+        return selectedSpaceID
+    }
+
+    /// Opacity while shown: faint. [06 §1] observed "淡色"; the value is inferred.
+    static let opacity: Double = 0.18
+    /// Seconds it stays before fading, and the fade. [06 §1] observed that it goes away; both
+    /// durations are inferred (unknown in the capture).
+    static let holdDuration: Double = 1.4
+    static let fadeDuration: Double = 0.6
+}
+
+/// The faint illustration in the list area of a just-created, empty Space; it fades away on its
+/// own. Our own art (open hands with sparkles from SF Symbols), not the reference's drawing.
+struct NewSpaceIllustration: View {
+    let tint: Color
+    /// Called once it has faded out.
+    let onFinished: () -> Void
+    @State private var isShown = false
+
+    private typealias N = NewSpaceIllustrationTrigger
+
+    var body: some View {
+        Image(systemName: "hands.sparkles")
+            .font(.system(size: 54, weight: .light))
+            .foregroundStyle(tint)
+            .opacity(isShown ? N.opacity : 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .task {
+                // Fades in with the sidebar's create transition, then away. [06 §1] observed ≈ 0.3 s.
+                withAnimation(ShellMotion.spaceCreateFade) { isShown = true }
+                try? await Task.sleep(nanoseconds: UInt64((N.holdDuration) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: N.fadeDuration)) { isShown = false }
+                try? await Task.sleep(nanoseconds: UInt64(N.fadeDuration * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                onFinished()
+            }
+    }
+}

@@ -500,43 +500,109 @@ struct SidebarSpaceNameRowView: View {
     }
 }
 
+/// Dock values the spec does not pin down.
+enum SidebarDockLocalTokens {
+    /// Diameter of the "Create Space" placeholder's dashed circle. unknown (its look was not
+    /// recorded); about the ink of a Space glyph ([07 §4] observed ≈ 11 × 15).
+    static let createSpacePlaceholderSize: CGFloat = 13
+}
+
+/// One item between Home and "+" in the dock: a Space, or the "Create Space" placeholder shown
+/// while the creation view is up. [06 §1] observed ("底部 Dock 先插入一个「Create Space」占位项").
+enum SidebarDockEntry: Equatable {
+    case space(Space)
+    case createSpacePlaceholder
+
+    var id: String {
+        switch self {
+        case .space(let space): space.id.uuidString
+        case .createSpacePlaceholder: "createSpacePlaceholder"
+        }
+    }
+
+    /// The dock items in order. While a Space is being created the placeholder sits right after
+    /// the current Space, where the new Space will be inserted ([06 §1] observed: the new Space
+    /// goes after the current one; the placeholder's position is inferred from that). Without a
+    /// current Space it goes last.
+    static func entries(spaces: [Space], selectedSpaceID: UUID?, isCreatingSpace: Bool) -> [SidebarDockEntry] {
+        var entries = spaces.map(SidebarDockEntry.space)
+        guard isCreatingSpace else { return entries }
+        let index = spaces.firstIndex { $0.id == selectedSpaceID }.map { $0 + 1 } ?? entries.count
+        entries.insert(.createSpacePlaceholder, at: index)
+        return entries
+    }
+}
+
 /// Bottom dock, centered on y = H − 25 [07 §4] observed: a Home button at x 8 (32 × 32), the Space
 /// icons sharing x 42–234 (current opaque, others ≈ 33 % with dark ink; ≈ 50 % / ≈ 12 % with light
-/// ink, B32 round-1 PX), and "+" (New Space) at x 236.
+/// ink, B32 round-1 PX), and "+" at x 236, which opens the New menu ([06 §23] observed, B75; an
+/// incognito window's "+" opens the command bar, [06 §20.2] observed).
+/// While a Space is being created the dock stays under the creation view with a "Create Space"
+/// placeholder as the current item ([06 §1] observed); it ignores clicks then (inferred).
 struct SidebarDockView: View {
     @ObservedObject var viewModel: SidebarViewModel
     let layout: SidebarLayout
+    /// The creation view is up: show the placeholder item. [06 §1] observed.
+    var isCreatingSpace = false
+    /// The window palette when it is not the Space's (the creation view's light neutral theme).
+    var paletteOverride: ThemePalette? = nil
+    /// The window whose New menu rows run. nil (previews) draws them disabled.
+    @Environment(\.sidebarNewMenuTarget) private var newMenuTarget
+    @State private var isNewMenuShown = false
 
     var body: some View {
-        let palette = viewModel.palette
+        let palette = paletteOverride ?? viewModel.palette
         let tint = palette.primaryText.swiftUI.opacity(palette.inkOpacity.dockButton)
         let top = layout.dockFrame.minY
-        let spaces = viewModel.dockSpaces
+        let entries = SidebarDockEntry.entries(spaces: viewModel.dockSpaces, selectedSpaceID: viewModel.selectedSpaceID,
+                                               isCreatingSpace: isCreatingSpace)
         ZStack(alignment: .topLeading) {
             dockButton(layout.dockHomeFrame, top: top, symbol: SidebarLocalTokens.dockHomeSymbol,
                        glyphSize: SidebarLocalTokens.dockHomeGlyphSize, tint: tint,
                        label: "Library", id: "openarc.sidebar.dock.home") {
                 viewModel.requestFromMenu(.openLibrary)
             }
-            ForEach(Array(zip(spaces, layout.dockItemFrames(count: spaces.count))), id: \.0.id) { space, frame in
-                dockItem(space, frame: frame, top: top, palette: palette)
+            ForEach(Array(zip(entries, layout.dockItemFrames(count: entries.count))), id: \.0.id) { entry, frame in
+                switch entry {
+                case .space(let space): dockItem(space, frame: frame, top: top, palette: palette)
+                case .createSpacePlaceholder: createSpacePlaceholder(frame: frame, top: top, palette: palette)
+                }
             }
             dockButton(layout.dockPlusFrame, top: top, symbol: "plus", glyphSize: SidebarLocalTokens.dockPlusGlyphSize,
                        glyphWeight: SidebarLocalTokens.dockPlusGlyphWeight, tint: tint,
-                       label: viewModel.isIncognito ? "New Tab" : "New Space", id: "openarc.sidebar.dock.plus") {
-                viewModel.dockPlusClicked()
+                       label: viewModel.isIncognito ? "New Tab" : "New", id: "openarc.sidebar.dock.plus",
+                       presenter: AnyView(newMenuPresenter(palette: palette))) {
+                if viewModel.dockPlusClicked() == .toggleNewMenu { isNewMenuShown.toggle() }
             }
         }
         .frame(width: layout.width, height: layout.dockFrame.height, alignment: .topLeading)
+        .disabled(isCreatingSpace)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.dock")
+    }
+
+    /// The New menu above the "+" button while it is open. [06 §23] observed.
+    private func newMenuPresenter(palette: ThemePalette) -> some View {
+        let target = newMenuTarget
+        let menu = SidebarNewMenuView(
+            palette: palette,
+            isEnabled: { target?.canPerformNewMenuItem($0) ?? false },
+            onSelect: { item in
+                isNewMenuShown = false
+                target?.performNewMenuItem(item)
+            }
+        )
+        return SidebarNewMenuPresenter(content: isNewMenuShown && !isCreatingSpace ? AnyView(menu) : nil, palette: palette) {
+            isNewMenuShown = false
+        }
     }
 
     /// Home and "+": 32 × 32 hit areas; glyph sizes give the measured ink (+ 14 × 15 for 14 × 14,
     /// stack 13.5 × 16 for 13.5 × 16.5). [07 §4] observed ink; the Home glyph's shape is our own.
     private func dockButton(_ frame: CGRect, top: CGFloat, symbol: String, glyphSize: CGFloat,
                             glyphWeight: Font.Weight = .regular, tint: Color,
-                            label: String, id: String, action: @escaping () -> Void) -> some View {
+                            label: String, id: String, presenter: AnyView? = nil,
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: glyphSize, weight: glyphWeight))
@@ -546,13 +612,32 @@ struct SidebarDockView: View {
         }
         .buttonStyle(.plain)
         .frame(width: frame.width, height: frame.height)
+        .background { if let presenter { presenter } }
         .offset(x: frame.minX, y: frame.minY - top)
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)
     }
 
+    /// The "Create Space" placeholder: the current item while the creation view is up. [06 §1]
+    /// observed (the item exists); its look is unknown: a dashed circle, our own.
+    private func createSpacePlaceholder(frame: CGRect, top: CGFloat, palette: ThemePalette) -> some View {
+        let size = SidebarDockLocalTokens.createSpacePlaceholderSize
+        return Circle()
+            .strokeBorder(palette.primaryText.swiftUI, style: StrokeStyle(lineWidth: 1.2, dash: [2.5, 2]))
+            .frame(width: size, height: size)
+            .opacity(palette.inkOpacity.dockCurrentSpace)
+            .frame(width: frame.width, height: frame.height)
+            .offset(x: frame.minX, y: frame.minY - top)
+            .help("Create Space")
+            .accessibilityElement()
+            .accessibilityLabel("Create Space")
+            .accessibilityAddTraits(.isSelected)
+            .accessibilityIdentifier("openarc.sidebar.dock.createSpace")
+    }
+
     private func dockItem(_ space: Space, frame: CGRect, top: CGFloat, palette: ThemePalette) -> some View {
-        let isCurrent = space.id == viewModel.selectedSpaceID
+        // The placeholder is the current item while a Space is being created. inferred.
+        let isCurrent = space.id == viewModel.selectedSpaceID && !isCreatingSpace
         let radius = CGFloat(Metrics.Sidebar.addressFieldCornerRadius)
         return Button {
             viewModel.selectSpace(space.id)
