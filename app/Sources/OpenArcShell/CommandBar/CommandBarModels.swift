@@ -350,6 +350,8 @@ public enum CommandBarResultKind: Hashable, Sendable {
     case pinnedTab
     case favoriteTab
     case archivedItem
+    /// A page of the profile's browsing history (plan B66): not open, not archived.
+    case historyItem
     case command
     /// "Go to “<Space>”". inferred.
     case space
@@ -377,6 +379,9 @@ public enum CommandBarIconHint: Hashable, Sendable {
     case site(faviconURL: URL?)
     case pinned
     case archive
+    /// A browsing history page: a clock glyph. [07 §9] observed the row glyphs "globe, magnifier,
+    /// clock"; the clock standing for history rows is inferred.
+    case history
     case command
     case space
     case search
@@ -445,6 +450,8 @@ public struct CommandBarResult: Identifiable, Hashable, Sendable {
     /// Default shortcut of the row's command, drawn at the row's right end. [06 §16.2] observed
     /// for command rows ([02] observed keys); the ⌃N hints of "Go to" rows are inferred.
     public var shortcutHint: String?
+    /// History rows: the engine's frecency, 0...1 (`HistoryMatch.frecency`). 0 for other rows.
+    public var frecency: Double = 0
 
     public init(
         id: String,

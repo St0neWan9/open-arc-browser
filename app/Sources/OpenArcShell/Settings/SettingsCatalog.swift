@@ -141,8 +141,8 @@ public enum SettingsCatalog {
         // Live (B83): Chromium's search engine manager for the profile, in a tab (inferred target,
         // `ProfileEnginePage`).
         SettingsControl("profiles.searchSettings", "Search Settings…", .button, .live),
-        // Suggestions come from the engine's suggest service.
-        SettingsControl("profiles.searchSuggestions", "Include search engine suggestions", .toggle(defaultValue: true), .pending(task: "C9")),
+        // Per-profile `ProfileSettings.includesSearchSuggestions`; the command bar asks the engine (B66).
+        SettingsControl("profiles.searchSuggestions", "Include search engine suggestions", .toggle(defaultValue: true), .live),
         SettingsControl("profiles.archiveTabsAfter", "Archive tabs after", .picker(defaultValue: ArchiveLifetime.default.displayName), .live),
         // Default app for new documents (Notes/Easels are E3 gaps); default value unknown.
         SettingsControl("profiles.newDocuments", "New documents", .picker(defaultValue: "—"), .pending(task: "E3")),

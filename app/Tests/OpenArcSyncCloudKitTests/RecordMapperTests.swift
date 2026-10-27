@@ -66,7 +66,9 @@ final class RecordMapperTests: XCTestCase {
         let ck = mapper.makeCKRecord(.profile(profile), systemFields: nil)
         XCTAssertEqual(ck[ProfileFields.searchEngine.key] as? String, "ecosia")
         XCTAssertEqual(ck[ProfileFields.todayLifetime.key] as? Double, 7 * 24 * 3600)
-        for field in [ProfileFields.searchEngine, ProfileFields.todayLifetime] {
+        // B66: "Include search engine suggestions" ([03 §Profiles] observed toggle) as 0/1.
+        XCTAssertEqual(ck[ProfileFields.includesSearchSuggestions.key] as? Int64, 0)
+        for field in [ProfileFields.searchEngine, ProfileFields.todayLifetime, ProfileFields.includesSearchSuggestions] {
             XCTAssertFalse(field.encrypted)
             XCTAssertEqual(field.group, Profile.FieldGroup.settings.rawValue)
         }
@@ -76,6 +78,7 @@ final class RecordMapperTests: XCTestCase {
 
         ck[ProfileFields.searchEngine.key] = nil
         ck[ProfileFields.todayLifetime.key] = nil
+        ck[ProfileFields.includesSearchSuggestions.key] = nil
         ck[MetaFields.groupTime(Profile.FieldGroup.settings.rawValue).key] = nil
         guard case .profile(let old) = try mapper.decode(ck) else { return XCTFail("wrong type") }
         XCTAssertEqual(old.settings, .default)

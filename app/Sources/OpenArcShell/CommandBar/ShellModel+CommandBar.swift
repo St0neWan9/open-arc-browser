@@ -1,5 +1,6 @@
 import Foundation
 import OpenArcModel
+import OpenArcEngine
 
 // Window state for the command bar's command and space rows. The sources read it at query time,
 // so availability ("Close this Split Pane" only with a split, back/forward only with history) and
@@ -45,11 +46,60 @@ extension ShellModel {
         let state: @Sendable () async -> CommandBarCommandState = { @MainActor [weak self] in
             self?.commandBarCommandState ?? .everything
         }
-        commandBar.sources = commandBarDefaultSources(workspace: workspace, commandState: state)
-        paneCommandBar.sources = commandBarDefaultSources(workspace: workspace, commandState: state)
+        commandBar.sources = commandBarSources(workspace: workspace, commandState: state)
+        paneCommandBar.sources = commandBarSources(workspace: workspace, commandState: state)
         // The incognito window's empty bar lists the help rows only. [06 §20.1] observed (B61).
         commandBar.listsHelpOnlyWhenEmpty = isIncognito
         paneCommandBar.listsHelpOnlyWhenEmpty = isIncognito
+    }
+
+    /// The default sources plus the engine's browsing history and search suggestions (plan B66).
+    func commandBarSources(
+        workspace: @escaping @Sendable () async -> WorkspaceState,
+        commandState: @escaping @Sendable () async -> CommandBarCommandState
+    ) -> [any CommandBarSource] {
+        commandBarDefaultSources(
+            workspace: workspace,
+            commandState: commandState,
+            history: commandBarHistorySource(),
+            suggestions: commandBarSuggestionProvider(),
+            suggestionsAreDeferred: true
+        )
+    }
+
+    /// History rows from the engine for the window's profile. An incognito window has none: its
+    /// browsing is never recorded, and its bar lists "no history" ([06 §20.1] observed). nil there.
+    func commandBarHistorySource() -> CommandBarHistorySource? {
+        guard !isIncognito else { return nil }
+        let autocomplete = dependencies.engine.autocomplete
+        let sidebar = self.sidebar
+        let clock = controller.now
+        let now: @Sendable () async -> Date = { @MainActor in clock() }
+        return CommandBarHistorySource(now: now) { @MainActor text, maxCount in
+            guard let profileID = sidebar.currentProfileID else { return [] }
+            return await autocomplete.historyMatches(for: text, profileID: profileID, maxCount: maxCount)
+        }
+    }
+
+    /// Search suggestions from the engine, asked of the search engine of the window's profile
+    /// ([03 §Profiles] observed "Search engine") while its "Include search engine suggestions" is
+    /// on (observed toggle). An incognito window follows its parent profile's settings and asks
+    /// through its off-the-record context (inferred: the spec records suggestions only for normal
+    /// windows, [06 §16.2, §19.1, §23]; Chrome also suggests in incognito).
+    func commandBarSuggestionProvider() -> CommandBarEngineSuggestionProvider {
+        let autocomplete = dependencies.engine.autocomplete
+        let incognito = isIncognito
+        return CommandBarEngineSuggestionProvider(autocomplete: autocomplete) { @MainActor [weak self] query in
+            guard let self, let profileID = self.sidebar.currentProfileID else { return nil }
+            let settings = self.currentProfileSettings
+            guard settings.includesSearchSuggestions else { return nil }
+            return SearchSuggestionRequest(
+                query: query,
+                urlTemplate: settings.searchEngine.suggestURLTemplate,
+                profileID: profileID,
+                isOffTheRecord: incognito
+            )
+        }
     }
 }
 

@@ -42,6 +42,8 @@ extension WorkspaceController {
     /// typed URLs) the cached icon of their site.
     func commandBarFavicon(for result: CommandBarResult) -> Data? {
         if case .switchToTab(let id) = result.action, let data = faviconImage(for: id) { return data }
+        // History rows (B66): the site's icon when this window has seen the site; else the clock.
+        if case .history = result.iconHint { return favicons.image(forPage: result.url) }
         guard case .site(let iconURL) = result.iconHint else { return nil }
         return favicons.image(iconURL: iconURL, pageURL: result.url)
     }

@@ -282,7 +282,9 @@ struct ProfilesPane: View {
                     CatalogButton(id: "profiles.searchSettings") { model.openEnginePage(.searchSettings) }
                         .disabled(!model.canOpenEditedProfilePages)
                 }
-                PendingToggle(id: "profiles.searchSuggestions")
+                Toggle(SettingsCatalog.control("profiles.searchSuggestions").label, isOn: Binding(
+                    get: { model.includesSearchSuggestions }, set: { model.includesSearchSuggestions = $0 }
+                ))
                 // ⓘ: the spec notes an info button next to this dropdown; its text was not recorded.
                 Picker(SettingsCatalog.control("profiles.archiveTabsAfter").label, selection: Binding(
                     get: { model.archiveLifetime }, set: { model.archiveLifetime = $0 }

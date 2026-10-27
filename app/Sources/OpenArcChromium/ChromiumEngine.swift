@@ -54,6 +54,9 @@ public final class ChromiumEngine: BrowserEngine {
     public let importer: any EngineImporter
     /// Chromium's translate component with shell-drawn surfaces (plan B47).
     public let translation: any EngineTranslation
+    /// History search and search suggestions for the command bar (plan B66). Empty on a framework
+    /// built before B66 (`ChromiumAutocomplete.capabilities`).
+    public let autocomplete: any EngineAutocomplete
 
     private let core: ChromiumEngineCore
     private let broadcaster: AsyncBroadcaster<EngineEvent>
@@ -85,6 +88,7 @@ public final class ChromiumEngine: BrowserEngine {
         adBlocking = ChromiumAdBlocking(core: core)
         importer = ChromiumImporter(core: core)
         translation = ChromiumTranslation(core: core)
+        autocomplete = ChromiumAutocomplete(core: core)
         core.startAtLaunch()
     }
 

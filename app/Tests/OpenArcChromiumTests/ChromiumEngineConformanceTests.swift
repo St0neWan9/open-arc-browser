@@ -78,6 +78,13 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         try await tab.goBack()
         try await waitForState(tab) { $0.title == "First" && $0.navigation.canGoForward }
 
+        // Plan B66: history search. A framework built before B66 reports no capability and answers
+        // nothing; with it, the "First" page loaded above (a data: URL) is not history, and a query
+        // returns promptly.
+        let profileHistory = await engine.autocomplete.historyMatches(for: "First", profileID: tab.profileID, maxCount: 5)
+        XCTAssertTrue(profileHistory.allSatisfy { $0.url.scheme == "http" || $0.url.scheme == "https" })
+        if !engine.autocomplete.capabilities.contains(.history) { XCTAssertEqual(profileHistory, []) }
+
         // A JavaScript alert reaches the dialog stream; answering it lets the page continue.
         let dialogs = tab.dialogRequests()
         let alertPage = try XCTUnwrap(URL(string: "data:text/html,<script>alert('hello');document.title='Done'</script>"))

@@ -1,15 +1,25 @@
 import Foundation
 import OpenArcModel
+import OpenArcEngine
 
 // Pluggable candidate sources. A source returns unranked candidates for the current query; the
-// pure `CommandBarRanker` filters, orders and de-duplicates them. Sources never touch the network:
-// web suggestions come through an injected provider.
+// pure `CommandBarRanker` filters, orders and de-duplicates them. Sources never touch the network
+// themselves: browsing history and web suggestions come from the engine (`EngineAutocomplete`,
+// plan B66) through injected closures and providers.
 
 /// A producer of command bar candidates.
 public protocol CommandBarSource: Sendable {
     /// Returns candidates for the query. May return everything and let the ranker filter, but must
-    /// be deterministic (sorted, no dictionary-order leaks).
+    /// be deterministic (sorted, no dictionary-order leaks). Should return promptly once its task
+    /// is cancelled (the next keystroke cancels the previous query).
     func results(for context: CommandBarQueryContext) async -> [CommandBarResult]
+    /// A slow source (network): the bar shows the other sources' rows first and merges these when
+    /// they arrive (`CommandBarViewModel.refresh`). Default false.
+    var isDeferred: Bool { get }
+}
+
+extension CommandBarSource {
+    public var isDeferred: Bool { false }
 }
 
 // MARK: - Workspace tabs (open, pinned, favorite)
@@ -109,6 +119,66 @@ public struct CommandBarArchiveSource: CommandBarSource {
                 lastActiveAt: item.archivedAt,
                 sourceOrder: index
             )
+        }
+    }
+}
+
+// MARK: - Browsing history (plan B66)
+
+/// Pages of the profile's browsing history that match the typed text (the engine's history, not
+/// the sidebar: a page that was closed and never archived shows up too, F1 #2). Never listed for
+/// an empty query ([04 §command bar] observed: the empty list is open tabs and an app command) and
+/// never in an incognito window ([06 §20.1] observed: "no history"). Activating a row opens the
+/// page like a typed URL (the current tab for ⌘L, a new tab for ⌘T).
+public struct CommandBarHistorySource: CommandBarSource {
+    /// Right-hand text of history rows. unknown (not shown in the spec); the archive rows' word.
+    public static let openLabel = CommandBarArchiveSource.openLabel
+    /// History rows asked from the engine per query. inferred (the five-row panel of
+    /// [04 §command bar] leaves room for a few).
+    public static let defaultMaxCount = 4
+
+    private let matches: @Sendable (_ text: String, _ maxCount: Int) async -> [HistoryMatch]
+    private let now: @Sendable () async -> Date
+    private let maxCount: Int
+
+    /// - Parameters:
+    ///   - now: the clock frecency is measured against.
+    ///   - matches: the engine's history query for the window's profile
+    ///     (`EngineAutocomplete.historyMatches`).
+    public init(
+        maxCount: Int = CommandBarHistorySource.defaultMaxCount,
+        now: @escaping @Sendable () async -> Date = { Date() },
+        matches: @escaping @Sendable (_ text: String, _ maxCount: Int) async -> [HistoryMatch]
+    ) {
+        self.matches = matches
+        self.now = now
+        self.maxCount = maxCount
+    }
+
+    public func results(for context: CommandBarQueryContext) async -> [CommandBarResult] {
+        let query = context.trimmedText
+        // The incognito bar (whose empty list is help rows only) lists no history. [06 §20.1] observed.
+        guard !query.isEmpty, !context.listsHelpOnlyWhenEmpty else { return [] }
+        let found = await matches(query, maxCount)
+        guard !Task.isCancelled else { return [] }
+        let at = await now()
+        return found.prefix(maxCount).enumerated().map { index, page in
+            let host = CommandBarTextNormalizer.host(page.url)
+            var row = CommandBarResult(
+                id: "history:\(page.url.absoluteString)",
+                kind: .historyItem,
+                title: page.title.isEmpty ? (host ?? page.url.absoluteString) : page.title,
+                subtitle: host,
+                url: page.url,
+                iconHint: .history,
+                actionLabel: Self.openLabel,
+                action: .openURL(page.url, target: context.mode.openTarget),
+                completion: page.url.absoluteString,
+                lastActiveAt: page.lastVisit,
+                sourceOrder: index
+            )
+            row.frecency = page.frecency(at: at)
+            return row
         }
     }
 }
@@ -271,10 +341,32 @@ public struct CommandBarTypedInputSource: CommandBarSource {
 
 // MARK: - Web search suggestions
 
-/// Supplies web search suggestions for a query. The real implementation (network) lives outside
-/// this folder; v1 ships `CommandBarStaticSuggestionProvider`.
+/// Supplies web search suggestions for a query: `CommandBarEngineSuggestionProvider` in the app,
+/// `CommandBarStaticSuggestionProvider` in previews and tests.
 public protocol CommandBarSuggestionProviding: Sendable {
     func suggestions(for query: String) async -> [String]
+}
+
+/// The engine's suggestions (`EngineAutocomplete.searchSuggestions`, plan B66) from the search
+/// engine of the window's profile. `request` reads the window state at query time and answers nil
+/// when the profile's "Include search engine suggestions" is off ([03 §Profiles] observed toggle),
+/// so a settings change applies from the next keystroke.
+public struct CommandBarEngineSuggestionProvider: CommandBarSuggestionProviding {
+    private let autocomplete: any EngineAutocomplete
+    private let request: @Sendable (_ query: String) async -> SearchSuggestionRequest?
+
+    public init(
+        autocomplete: any EngineAutocomplete,
+        request: @escaping @Sendable (_ query: String) async -> SearchSuggestionRequest?
+    ) {
+        self.autocomplete = autocomplete
+        self.request = request
+    }
+
+    public func suggestions(for query: String) async -> [String] {
+        guard let request = await request(query), !Task.isCancelled else { return [] }
+        return await autocomplete.searchSuggestions(request)
+    }
 }
 
 /// Offline provider: phrases from a fixed list that contain the query (case-insensitive). For
@@ -293,20 +385,25 @@ public struct CommandBarStaticSuggestionProvider: CommandBarSuggestionProviding 
     }
 }
 
-/// Web suggestion rows from an injected provider.
+/// Web suggestion rows from an injected provider: magnifier glyph ([07 §9] observed row glyphs),
+/// the suggestion as the title, "Search" on the right (unknown). Deferred by default: they come
+/// over the network, so the other rows show first.
 public struct CommandBarWebSuggestionsSource: CommandBarSource {
     private let provider: any CommandBarSuggestionProviding
     private let maxCount: Int
+    public let isDeferred: Bool
 
-    public init(provider: any CommandBarSuggestionProviding, maxCount: Int = 4) {
+    public init(provider: any CommandBarSuggestionProviding, maxCount: Int = 4, isDeferred: Bool = true) {
         self.provider = provider
         self.maxCount = maxCount
+        self.isDeferred = isDeferred
     }
 
     public func results(for context: CommandBarQueryContext) async -> [CommandBarResult] {
         let query = context.trimmedText
         guard !query.isEmpty else { return [] }
         let suggestions = await provider.suggestions(for: query)
+        guard !Task.isCancelled else { return [] }
         return suggestions.prefix(maxCount).enumerated().map { index, text in
             CommandBarResult(
                 id: "suggestion:\(index):\(text)",
@@ -323,18 +420,25 @@ public struct CommandBarWebSuggestionsSource: CommandBarSource {
 }
 
 /// The default set of sources for a workspace. `commandState` is the window state the command and
-/// space rows depend on; the default offers every command and no move rows.
+/// space rows depend on; the default offers every command and no move rows. `history` is the
+/// engine's history source (nil: no history rows); `suggestions` the web suggestion provider.
 public func commandBarDefaultSources(
     workspace: @escaping @Sendable () async -> WorkspaceState,
     commandState: @escaping @Sendable () async -> CommandBarCommandState = { .everything },
-    suggestions: any CommandBarSuggestionProviding = CommandBarStaticSuggestionProvider(phrases: [])
+    history: CommandBarHistorySource? = nil,
+    suggestions: any CommandBarSuggestionProviding = CommandBarStaticSuggestionProvider(phrases: []),
+    suggestionsAreDeferred: Bool = false
 ) -> [any CommandBarSource] {
-    [
+    var sources: [any CommandBarSource] = [
         CommandBarWorkspaceTabsSource(workspace: workspace),
         CommandBarArchiveSource(workspace: workspace),
+    ]
+    if let history { sources.append(history) }
+    sources += [
         CommandBarCommandsSource(state: commandState),
         CommandBarSpacesSource(workspace: workspace, state: commandState),
         CommandBarTypedInputSource(),
-        CommandBarWebSuggestionsSource(provider: suggestions),
+        CommandBarWebSuggestionsSource(provider: suggestions, isDeferred: suggestionsAreDeferred),
     ]
+    return sources
 }

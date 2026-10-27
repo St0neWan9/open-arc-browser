@@ -47,6 +47,7 @@ DEFINE SCHEMA
         naming_name             ENCRYPTED STRING,
         settings_searchEngine   STRING,
         settings_todayLifetime  DOUBLE,
+        settings_includesSearchSuggestions INT64,
         meta_createdAt          TIMESTAMP,
         meta_modifiedAt         TIMESTAMP,
         meta_version            INT64,

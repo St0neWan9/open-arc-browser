@@ -403,12 +403,16 @@ public protocol BrowserEngine: AnyObject, Sendable {
     /// History and password import from other browsers (plan D3b). Engines without one get
     /// `UnavailableImporter`.
     var importer: any EngineImporter { get }
+    /// Browsing history matches and search suggestions for the command bar (plan B66,
+    /// Autocomplete.swift). Engines without them get `UnavailableAutocomplete`.
+    var autocomplete: any EngineAutocomplete { get }
 }
 
 extension BrowserEngine {
     public var adBlocking: any EngineAdBlocking { UnavailableAdBlocking.shared }
     public var translation: any EngineTranslation { UnavailableTranslation.shared }
     public var importer: any EngineImporter { UnavailableImporter.shared }
+    public var autocomplete: any EngineAutocomplete { UnavailableAutocomplete.shared }
 }
 
 /// One live web contents.

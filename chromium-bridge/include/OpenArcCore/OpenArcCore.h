@@ -24,3 +24,4 @@
 #import <OpenArcCore/OACImport.h>
 #import <OpenArcCore/OACLinkPreview.h>
 #import <OpenArcCore/OACTranslation.h>
+#import <OpenArcCore/OACAutocomplete.h>
