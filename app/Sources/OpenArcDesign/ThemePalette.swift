@@ -9,9 +9,11 @@ public enum ResolvedAppearance: String, Hashable, Sendable, CaseIterable {
 
 /// Colors for one space, derived from its theme.
 ///
-/// The derivation follows docs/arc-spec/07-design-system.md §8 (E11): rules fitted to three preset
-/// colors in light and dark (`ThemeDerivation`). The rules are inferred; the sample values they
-/// reproduce are observed (JPEG, ±2/255 on flat fills; text colors from the accessibility tree).
+/// The derivation follows docs/arc-spec/07-design-system.md §8 (E11, refitted by E12 / B38 / B46 and
+/// checked on lossless captures by E8, §8.4) (`ThemeDerivation`). The rules are inferred; the sample
+/// values they reproduce are observed. Arc's window is slightly translucent ([07 §8.4]: ≈ 11 % light /
+/// 19 % dark of the blurred desktop shows through); these opaque colors match Arc over a mid-gray
+/// desktop (the E12 / E8 reference), not over every wallpaper.
 /// Window, sidebar, controls and separators are one color family per Space [07 §8] observed; the
 /// command bar, sheets and menus do not follow the theme color, only light or dark [07 §8] observed.
 public struct ThemePalette: Hashable, Sendable {
@@ -22,17 +24,18 @@ public struct ThemePalette: Hashable, Sendable {
     /// lighter). [07 §8] inferred, light and dark.
     public var controlFill: RGBAColor
     /// Selected tab row background (also the lifted drag row and the hover card). Dark ink:
-    /// mix(window, #F5F5F5, 0.90), near white; light ink: mix(window, #F5F5FF, 0.222), a muted
-    /// tone close to the window. It follows the ink, not light / dark. [07 §8.3] inferred (B46).
+    /// mix(window, #F7F7F7, 0.894), near white (E8 refit, [07 §8.4]); light ink: mix(window,
+    /// #F5F5FF, 0.222), a muted tone close to the window. It follows the ink, not light / dark.
+    /// [07 §8.3, §8.4] inferred.
     public var selectedTabFill: RGBAColor
     /// Command bar panel: #F9F9F9 light, #181818 dark, whatever the theme. [07 §5, §8] observed.
     public var commandBarBackground: RGBAColor
-    /// Highlighted command bar result: the theme hue at OKLCH L ≈ 0.735 (light) / ≈ 0.50 (dark).
-    /// [07 §8] observed samples; the rule (and its chroma factor) is inferred.
+    /// Highlighted command bar result: the theme hue at OKLCH L 0.73 (light) / 0.485 (dark).
+    /// [07 §8, §8.4] observed samples; the rule (and its chroma factor) is inferred.
     public var commandBarSelection: RGBAColor
     /// Text on the window background (tab and folder titles, toolbar icons): a dark color of the
-    /// theme's hue, OKLCH L ≈ 0.258, chroma ≈ 0.45 × the theme's; the same in dark. [07 §8] observed
-    /// values, inferred rule. White instead when the window is too dark for it (inferred).
+    /// theme's hue, OKLCH L 0.252, chroma 0.60 × the theme's; the same in dark. [07 §8, §8.4]
+    /// observed values (AX), inferred rule. White with a light-ink theme [07 §8.3].
     public var primaryText: RGBAColor
     /// Dimmed text (Space name, "Clear"): the chrome ink at the Space name opacity: black 45 %
     /// [07 §3] observed (AX); white ≈ 50 % on a light-ink window (B32 round-1 PX, inferred).
@@ -65,9 +68,10 @@ public struct ThemePalette: Hashable, Sendable {
     /// Rounded backdrop of small buttons on the panel (Little Arc ✕, unselected arrow box):
     /// black 4 % in light [07 §5] observed (#EFEFEF on #F9F9F9); white 8 % in dark, inferred.
     public var commandBarAccessoryFill: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.04)
-    /// Theme bubble and other floating panels drawn by us: near white tinted by the theme (light,
-    /// ≈ #FDF1FA for the purple sample) or the theme hue darkened (dark, ≈ #5C4457). [07 §6] observed
-    /// samples; OKLCH rule inferred.
+    /// Theme bubble and other floating panels drawn by us: near white tinted by the theme (light)
+    /// or a dark tone of the theme hue (dark), fitted so that the tint at
+    /// `Metrics.FloatingBubble.tintOpacity` over a neutral backdrop lands on Arc's bubble body.
+    /// [07 §6, §8.4] observed samples (E8 lossless); OKLCH rule inferred.
     public var floatingPanelBackground: RGBAColor = RGBAColor(hex: 0xFFFFFF)
     /// Sidebar drop target fill (the Space-name row while a tab is dragged over it): a darker tone
     /// of the theme, not gray. [06 §15.4] observed (E17, sidebar → band: lavender #DFE0FA →
@@ -97,7 +101,8 @@ public struct ThemePalette: Hashable, Sendable {
     /// when the window is too dark for black (inferred). Used with `Typography` opacities.
     /// [07 §3, §8] observed: black with alpha, not tinted.
     public var chromeInk: RGBAColor = RGBAColor(hex: 0x000000)
-    /// Hairline divider between pinned and Today: window × 0.87. [07 §4, §8] inferred.
+    /// Hairline divider between pinned and Today: window × 0.87 (dark ink), window + 16 % white
+    /// (light ink). [07 §4, §8, §8.4] inferred.
     public var separator: RGBAColor = RGBAColor(hex: 0xCCCCCC)
     /// Title on the selected tab row (on `selectedTabFill`): the row text color with dark ink
     /// ([07 §8] observed, the AX title color does not change); with light ink the same white as the
@@ -248,13 +253,15 @@ public enum ThemeDerivation {
     /// Round-1 PX (B32): #5247FE → #655CFE (≤ 1/255); inferred. The older "≈ 10 % white" of
     /// [04 §theme system] matches this case.
     public static let lightInkControlWhite: Double = 0.11
-    /// Separator and scroll-edge lines on a light-ink window: window + 5 % white. Round-1 PX (B32):
-    /// #5247FE → #5A52FD; inferred.
-    public static let lightInkSeparatorWhite: Double = 0.05
-    /// Selected row fill with dark ink = mix(window, #F5F5F5, 0.90). [07 §8, §8.3] inferred
-    /// (≤ 2.6/255 over 17 B46 samples).
-    public static let selectedRowMixColor = RGBAColor(hex: 0xF5F5F5)
-    public static let selectedRowMixAmount: Double = 0.90
+    /// Separator and scroll-edge lines on a light-ink window: window + 16 % white. [07 §8.4]
+    /// inferred: lossless E8 captures of the navy preset (light and dark) fit 0.16 within 0.5/255;
+    /// the former 5 % came from a JPEG reading of the 1 px line (B32 round 1) and missed by 13/255.
+    public static let lightInkSeparatorWhite: Double = 0.16
+    /// Selected row fill with dark ink = mix(window, #F7F7F7, 0.894). [07 §8.4] inferred: refitted
+    /// on 16 lossless E8 samples (8 presets × light / dark, max 0.6/255) and the 5 E11 samples
+    /// (max 1.3/255); the former mix(window, #F5F5F5, 0.90) missed them by 2.4 / 3.0.
+    public static let selectedRowMixColor = RGBAColor(hex: 0xF7F7F7)
+    public static let selectedRowMixAmount: Double = 0.894
     /// Selected row fill with light ink = mix(window, #F5F5FF, 0.222): a muted tone close to the
     /// window, not near white (navy dark #838498 → #9E9DB0). [07 §8.3] inferred, fitted to 16
     /// light-ink B46 samples in light and dark, max 1.7/255.
@@ -264,23 +271,32 @@ public enum ThemeDerivation {
     /// 36 E12 presets: ≤ 0.143 light ink, ≥ 0.204 dark ink, the same in light and dark; the
     /// midpoint is inferred.
     public static let lightInkThemeLuminance: Double = 0.17
-    /// Row text = OKLCH(L, chroma × factor, theme hue). [07 §8] inferred: L 0.25–0.265, chroma
-    /// 0.36–0.53 × the theme's over the three samples.
-    public static let rowTextLightness: Double = 0.258
-    public static let rowTextChromaFactor: Double = 0.45
-    /// Command bar selection = OKLCH(L, chroma × factor, theme hue). [07 §8]: values observed,
-    /// L inferred (≈ 0.73 light / 0.50 dark); chroma factor unknown (fitted 0.39–0.61 light,
-    /// 0.62–0.79 dark; the middle is used).
-    public static let commandBarSelectionLightness: Double = 0.735
-    public static let commandBarSelectionChromaFactor: Double = 0.5
-    public static let darkCommandBarSelectionLightness: Double = 0.50
-    public static let darkCommandBarSelectionChromaFactor: Double = 0.6
-    /// Theme bubble = OKLCH(L, chroma × factor, theme hue): light L 0.97 × 0.2, dark L 0.42 × 0.5.
-    /// [07 §6] observed samples (#FDF1FA / #5C4457 for purple); rule inferred.
-    public static let floatingPanelLightness: Double = 0.97
-    public static let floatingPanelChromaFactor: Double = 0.2
-    public static let darkFloatingPanelLightness: Double = 0.42
-    public static let darkFloatingPanelChromaFactor: Double = 0.5
+    /// Row text = OKLCH(L, chroma × factor, theme hue). [07 §8.4] inferred: fitted to the AX title
+    /// colors of 8 dark-ink presets (E8) and the E11 samples, max 10.6/255 (the former L 0.258 ×
+    /// 0.45 missed by 14). Arc's colors keep a near-constant luminance (Y ≈ 0.016) and reach the
+    /// sRGB gamut edge for saturated themes; no simple rule matched them better (unknown).
+    public static let rowTextLightness: Double = 0.252
+    public static let rowTextChromaFactor: Double = 0.60
+    /// Command bar selection = OKLCH(L, chroma × factor, theme hue). [07 §8, §8.4]: values observed
+    /// (purple, blue, pink light; yellow, blue dark), rule inferred: best fit light L 0.73 × 0.64
+    /// (max 9.9/255, was 15.6), dark L 0.485 × 0.62 (max 12.7, was 18.4). Arc's chroma ratio still
+    /// varies 0.39–0.89 between presets, so the chroma rule stays unknown.
+    public static let commandBarSelectionLightness: Double = 0.73
+    public static let commandBarSelectionChromaFactor: Double = 0.64
+    public static let darkCommandBarSelectionLightness: Double = 0.485
+    public static let darkCommandBarSelectionChromaFactor: Double = 0.62
+    /// Theme bubble = OKLCH(L, chroma × factor, theme hue): light L 0.982 × 0.24, dark L 0.318 ×
+    /// 0.29. [07 §8.4] inferred: fitted so that this tint at `Metrics.FloatingBubble.tintOpacity`
+    /// (0.82) over Arc's neutral backdrop (#EEEEEE / #1E1E1E) matches the bubble body beside the
+    /// color board on 9 presets × light / dark (E8 lossless): max 3.4 / 7.1 per channel. The former
+    /// L 0.42 × 0.5 dark tint (an E11 JPEG reading near the top) missed the body by 39/255. Arc's
+    /// bubble is not flat: a fixed pink-violet glow at the top edge (≈ #FFE8FF light, #4B2046 dark,
+    /// the same for every theme) fades into the theme tint and then neutral gray toward the bottom
+    /// right; that gradient is observed but not implemented.
+    public static let floatingPanelLightness: Double = 0.982
+    public static let floatingPanelChromaFactor: Double = 0.24
+    public static let darkFloatingPanelLightness: Double = 0.318
+    public static let darkFloatingPanelChromaFactor: Double = 0.29
     /// Drop target fill (Space-name band), derived from the window color in OKLCH, hue kept.
     /// Light: L = min(window L × 0.80, 0.685), chroma = max(window chroma, min(0.155, window
     /// chroma × 5)), i.e. pale windows get a saturated band. Dark: L × 0.893, chroma × 1.05.

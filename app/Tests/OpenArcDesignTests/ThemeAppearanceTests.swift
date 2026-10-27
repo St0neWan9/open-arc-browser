@@ -77,11 +77,61 @@ final class ThemeAppearanceTests: XCTestCase {
         }
     }
 
-    /// The theme bubble samples of [07 §6] (purple): ≈ #FDF1FA light, ≈ #5C4457 dark.
-    func testThemeBubbleSamples() {
-        let purple = RGBAColor(hex: 0xA5729C)
-        assertClose(ThemeDerivation.palette(for: theme(.light, colors: [purple])).floatingPanelBackground, RGBAColor(hex: 0xFDF1FA), tolerance: 8.0 / 255)
-        assertClose(ThemeDerivation.palette(for: theme(.dark, colors: [purple])).floatingPanelBackground, RGBAColor(hex: 0x5C4457), tolerance: 8.0 / 255)
+    /// The theme bubble body [07 §8.4] (E8, lossless): our tint at `Metrics.FloatingBubble.tintOpacity`
+    /// over Arc's neutral backdrop (#EEEEEE light, #1E1E1E dark) lands on Arc's bubble beside the color
+    /// board. observed samples, inferred rule (max 3.4 / 7.1 per channel over 9 presets).
+    func testThemeBubbleBodySamples() {
+        let samples: [(theme: UInt32, light: UInt32, dark: UInt32)] = [
+            (0xA6729D, 0xFEF2F9, 0x322830), (0x6CBAD9, 0xECF7FD, 0x263036),
+            (0xF8D558, 0xFFF5DF, 0x3A321D), (0x35E894, 0xE1FCED, 0x1E3629),
+        ]
+        let opacity = Metrics.FloatingBubble.tintOpacity
+        for s in samples {
+            for (appearance, arc, backdrop) in [(ThemeAppearance.light, s.light, 0xEEEEEE as UInt32), (.dark, s.dark, 0x1E1E1E)] {
+                let tint = ThemeDerivation.palette(for: theme(appearance, colors: [RGBAColor(hex: s.theme)])).floatingPanelBackground
+                let shown = ThemeDerivation.mix(RGBAColor(hex: backdrop), tint, amount: opacity)
+                assertClose(shown, RGBAColor(hex: arc), tolerance: 8.0 / 255, String(format: "bubble %06X %@", s.theme, appearance.rawValue))
+            }
+        }
+    }
+
+    /// E8 lossless samples [07 §8.4]: Arc composited over a mid-gray desktop (the reference the
+    /// opaque palette stands for), sRGB from ⇧⌘3 PNGs of the display profile. observed values; the
+    /// rules (inferred) must stay within the stated bounds.
+    func testE8LosslessSamplesAreReproduced() {
+        struct Sample { var theme: UInt32; var dark: Bool; var window, control, separator, selected: UInt32; var rowText: UInt32? }
+        let samples = [
+            Sample(theme: 0xF3EAE4, dark: false, window: 0xF0EBE7, control: 0xE6E1DD, separator: 0xD0CCC8, selected: 0xF7F6F6, rowText: 0x2E2014),
+            Sample(theme: 0xF3EAE4, dark: true, window: 0xDBD6D2, control: 0xD3CDCA, separator: 0xBEBAB6, selected: 0xF4F4F3),
+            Sample(theme: 0xF29CBA, dark: false, window: 0xF0B8CC, control: 0xE6B1C4, separator: 0xD0A0B1, selected: 0xF7F0F2, rowText: 0x440B22),
+            Sample(theme: 0xF29CBA, dark: true, window: 0xDCA4B8, control: 0xD39EB1, separator: 0xBF8EA0, selected: 0xF4EEF0),
+            Sample(theme: 0xA6729D, dark: false, window: 0xBF9EBA, control: 0xB898B2, separator: 0xA689A1, selected: 0xF1EDF0, rowText: 0x2F1F2C),
+            Sample(theme: 0xA6729D, dark: true, window: 0xAB8BA5, control: 0xA5869F, separator: 0x94788F, selected: 0xEFEBEE),
+            Sample(theme: 0xF25E6B, dark: false, window: 0xF0929A, control: 0xE68D94, separator: 0xD17E85, selected: 0xF7ECED, rowText: 0x480409),
+            Sample(theme: 0xF25E6B, dark: true, window: 0xDC8087, control: 0xD37B82, separator: 0xC06F75, selected: 0xF5EAEB),
+            Sample(theme: 0xFF8557, dark: false, window: 0xF8AA8E, control: 0xEEA389, separator: 0xD8937B, selected: 0xF8EFEC, rowText: 0x421200),
+            Sample(theme: 0xFF8557, dark: true, window: 0xE4977D, control: 0xDB9178, separator: 0xC6826B, selected: 0xF5ECEA),
+            Sample(theme: 0xF8D558, dark: false, window: 0xF4DD8F, control: 0xEAD48A, separator: 0xD4C07B, selected: 0xF7F4EC, rowText: 0x2D2200),
+            Sample(theme: 0xF8D558, dark: true, window: 0xDFC87E, control: 0xD6C179, separator: 0xC2AE6D, selected: 0xF5F2EA),
+            Sample(theme: 0x35E894, dark: false, window: 0x7CE9B5, control: 0x78E0AD, separator: 0x6BCA9C, selected: 0xEAF6F0, rowText: 0x00280E),
+            Sample(theme: 0x35E894, dark: true, window: 0x73D5A1, control: 0x6FCC9B, separator: 0x63B88B, selected: 0xE9F3ED),
+            Sample(theme: 0x6CBAD9, dark: false, window: 0x9BCCE0, control: 0x95C4D7, separator: 0x86B0C2, selected: 0xEDF2F4, rowText: 0x002632),
+            Sample(theme: 0x6CBAD9, dark: true, window: 0x89B7CB, control: 0x84B0C3, separator: 0x769FB0, selected: 0xEBF0F2),
+            // Navy p1-9: light ink.
+            Sample(theme: 0x666789, dark: false, window: 0x9797AD, control: 0xA1A2B5, separator: 0xA7A8B9, selected: 0xACACBE),
+            Sample(theme: 0x666789, dark: true, window: 0x848499, control: 0x9091A4, separator: 0x9798A9, selected: 0x9D9DAE),
+        ]
+        for s in samples {
+            let palette = ThemeDerivation.palette(for: theme(s.dark ? .dark : .light, colors: [RGBAColor(hex: s.theme)]))
+            let label = String(format: "%06X %@", s.theme, s.dark ? "dark" : "light")
+            assertClose(palette.windowBackground, RGBAColor(hex: s.window), tolerance: 4.5 / 255, "window \(label)")
+            assertClose(palette.controlFill, RGBAColor(hex: s.control), tolerance: 4.5 / 255, "control \(label)")
+            assertClose(palette.separator, RGBAColor(hex: s.separator), tolerance: 4.5 / 255, "separator \(label)")
+            assertClose(palette.selectedTabFill, RGBAColor(hex: s.selected), tolerance: 2.5 / 255, "selected row \(label)")
+            if let rowText = s.rowText {
+                assertClose(palette.primaryText, RGBAColor(hex: rowText), tolerance: 11.0 / 255, "row text \(label)")
+            }
+        }
     }
 
     // MARK: Light
@@ -316,7 +366,9 @@ final class ThemeAppearanceTests: XCTestCase {
         // The rules reproduce the round-1 samples from Arc's own window color.
         let arcWindow = RGBAColor(hex: 0x5247FE)
         assertClose(ThemeDerivation.overlayWhite(arcWindow, amount: ThemeDerivation.lightInkControlWhite), RGBAColor(hex: 0x655CFE), tolerance: 2.0 / 255, "control / empty panel")
-        assertClose(ThemeDerivation.overlayWhite(arcWindow, amount: ThemeDerivation.lightInkSeparatorWhite), RGBAColor(hex: 0x5A52FD), tolerance: 2.0 / 255, "separator")
+        // The round-1 separator reading (#5A52FD, + 5 % white) was a JPEG 1 px line; E8's lossless
+        // navy captures put light-ink lines at + 16 % white [07 §8.4].
+        assertClose(ThemeDerivation.overlayWhite(RGBAColor(hex: 0x9797AD), amount: ThemeDerivation.lightInkSeparatorWhite), RGBAColor(hex: 0xA7A8B9), tolerance: 1.5 / 255, "separator (E8 navy light)")
         // PX opacities (inferred): titles, Space name, New Tab, placeholder, magnifier.
         let ink = ChromeInkOpacities.lightInk
         XCTAssertEqual(ink.rowTitle, 0.78, accuracy: 0.03)
