@@ -26,10 +26,9 @@ private final class RecordingDefaultBrowserService: DefaultBrowserService {
     }
 }
 
-/// D9: first-run onboarding. OWN DESIGN: the spec has no capture of Arc's onboarding (plan E6,
-/// `docs/arc-spec` has no entry), so these tests pin our own behavior: shown once on first
-/// launch, skippable from every step, per-device completion flag in `ui-state.json`, and
-/// Help ▸ Show Welcome Again (inferred).
+/// D9: first-run onboarding. The behavior is our own: shown once on first launch, skippable from
+/// every step, per-device completion flag in `ui-state.json`, and Help ▸ Show Welcome Again
+/// (inferred). B53: the look follows the E6 capture, `docs/arc-spec/06-flows.md §27`.
 @MainActor
 final class OnboardingTests: XCTestCase {
     private nonisolated let directory: URL = FileManager.default.temporaryDirectory
@@ -297,66 +296,126 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(decoded.onboardingCompleted, true)
     }
 
-    // MARK: Card size (B26)
+    // MARK: Look (B53, [06 §27])
 
-    /// B26: the card is a compact card sized to its content, not a full-height panel. Measured
-    /// with the window's size as the offer, at 1920×985 (the reference size) and 1280×800.
-    func testCardIsCompactAndBoundedAtWindowSizes() {
+    /// [06 §27.1] the welcome is its own full-window screen; [06 §27.2, §27.4] every later D9
+    /// step goes into the split layout's left column, one step per screen.
+    func testStepToScreenMapping() {
+        XCTAssertEqual(OnboardingModel.screen(for: .welcome), .welcome)
+        for step in OnboardingModel.Step.allCases where step != .welcome {
+            XCTAssertEqual(OnboardingModel.screen(for: step), .split, "\(step)")
+        }
         let controller = makeController()
         _ = openWindow(controller)
         let onboarding = controller.onboarding
-        for windowSize in [CGSize(width: 1920, height: 985), CGSize(width: 1280, height: 800)] {
-            onboarding.showAgain(in: controller.browserWindows[0])
+        XCTAssertEqual(onboarding.screen, .welcome)
+        onboarding.next()
+        XCTAssertEqual(onboarding.screen, .split)
+        onboarding.back()
+        XCTAssertEqual(onboarding.screen, .welcome)
+    }
+
+    /// [06 §27.2] observed: the demo changes about every 3 s and wraps around. Driven by dates
+    /// passed in, no real timer.
+    func testCarouselAdvancesEveryIntervalAndWraps() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let interval = OnboardingCarousel.interval
+        XCTAssertEqual(interval, 3, accuracy: 0.001)
+        let count = OnboardingDemoSample.samples.count
+        XCTAssertGreaterThanOrEqual(count, 4, "[06 §27.2]: several themed samples")
+        func index(_ t: TimeInterval) -> Int { OnboardingCarousel.index(start: start, now: start.addingTimeInterval(t), count: count) }
+        XCTAssertEqual(index(-5), 0, "before the start")
+        XCTAssertEqual(index(0), 0)
+        XCTAssertEqual(index(interval - 0.1), 0)
+        XCTAssertEqual(index(interval), 1)
+        XCTAssertEqual(index(interval * 2.5), 2)
+        XCTAssertEqual(index(interval * Double(count)), 0, "wraps after the last sample")
+        XCTAssertEqual(index(interval * Double(count + 1)), 1)
+        XCTAssertEqual(OnboardingCarousel.index(start: start, now: start.addingTimeInterval(100), count: 0), 0)
+        // Sample themes differ, so each change is visible.
+        XCTAssertEqual(Set(OnboardingDemoSample.samples.map(\.colors)).count, count)
+    }
+
+    /// [06 §27.3] observed: the primary button has a disabled state. Ours: the Space step needs
+    /// a name; other steps are always enabled.
+    func testContinueDisabledOnlyForEmptySpaceName() {
+        let controller = makeController()
+        _ = openWindow(controller)
+        let onboarding = controller.onboarding
+        XCTAssertTrue(onboarding.isContinueEnabled)
+        onboarding.next()
+        XCTAssertEqual(onboarding.step, .space)
+        XCTAssertTrue(onboarding.isContinueEnabled, "prefilled with the Space name")
+        XCTAssertTrue(onboarding.showsLiveSpaceDemo)
+        onboarding.spaceName = "  "
+        XCTAssertFalse(onboarding.isContinueEnabled)
+        onboarding.spaceName = "Work"
+        XCTAssertTrue(onboarding.isContinueEnabled)
+        onboarding.next()
+        XCTAssertTrue(onboarding.isContinueEnabled)
+        XCTAssertFalse(onboarding.showsLiveSpaceDemo)
+    }
+
+    /// [06 §27.2] observed at 1280 × 800: halves of 640; the demo card's top left at (736, 83),
+    /// running out of the window on the right; scallops along the half line.
+    func testSplitLayoutMatchesCapture() {
+        let layout = OnboardingSplitLayout(windowSize: CGSize(width: 1280, height: 800))
+        XCTAssertEqual(layout.leftColumnWidth, 640)
+        XCTAssertEqual(layout.rightColumnFrame.maxX, 1280)
+        XCTAssertLessThan(layout.rightColumnFrame.minX, 640, "room for the scallops")
+        let card = layout.demoCardFrame
+        XCTAssertEqual(card.minX, 736, accuracy: 1)
+        XCTAssertEqual(card.minY, 83, accuracy: 1)
+        XCTAssertGreaterThan(card.maxX, 1280, "cropped by the window's right edge")
+        XCTAssertEqual(card.maxY, 800 - 83, accuracy: 1)
+
+        // The wavy edge stays within the amplitude and repeats with the period.
+        let period = OnboardingTokens.scallopPeriod, amplitude = OnboardingTokens.scallopAmplitude
+        let xs = stride(from: CGFloat(0), through: 200, by: 0.5).map {
+            ScallopedColumn.edge(at: $0, center: 640, period: period, amplitude: amplitude)
+        }
+        XCTAssertEqual(xs.max() ?? 0, 640 + amplitude, accuracy: 0.01)
+        XCTAssertEqual(xs.min() ?? 0, 640 - amplitude, accuracy: 0.01)
+        XCTAssertEqual(ScallopedColumn.edge(at: 3, center: 640, period: period, amplitude: amplitude),
+                       ScallopedColumn.edge(at: 3 + period, center: 640, period: period, amplitude: amplitude), accuracy: 0.001)
+    }
+
+    /// [06 §27.1, §27.3] observed sizes and colors of the welcome button, field and primary button.
+    func testControlTokensMatchCapture() {
+        XCTAssertEqual(OnboardingTokens.arrowButtonSize, CGSize(width: 67, height: 40))
+        XCTAssertEqual(OnboardingTokens.arrowButtonRadius, 8)
+        XCTAssertEqual(OnboardingTokens.arrowButtonFill, RGBAColor(hex: 0xDDDEFB))
+        XCTAssertEqual(OnboardingTokens.fieldSize, CGSize(width: 369, height: 63))
+        XCTAssertEqual(OnboardingTokens.accent, RGBAColor(hex: 0x3950F0))
+        XCTAssertEqual(OnboardingTokens.primarySize, CGSize(width: 232, height: 40))
+        XCTAssertEqual(OnboardingTokens.bodyInk, RGBAColor(hex: 0x505050))
+        XCTAssertEqual(OnboardingTokens.bodyWidth, 330)
+        XCTAssertEqual(OnboardingTokens.grayButtonFill, RGBAColor(hex: 0xEFEFEF))
+        // Our own wording: never the captured headline.
+        XCTAssertNotEqual(OnboardingTokens.headline, "A browser for you.")
+    }
+
+    /// Every screen renders at the captured window size and at the minimum window size, and the
+    /// left column's content fits the half width. [06 §27.2]
+    func testScreensRenderAtWindowSizes() {
+        let controller = makeController()
+        let window = openWindow(controller)
+        let onboarding = controller.onboarding
+        for windowSize in [CGSize(width: 1280, height: 800), CGSize(width: 800, height: 500)] {
+            onboarding.showAgain(in: window)
             for step in OnboardingModel.Step.allCases {
                 while onboarding.step != step { onboarding.next() }
-                let host = NSHostingController(rootView: OnboardingCard(onboarding: onboarding))
-                let size = host.sizeThatFits(in: windowSize)
-                XCTAssertEqual(size.width, OnboardingTokens.cardWidth, accuracy: 1, "\(step) @ \(windowSize)")
-                XCTAssertLessThanOrEqual(size.height, OnboardingTokens.cardMaxHeight, "\(step) @ \(windowSize)")
-                XCTAssertLessThan(size.height, windowSize.height * 0.75, "\(step) @ \(windowSize): no full-height card")
-                if step == .welcome || step == .done {
-                    XCTAssertLessThan(size.height, 360, "\(step): a text-only card stays short")
-                }
-                // The fitting size agrees: the height does not depend on the space offered.
-                XCTAssertEqual(host.view.fittingSize.height, size.height, accuracy: 1, "\(step)")
+                let host = NSHostingView(rootView: OnboardingOverlay(onboarding: onboarding, palette: ThemeDerivation.palette(for: nil))
+                    .frame(width: windowSize.width, height: windowSize.height))
+                host.frame = CGRect(origin: .zero, size: windowSize)
+                host.layoutSubtreeIfNeeded()
+                XCTAssertEqual(host.fittingSize.width, windowSize.width, accuracy: 1, "\(step) @ \(windowSize)")
+                let column = NSHostingController(rootView: OnboardingStepColumn(onboarding: onboarding))
+                let size = column.sizeThatFits(in: CGSize(width: windowSize.width / 2, height: windowSize.height))
+                XCTAssertLessThanOrEqual(size.width, windowSize.width / 2 + 1, "\(step) @ \(windowSize)")
+                XCTAssertLessThanOrEqual(size.height, windowSize.height + 1, "\(step) @ \(windowSize)")
             }
         }
     }
-
-    /// B26: a window shorter than the content caps the card; the content scrolls inside it.
-    func testCardFitsShortWindow() {
-        let controller = makeController()
-        _ = openWindow(controller)
-        let onboarding = controller.onboarding
-        onboarding.next()  // the Space step is the tallest (field + theme editor)
-        let host = NSHostingController(rootView: OnboardingCard(onboarding: onboarding))
-        let size = host.sizeThatFits(in: CGSize(width: 1280, height: 420))
-        XCTAssertLessThanOrEqual(size.height, 421)
-    }
-
-    /// B26: in the window the card is centered and keeps its compact height.
-    func testOverlayCentersCompactCard() throws {
-        let controller = makeController()
-        _ = openWindow(controller)
-        let onboarding = controller.onboarding
-        let windowSize = CGSize(width: 1920, height: 985)
-        let expected = NSHostingController(rootView: OnboardingCard(onboarding: onboarding)).sizeThatFits(in: windowSize)
-        let probe = CardFrameProbe()
-        let root = OnboardingOverlay(onboarding: onboarding, palette: ThemeDerivation.palette(for: nil))
-            .onPreferenceChange(OnboardingCardFrameKey.self) { frame in MainActor.assumeIsolated { probe.frame = frame } }
-            .frame(width: windowSize.width, height: windowSize.height)
-        let host = NSHostingView(rootView: root)
-        host.frame = CGRect(origin: .zero, size: windowSize)
-        host.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        let frame = try XCTUnwrap(probe.frame)
-        XCTAssertEqual(frame.height, expected.height, accuracy: 1)
-        XCTAssertEqual(frame.midX, windowSize.width / 2, accuracy: 1)
-        XCTAssertEqual(frame.midY, windowSize.height / 2, accuracy: 1)
-    }
 }
 
-@MainActor
-private final class CardFrameProbe {
-    var frame: CGRect?
-}
