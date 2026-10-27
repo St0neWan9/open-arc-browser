@@ -86,7 +86,10 @@ extension AppDependencies {
             preferences: .standard,
             defaultBrowser: SystemDefaultBrowserService(),
             systemAppearance: ApplicationSystemAppearance(),
-            mediaFolders: .live(environment: environment)
+            mediaFolders: .live(environment: environment),
+            feedbackOutput: SystemFeedbackOutput(),
+            appIconDisplay: SystemAppIconDisplay(),
+            exportPicker: SavePanelExportPicker()
         )
     }
 

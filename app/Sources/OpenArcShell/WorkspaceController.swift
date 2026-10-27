@@ -91,6 +91,17 @@ public final class WorkspaceController: ObservableObject {
     /// (B43, [06 §17.1] observed). An incognito controller uses its parent's.
     public var webToolbar: WebToolbarSettings { parent?.webToolbar ?? ownWebToolbar }
     private lazy var ownWebToolbar = WebToolbarSettings(preferences: dependencies.preferences)
+    /// Settings ▸ Advanced sound, haptic and window-drag switches, global for every window (B84,
+    /// [03 §Advanced] observed). An incognito controller uses its parent's.
+    public var feedback: FeedbackPlayer { parent?.feedback ?? ownFeedback }
+    private lazy var ownFeedback = FeedbackPlayer(
+        settings: AdvancedBehaviorSettings(preferences: dependencies.preferences),
+        output: dependencies.feedbackOutput
+    )
+    /// Settings ▸ Icon: the current app icon (B84, [03 §Icon] observed). An incognito controller
+    /// uses its parent's.
+    public var appIcon: AppIconSettings { parent?.appIcon ?? ownAppIcon }
+    private lazy var ownAppIcon = AppIconSettings(preferences: dependencies.preferences, display: dependencies.appIconDisplay)
 
     private var liveTabs: [UUID: any BrowserTab] = [:]
     private var eventTasks: [UUID: Task<Void, Never>] = [:]
@@ -218,6 +229,8 @@ public final class WorkspaceController: ObservableObject {
         dependencies.preferences.pinLegacySidebarSyncDefault(isExistingInstall: persistence?.loadResult.outcome == .loaded)
         sidebarSync.launch()
         observeSystemAppearance()
+        // The app icon chosen in Settings ▸ Icon shows in the Dock again after a relaunch (B84).
+        appIcon.applyStored()
     }
 
     /// An incognito window's controller: one off-the-record Space (dark theme, no favorites) in

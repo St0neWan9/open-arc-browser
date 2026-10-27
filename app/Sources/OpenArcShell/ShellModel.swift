@@ -407,7 +407,7 @@ public final class ShellModel: ObservableObject {
             if let open = openLittleArcWindow { open() } else { lastUnhandledCommand = command }
         case .restoreLastClosedTab: sidebar.restoreLastClosedTab()
         // Edit
-        case .copyURL: if let url = sidebar.selectedURL { siteControls.pasteboard.writeURL(url) }
+        case .copyURL: copySelectedURL()
         // View
         case .toggleSidebar: toggleSidebar()
         case .reload: sidebar.reloadOrStop()

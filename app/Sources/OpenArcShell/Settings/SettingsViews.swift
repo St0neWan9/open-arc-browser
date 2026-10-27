@@ -49,7 +49,7 @@ struct SettingsPaneView: View {
             case .profiles: ProfilesPane(model: model)
             case .links: LinksPane(model: model)
             case .shortcuts: ShortcutsPane(model: model)
-            case .icon: IconPane()
+            case .icon: IconPane(icons: model.appIcon)
             case .advanced: AdvancedPane(model: model)
             }
         }
@@ -180,7 +180,8 @@ struct GeneralPane: View {
                 ))
             }
             Section("Previews") {
-                CatalogButton(id: "general.previewsSettings")
+                // Opens Links ▸ Peek (B84).
+                CatalogButton(id: "general.previewsSettings") { model.openPreviewsSettings() }
             }
             Section {
                 Text("Your default search engine, tab archiving and download location are set per Profile.")
@@ -382,20 +383,61 @@ struct ShortcutsPane: View {
 
 // MARK: - Icon
 
-/// [03 §Icon] observed: a list of app icons with a CURRENT ICON marker. Our icon variants are not
-/// designed yet, so the grid holds a single placeholder default.
+/// [03 §Icon] observed: a list of six app icons with a CURRENT ICON marker next to the chosen one.
+/// Ours: six of our own color variants in a 3 × 2 grid (layout inferred); a click makes the icon
+/// current, shows it in the Dock and keeps it across relaunches. B84.
 struct IconPane: View {
+    @ObservedObject var icons: AppIconSettings
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 3)
+
     var body: some View {
-        VStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(LinearGradient(colors: [.purple, .blue], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: SettingsTokens.iconTileSize, height: SettingsTokens.iconTileSize)
-                .overlay(Image(systemName: "circle.hexagongrid").font(.system(size: 40)).foregroundStyle(.white))
-            Text("Default")
-            Text("CURRENT ICON").font(.caption2.bold()).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Choose the icon Open Arc shows in the Dock.")
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: columns, spacing: 20) {
+                ForEach(AppIconChoice.allCases) { choice in
+                    IconTile(choice: choice, image: icons.tileImage(choice), isCurrent: icons.current == choice) {
+                        icons.select(choice)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(20)
+        .padding(24)
+    }
+}
+
+/// One icon in the Icon pane: the icon, its name, and CURRENT ICON under the chosen one.
+struct IconTile: View {
+    let choice: AppIconChoice
+    let image: NSImage
+    let isCurrent: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(nsImage: image)
+                    .resizable()
+                    .frame(width: SettingsTokens.iconTileSize, height: SettingsTokens.iconTileSize)
+                    .padding(6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(isCurrent ? Color.accentColor.opacity(0.15) : Color.clear)
+                    )
+                Text(choice.displayName)
+                Text("CURRENT ICON")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.secondary)
+                    .opacity(isCurrent ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(choice.displayName)
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .accessibilityIdentifier("openarc.icon.\(choice.rawValue)")
     }
 }
 
@@ -434,6 +476,9 @@ struct AdvancedPane: View {
                             get: { model.entersPictureInPictureOnLeavingVideoTab },
                             set: { model.entersPictureInPictureOnLeavingVideoTab = $0 }
                         ))
+                    } else if let keyPath = AdvancedBehaviorToggles.keyPath(id) {
+                        // [03 §Advanced] observed, on by default. Live since B84.
+                        AdvancedBehaviorToggle(id: id, settings: model.advancedBehavior, keyPath: keyPath)
                     } else {
                         PendingToggle(id: id)
                     }
@@ -444,7 +489,11 @@ struct AdvancedPane: View {
                 // [03 §Advanced] observed button. Live since B47: forgets every profile's
                 // translation decisions (never-translate sites and languages).
                 CatalogButton(id: "advanced.resetTranslatePrompts") { Task { await model.resetTranslatedSitePrompts() } }
-                CatalogButton(id: "advanced.exportData")
+                // [03 §Advanced] observed button. Live since B84: our own JSON export.
+                CatalogButton(id: "advanced.exportData") { Task { await model.exportData() } }
+                if let status = model.exportStatus {
+                    Text(status).font(Typography.settingsCaption.font).foregroundStyle(.secondary)
+                }
             }
             // Plan C16: the engine's ad blocker; hidden when the engine has no filter ruleset.
             if let version = model.adBlockingRulesetVersion {
@@ -516,6 +565,32 @@ struct DeleteProfileSheet: View {
         .padding(38)
         .frame(width: 450)
         .accessibilityIdentifier("openarc.deleteProfile")
+    }
+}
+
+/// The Advanced switches backed by `AdvancedBehaviorSettings` (B84), by catalog id.
+@MainActor
+enum AdvancedBehaviorToggles {
+    static func keyPath(_ id: String) -> ReferenceWritableKeyPath<AdvancedBehaviorSettings, Bool>? {
+        switch id {
+        case "advanced.soundEffects": return \.playsSoundEffects
+        case "advanced.reorderHaptics": return \.playsReorderHaptics
+        case "advanced.windowDragging": return \.allowsWindowDragFromPageTop
+        default: return nil
+        }
+    }
+}
+
+/// A switch on the shared sound / haptic / window-drag settings (B84); every window follows.
+struct AdvancedBehaviorToggle: View {
+    let id: String
+    @ObservedObject var settings: AdvancedBehaviorSettings
+    let keyPath: ReferenceWritableKeyPath<AdvancedBehaviorSettings, Bool>
+
+    var body: some View {
+        Toggle(SettingsCatalog.control(id).label, isOn: Binding(
+            get: { settings[keyPath: keyPath] }, set: { settings[keyPath: keyPath] = $0 }
+        ))
     }
 }
 

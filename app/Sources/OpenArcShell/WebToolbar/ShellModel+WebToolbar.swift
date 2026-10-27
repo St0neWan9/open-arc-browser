@@ -131,6 +131,7 @@ extension ShellModel {
     func webToolbarCopyLink(_ tabID: UUID?) -> Bool {
         guard let tabID, let url = sidebar.linkURL(for: tabID) else { return false }
         siteControls.pasteboard.writeURL(url)
+        controller.feedback.play(.copy)
         return true
     }
 

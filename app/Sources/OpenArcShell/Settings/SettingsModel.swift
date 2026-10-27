@@ -259,6 +259,13 @@ public final class SettingsModel: ObservableObject {
         return id
     }
 
+    /// "Previews Settings…" in General jumps to the Links pane, where the Peek switches are.
+    /// [03 §General] observed button; the target is inferred (Previews = Peek link previews,
+    /// [03 §Links] observed Peek section). B84.
+    public func openPreviewsSettings() {
+        selectedPane = .links
+    }
+
     /// "Profile Settings…" in General jumps to the Profiles pane. [03 §General] observed.
     public func openProfileSettings() {
         selectedPane = .profiles
@@ -444,6 +451,34 @@ public final class SettingsModel: ObservableObject {
         let live = shell.controller.workspace.profiles.values.filter { !$0.meta.isTombstone }.map(\.id)
         for profileID in live.sorted(by: { $0.uuidString < $1.uuidString }) {
             await translation.resetDecisions(profileID: profileID)
+        }
+    }
+
+    /// Sound, haptic and window-drag switches (B84), shared with every window.
+    public var advancedBehavior: AdvancedBehaviorSettings { shell.controller.feedback.settings }
+
+    /// The Icon pane's state (B84).
+    public var appIcon: AppIconSettings { shell.controller.appIcon }
+
+    /// Result of the last Export Data, shown under the button. nil before any export.
+    @Published public private(set) var exportStatus: String?
+
+    /// "Export Data" ([03 §Advanced] observed button; Arc's format is unknown). Asks where to save,
+    /// then writes our own JSON export of the workspace (`WorkspaceExport`). Returns the written
+    /// file, or nil when cancelled or failed (the status line says which). B84.
+    @discardableResult
+    public func exportData() async -> URL? {
+        let stamp = shell.controller.now()
+        let name = WorkspaceExport.suggestedFileName(at: stamp)
+        guard let url = await shell.dependencies.exportPicker.chooseDestination(suggestedName: name) else { return nil }
+        do {
+            let data = try WorkspaceExport.make(shell.workspace, exportedAt: stamp).encoded()
+            try data.write(to: url, options: .atomic)
+            exportStatus = "Exported to \(url.lastPathComponent)."
+            return url
+        } catch {
+            exportStatus = "Export failed: \(error.localizedDescription)"
+            return nil
         }
     }
 

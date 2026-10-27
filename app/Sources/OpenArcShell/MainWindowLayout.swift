@@ -36,6 +36,23 @@ public struct MainWindowLayout: Equatable, Sendable {
         return CGRect(x: panel.minX, y: panel.minY + strip, width: panel.width, height: max(0, panel.height - strip))
     }
 
+    /// The window-drag strip at the top of the page area ("Allow window dragging from the top of
+    /// webpages", B84). [06 §13] observed: a short bar centered at the top of the page area. Its
+    /// size is not recorded; ours (inferred): a 120 × 12 pt grab area at the page's top edge,
+    /// drawing a 36 × 4 pt handle. Empty when the setting is off or the page area is too small.
+    public func windowDragStripFrame(isEnabled: Bool) -> CGRect {
+        guard isEnabled else { return .zero }
+        let page = pageFrame
+        let width = min(Self.dragStripSize.width, page.width)
+        guard width > 0, page.height >= Self.dragStripSize.height else { return .zero }
+        return CGRect(x: page.midX - width / 2, y: page.minY, width: width, height: Self.dragStripSize.height)
+    }
+
+    /// Grab area of the drag strip. inferred.
+    public static let dragStripSize = CGSize(width: 120, height: 12)
+    /// The visible handle inside the grab area. inferred.
+    public static let dragHandleSize = CGSize(width: 36, height: 4)
+
     /// How far the sidebar content below the (removed) URL box moves up while the toolbar shows.
     /// [06 §17.1] observed (46: favorites y 82 → 36).
     public var sidebarContentShift: Double {
