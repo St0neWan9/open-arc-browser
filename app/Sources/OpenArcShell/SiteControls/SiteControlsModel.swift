@@ -13,6 +13,9 @@ import OpenArcDesign
 //   Developer Mode (Off) and Automatic Picture-In-Picture (Allowed), and at the bottom a
 //   "Secure" pill on the left and a "⋯" button on the right.
 // - Moving the pointer away makes the bubble disappear.
+// [06 §17.3] observed: the pill reads "Insecure" or "Secure". [06 §19.1] observed: the "⋯" menu is
+// Clear Cache · Clear Cookies ‖ Manage Boosts… · New Boost… ‖ Manage Extensions… · Add Extension… ‖
+// All Site Settings… (plan B80).
 //
 // Engine-backed values go through `SiteSettingsProvider` (ad blocking C16 and extensions C14 are
 // the engine's; the rest is fake until C12 settles it).
@@ -38,6 +41,53 @@ public enum SiteControlsTool: String, CaseIterable, Sendable {
         case .captureArea: "camera"
         case .captureFullPage: "doc.viewfinder"
         }
+    }
+}
+
+/// Items of the "⋯" menu at the bottom right of the bubble. [06 §19.1] observed order and titles.
+public enum SiteControlsMenuItem: String, CaseIterable, Sendable {
+    case clearCache, clearCookies, manageBoosts, newBoost, manageExtensions, addExtension, allSiteSettings
+
+    public var title: String {
+        switch self {
+        case .clearCache: "Clear Cache"
+        case .clearCookies: "Clear Cookies"
+        case .manageBoosts: "Manage Boosts…"
+        case .newBoost: "New Boost…"
+        case .manageExtensions: "Manage Extensions…"
+        case .addExtension: "Add Extension…"
+        case .allSiteSettings: "All Site Settings…"
+        }
+    }
+
+    /// The menu's groups, separated by dividers. [06 §19.1] observed.
+    public static let groups: [[SiteControlsMenuItem]] = [
+        [.clearCache, .clearCookies],
+        [.manageBoosts, .newBoost],
+        [.manageExtensions, .addExtension],
+        [.allSiteSettings],
+    ]
+}
+
+/// The system share picker the Share button opened, anchored to that button. The bubble stays
+/// open under it and closes once the picker is done. inferred: [06 §12] observed the Share
+/// button, not what follows a click.
+public struct SiteControlsShareRequest: Equatable, Sendable {
+    /// Tells two requests for the same page apart, so the view shows each picker once.
+    public var serial: Int
+    public var tabID: UUID
+    /// The page's link, as Copy Link writes it.
+    public var url: URL
+}
+
+/// Where "All Site Settings…" goes: Chromium's settings page of the site. inferred (the spec
+/// records the item, not its destination; there is no native site settings page).
+enum SiteSettingsPages {
+    static func details(for site: SiteOrigin) -> URL? {
+        let origin = "\(site.scheme)://\(site.displayHost)"
+        let unreserved = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        guard let encoded = origin.addingPercentEncoding(withAllowedCharacters: unreserved) else { return nil }
+        return URL(string: "chrome://settings/content/siteDetails?site=\(encoded)")
     }
 }
 
@@ -103,14 +153,18 @@ public final class SiteControlsModel: ObservableObject {
     @Published public private(set) var lastCloseReason: SiteControlsCloseReason?
     /// The open extension popup, if any (C14).
     @Published public private(set) var extensionPopup: ExtensionPopupState?
+    /// The system share picker the Share button opened, while it is up (B80).
+    @Published public private(set) var shareRequest: SiteControlsShareRequest?
 
     // MARK: Dependencies
 
     /// Engine site settings. Fake until C12 / C14 / C16 plug in Chromium.
     var provider: any SiteSettingsProvider
     var pasteboard: any PasteboardWriter
-    /// Runs the 4 top buttons. nil disables them (no Share / Boost / capture surface yet).
+    /// Runs the two capture buttons; nil disables them. Share and New Boost are the model's own.
     public var toolHandler: ((SiteControlsTool, UUID) -> Void)?
+    /// Opens Library ▸ Boosts ("Manage Boosts…"); nil disables the item.
+    public var manageBoostsHandler: (() -> Void)?
     /// Opens the extension gallery ("+") and the extension manager ("Manage") (C14). nil disables them.
     public var addExtensionHandler: (() -> Void)?
     public var manageExtensionsHandler: (() -> Void)?
@@ -130,6 +184,7 @@ public final class SiteControlsModel: ObservableObject {
     private var openPopup: (any ExtensionPopup)?
     private var popupEvents: Task<Void, Never>?
     private var extensionEvents: Task<Void, Never>?
+    private var shareSerial = 0
 
     init(sidebar: SidebarViewModel, provider: any SiteSettingsProvider, pasteboard: any PasteboardWriter) {
         self.sidebar = sidebar
@@ -153,8 +208,8 @@ public final class SiteControlsModel: ObservableObject {
 
     private var liveState: SidebarTabLiveState? { tabID.flatMap { sidebar.liveState(for: $0) } }
 
-    /// The "Secure" pill. [06 §12] observed "Secure"; the insecure label is inferred.
-    public var securityLabel: String { site?.isSecure == false ? "Not Secure" : "Secure" }
+    /// The pill at the bottom left. [06 §12] observed "Secure"; [06 §17.3] observed "Insecure".
+    public var securityLabel: String { site?.isSecure == false ? "Insecure" : "Secure" }
 
     /// "Manage" shows only when extensions exist. [06 §12] observed. Any installed extension
     /// counts, also one without an action on this page. inferred.
@@ -165,12 +220,6 @@ public final class SiteControlsModel: ObservableObject {
 
     /// Engine extensions (C14): installed list and change events for the bubble's section.
     var engineExtensions: (any EngineExtensions)?
-
-    /// Permissions the "⋯" menu offers: the common four, plus any other kind the site has a
-    /// decision for. inferred.
-    public var menuPermissionKinds: [SitePermissionKind] {
-        SitePermissionKind.allCases.filter { SitePermissionKind.commonKinds.contains($0) || settings.decision(for: $0) != .ask }
-    }
 
     /// Rows of the "Settings" section. The first two are always there [06 §12] observed. The
     /// others show only when they carry state (inferred: none of them was visible on a fresh site).
@@ -231,13 +280,15 @@ public final class SiteControlsModel: ObservableObject {
         guard isPresented else { return }
         isPresented = false
         lastCloseReason = reason
+        shareRequest = nil
         extensionEvents?.cancel()
         extensionEvents = nil
     }
 
     /// The pointer left the bubble (or the icon it opened from). [06 §12] observed: it closes.
     public func pointerExited() {
-        guard isPresented else { return }
+        // The share picker's menu hangs off the bubble: moving into it keeps the bubble open.
+        guard isPresented, shareRequest == nil else { return }
         leaveTask?.cancel()
         guard pointerLeaveGrace > 0 else { close(.pointerLeft); return }
         let grace = pointerLeaveGrace
@@ -273,12 +324,92 @@ public final class SiteControlsModel: ObservableObject {
 
     // MARK: Top buttons and extensions
 
+    /// The capture buttons have a handler (the shell installs it, B51).
     public var canRunTools: Bool { toolHandler != nil }
 
+    /// Share and New Boost are always enabled ([06 §12] observed New Boost clickable, opening
+    /// nothing); the capture buttons need the shell's handler.
+    public func canRun(_ tool: SiteControlsTool) -> Bool {
+        switch tool {
+        case .share, .newBoost: true
+        case .captureArea, .captureFullPage: canRunTools
+        }
+    }
+
     public func run(_ tool: SiteControlsTool) {
-        guard let id = tabID, let toolHandler else { return }
+        guard let id = tabID, canRun(tool) else { return }
+        switch tool {
+        case .share:
+            beginShare(tabID: id)
+        case .newBoost:
+            // Inert: [06 §12] observed that New Boost opened no editor; Boosts are out of v1.
+            break
+        case .captureArea, .captureFullPage:
+            close(.action)
+            toolHandler?(tool, id)
+        }
+    }
+
+    // MARK: Share
+
+    /// Share: the system share picker for the page's link, below the Share button. [06 §12],
+    /// [06 §17.3] observed button; the picker is the system's (plan B80).
+    private func beginShare(tabID id: UUID) {
+        guard let url = sidebar.linkURL(for: id) else { return }
+        leaveTask?.cancel()
+        leaveTask = nil
+        shareSerial += 1
+        shareRequest = SiteControlsShareRequest(serial: shareSerial, tabID: id, url: url)
+    }
+
+    /// The picker closed, with a service chosen or not: the bubble closes too. inferred.
+    public func finishShare(serial: Int) {
+        guard shareRequest?.serial == serial else { return }
+        shareRequest = nil
         close(.action)
-        toolHandler(tool, id)
+    }
+
+    // MARK: "⋯" menu
+
+    public func isEnabled(_ item: SiteControlsMenuItem) -> Bool {
+        switch item {
+        case .clearCache: tabID.flatMap { sidebar.liveTab(for: $0) } != nil
+        case .clearCookies, .newBoost: site != nil
+        case .manageBoosts: manageBoostsHandler != nil
+        case .manageExtensions: manageExtensionsHandler != nil
+        case .addExtension: addExtensionHandler != nil
+        case .allSiteSettings: site.flatMap(SiteSettingsPages.details(for:)) != nil
+        }
+    }
+
+    /// Runs one "⋯" item. [06 §19.1] observed items; what each does is inferred:
+    /// - Clear Cache reloads the page bypassing the cache (the engine clears caches per profile
+    ///   only); Clear Cookies clears the site's data through the provider (C12). Both keep the
+    ///   bubble open.
+    /// - New Boost… is inert, like the New Boost button (Boosts are out of v1).
+    /// - The others open their page and close the bubble.
+    public func perform(_ item: SiteControlsMenuItem) {
+        guard isEnabled(item) else { return }
+        switch item {
+        case .clearCache:
+            guard let id = tabID, let live = sidebar.liveTab(for: id) else { return }
+            work.append(Task { try? await live.reload(bypassingCache: true) })
+        case .clearCookies:
+            apply(.clearSiteData)
+        case .newBoost:
+            break
+        case .manageBoosts:
+            close(.action)
+            manageBoostsHandler?()
+        case .manageExtensions:
+            manageExtensionsHandler?()
+        case .addExtension:
+            addExtensionHandler?()
+        case .allSiteSettings:
+            guard let site, let url = SiteSettingsPages.details(for: site) else { return }
+            close(.action)
+            _ = sidebar.newTab(url: url, title: "Settings")
+        }
     }
 
     /// Runs an extension's action on the bubble's tab, as a click on Chrome's toolbar button does.
@@ -377,8 +508,6 @@ public final class SiteControlsModel: ObservableObject {
         apply(.permission(kind, decision))
     }
 
-    public func clearSiteData() { apply(.clearSiteData) }
-
     /// Mute / unmute through the sidebar's engine path (same as the tab menu).
     public func toggleMute() {
         guard let id = tabID else { return }
@@ -451,10 +580,6 @@ public final class SiteControlsModel: ObservableObject {
 }
 
 extension SitePermissionKind {
-    /// Kinds the "⋯" menu always offers; any other kind appears once the site has a decision for
-    /// it. inferred (the spec shows no permission rows, [06 §12]).
-    static let commonKinds: [SitePermissionKind] = [.camera, .microphone, .location, .notifications]
-
     /// Row and menu title. Our wording (the spec records none): unknown.
     var title: String {
         switch self {
