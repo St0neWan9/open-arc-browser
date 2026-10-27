@@ -340,8 +340,17 @@ public struct BrowsingDataTypes: OptionSet, Hashable, Sendable {
     public static let cookies = BrowsingDataTypes(rawValue: 1 << 1)
     public static let cache = BrowsingDataTypes(rawValue: 1 << 2)
     public static let siteStorage = BrowsingDataTypes(rawValue: 1 << 3)
+    /// The downloads list (the files stay on disk).
     public static let downloads = BrowsingDataTypes(rawValue: 1 << 4)
-    public static let all: BrowsingDataTypes = [.history, .cookies, .cache, .siteStorage, .downloads]
+    /// Saved passwords and other sign-in data (plan B83, Clear Browsing Data sheet).
+    public static let passwords = BrowsingDataTypes(rawValue: 1 << 5)
+    /// Autofill form data: addresses, cards and form entries (plan B83).
+    public static let autofill = BrowsingDataTypes(rawValue: 1 << 6)
+    /// Per-site permissions and zoom levels (plan B83).
+    public static let siteSettings = BrowsingDataTypes(rawValue: 1 << 7)
+    public static let all: BrowsingDataTypes = [
+        .history, .cookies, .cache, .siteStorage, .downloads, .passwords, .autofill, .siteSettings,
+    ]
 }
 
 /// The web engine as seen by the shell.

@@ -438,6 +438,10 @@ final class SettingsTests: XCTestCase {
             "general.warnBeforeQuitting", "advanced.reorderHaptics",
             // B84: Previews Settings…, sounds, haptics, window dragging, Export Data.
             "general.previewsSettings", "advanced.soundEffects", "advanced.windowDragging", "advanced.exportData",
+            // B83: Profiles data rows, Download location, Learn more, More Settings… (03 §Profiles).
+            "profiles.learnMore", "profiles.searchSettings", "profiles.downloadLocation",
+            "profiles.privacy", "profiles.passwords", "profiles.creditCards", "profiles.notifications",
+            "profiles.autofill", "profiles.clearBrowsingData", "advanced.moreSettings",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {

@@ -131,27 +131,32 @@ public enum SettingsCatalog {
     // MARK: Profiles [03 §Profiles]
 
     static let profiles: [SettingsControl] = [
-        SettingsControl("profiles.learnMore", "Learn more", .button, .pending(task: "D9")),
+        // Live (B83): our help page in a tab (`HelpPages.profiles`). inferred target.
+        SettingsControl("profiles.learnMore", "Learn more", .button, .live),
         SettingsControl("profiles.list", "Your Profiles", .list, .live),
         SettingsControl("profiles.add", "Add Profile", .button, .live),
         // Deleting needs a TreeOps profile delete (Model change, Opus) plus C11 data removal.
         SettingsControl("profiles.remove", "Remove Profile", .button, .live),
         SettingsControl("profiles.searchEngine", "Search engine", .picker(defaultValue: SearchEngine.default.displayName), .live),
-        // Chromium's search engine manager.
-        SettingsControl("profiles.searchSettings", "Search Settings…", .button, .pending(task: "C12")),
+        // Live (B83): Chromium's search engine manager for the profile, in a tab (inferred target,
+        // `ProfileEnginePage`).
+        SettingsControl("profiles.searchSettings", "Search Settings…", .button, .live),
         // Suggestions come from the engine's suggest service.
         SettingsControl("profiles.searchSuggestions", "Include search engine suggestions", .toggle(defaultValue: true), .pending(task: "C9")),
         SettingsControl("profiles.archiveTabsAfter", "Archive tabs after", .picker(defaultValue: ArchiveLifetime.default.displayName), .live),
         // Default app for new documents (Notes/Easels are E3 gaps); default value unknown.
         SettingsControl("profiles.newDocuments", "New documents", .picker(defaultValue: "—"), .pending(task: "E3")),
-        SettingsControl("profiles.downloadLocation", "Download location", .picker(defaultValue: "Downloads"), .pending(task: "C12")),
-        SettingsControl("profiles.privacy", "Privacy and Security", .navigationRow, .pending(task: "C12")),
-        // C13 made the password manager work in pages; the list view of saved passwords is a follow-up.
-        SettingsControl("profiles.passwords", "Passwords", .navigationRow, .pending(task: "C13 follow-up")),
-        SettingsControl("profiles.creditCards", "Credit Cards", .navigationRow, .pending(task: "C13 follow-up")),
-        SettingsControl("profiles.notifications", "Notifications", .navigationRow, .pending(task: "C12")),
-        SettingsControl("profiles.autofill", "Autofill", .navigationRow, .pending(task: "C13 follow-up")),
-        SettingsControl("profiles.clearBrowsingData", "Clear Browsing Data", .navigationRow, .pending(task: "C11")),
+        // Live (B83): the engine keeps the folder per profile (`EngineDownloads.setDefaultDirectory`).
+        SettingsControl("profiles.downloadLocation", "Download location", .picker(defaultValue: "Downloads"), .live),
+        // Live (B83): each row opens the engine's page for the profile in a tab (inferred targets,
+        // `ProfileEnginePage`).
+        SettingsControl("profiles.privacy", "Privacy and Security", .navigationRow, .live),
+        SettingsControl("profiles.passwords", "Passwords", .navigationRow, .live),
+        SettingsControl("profiles.creditCards", "Credit Cards", .navigationRow, .live),
+        SettingsControl("profiles.notifications", "Notifications", .navigationRow, .live),
+        SettingsControl("profiles.autofill", "Autofill", .navigationRow, .live),
+        // Live (B83): our sheet (time range + kinds) → `BrowserEngine.clearBrowsingData`.
+        SettingsControl("profiles.clearBrowsingData", "Clear Browsing Data", .navigationRow, .live),
     ]
 
     // MARK: Links [03 §Links]
@@ -212,8 +217,9 @@ public enum SettingsCatalog {
         // colors → window tint) was the opposite direction and is closed "not needed".
         SettingsControl("advanced.themeData", "Allow websites to get your theme data", .toggle(defaultValue: true), .pending(task: "unknown (spec gap)")),
         SettingsControl("advanced.boosts", "Enable Boosts on websites you visit", .toggle(defaultValue: true), .pending(task: "E1")),
-        // Chromium's own settings pages.
-        SettingsControl("advanced.moreSettings", "More Settings…", .button, .pending(task: "C12")),
+        // Live (B83): Chromium's settings pages for the current profile, in a tab
+        // (`SettingsModel.openMoreSettings`).
+        SettingsControl("advanced.moreSettings", "More Settings…", .button, .live),
         SettingsControl("advanced.resetTranslatePrompts", "Reset Translated-site Prompts", .button, .live),
         // Live (B84): our own JSON export of the sidebar (`WorkspaceExport`); Arc's format is unknown.
         SettingsControl("advanced.exportData", "Export Data", .button, .live),

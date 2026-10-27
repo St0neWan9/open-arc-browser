@@ -454,7 +454,7 @@ final class EngineProtocolTests: XCTestCase {
         await engine.downloads.pause("d1")
         await engine.downloads.confirm("d1", keep: true)
         await engine.downloads.remove("d1")
-        await engine.downloads.setDefaultDirectory(try url("file:///tmp/"))
+        await engine.downloads.setDefaultDirectory(try url("file:///tmp/"), profileID: profile)
         let received = await take(4, from: events)
         guard case .updated(let paused) = received[1], case .updated(let kept) = received[2] else { return XCTFail("expected updates") }
         XCTAssertEqual(received.first, .added(item))
@@ -463,7 +463,12 @@ final class EngineProtocolTests: XCTestCase {
         XCTAssertEqual(received.last, .removed(id: "d1"))
         let remaining = await engine.downloads.items(profileID: profile)
         XCTAssertTrue(remaining.isEmpty)
-        XCTAssertEqual(downloads.defaultDirectory, try url("file:///tmp/"))
+        XCTAssertEqual(downloads.defaultDirectories, [profile: try url("file:///tmp/")])
+        // Per profile (plan B83): another profile keeps its own (unset) folder.
+        let tmp = await engine.downloads.defaultDirectory(profileID: profile)
+        let other = await engine.downloads.defaultDirectory(profileID: UUID())
+        XCTAssertEqual(tmp, try url("file:///tmp/"))
+        XCTAssertNil(other)
     }
 
     func testExtensionsSkeleton() async throws {

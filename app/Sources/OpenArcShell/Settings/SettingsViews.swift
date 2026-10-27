@@ -210,7 +210,7 @@ struct ProfilesPane: View {
                 Text("Profiles help keep your data separate across Spaces — like history, logins, cookies, and extensions. You can use any Profile across one or more Spaces.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                CatalogButton(id: "profiles.learnMore")
+                CatalogButton(id: "profiles.learnMore") { model.openProfilesHelp() }
             }
             HStack(alignment: .top, spacing: 12) {
                 profileList
@@ -224,6 +224,14 @@ struct ProfilesPane: View {
         )) {
             DeleteProfileSheet(model: model)
         }
+        .sheet(isPresented: Binding(
+            get: { model.profileClearingData != nil },
+            set: { if !$0 { model.cancelClearBrowsingData() } }
+        )) {
+            ClearBrowsingDataSheet(model: model)
+        }
+        // The edited profile's download folder comes from the engine (B83).
+        .task(id: model.editedProfileID) { await model.loadDownloadDirectory() }
     }
 
     private var profileList: some View {
@@ -270,7 +278,10 @@ struct ProfilesPane: View {
                 )) {
                     ForEach(SearchEngine.allCases) { Text($0.displayName).tag($0) }
                 }
-                LabeledContent("Manage search") { CatalogButton(id: "profiles.searchSettings") }
+                LabeledContent("Manage search") {
+                    CatalogButton(id: "profiles.searchSettings") { model.openEnginePage(.searchSettings) }
+                        .disabled(!model.canOpenEditedProfilePages)
+                }
                 PendingToggle(id: "profiles.searchSuggestions")
                 // ⓘ: the spec notes an info button next to this dropdown; its text was not recorded.
                 Picker(SettingsCatalog.control("profiles.archiveTabsAfter").label, selection: Binding(
@@ -280,25 +291,120 @@ struct ProfilesPane: View {
                 }
                 .help("Unpinned tabs in Today are archived after they have been idle this long.")
                 PendingPicker(id: "profiles.newDocuments")
-                PendingPicker(id: "profiles.downloadLocation")
+                DownloadLocationPicker(model: model)
             }
-            Section("Your Data and Settings") {
-                ForEach(["profiles.privacy", "profiles.passwords", "profiles.creditCards",
-                         "profiles.notifications", "profiles.autofill", "profiles.clearBrowsingData"], id: \.self) { id in
-                    let control = SettingsCatalog.control(id)
-                    Button {} label: {
-                        HStack {
-                            Text(control.label)
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!control.isEnabled)
+            Section {
+                ForEach(Self.dataRows, id: \.self) { page in
+                    DataRow(id: page.controlID) { model.openEnginePage(page) }
+                        .disabled(!model.canOpenEditedProfilePages)
+                }
+                DataRow(id: "profiles.clearBrowsingData") { model.requestClearBrowsingData() }
+            } header: {
+                Text("Your Data and Settings")
+            } footer: {
+                if !model.canOpenEditedProfilePages {
+                    // A page opens in a tab of a Space that uses this Profile (inferred).
+                    Text("Assign this Profile to a Space to manage its data.")
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// [03 §Profiles] observed order: Privacy and Security · Passwords · Credit Cards ·
+    /// Notifications · Autofill, then Clear Browsing Data.
+    static let dataRows: [ProfileEnginePage] = [.privacy, .passwords, .creditCards, .notifications, .autofill]
+}
+
+/// A "Your Data and Settings" row: label and an arrow; the whole row is the button.
+/// [03 §Profiles] observed: each item is a row with an arrow.
+struct DataRow: View {
+    let id: String
+    let action: () -> Void
+
+    var body: some View {
+        let control = SettingsCatalog.control(id)
+        Button(action: action) {
+            HStack {
+                Text(control.label)
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!control.isEnabled)
+    }
+}
+
+/// "Download location": the folder, Downloads, and "Other…". [03 §Profiles] observed dropdown
+/// with default Downloads; the other entries are inferred (a Finder-style folder menu).
+struct DownloadLocationPicker: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        Picker(SettingsCatalog.control("profiles.downloadLocation").label, selection: Binding(
+            get: { DownloadLocationChoice.folder(model.downloadDirectory.standardizedFileURL) },
+            set: { choice in Task { await model.chooseDownloadLocation(choice) } }
+        )) {
+            ForEach(model.downloadLocationChoices, id: \.self) { choice in
+                switch choice {
+                case .folder(let url):
+                    Label {
+                        Text(SettingsModel.displayName(of: url))
+                    } icon: {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                    }
+                    .tag(choice)
+                case .other:
+                    Text("Other…").tag(choice)
+                }
+            }
+        }
+        .help(model.downloadDirectory.path)
+    }
+}
+
+/// "Clear Browsing Data" for one Profile. [03 §Profiles] observed row; the sheet itself is ours
+/// (inferred, Chromium's choices): a time range, the kinds of data, Cancel and "Clear data".
+struct ClearBrowsingDataSheet: View {
+    @ObservedObject var model: SettingsModel
+    @State private var range = ClearBrowsingDataRange.default
+    @State private var kinds = ClearBrowsingDataKind.defaultSelection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Clear Browsing Data").font(.title3.weight(.semibold))
+            Text("Removes data of the Profile “\(model.profileClearingDataName ?? "")” from this Mac.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Picker("Time range", selection: $range) {
+                ForEach(ClearBrowsingDataRange.allCases) { Text($0.displayName).tag($0) }
+            }
+            .fixedSize()
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(ClearBrowsingDataKind.allCases) { kind in
+                    Toggle(kind.label, isOn: Binding(
+                        get: { kinds.contains(kind) },
+                        set: { if $0 { kinds.insert(kind) } else { kinds.remove(kind) } }
+                    ))
+                    .toggleStyle(.checkbox)
+                }
+            }
+            HStack {
+                if model.isClearingBrowsingData { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel", role: .cancel) { model.cancelClearBrowsingData() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Clear data") { Task { await model.confirmClearBrowsingData(range: range, kinds: kinds) } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(kinds.isEmpty || model.isClearingBrowsingData)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+        .accessibilityIdentifier("openarc.clearBrowsingData")
     }
 }
 
@@ -485,7 +591,7 @@ struct AdvancedPane: View {
                 }
             }
             Section {
-                CatalogButton(id: "advanced.moreSettings")
+                CatalogButton(id: "advanced.moreSettings") { model.openMoreSettings() }
                 // [03 §Advanced] observed button. Live since B47: forgets every profile's
                 // translation decisions (never-translate sites and languages).
                 CatalogButton(id: "advanced.resetTranslatePrompts") { Task { await model.resetTranslatedSitePrompts() } }

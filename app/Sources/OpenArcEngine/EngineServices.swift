@@ -81,8 +81,13 @@ public protocol EngineDownloads: AnyObject, Sendable {
     func remove(_ id: String) async
     /// Starts a download without navigating (Download Linked File).
     func download(_ url: URL, profileID: Profile.ID) async
-    /// Where files go. [03] observed "Download location" (default Downloads).
-    func setDefaultDirectory(_ url: URL) async
+    /// Where the profile's files go. [03 §Profiles] observed "Download location" (a per-Profile
+    /// dropdown, default Downloads). The engine keeps the choice (Chromium: the profile's
+    /// `download.default_directory` pref), so it is per device and survives restarts (plan B83).
+    func setDefaultDirectory(_ url: URL, profileID: Profile.ID) async
+    /// The profile's download folder; nil when the engine cannot say (then the user's Downloads
+    /// folder applies).
+    func defaultDirectory(profileID: Profile.ID) async -> URL?
 }
 
 // MARK: - Extensions

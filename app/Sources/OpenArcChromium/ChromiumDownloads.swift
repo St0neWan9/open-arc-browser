@@ -56,10 +56,30 @@ final class ChromiumDownloads: EngineDownloads, @unchecked Sendable {
         await core.downloads(profileID)?.downloadURL(url)
     }
 
-    func setDefaultDirectory(_ url: URL) async {
-        await MainActor.run {
-            for downloads in self.loadedDownloads() { downloads.defaultDirectory = url }
-        }
+    /// Plan B83: Settings ▸ Profiles ▸ Download location. The bridge stores it in the profile's
+    /// `download.default_directory` pref (`DownloadPrefs::SetDownloadPath`, patch 0017), so Chromium
+    /// keeps it across launches; incognito downloads of the profile follow it. Loads the profile
+    /// (and starts the engine) when needed.
+    func setDefaultDirectory(_ url: URL, profileID: Profile.ID) async {
+        await setDefaultDirectoryOnMain(url, profileID: profileID)
+    }
+
+    @MainActor
+    private func setDefaultDirectoryOnMain(_ url: URL, profileID: Profile.ID) async {
+        guard url.isFileURL, let downloads = await core.downloads(profileID), downloads.profile?.isValid == true else { return }
+        downloads.defaultDirectory = url
+    }
+
+    func defaultDirectory(profileID: Profile.ID) async -> URL? {
+        await defaultDirectoryOnMain(profileID)
+    }
+
+    @MainActor
+    private func defaultDirectoryOnMain(_ profileID: Profile.ID) async -> URL? {
+        // The getter returns nil once the profile is gone, although the header says nonnull: read
+        // it only from a valid profile.
+        guard let downloads = await core.downloads(profileID), downloads.profile?.isValid == true else { return nil }
+        return downloads.defaultDirectory
     }
 
     // MARK: Internals
