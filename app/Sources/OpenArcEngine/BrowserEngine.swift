@@ -421,6 +421,10 @@ public protocol BrowserTab: AnyObject, Sendable {
 
     /// Renders the visible page, scaled so the longer side is at most `maxPixelSize`.
     func snapshot(maxPixelSize: Int) async throws -> EngineSnapshot
+    /// Renders part of the visible page or the whole page at the screen's pixel density, for the
+    /// capture tools (plan B51, [06 §24] observed). See `PageCaptureArea` (PageCapture.swift);
+    /// engines without it throw `EngineError.unsupported("capture")`.
+    func capture(_ area: PageCaptureArea) async throws -> EngineSnapshot
 
     /// Runs the page's beforeunload handler (it may raise a `.beforeUnload` dialog); the tab then
     /// reports `.closeRequested` if the page agreed. `BrowserEngine.closeTab` stays the immediate

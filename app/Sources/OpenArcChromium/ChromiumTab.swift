@@ -72,6 +72,11 @@ public final class ChromiumTab: BrowserTab, @unchecked Sendable {
         try await core.snapshot(maxPixelSize: maxPixelSize)
     }
 
+    /// Plan B51 (`OACCapture.h`).
+    public func capture(_ area: PageCaptureArea) async throws -> EngineSnapshot {
+        try await core.capture(area)
+    }
+
     public func requestClose() async {
         await core.perform { $0.closeRunningUnloadHandlers() }
     }

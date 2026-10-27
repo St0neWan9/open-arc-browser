@@ -162,6 +162,15 @@ struct ShellCommands: Commands {
         // No system Close (⌘W) / Close All (⌥⌘W): they took ⌘W from Tabs ▸ Archive Tab (B19).
         NoSystemCloseCommands()
         CommandGroup(replacing: .printItem) {
+            // [01 §File] observed: Capture… · Capture Full Page · Capture in Portrait Mode before
+            // Save Page As; ⇧⌘2 for Capture… [02] observed, none for the other two. B51.
+            Button("Capture…") { model.beginRegionCapture() }
+                .keyboardShortcut("2", modifiers: [.shift, .command])
+                .disabled(!hasWindow || !model.canCapturePage)
+            Button("Capture Full Page") { model.captureFullPage() }
+                .disabled(!hasWindow || !model.canCapturePage)
+            Button("Capture in Portrait Mode") { model.beginPortraitCapture() }
+                .disabled(!hasWindow || !model.canCapturePage)
             Button("Save Page As") { model.savePageAs() }
                 .disabled(!hasWindow || !model.canRunPageCommands)
             Button("Print") { model.printPage() }

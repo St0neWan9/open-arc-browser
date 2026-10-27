@@ -270,6 +270,8 @@ public enum FakeTabCommand: Hashable, Sendable {
     case translate(String?)
     case revertTranslation
     case neverTranslateSite
+    /// Plan B51: `capture(_:)`.
+    case capture(PageCaptureArea)
 }
 
 /// The answer a fake dialog request got (or its default when it was dropped).
@@ -328,6 +330,9 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private var state = BrowserTabState()
     private var isClosed = false
     private var commandLog: [FakeTabCommand] = []
+    /// Page capture sizes (plan B51, `simulateCaptureSizes`).
+    private var captureViewport = (width: 800, height: 600)
+    private var capturePage = (width: 800, height: 600)
     private var answers: [UUID: FakeDialogAnswer] = [:]
     private var autofillCommandLog: [AutofillPopupCommand] = []
     /// Withdraws an outstanding dialog request (captures the reply weakly).
@@ -460,6 +465,44 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
             guard !isClosed else { throw EngineError.tabClosed(id) }
         }
         return EngineSnapshot(pngData: FakeTab.transparentPixelPNG, pixelWidth: 1, pixelHeight: 1)
+    }
+
+    /// Page capture (plan B51) of the fake page (`FakePageImage`: each pixel encodes its page
+    /// point), at 1 pixel per point. The visible page is the top of the page; both are 800 × 600
+    /// unless a test sets them (`simulateCaptureSizes`).
+    public func capture(_ area: PageCaptureArea) async throws -> EngineSnapshot {
+        let (viewport, page) = try lock.withLock {
+            guard !isClosed else { throw EngineError.tabClosed(id) }
+            commandLog.append(.capture(area))
+            return (captureViewport, capturePage)
+        }
+        var rect: (x: Int, y: Int, width: Int, height: Int)
+        switch area {
+        case .visible(let selection):
+            guard let selection else {
+                rect = (0, 0, viewport.width, viewport.height)
+                break
+            }
+            let minX = max(0, Int(selection.x.rounded(.down))), minY = max(0, Int(selection.y.rounded(.down)))
+            let maxX = min(viewport.width, Int((selection.x + selection.width).rounded(.up)))
+            let maxY = min(viewport.height, Int((selection.y + selection.height).rounded(.up)))
+            guard maxX > minX, maxY > minY else { throw EngineError.invalidArgument }
+            rect = (minX, minY, maxX - minX, maxY - minY)
+        case .fullPage(let ratio):
+            var height = page.height
+            if let ratio, ratio > 0 { height = min(height, Int((Double(page.width) * ratio).rounded(.down))) }
+            rect = (0, 0, page.width, max(1, height))
+        }
+        let png = FakePageImage.png(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+        return EngineSnapshot(pngData: png, pixelWidth: rect.width, pixelHeight: rect.height)
+    }
+
+    /// The visible page and whole page sizes the fake captures from (points = pixels). For tests.
+    public func simulateCaptureSizes(viewport: (width: Int, height: Int), page: (width: Int, height: Int)) {
+        lock.withLock {
+            captureViewport = viewport
+            capturePage = page
+        }
     }
 
     /// Without a beforeunload handler the page agrees at once (`.closeRequested`). With one
