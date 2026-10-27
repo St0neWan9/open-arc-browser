@@ -18,6 +18,7 @@
 #import <OpenArcCore/OACJavaScript.h>
 #import <OpenArcCore/OACDialogDelegate.h>
 #import <OpenArcCore/OACAutofill.h>
+#import <OpenArcCore/OACWebAuthn.h>
 #import <OpenArcCore/OACSiteSettings.h>
 #import <OpenArcCore/OACDownloads.h>
 #import <OpenArcCore/OACExtensions.h>

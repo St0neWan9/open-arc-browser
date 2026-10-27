@@ -17,7 +17,8 @@ import os
 // Plan C13 adds the password manager's save prompt and the autofill dropdown ([00 §A] observed:
 // "inherited from the engine; prompts drawn by the shell, style not captured"). F1 step 2 adds the
 // unresponsive-page prompt (C22, [00 §A] inferred (analysis): "Page unresponsive" dialog for a hung
-// page, wait or leave).
+// page, wait or leave), the client-certificate picker (C25, [00 §A] inferred (analysis)) and the
+// passkey / security-key dialog (C21, [00 §A] inferred (analysis): drawn by the shell).
 
 /// Single-shot answer channel of one dialog request. Thread-safe; equal by identity.
 public final class DialogReply<Answer: Sendable>: Sendable, Hashable {
@@ -559,6 +560,264 @@ public enum UnresponsivePageReply: Hashable, Sendable {
     case leave
 }
 
+// MARK: - Client certificate (plan C25)
+
+/// One client certificate (a keychain identity) a site may get.
+public struct ClientCertificate: Hashable, Sendable {
+    /// The subject's display name (common name, else organization).
+    public var subjectName: String
+    public var issuerName: String
+    public var validUntil: Date
+    /// The certificate (DER), for a certificate viewer.
+    public var derData: Data
+
+    public init(subjectName: String, issuerName: String, validUntil: Date, derData: Data = Data()) {
+        self.subjectName = subjectName
+        self.issuerName = issuerName
+        self.validUntil = validUntil
+        self.derData = derData
+    }
+}
+
+/// A server asked for a client certificate during the TLS handshake and the engine's policy did not
+/// pick one. [00 §A] inferred (analysis): a picker for sites that ask for one; look unknown.
+/// The engine withdraws it when the tab closes, the network request went away or another prompt for
+/// the same host was answered. Bridge: `OACClientCertificateRequest`.
+public struct ClientCertificatePrompt: Identifiable, Hashable, Sendable {
+    public let id: UUID
+    public let origin: SiteOrigin?
+    /// The server that asks, "host:port".
+    public let hostPort: String
+    /// Never empty (with no identity the engine continues without asking).
+    public let certificates: [ClientCertificate]
+    public let reply: DialogReply<ClientCertificateReply>
+
+    public init(id: UUID, origin: SiteOrigin?, hostPort: String, certificates: [ClientCertificate], reply: DialogReply<ClientCertificateReply>) {
+        self.id = id
+        self.origin = origin
+        self.hostPort = hostPort
+        self.certificates = certificates
+        self.reply = reply
+    }
+}
+
+/// Answer to a client-certificate prompt. Default: `.continueWithout`. The engine remembers either
+/// answer for the host until the browsing session ends.
+public enum ClientCertificateReply: Hashable, Sendable {
+    /// Send `certificates[index]` (macOS may ask to allow access to its private key).
+    case select(index: Int)
+    /// Continue the handshake without a certificate (Cancel).
+    case continueWithout
+}
+
+// MARK: - WebAuthn (plan C21)
+
+/// The passkey / security-key dialog's current step. [00 §A] inferred (analysis); look and wording
+/// unknown. Bridge: `OACWebAuthnDialog` (OACWebAuthn.h lists what is and is not supported).
+public struct WebAuthnState: Hashable, Sendable {
+    public enum Operation: Hashable, Sendable {
+        /// `navigator.credentials.create()`.
+        case create
+        /// `navigator.credentials.get()`.
+        case signIn
+    }
+
+    public enum Step: Hashable, Sendable {
+        /// Choose how to continue (`mechanisms`).
+        case chooseMethod
+        /// Confirm `mechanisms[priorityMechanismIndex]`.
+        case confirmMethod
+        /// Insert and touch the security key (no button).
+        case securityKey
+        case enterPIN
+        /// The key has no PIN yet: choose one (asked twice).
+        case setPIN
+        /// The key requires a new PIN (asked twice).
+        case changePIN
+        case touchAgain
+        /// Touch the key's fingerprint sensor (`bioSamplesRemaining`); accept when done.
+        case fingerprintEnrollment
+        case retryVerification
+        case confirmSecurityKeyStorage
+        /// Choose the account (`accounts`).
+        case chooseAccount
+        /// Create a passkey on this Mac (macOS asks for Touch ID or the password next).
+        case createPasskey
+        case privateWindowWarning
+        case error(WebAuthnError)
+    }
+
+    public enum MechanismKind: Hashable, Sendable {
+        /// A passkey for one account on this Mac.
+        case passkeyOnThisMac
+        /// Save or use a passkey on this Mac.
+        case thisMac
+        case securityKey
+        case other
+    }
+
+    public struct Mechanism: Hashable, Sendable {
+        public var kind: MechanismKind
+        /// The account for passkeys; empty otherwise.
+        public var title: String
+        public var subtitle: String
+
+        public init(kind: MechanismKind, title: String = "", subtitle: String = "") {
+            self.kind = kind
+            self.title = title
+            self.subtitle = subtitle
+        }
+    }
+
+    public struct Account: Hashable, Sendable {
+        public var name: String
+        public var displayName: String
+
+        public init(name: String, displayName: String = "") {
+            self.name = name
+            self.displayName = displayName
+        }
+    }
+
+    public enum PINError: Hashable, Sendable {
+        case none, wrongPIN, tooShort, invalidCharacters, sameAsCurrent, fingerprintLocked
+    }
+
+    public var operation: Operation
+    /// The relying party ("example.com").
+    public var relyingPartyID: String
+    /// For `.create`: the account the site creates a passkey for (may be empty).
+    public var userName: String
+    public var step: Step
+    public var mechanisms: [Mechanism]
+    public var priorityMechanismIndex: Int?
+    public var accounts: [Account]
+    public var canChooseAnotherMethod: Bool
+    /// The error step offers "Try Again".
+    public var canRetry: Bool
+    public var pinError: PINError
+    public var pinAttemptsRemaining: Int?
+    public var minimumPINLength: Int
+    public var bioSamplesRemaining: Int?
+    public var bioSamplesTotal: Int?
+    /// The engine is busy: no input until the next update.
+    public var isBusy: Bool
+
+    public init(
+        operation: Operation, relyingPartyID: String, userName: String = "", step: Step,
+        mechanisms: [Mechanism] = [], priorityMechanismIndex: Int? = nil, accounts: [Account] = [],
+        canChooseAnotherMethod: Bool = false, canRetry: Bool = false, pinError: PINError = .none,
+        pinAttemptsRemaining: Int? = nil, minimumPINLength: Int = 4, bioSamplesRemaining: Int? = nil,
+        bioSamplesTotal: Int? = nil, isBusy: Bool = false
+    ) {
+        self.operation = operation
+        self.relyingPartyID = relyingPartyID
+        self.userName = userName
+        self.step = step
+        self.mechanisms = mechanisms
+        self.priorityMechanismIndex = priorityMechanismIndex
+        self.accounts = accounts
+        self.canChooseAnotherMethod = canChooseAnotherMethod
+        self.canRetry = canRetry
+        self.pinError = pinError
+        self.pinAttemptsRemaining = pinAttemptsRemaining
+        self.minimumPINLength = minimumPINLength
+        self.bioSamplesRemaining = bioSamplesRemaining
+        self.bioSamplesTotal = bioSamplesTotal
+        self.isBusy = isBusy
+    }
+}
+
+/// Why a WebAuthn request failed.
+public enum WebAuthnError: Hashable, Sendable {
+    case timedOut
+    case keyNotRegistered
+    case keyAlreadyRegistered
+    case noPasskeys
+    case noMethods
+    case pinTemporarilyLocked
+    case pinLocked
+    case keyRemoved
+    case missingCapability
+    case storageFull
+    /// A method this app does not support (phone, Bluetooth, cloud passkeys).
+    case unsupported
+    case other
+}
+
+/// What the shell tells a live WebAuthn dialog.
+public enum WebAuthnCommand: Hashable, Sendable {
+    /// The step's main button (continue, create, try again, done).
+    case accept
+    case selectMechanism(Int)
+    case selectAccount(Int)
+    /// The PIN (for set / change: already confirmed by the shell).
+    case providePIN(String)
+    /// Back to the method list.
+    case chooseAnotherMethod
+}
+
+/// The live side of a WebAuthn dialog: its current step (changes while it is open) and the commands
+/// the shell sends. Thread-safe; equal by identity.
+public final class WebAuthnSession: Sendable, Hashable {
+    public typealias CommandHandler = @Sendable (WebAuthnCommand) -> Void
+
+    private let current: OSAllocatedUnfairLock<WebAuthnState>
+    private let broadcaster = AsyncBroadcaster<WebAuthnState>()
+    private let handler: CommandHandler
+
+    public init(state: WebAuthnState, handler: @escaping CommandHandler) {
+        current = OSAllocatedUnfairLock(initialState: state)
+        self.handler = handler
+    }
+
+    public var state: WebAuthnState { current.withLock { $0 } }
+
+    /// The state now, then every change; finishes when the engine ends the session.
+    public func updates() -> AsyncStream<WebAuthnState> {
+        current.withLock { broadcaster.subscribe(initial: [$0]) }
+    }
+
+    /// Shell side.
+    public func send(_ command: WebAuthnCommand) { handler(command) }
+
+    /// Engine side: the dialog moved to another step or its content changed.
+    public func update(_ state: WebAuthnState) {
+        current.withLock {
+            $0 = state
+            broadcaster.yield(state)
+        }
+    }
+
+    /// Engine side: the dialog went away.
+    public func finish() { broadcaster.finish() }
+
+    public static func == (lhs: WebAuthnSession, rhs: WebAuthnSession) -> Bool { lhs === rhs }
+    public func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
+}
+
+/// The passkey / security-key dialog of one WebAuthn request. Tab-modal. Steps change through
+/// `session`; only cancelling answers the request (`reply`). The engine withdraws it when the flow
+/// completes or hands over to macOS (Touch ID / password prompt). Bridge: `OACWebAuthnDialog`.
+public struct WebAuthnDialog: Identifiable, Hashable, Sendable {
+    public let id: UUID
+    public let origin: SiteOrigin?
+    public let session: WebAuthnSession
+    public let reply: DialogReply<WebAuthnReply>
+
+    public init(id: UUID, origin: SiteOrigin?, session: WebAuthnSession, reply: DialogReply<WebAuthnReply>) {
+        self.id = id
+        self.origin = origin
+        self.session = session
+        self.reply = reply
+    }
+}
+
+/// Answer to a WebAuthn dialog. Default: `.cancel` (the page gets NotAllowedError).
+public enum WebAuthnReply: Hashable, Sendable {
+    case cancel
+}
+
 // MARK: - Request
 
 /// One dialog request of a tab (`BrowserTab.dialogRequests()`).
@@ -576,6 +835,10 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
     case extensionInstall(ExtensionInstallPrompt)
     /// The page stopped responding (plan C22).
     case unresponsivePage(UnresponsivePagePrompt)
+    /// A site asks for a client certificate (plan C25).
+    case clientCertificate(ClientCertificatePrompt)
+    /// The passkey / security-key dialog (plan C21).
+    case webAuthn(WebAuthnDialog)
 
     public var id: UUID {
         switch self {
@@ -588,6 +851,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .autofillPopup(let r): r.id
         case .extensionInstall(let r): r.id
         case .unresponsivePage(let r): r.id
+        case .clientCertificate(let r): r.id
+        case .webAuthn(let r): r.id
         }
     }
 
@@ -602,6 +867,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .autofillPopup(let r): r.origin
         case .extensionInstall(let r): r.origin
         case .unresponsivePage(let r): r.origin
+        case .clientCertificate(let r): r.origin
+        case .webAuthn(let r): r.origin
         }
     }
 
@@ -617,6 +884,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .autofillPopup(let r): r.reply.isFinished
         case .extensionInstall(let r): r.reply.isFinished
         case .unresponsivePage(let r): r.reply.isFinished
+        case .clientCertificate(let r): r.reply.isFinished
+        case .webAuthn(let r): r.reply.isFinished
         }
     }
 
@@ -633,6 +902,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .autofillPopup(let r): r.reply.sendDefault()
         case .extensionInstall(let r): r.reply.sendDefault()
         case .unresponsivePage(let r): r.reply.sendDefault()
+        case .clientCertificate(let r): r.reply.sendDefault()
+        case .webAuthn(let r): r.reply.sendDefault()
         }
     }
 
@@ -648,6 +919,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .autofillPopup(let r): r.reply.withdraw()
         case .extensionInstall(let r): r.reply.withdraw()
         case .unresponsivePage(let r): r.reply.withdraw()
+        case .clientCertificate(let r): r.reply.withdraw()
+        case .webAuthn(let r): r.reply.withdraw()
         }
     }
 }

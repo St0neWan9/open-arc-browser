@@ -311,6 +311,8 @@ public enum FakeDialogAnswer: Hashable, Sendable {
     case autofillPopup(AutofillPopupReply)
     case extensionInstall(ExtensionInstallReply)
     case unresponsivePage(UnresponsivePageReply)
+    case clientCertificate(ClientCertificateReply)
+    case webAuthn(WebAuthnReply)
 }
 
 /// Per-site zoom levels, shared by every tab of one FakeEngine. Keyed by profile, off-the-record
@@ -362,6 +364,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private var capturePage = (width: 800, height: 600)
     private var answers: [UUID: FakeDialogAnswer] = [:]
     private var autofillCommandLog: [AutofillPopupCommand] = []
+    private var webAuthnCommandLog: [WebAuthnCommand] = []
     /// The open unresponsive-page prompt (C22), withdrawn by `simulatePageResponsive`.
     private var unresponsivePromptID: UUID?
     /// Withdraws an outstanding dialog request (captures the reply weakly).
@@ -1125,6 +1128,48 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         }
         if let pending { simulateDialogCancel(pending) }
     }
+
+    /// A server asks for a client certificate (plan C25). Returns the request id; the answer is in
+    /// `dialogAnswers` (`.clientCertificate`).
+    @discardableResult
+    public func simulateClientCertificateRequest(hostPort: String, certificates: [ClientCertificate]) -> UUID {
+        let requestID = UUID()
+        let reply = DialogReply<ClientCertificateReply>(
+            default: .continueWithout, handler: answerHandler(requestID) { .clientCertificate($0) }
+        )
+        let origin = URL(string: "https://\(hostPort)").flatMap(SiteOrigin.init(url:))
+        let request = ClientCertificatePrompt(
+            id: requestID, origin: origin, hostPort: hostPort, certificates: certificates, reply: reply
+        )
+        deliver(.clientCertificate(request), withdraw: { [weak reply] in reply?.withdraw() })
+        return requestID
+    }
+
+    /// Opens the WebAuthn dialog (plan C21). Commands the shell sends are recorded in
+    /// `webAuthnCommands`; move it to another step with `session.update(_:)` and end it with
+    /// `simulateDialogCancel` (the flow completed or handed over to macOS).
+    @discardableResult
+    public func simulateWebAuthnDialog(_ state: WebAuthnState) -> (id: UUID, session: WebAuthnSession) {
+        let requestID = UUID()
+        let session = WebAuthnSession(state: state) { [weak self] command in
+            guard let self else { return }
+            self.lock.withLock { self.webAuthnCommandLog.append(command) }
+        }
+        let record = answerHandler(requestID) { FakeDialogAnswer.webAuthn($0) }
+        let reply = DialogReply<WebAuthnReply>(default: .cancel) { [weak session] answer in
+            record(answer)
+            session?.finish()
+        }
+        let request = WebAuthnDialog(id: requestID, origin: currentOrigin(), session: session, reply: reply)
+        deliver(.webAuthn(request), withdraw: { [weak reply, weak session] in
+            reply?.withdraw()
+            session?.finish()
+        })
+        return (requestID, session)
+    }
+
+    /// Commands the shell sent to WebAuthn dialogs, oldest first. For tests.
+    public var webAuthnCommands: [WebAuthnCommand] { lock.withLock { webAuthnCommandLog } }
 
     /// The engine withdraws an unanswered request (`TabEvent.dialogCancelled`).
     public func simulateDialogCancel(_ requestID: UUID) {

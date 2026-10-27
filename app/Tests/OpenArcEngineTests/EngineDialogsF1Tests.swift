@@ -3,7 +3,8 @@ import OpenArcModel
 @testable import OpenArcEngine
 
 /// F1 step 2 dialog requests drawn by the shell (`docs/arc-spec/00-feature-inventory.md §A`,
-/// inferred (analysis); looks unknown): the unresponsive-page prompt (C22).
+/// inferred (analysis); looks unknown): the unresponsive-page prompt (C22), the client-certificate
+/// picker (C25) and the passkey / security-key dialog (C21).
 final class EngineDialogsF1Tests: XCTestCase {
     private let profile = UUID(uuidString: "00000000-0000-0000-0000-0000000000F1")!
 
@@ -112,5 +113,114 @@ final class EngineDialogsF1Tests: XCTestCase {
         let id = tab.simulateUnresponsivePage()
         try await waitUntil { tab.dialogAnswers[id] != nil }
         XCTAssertEqual(tab.dialogAnswers[id], .unresponsivePage(.wait))
+    }
+
+    // MARK: C25 client certificate ([00 §A] inferred (analysis): picker for sites that ask)
+
+    private func certificates() -> [ClientCertificate] {
+        [
+            ClientCertificate(subjectName: "Alice", issuerName: "Test CA", validUntil: Date(timeIntervalSince1970: 2_000_000_000)),
+            ClientCertificate(subjectName: "Bob", issuerName: "Test CA", validUntil: Date(timeIntervalSince1970: 2_000_000_000)),
+        ]
+    }
+
+    /// The prompt lists the identities; choosing one sends its index.
+    func testClientCertificateSelect() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine)
+        let stream = tab.dialogRequests()
+        let id = tab.simulateClientCertificateRequest(hostPort: "localhost:8443", certificates: certificates())
+        guard case .clientCertificate(let prompt) = await take(1, from: stream).first else { return XCTFail("expected the picker") }
+        XCTAssertEqual(prompt.id, id)
+        XCTAssertEqual(prompt.hostPort, "localhost:8443")
+        XCTAssertEqual(prompt.origin?.displayHost, "localhost:8443")
+        XCTAssertEqual(prompt.certificates.map(\.subjectName), ["Alice", "Bob"])
+        XCTAssertTrue(prompt.reply.send(.select(index: 1)))
+        XCTAssertEqual(tab.dialogAnswers[id], .clientCertificate(.select(index: 1)))
+    }
+
+    /// Dropped unanswered (Cancel), the handshake continues without a certificate.
+    func testClientCertificateDefaultContinuesWithout() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine)
+        let id = tab.simulateClientCertificateRequest(hostPort: "localhost:8443", certificates: certificates())
+        try await waitUntil { tab.dialogAnswers[id] != nil }
+        XCTAssertEqual(tab.dialogAnswers[id], .clientCertificate(.continueWithout))
+    }
+
+    /// The engine withdraws the picker (another prompt for the host was answered); a late answer is
+    /// ignored.
+    func testClientCertificateWithdrawn() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine)
+        let stream = tab.dialogRequests()
+        let id = tab.simulateClientCertificateRequest(hostPort: "localhost:8443", certificates: certificates())
+        guard case .clientCertificate(let prompt) = await take(1, from: stream).first else { return XCTFail("expected the picker") }
+        tab.simulateDialogCancel(id)
+        XCTAssertTrue(prompt.reply.isFinished)
+        XCTAssertFalse(prompt.reply.send(.select(index: 0)))
+        XCTAssertNil(tab.dialogAnswers[id])
+    }
+
+    // MARK: C21 WebAuthn ([00 §A] inferred (analysis): passkey / security-key dialog)
+
+    /// The dialog carries the flow's step; the shell's choices go to the engine as commands, and
+    /// later steps arrive on the same session.
+    func testWebAuthnSessionCarriesStepsAndCommands() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine, url: "https://webauthn.example")
+        let stream = tab.dialogRequests()
+        let methods = WebAuthnState(
+            operation: .create, relyingPartyID: "webauthn.example", userName: "alice", step: .chooseMethod,
+            mechanisms: [.init(kind: .thisMac), .init(kind: .securityKey)]
+        )
+        let (id, session) = tab.simulateWebAuthnDialog(methods)
+        guard case .webAuthn(let dialog) = await take(1, from: stream).first else { return XCTFail("expected the dialog") }
+        XCTAssertEqual(dialog.id, id)
+        XCTAssertEqual(dialog.origin?.displayHost, "webauthn.example")
+        XCTAssertEqual(dialog.session.state, methods)
+
+        let updates = dialog.session.updates()
+        dialog.session.send(.selectMechanism(1))
+        var pinStep = methods
+        pinStep.step = .enterPIN
+        pinStep.pinAttemptsRemaining = 8
+        session.update(pinStep)
+        dialog.session.send(.providePIN("1234"))
+        let seen = await take(2, from: updates)
+        XCTAssertEqual(seen.map(\.step), [.chooseMethod, .enterPIN])
+        XCTAssertEqual(tab.webAuthnCommands, [.selectMechanism(1), .providePIN("1234")])
+        XCTAssertFalse(dialog.reply.isFinished, "commands do not answer the request")
+    }
+
+    /// Cancel answers the request; the session ends.
+    func testWebAuthnCancel() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine)
+        let stream = tab.dialogRequests()
+        let (id, _) = tab.simulateWebAuthnDialog(WebAuthnState(operation: .signIn, relyingPartyID: "stuck.example", step: .securityKey))
+        guard case .webAuthn(let dialog) = await take(1, from: stream).first else { return XCTFail("expected the dialog") }
+        let updates = dialog.session.updates()
+        XCTAssertTrue(dialog.reply.send(.cancel))
+        XCTAssertEqual(tab.dialogAnswers[id], .webAuthn(.cancel))
+        var count = 0
+        for await _ in updates { count += 1 }
+        XCTAssertEqual(count, 1, "the stream finishes after the current state")
+    }
+
+    /// The engine withdraws the dialog when macOS takes over or the flow completes.
+    func testWebAuthnWithdrawnByEngine() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine)
+        let events = tab.events()
+        let stream = tab.dialogRequests()
+        let (id, _) = tab.simulateWebAuthnDialog(WebAuthnState(operation: .create, relyingPartyID: "stuck.example", step: .createPasskey))
+        guard case .webAuthn(let dialog) = await take(1, from: stream).first else { return XCTFail("expected the dialog") }
+        tab.simulateDialogCancel(id)
+        for await event in events {
+            if case .dialogCancelled(let cancelled) = event, cancelled == id { break }
+        }
+        XCTAssertTrue(dialog.reply.isFinished)
+        XCTAssertNil(tab.dialogAnswers[id])
     }
 }

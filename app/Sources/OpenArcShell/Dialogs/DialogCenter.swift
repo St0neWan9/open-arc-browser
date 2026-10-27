@@ -6,8 +6,8 @@ import OpenArcDesign
 
 // Shell side of engine dialog requests (plan C7b / C12 / C13; chromium-bridge/SWIFT_PROTOCOL_CHANGES.md
 // §3). The engine raises JavaScript dialogs, HTTP auth, permission prompts, file choosers,
-// external-protocol prompts, password save prompts, autofill dropdowns and unresponsive-page
-// prompts (C22) per tab (`BrowserTab.dialogRequests()`); this queue holds them per
+// external-protocol prompts, password save prompts, autofill dropdowns, unresponsive-page
+// prompts (C22), client-certificate pickers (C25) and the WebAuthn dialog (C21) per tab (`BrowserTab.dialogRequests()`); this queue holds them per
 // tab and the views draw the head of each queue (TabDialogViews.swift).
 //
 // Decisions without evidence (the spec records none of these dialogs; all inferred):
@@ -32,6 +32,8 @@ public enum DialogAnswer: Hashable, Sendable {
     case autofillPopup(AutofillPopupReply)
     case extensionInstall(ExtensionInstallReply)
     case unresponsivePage(UnresponsivePageReply)
+    case clientCertificate(ClientCertificateReply)
+    case webAuthn(WebAuthnReply)
 }
 
 /// Dialog requests of every live tab of one workspace controller, queued per engine tab.
@@ -111,6 +113,8 @@ public final class DialogCenter: ObservableObject {
         case (.autofillPopup(let r), .autofillPopup(let a)): sent = r.reply.send(a)
         case (.extensionInstall(let r), .extensionInstall(let a)): sent = r.reply.send(a)
         case (.unresponsivePage(let r), .unresponsivePage(let a)): sent = r.reply.send(a)
+        case (.clientCertificate(let r), .clientCertificate(let a)): sent = r.reply.send(a)
+        case (.webAuthn(let r), .webAuthn(let a)): sent = r.reply.send(a)
         default: return false
         }
         remove(requestID)
@@ -166,6 +170,15 @@ public struct DialogPresentation: Equatable, Sendable {
         case filePanel
         /// The autofill dropdown under a form field (C13; drawn by `AutofillDropdownView`).
         case dropdown
+        /// The passkey / security-key sheet (C21; drawn by `WebAuthnSheetView`, its steps change
+        /// while it is open).
+        case webAuthn
+    }
+
+    /// One row of a single-choice list (the client-certificate picker, C25).
+    public struct Choice: Equatable, Sendable {
+        public var title: String
+        public var detail: String
     }
 
     public enum Field: Equatable, Sendable {
@@ -179,6 +192,8 @@ public struct DialogPresentation: Equatable, Sendable {
     public var fields: [Field]
     /// Title of the "remember" / "suppress" checkbox, if the dialog has one.
     public var checkbox: String?
+    /// Rows to choose one from (the first is selected at first); empty for most dialogs.
+    public var choices: [Choice] = []
     /// Buttons from left to right; the last one is the default (Return).
     public var buttons: [String]
 
@@ -267,6 +282,28 @@ public struct DialogPresentation: Equatable, Sendable {
             fields = []
             checkbox = nil
             buttons = ["Leave Page", "Wait"]
+        case .clientCertificate(let prompt):
+            // [00 §A] inferred (analysis): a picker for sites that ask for a certificate. Look and
+            // wording are ours (unknown). Cancel continues without a certificate, as Chrome's does.
+            style = .sheet
+            title = "Select a certificate"
+            message = "\(prompt.hostPort) needs a certificate to identify you."
+            fields = []
+            checkbox = nil
+            choices = prompt.certificates.map {
+                Choice(title: $0.subjectName,
+                       detail: "Issued by \($0.issuerName) · Expires \($0.validUntil.formatted(date: .abbreviated, time: .omitted))")
+            }
+            buttons = ["Cancel", "OK"]
+        case .webAuthn(let dialog):
+            // Drawn by `WebAuthnSheetView` from the session's live state (`WebAuthnPresentation`).
+            let live = WebAuthnPresentation(dialog.session.state)
+            style = .webAuthn
+            title = live.title
+            message = live.message
+            fields = []
+            checkbox = nil
+            buttons = ["Cancel"]
         case .autofillPopup:
             style = .dropdown
             title = ""
@@ -286,8 +323,11 @@ public struct DialogPresentation: Equatable, Sendable {
         }
     }
 
-    /// The answer for button `index` (as in `buttons`), with the field values and checkbox state.
-    public static func answer(for request: EngineDialogRequest, button index: Int, fieldValues: [String], checkbox: Bool) -> DialogAnswer {
+    /// The answer for button `index` (as in `buttons`), with the field values, checkbox state and
+    /// the chosen row of `choices`.
+    public static func answer(
+        for request: EngineDialogRequest, button index: Int, fieldValues: [String], checkbox: Bool, selection: Int? = nil
+    ) -> DialogAnswer {
         let isDefaultButton = index == DialogPresentation(request).buttons.count - 1
         switch request {
         case .javaScript(let dialog):
@@ -319,6 +359,12 @@ public struct DialogPresentation: Equatable, Sendable {
             return .extensionInstall(isDefaultButton ? .add : .cancel)
         case .unresponsivePage:
             return .unresponsivePage(isDefaultButton ? .wait : .leave)
+        case .clientCertificate(let prompt):
+            guard isDefaultButton, !prompt.certificates.isEmpty else { return .clientCertificate(.continueWithout) }
+            let chosen = min(max(selection ?? 0, 0), prompt.certificates.count - 1)
+            return .clientCertificate(.select(index: chosen))
+        case .webAuthn:
+            return .webAuthn(.cancel)
         }
     }
 }

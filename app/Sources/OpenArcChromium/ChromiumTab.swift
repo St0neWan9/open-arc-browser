@@ -271,6 +271,8 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     private var outstandingDialogs: [ObjectIdentifier: (id: UUID, withdraw: () -> Void)] = [:]
     /// Live autofill dropdowns (C13), by the bridge request's identity, for row updates.
     private var autofillSessions: [ObjectIdentifier: AutofillPopupSession] = [:]
+    /// Live WebAuthn dialogs (C21), by the bridge request's identity, for step updates.
+    private var webAuthnSessions: [ObjectIdentifier: WebAuthnSession] = [:]
     /// Re-reads the bridge state a few times after a load settles (see `scheduleSettleResync`).
     private var settleResync: Task<Void, Never>?
 
@@ -379,6 +381,8 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         outstandingDialogs.removeAll()
         for session in autofillSessions.values { session.finish() }
         autofillSessions.removeAll()
+        for session in webAuthnSessions.values { session.finish() }
+        webAuthnSessions.removeAll()
         channel.finish()
         tab?.delegate = nil
         tab?.dialogDelegate = nil
@@ -685,6 +689,61 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         return true
     }
 
+    /// C25: a site asks for a client certificate.
+    func tab(_ tab: OACTab, selectClientCertificate request: OACClientCertificateRequest) -> Bool {
+        deliver(request, default: ClientCertificateReply.continueWithout, answer: { request, answer in
+            switch answer {
+            case .select(let index): request.selectCertificate(at: index)
+            case .continueWithout: request.continueWithoutCertificate()
+            }
+        }, make: { id, reply in
+            .clientCertificate(ClientCertificatePrompt(
+                id: id,
+                origin: request.origin.map(SiteOrigin.init(bridge:)),
+                hostPort: request.hostPort,
+                certificates: request.certificates.map {
+                    ClientCertificate(subjectName: $0.subjectName, issuerName: $0.issuerName,
+                                      validUntil: $0.validUntil, derData: $0.derData)
+                },
+                reply: reply
+            ))
+        })
+    }
+
+    /// C21: the passkey / security-key dialog. Its step changes while it is open
+    /// (`didUpdateWebAuthnDialog`), so besides the single-shot reply (cancel) it carries a
+    /// `WebAuthnSession`.
+    func tab(_ tab: OACTab, showWebAuthnDialog dialog: OACWebAuthnDialog) -> Bool {
+        let box = MainActorBox(dialog)
+        let session = WebAuthnSession(state: WebAuthnState(dialog)) { command in
+            ChromiumTabCore.onMain {
+                let dialog = box.value
+                switch command {
+                case .accept: dialog.accept()
+                case .selectMechanism(let index): dialog.selectMechanism(at: index)
+                case .selectAccount(let index): dialog.selectAccount(at: index)
+                case .providePIN(let pin): dialog.providePIN(pin)
+                case .chooseAnotherMethod: dialog.chooseAnotherMethod()
+                }
+            }
+        }
+        let key = ObjectIdentifier(dialog)
+        let delivered = deliver(dialog, default: WebAuthnReply.cancel, answer: { [weak self] dialog, _ in
+            self?.webAuthnSessions.removeValue(forKey: key)?.finish()
+            dialog.cancel()
+        }, make: { id, reply in
+            .webAuthn(WebAuthnDialog(
+                id: id, origin: dialog.origin.map(SiteOrigin.init(bridge:)), session: session, reply: reply
+            ))
+        })
+        if delivered { webAuthnSessions[key] = session }
+        return delivered
+    }
+
+    func tab(_ tab: OACTab, didUpdateWebAuthnDialog dialog: OACWebAuthnDialog) {
+        webAuthnSessions[ObjectIdentifier(dialog)]?.update(WebAuthnState(dialog))
+    }
+
     func tab(_ tab: OACTab, didUpdateAutofillPopup popup: OACAutofillPopup) {
         autofillSessions[ObjectIdentifier(popup)]?.update(AutofillPopupState(popup))
     }
@@ -718,6 +777,7 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
 
     func tab(_ tab: OACTab, didCancel request: OACDialogRequest) {
         autofillSessions.removeValue(forKey: ObjectIdentifier(request))?.finish()
+        webAuthnSessions.removeValue(forKey: ObjectIdentifier(request))?.finish()
         guard let entry = outstandingDialogs.removeValue(forKey: ObjectIdentifier(request)) else { return }
         entry.withdraw()
         channel.send(.dialogCancelled(entry.id))
@@ -840,6 +900,93 @@ extension PageTopColor {
         case .color: self = .color(RGBAColor(red: color.red, green: color.green, blue: color.blue, alpha: 1))
         case .scrollbar: self = .scrollbar
         default: return nil
+        }
+    }
+}
+
+extension WebAuthnState {
+    /// C21: the bridge dialog's current step.
+    @MainActor
+    init(_ dialog: OACWebAuthnDialog) {
+        self.init(
+            operation: dialog.operation == .create ? .create : .signIn,
+            relyingPartyID: dialog.relyingPartyID,
+            userName: dialog.userName,
+            step: Self.step(dialog),
+            mechanisms: dialog.mechanisms.map {
+                Mechanism(kind: Self.kind($0.kind), title: $0.title, subtitle: $0.subtitle)
+            },
+            priorityMechanismIndex: dialog.priorityMechanismIndex >= 0 ? dialog.priorityMechanismIndex : nil,
+            accounts: dialog.accounts.map { Account(name: $0.name, displayName: $0.displayName) },
+            canChooseAnotherMethod: dialog.canChooseAnotherMethod,
+            canRetry: dialog.canRetry,
+            pinError: Self.pinError(dialog.pinError),
+            pinAttemptsRemaining: dialog.pinAttemptsRemaining >= 0 ? dialog.pinAttemptsRemaining : nil,
+            minimumPINLength: dialog.minimumPINLength,
+            bioSamplesRemaining: dialog.bioSamplesRemaining >= 0 ? dialog.bioSamplesRemaining : nil,
+            bioSamplesTotal: dialog.bioSamplesTotal >= 0 ? dialog.bioSamplesTotal : nil,
+            isBusy: dialog.isBusy
+        )
+    }
+
+    @MainActor
+    private static func step(_ dialog: OACWebAuthnDialog) -> Step {
+        switch dialog.step {
+        case .chooseMethod: .chooseMethod
+        case .confirmMethod: .confirmMethod
+        case .securityKey: .securityKey
+        case .enterPIN: .enterPIN
+        case .setPIN: .setPIN
+        case .changePIN: .changePIN
+        case .touchAgain: .touchAgain
+        case .fingerprintEnrollment: .fingerprintEnrollment
+        case .retryVerification: .retryVerification
+        case .confirmSecurityKeyStorage: .confirmSecurityKeyStorage
+        case .chooseAccount: .chooseAccount
+        case .createPasskey: .createPasskey
+        case .privateWindowWarning: .privateWindowWarning
+        case .error: .error(error(dialog.errorKind))
+        @unknown default: .error(.other)
+        }
+    }
+
+    private static func error(_ kind: OACWebAuthnErrorKind) -> WebAuthnError {
+        switch kind {
+        case .timedOut: .timedOut
+        case .keyNotRegistered: .keyNotRegistered
+        case .keyAlreadyRegistered: .keyAlreadyRegistered
+        case .noPasskeys: .noPasskeys
+        case .noMethods: .noMethods
+        case .pinTemporarilyLocked: .pinTemporarilyLocked
+        case .pinLocked: .pinLocked
+        case .keyRemoved: .keyRemoved
+        case .missingCapability: .missingCapability
+        case .storageFull: .storageFull
+        case .unsupported: .unsupported
+        case .none, .other: .other
+        @unknown default: .other
+        }
+    }
+
+    private static func kind(_ kind: OACWebAuthnMechanismKind) -> MechanismKind {
+        switch kind {
+        case .passkeyOnThisMac: .passkeyOnThisMac
+        case .thisMac: .thisMac
+        case .securityKey: .securityKey
+        case .other: .other
+        @unknown default: .other
+        }
+    }
+
+    private static func pinError(_ error: OACWebAuthnPINError) -> PINError {
+        switch error {
+        case .none: .none
+        case .wrongPIN: .wrongPIN
+        case .tooShort: .tooShort
+        case .invalidCharacters: .invalidCharacters
+        case .sameAsCurrent: .sameAsCurrent
+        case .fingerprintLocked: .fingerprintLocked
+        @unknown default: .none
         }
     }
 }

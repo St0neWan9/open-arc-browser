@@ -5,7 +5,8 @@ import OpenArcSyncAPI
 @testable import OpenArcShell
 
 /// F1 step 2 dialogs drawn by the shell (`docs/arc-spec/00-feature-inventory.md §A`, inferred
-/// (analysis); looks and wording are ours: unknown): the unresponsive-page sheet (C22).
+/// (analysis); looks and wording are ours: unknown): the unresponsive-page sheet (C22), the
+/// client-certificate picker (C25) and the passkey / security-key sheet (C21).
 @MainActor
 final class ShellDialogsF1Tests: XCTestCase {
     private var engine: FakeEngine!
@@ -91,6 +92,119 @@ final class ShellDialogsF1Tests: XCTestCase {
         let second = live.simulateUnresponsivePage()
         try await waitUntil { center.current(for: live.id)?.id == second }
         live.simulatePageResponsive()
+        try await waitUntil { center.current(for: live.id) == nil }
+        XCTAssertNil(live.dialogAnswers[second])
+    }
+
+    // MARK: C25 client certificate
+
+    /// A sheet listing the identities; OK sends the chosen one, Cancel continues without one.
+    func testClientCertificateSheet() async throws {
+        let live = try await openPage("https://secure.example")
+        let center = model.controller.dialogs
+        let expiry = Date(timeIntervalSince1970: 2_000_000_000)
+        let id = live.simulateClientCertificateRequest(hostPort: "secure.example:443", certificates: [
+            ClientCertificate(subjectName: "Alice", issuerName: "Test CA", validUntil: expiry),
+            ClientCertificate(subjectName: "Bob", issuerName: "Other CA", validUntil: expiry),
+        ])
+        try await waitUntil { center.current(for: live.id) != nil }
+        let request = try XCTUnwrap(center.current(for: live.id))
+        let presentation = DialogPresentation(request)
+        XCTAssertEqual(presentation.style, .sheet)
+        XCTAssertEqual(presentation.buttons, ["Cancel", "OK"])
+        XCTAssertEqual(presentation.choices.map(\.title), ["Alice", "Bob"])
+        XCTAssertTrue(presentation.choices[1].detail.contains("Other CA"))
+        XCTAssertTrue(presentation.message.contains("secure.example:443"))
+        XCTAssertEqual(DialogPresentation.answer(for: request, button: 0, fieldValues: [], checkbox: false, selection: 1),
+                       .clientCertificate(.continueWithout))
+        let ok = DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false, selection: 1)
+        XCTAssertEqual(ok, .clientCertificate(.select(index: 1)))
+        XCTAssertTrue(center.answer(id, with: ok))
+        XCTAssertEqual(live.dialogAnswers[id], .clientCertificate(.select(index: 1)))
+    }
+
+    /// Escape continues without a certificate.
+    func testClientCertificateDismissContinuesWithout() async throws {
+        let live = try await openPage("https://secure.example")
+        let center = model.controller.dialogs
+        let id = live.simulateClientCertificateRequest(hostPort: "secure.example:443", certificates: [
+            ClientCertificate(subjectName: "Alice", issuerName: "Test CA", validUntil: Date(timeIntervalSince1970: 2_000_000_000)),
+        ])
+        try await waitUntil { center.current(for: live.id) != nil }
+        center.dismiss(id)
+        XCTAssertEqual(live.dialogAnswers[id], .clientCertificate(.continueWithout))
+    }
+
+    // MARK: C21 WebAuthn
+
+    /// The sheet follows the flow: method list, PIN entry (new PINs compared in the shell), errors
+    /// with Try Again; Cancel answers the request.
+    func testWebAuthnPresentationFollowsTheSteps() {
+        var state = WebAuthnState(
+            operation: .create, relyingPartyID: "webauthn.io", userName: "alice", step: .chooseMethod,
+            mechanisms: [.init(kind: .thisMac), .init(kind: .securityKey)]
+        )
+        var presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.title, "Create a passkey for webauthn.io")
+        XCTAssertEqual(presentation.rows.map(\.title), ["This Mac", "Security key"])
+        XCTAssertNil(presentation.acceptTitle)
+        XCTAssertEqual(WebAuthnPresentation.rowCommand(for: state, row: 1), .selectMechanism(1))
+        XCTAssertNil(WebAuthnPresentation.rowCommand(for: state, row: 5))
+
+        state.step = .confirmMethod
+        state.priorityMechanismIndex = 0
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.rows.map(\.title), ["This Mac"])
+        XCTAssertEqual(presentation.acceptTitle, "Continue")
+
+        state.step = .securityKey
+        presentation = WebAuthnPresentation(state)
+        XCTAssertTrue(presentation.showsProgress)
+        XCTAssertNil(presentation.acceptTitle)
+
+        state.step = .enterPIN
+        state.pinError = .wrongPIN
+        state.pinAttemptsRemaining = 2
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.input, .pin)
+        XCTAssertEqual(presentation.errorText, "Incorrect PIN.")
+        XCTAssertTrue(presentation.message.contains("2 attempts"))
+        XCTAssertEqual(try WebAuthnPresentation.acceptCommand(for: state, pin: "1234", confirmation: "").get(), .providePIN("1234"))
+
+        state.step = .setPIN
+        state.pinError = .none
+        XCTAssertEqual(WebAuthnPresentation(state).input, .newPIN)
+        XCTAssertThrowsError(try WebAuthnPresentation.acceptCommand(for: state, pin: "1234", confirmation: "4321").get())
+        XCTAssertEqual(try WebAuthnPresentation.acceptCommand(for: state, pin: "1234", confirmation: "1234").get(), .providePIN("1234"))
+
+        state.step = .error(.keyNotRegistered)
+        state.canRetry = true
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.acceptTitle, "Try Again")
+        XCTAssertTrue(presentation.message.contains("webauthn.io"))
+
+        state.step = .chooseAccount
+        state.accounts = [.init(name: "alice@example.com", displayName: "Alice")]
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.rows.first?.title, "alice@example.com")
+        XCTAssertEqual(WebAuthnPresentation.rowCommand(for: state, row: 0), .selectAccount(0))
+    }
+
+    /// The live sheet: queued like the other tab-modal dialogs, Cancel answers it, and the engine
+    /// withdrawing it (macOS took over) removes it.
+    func testWebAuthnSheetInTheQueue() async throws {
+        let live = try await openPage("https://webauthn.io")
+        let center = model.controller.dialogs
+        let (first, _) = live.simulateWebAuthnDialog(WebAuthnState(operation: .signIn, relyingPartyID: "webauthn.io", step: .securityKey))
+        try await waitUntil { center.current(for: live.id) != nil }
+        let request = try XCTUnwrap(center.current(for: live.id))
+        XCTAssertEqual(DialogPresentation(request).style, .webAuthn)
+        XCTAssertTrue(center.answer(first, with: .webAuthn(.cancel)))
+        XCTAssertEqual(live.dialogAnswers[first], .webAuthn(.cancel))
+
+        let (second, _) = live.simulateWebAuthnDialog(WebAuthnState(operation: .create, relyingPartyID: "webauthn.io", step: .createPasskey))
+        try await waitUntil { center.current(for: live.id)?.id == second }
+        live.simulateDialogCancel(second)
         try await waitUntil { center.current(for: live.id) == nil }
         XCTAssertNil(live.dialogAnswers[second])
     }
