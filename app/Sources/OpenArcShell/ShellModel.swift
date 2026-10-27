@@ -433,15 +433,18 @@ public final class ShellModel: ObservableObject {
     /// "Open in Open Arc" from a Little Arc window: opens the page as a new Today tab in the
     /// current space (via `TreeOps.openTab`) and selects it. The Little Arc page had no model tab
     /// before this. [06 §7] inferred. Returns the new tab id.
+    /// B60: `spaceID` is the Space chosen with "Open in <Space>"; the window switches to it first,
+    /// so the page becomes the selected top Today tab there. [06 §21.7] observed.
     @discardableResult
-    public func adoptLittleArcTab(url: URL, title: String) -> UUID? {
+    public func adoptLittleArcTab(url: URL, title: String, spaceID: UUID? = nil) -> UUID? {
         // The window this Little Arc was opened from has closed since: use the window used last
         // (or the hidden host, which opens a new window). inferred.
         if isStopped, !isIncognito {
             let host = controller.littleArcHost()
-            if host !== self { return host.adoptLittleArcTab(url: url, title: title) }
+            if host !== self { return host.adoptLittleArcTab(url: url, title: title, spaceID: spaceID) }
         }
         if isCommandBarPresented { dismissCommandBar() }
+        if let spaceID, spaceID != selectedSpaceID { sidebar.selectSpace(spaceID) }
         guard let id = sidebar.newTab(url: url, title: title) else { return nil }
         if isBrowserWindow {
             // The window may be behind other windows or minimized: bring it forward (B29).
