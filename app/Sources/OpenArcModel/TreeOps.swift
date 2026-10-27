@@ -17,6 +17,9 @@ public enum TreeError: Error, Equatable, Sendable {
     /// The Default profile (the oldest live one) cannot be deleted. [03 §Profiles] observed:
     /// "The Default Profile cannot be deleted."
     case defaultProfileNotDeletable
+    /// A split resize names no split node at that path, or the fractions do not fit its children
+    /// (wrong count, not finite, not positive).
+    case invalidSplitFractions
 }
 
 /// Where to put a node within its target container.
@@ -645,6 +648,30 @@ public enum TreeOps {
         return s
     }
 
+    /// Stores new child fractions for the split node at `path` inside layout `layoutID` (a divider
+    /// drag, B58). `path` lists child indices from the root to that split node (`[]` is the root).
+    /// The fractions are normalized to sum to 1. [06 §21.6] observed: the stored value is the
+    /// ratio, not a width, so it survives tab switches and hiding the sidebar. Stamps only the
+    /// layout's `layout` group, and only when the tree changes.
+    public static func setSplitFractions(
+        _ state: WorkspaceState,
+        layoutID: UUID,
+        path: [Int],
+        fractions: [Double],
+        now: Date
+    ) throws -> WorkspaceState {
+        var layout = try live(state.splits, layoutID)
+        guard let root = layout.root.replacingFractions(at: path, with: fractions) else {
+            throw TreeError.invalidSplitFractions
+        }
+        guard root != layout.root else { return state }
+        var s = state
+        layout.root = root
+        layout.meta.stamp([SplitLayout.FieldGroup.layout], at: now)
+        s.splits[layoutID] = layout
+        return s
+    }
+
     // MARK: - Internals
 
     private static func live<T: SyncableEntity>(_ table: [UUID: T], _ id: UUID) throws -> T {
@@ -822,6 +849,31 @@ extension SplitNode {
             let total = kept.reduce(0) { $0 + $1.fraction }
             return .split(axis: axis, children: kept.map { SplitChild(node: $0.node, fraction: total > 0 ? $0.fraction / total : 1 / Double(kept.count)) })
         }
+    }
+
+    /// The node at `path` (child indices from this node; `[]` is this node), or nil if the path
+    /// leaves the tree.
+    public func node(at path: [Int]) -> SplitNode? {
+        guard let first = path.first else { return self }
+        guard case .split(_, let children) = self, children.indices.contains(first) else { return nil }
+        return children[first].node.node(at: Array(path.dropFirst()))
+    }
+
+    /// This tree with the split node at `path` given `fractions` (one per child, finite and
+    /// positive, normalized to sum to 1). Nil if `path` does not name a split node or the
+    /// fractions do not fit it.
+    public func replacingFractions(at path: [Int], with fractions: [Double]) -> SplitNode? {
+        guard case .split(let axis, var children) = self else { return nil }
+        guard let first = path.first else {
+            guard fractions.count == children.count, fractions.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
+            let total = fractions.reduce(0, +)
+            for i in children.indices { children[i].fraction = fractions[i] / total }
+            return .split(axis: axis, children: children)
+        }
+        guard children.indices.contains(first),
+              let replaced = children[first].node.replacingFractions(at: Array(path.dropFirst()), with: fractions) else { return nil }
+        children[first].node = replaced
+        return .split(axis: axis, children: children)
     }
 
     /// Inserts `newTabID` right after `existingTabID`. If the existing pane's parent split has the
