@@ -57,11 +57,11 @@ final class CommandBarLayoutTests: XCTestCase {
         for i in 1..<8 { XCTAssertLessThanOrEqual(layout.rowFrame(at: i - 1).maxY, layout.rowFrame(at: i).minY) }
     }
 
-    /// [06 §5] pane width 400; [06 §7] Little Arc initial size 490 x 330.
+    /// [06 §5] pane width 400; [06 §7] Little Arc initial size; [07 §11, §12] observed 490 x 329.
     func testPaneAndLittleArcSizes() {
         XCTAssertEqual(CommandBarLayout(presentation: .pane, resultCount: 5).panelWidth, Metrics.SplitView.paneCommandBarWidth)
         let little = CommandBarLayout(presentation: .littleArc, resultCount: 3)
-        XCTAssertEqual(little.panelSize, CGSize(width: 490, height: 330))
+        XCTAssertEqual(little.panelSize, CGSize(width: 490, height: 329))
         XCTAssertEqual(CommandBarLayout(presentation: .littleArc, resultCount: 9).panelSize, little.panelSize)
     }
 

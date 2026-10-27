@@ -402,8 +402,9 @@ public enum Metrics {
     // MARK: Other surfaces
 
     public enum LittleArc {
-        /// Initial (command-bar-only) window size. [06 §7] observed (≈ 490×330).
-        public static let initialSize = Size2D(width: 490, height: 330)
+        /// Initial (command-bar-only) window size. [07 §11, §12] observed (490 × 329, window list;
+        /// [06 §7]'s ≈ 490 × 330 was read off a screenshot).
+        public static let initialSize = Size2D(width: 490, height: 329)
         /// Opens at the top right of the screen's visible area, this far from its right and top
         /// edges (not centered). [07 §12] observed (20 / 20).
         public static let screenMargin: Double = 20
@@ -590,6 +591,9 @@ public enum Metrics {
         public static let windowSize = Size2D(width: 684, height: 650)
         public static let toolbarHeight: Double = 56
         public static let toggleRowPitch: Double = 37
+        /// Title bar above the toolbar: the system's for a settings window (32 on macOS 26,
+        /// measured on ours). Not in the spec; used to size the pane so the window is 650 tall.
+        public static let titleBarHeight: Double = 32
     }
 
     // MARK: Sidebar drag image

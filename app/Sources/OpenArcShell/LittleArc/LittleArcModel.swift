@@ -8,7 +8,7 @@ import OpenArcDesign
 // State of one Little Arc window. No UI framework types, so the flow is unit-testable.
 //
 // Spec sources (docs/arc-spec/):
-//   [06 §7]  observed: a command-bar-only floating window (≈ 490×330, large radius, no title bar,
+//   [06 §7]  observed: a command-bar-only floating window (490×329 ([07 §11, §12] observed), large radius, no title bar,
 //            no sidebar); ✕ on the right of the field; the first row is selected in the theme
 //            accent; Escape closes. After a page is opened the window becomes a narrow browsing
 //            window with an address bar (expansion itself was not observed in detail).
@@ -149,7 +149,7 @@ public final class LittleArcModel: ObservableObject {
 
     // MARK: Derived state
 
-    /// Window content size for the current phase. Compact: [06 §7] observed ≈ 490×330.
+    /// Window content size for the current phase. Compact: [06 §7] observed 490×329 ([07 §11, §12] observed).
     /// Expanded: `LittleArcTokens.expandedSize` (unknown). Closed: the size of the phase it closed from.
     public var windowSize: CGSize {
         switch displayedPhase {

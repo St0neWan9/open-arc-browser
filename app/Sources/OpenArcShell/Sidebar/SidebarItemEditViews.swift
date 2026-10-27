@@ -30,18 +30,9 @@ struct SidebarChangeIconSheet: View {
 
     var body: some View {
         let current = viewModel.iconPickerItemID.flatMap { viewModel.customIcon(of: $0) }
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Change Icon").textStyle(Typography.dialogTitle).padding(.horizontal, 14).padding(.top, 14)
-            SpaceIconGrid(showsReset: current != nil) { viewModel.chooseIcon($0) }
-            Spacer(minLength: 0)
-            HStack {
-                Spacer()
-                Button("Cancel") { viewModel.cancelChangeIcon() }.keyboardShortcut(.cancelAction)
-            }
-            .padding(14)
-        }
-        .frame(width: SpaceFlowLocalTokens.iconSheetSize.width, height: SpaceFlowLocalTokens.iconSheetSize.height)
-        .accessibilityIdentifier("openarc.sidebar.changeIconSheet")
+        IconPickerCard(title: "Change Icon", showsReset: current != nil, palette: viewModel.palette,
+                       onChoose: { viewModel.chooseIcon($0) }, onCancel: { viewModel.cancelChangeIcon() })
+            .accessibilityIdentifier("openarc.sidebar.changeIconSheet")
     }
 }
 
@@ -110,20 +101,13 @@ struct FavoriteUnreadBadge: View {
     }
 }
 
-/// Presents the B77 sheets on the sidebar.
+/// Shows the B77 share picker from the sidebar. Its Change Icon… and Edit… cards are window cards
+/// (`SidebarWindowModals`, B91).
 struct SidebarItemEditSheets: ViewModifier {
     @ObservedObject var viewModel: SidebarViewModel
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: Binding(
-                get: { viewModel.iconPickerItemID != nil },
-                set: { if !$0 { viewModel.cancelChangeIcon() } }
-            )) { SidebarChangeIconSheet(viewModel: viewModel) }
-            .sheet(isPresented: Binding(
-                get: { viewModel.pinnedPageEditorTabID != nil },
-                set: { if !$0 { viewModel.cancelEditPinnedPage() } }
-            )) { PinnedPageEditorSheet(viewModel: viewModel) }
             .background(SidebarSharePickerAnchor(viewModel: viewModel))
     }
 }

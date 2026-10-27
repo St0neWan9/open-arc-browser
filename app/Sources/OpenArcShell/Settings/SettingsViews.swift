@@ -22,6 +22,8 @@ public struct SettingsWindowView: View {
             }
         }
         .frame(width: SettingsTokens.windowWidth)
+        // Always dark purple, 37 pt toggle rows. [07 §6] observed (B91).
+        .modifier(SettingsWindowChrome())
         .task { await model.observeSync() }
     }
 }
@@ -30,9 +32,16 @@ public struct SettingsWindowView: View {
 /// opens centered on the screen like Arc's ([07 §12] observed). B42.
 enum SettingsTokens {
     static let windowWidth = CGFloat(Metrics.Settings.windowSize.width)
-    /// Pane height that makes the window 650 tall ([07 §6] observed) under the 80 pt title bar and
-    /// toolbar of the settings window (measured on ours: 640 tall with a 560 pane). B42.
-    static let paneMinHeight = CGFloat(Metrics.Settings.windowSize.height) - 80
+    /// Title bar plus toolbar above the pane: the system title bar and the 56 pt toolbar
+    /// ([07 §6] observed; the settings toolbar measures 56 on ours too, B91).
+    static let chromeHeight = CGFloat(Metrics.Settings.titleBarHeight + Metrics.Settings.toolbarHeight)
+    /// Pane height that makes the window 650 tall. [07 §6] observed.
+    static let paneMinHeight = CGFloat(Metrics.Settings.windowSize.height) - chromeHeight
+    /// Space a grouped form row adds around its content (measured on ours: 10.75 above and below
+    /// a 16 pt switch, a 37.5 pt pitch). B91.
+    static let groupedRowChrome: CGFloat = 21.5
+    /// Toggle content height that gives the 37 pt toggle row pitch. [07 §6] observed (37).
+    static let toggleContentHeight = CGFloat(Metrics.Settings.toggleRowPitch) - groupedRowChrome
     static let profileListWidth: CGFloat = 180
     static let iconTileSize: CGFloat = 96
 }

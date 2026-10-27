@@ -119,18 +119,9 @@ public struct SidebarView: View {
         // Space switch: the page slides by one sidebar width on a critically damped spring, no
         // fade. [07 §11] observed (response 0.2 s, dampingFraction 1.0). B40.
         .animation(ShellMotion.spaceSwitch, value: viewModel.selectedSpaceID)
-        .sheet(isPresented: $viewModel.isNewFolderSheetPresented) {
-            SidebarNewFolderSheet(viewModel: viewModel)
-        }
-        // Change Icon…, Edit Pinned Page ▸ Edit… and the tab Share picker (B77).
+        // The tab Share picker (B77). New Folder, Delete Space, Change Icon… and Edit Pinned Page
+        // are window cards (`SidebarWindowModals`, B91).
         .modifier(SidebarItemEditSheets(viewModel: viewModel))
-        .sheet(isPresented: deleteBinding) {
-            DeleteSpaceSheet(spaceName: deleteSpaceName, palette: palette) {
-                viewModel.cancelDeleteSpace()
-            } onDelete: {
-                viewModel.confirmDeleteSpace()
-            }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar")
     }
@@ -246,16 +237,6 @@ public struct SidebarView: View {
             .allowsHitTesting(false)
     }
 
-    private var deleteSpaceName: String {
-        viewModel.pendingSpaceDeletionID.flatMap { viewModel.workspace.spaces[$0]?.name } ?? ""
-    }
-
-    private var deleteBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.pendingSpaceDeletionID != nil },
-            set: { if !$0 { viewModel.cancelDeleteSpace() } }
-        )
-    }
 }
 
 /// Scrolling list: pinned area (folders and tabs), the divider, "+ New Tab" right under it at the

@@ -10,7 +10,7 @@ import OpenArcSyncAPI
 /// because the window configurator wrote window properties on every view update and each write
 /// invalidated the hosting view again. This hosts the real view in a real window, expands it,
 /// resizes it, and checks that the configurator settles. [06 §7] observed: the window starts
-/// command-bar-only at ≈ 490×330 and becomes a browsing window once a page is opened; the expanded
+/// command-bar-only at 490×329 ([07 §11, §12] observed) and becomes a browsing window once a page is opened; the expanded
 /// size is `LittleArcTokens.expandedSize` (unknown).
 @MainActor
 final class LittleArcWindowHostingTests: XCTestCase {

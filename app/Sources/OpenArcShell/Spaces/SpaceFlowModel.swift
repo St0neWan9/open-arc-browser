@@ -44,8 +44,7 @@ enum SpaceFlowLocalTokens {
     static let themeRowAnchorOutset: CGFloat = 14
     static let primaryButtonHeight: CGFloat = 36    // unknown
     static let swatchSize: CGFloat = 20             // unknown
-    static let renameSheetSize = CGSize(width: 360, height: 150)   // inferred (smaller than New Folder)
-    static let iconSheetSize = CGSize(width: 360, height: 360)     // inferred
+    static let iconSheetSize = Size2D(width: 360, height: 360)     // inferred
 }
 
 /// The theme bubble's working copy of a theme's `style` group. Becomes a `Theme` record through

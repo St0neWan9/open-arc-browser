@@ -21,8 +21,9 @@ public struct MainWindowView: View {
 
     public var body: some View {
         MainWindowContent(model: model, sidebar: model.sidebar, webToolbar: model.webToolbar)
+            // Draws the cards the window content declares (B91).
+            .windowModalHost()
             .modifier(LaunchNoticeAlert(model: model))
-            .modifier(ClearArchiveConfirmation(sidebar: model.sidebar))
     }
 }
 
@@ -43,6 +44,8 @@ struct MainWindowContent: View {
     @State private var spaceBeforeCreate: UUID?
     /// A just-created, empty Space showing its faint illustration. [06 §1] observed. B75.
     @State private var greetedSpaceID: UUID?
+    /// A modal card covers the window (B91): the sidebar and Peek leave the mouse and keys to it.
+    @Environment(\.isWindowModalPresented) private var isModalPresented
 
     init(model: ShellModel, sidebar: SidebarViewModel, webToolbar: WebToolbarSettings? = nil) {
         self.model = model
@@ -91,7 +94,7 @@ struct MainWindowContent: View {
                         peek: model.linkPeek,
                         layout: LinkPeekLayout(windowSize: proxy.size, webPanelFrame: baseLayout.webPanelFrame),
                         palette: palette,
-                        handlesEscape: !model.isCommandBarPresented
+                        handlesEscape: !model.isCommandBarPresented && !isModalPresented
                     )
                 }
 
@@ -139,7 +142,7 @@ struct MainWindowContent: View {
             .environment(\.sidebarNewMenuTarget, model)
             // The window command bar and onboarding cover the sidebar: presses go to them.
             .environment(\.sidebarAcceptsPointer, !(model.isCommandBarPresented && model.commandBarPaneTabID == nil)
-                         && !model.controller.onboarding.isShown(in: model))
+                         && !model.controller.onboarding.isShown(in: model) && !isModalPresented)
             .environment(\.windowDrawnPermissionTab, permissionTabUnderURLBox)
             // ⌘S: web panel resize and sidebar slide on one fast ease-out. [07 §11] B40.
             .animation(ShellMotion.sidebarToggle, value: model.isSidebarVisible)
@@ -169,8 +172,10 @@ struct MainWindowContent: View {
                 )
             }
         }
+        // Modal cards: centered in the window over the dimmed window. [07 §12] observed (B91).
         .modifier(SpaceFlowSheets(flow: model.spaceFlow, workspace: sidebar.workspace, palette: model.windowPalette))
         .modifier(ProfileFlowSheets(flow: model.profileFlow, palette: model.windowPalette))
+        .modifier(SidebarWindowModals(sidebar: sidebar))
         .overlay(alignment: .topLeading) { themeEditorAnchor }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.
         .background(WindowAppearanceApplier(appearance: palette.appearance))
