@@ -48,6 +48,15 @@ public struct AppDependencies: Sendable {
     /// the sync store first starts. nil (the default) never registers, so tests and previews never
     /// talk to APNs; the app passes `NSApplication.registerForRemoteNotifications`.
     public var registerForRemoteNotifications: (@MainActor @Sendable () -> Void)?
+    /// Plays sounds and haptics (B84). The default is silent, so tests and previews never make a
+    /// sound; the app passes `SystemFeedbackOutput`.
+    public var feedbackOutput: any FeedbackOutput
+    /// Shows the chosen app icon in the Dock (B84). The default only records, so tests and previews
+    /// never change the running app's icon; the app passes `SystemAppIconDisplay`.
+    public var appIconDisplay: any AppIconDisplay
+    /// Asks where Export Data saves its file (B84). The default cancels, so tests and previews
+    /// never show a panel; the app passes `SavePanelExportPicker`.
+    public var exportPicker: any ExportDestinationPicker
 
     public init(
         engine: any BrowserEngine,
@@ -57,7 +66,10 @@ public struct AppDependencies: Sendable {
         defaultBrowser: (any DefaultBrowserService)? = nil,
         updateChecker: (any UpdateChecker)? = nil,
         systemAppearance: (any SystemAppearanceSource)? = nil,
-        mediaFolders: LibraryMediaFolders = .none
+        mediaFolders: LibraryMediaFolders = .none,
+        feedbackOutput: (any FeedbackOutput)? = nil,
+        appIconDisplay: (any AppIconDisplay)? = nil,
+        exportPicker: (any ExportDestinationPicker)? = nil
     ) {
         self.engine = engine
         self.sync = sync
@@ -67,6 +79,9 @@ public struct AppDependencies: Sendable {
         self.updateChecker = updateChecker ?? UnavailableUpdateChecker()
         self.systemAppearance = systemAppearance ?? ManualSystemAppearance(.light)
         self.mediaFolders = mediaFolders
+        self.feedbackOutput = feedbackOutput ?? SilentFeedbackOutput()
+        self.appIconDisplay = appIconDisplay ?? RecordingAppIconDisplay()
+        self.exportPicker = exportPicker ?? CancelledExportPicker()
     }
 
     /// FakeEngine + sync disabled + no persistence (never touches the disk). Used for UI

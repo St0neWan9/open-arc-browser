@@ -436,6 +436,8 @@ final class SettingsTests: XCTestCase {
             "links.peekShiftClick", "links.peekOtherSites",
             // B68: 03 §General Warn before quitting, 03 §Advanced reorder haptics.
             "general.warnBeforeQuitting", "advanced.reorderHaptics",
+            // B84: Previews Settings…, sounds, haptics, window dragging, Export Data.
+            "general.previewsSettings", "advanced.soundEffects", "advanced.windowDragging", "advanced.exportData",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {

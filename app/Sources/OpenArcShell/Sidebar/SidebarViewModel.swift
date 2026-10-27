@@ -115,7 +115,7 @@ public final class SidebarViewModel: ObservableObject {
     /// Plays the reorder haptic: a tap on the trackpad each time an in-app drag moves to a new drop
     /// position, while "Haptic feedback when reordering tabs" is on ([03 §Advanced] observed toggle,
     /// default on; when it fires is inferred). Tests replace it. B68.
-    var playReorderHaptic: @MainActor () -> Void = SidebarReorderHaptic.play
+    lazy var playReorderHaptic: @MainActor () -> Void = { [weak self] in self?.controller.feedback.reorderHaptic() }
     /// Poll interval of the drag watchdog (see `beginDrag`).
     var dragWatchInterval: Double = SidebarLocalTokens.dragWatchInterval
     /// Seconds between two auto-scroll steps while a drag hovers an edge band of the list. inferred.
@@ -773,6 +773,8 @@ public final class SidebarViewModel: ObservableObject {
         guard let spaceID = selectedSpaceID else { return }
         let ids = workspace.today(spaceID: spaceID).map(\.id)
         guard mutate({ try TreeOps.clearToday($0, spaceID: spaceID, now: now()) }) else { return }
+        // Our own clear sound when "Play Open Arc sound effects" is on (B84, [03 §Advanced]).
+        if !ids.isEmpty { controller.feedback.play(.clear) }
         ids.forEach(closeLive)
         if let selected = selectedTabID, ids.contains(selected) { selectedTabID = nil }
     }
@@ -1174,7 +1176,7 @@ public final class SidebarViewModel: ObservableObject {
         let new: SidebarDropTarget? = accepted ? target : nil
         if dropTarget != new {
             dropTarget = new
-            if new != nil, draggingItem != nil, controller.dependencies.preferences.playsReorderHaptics {
+            if new != nil, draggingItem != nil, controller.feedback.settings.playsReorderHaptics {
                 playReorderHaptic()
             }
         }

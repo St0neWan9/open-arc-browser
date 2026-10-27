@@ -188,6 +188,35 @@ public final class AppPreferences: @unchecked Sendable {
         set { setBool(newValue, Self.pictureInPictureKey) }
     }
 
+    static let soundEffectsKey = "\(keyPrefix)advanced.soundEffects"
+    static let windowDraggingKey = "\(keyPrefix)advanced.windowDragging"
+
+    /// "Play Arc sound effects". [03 §Advanced] observed toggle, on by default. Per device. The
+    /// sounds are our own (`FeedbackSound`); [00 §音效与触感] says Arc's sound content is not copied. B84.
+    public var playsSoundEffects: Bool {
+        get { boolValue(Self.soundEffectsKey) ?? true }
+        set { setBool(newValue, Self.soundEffectsKey) }
+    }
+
+    /// "Allow window dragging from the top of webpages". [03 §Advanced] observed toggle, on by
+    /// default; [06 §13] observed the short drag handle at the top of the page area. B84.
+    public var allowsWindowDragFromPageTop: Bool {
+        get { boolValue(Self.windowDraggingKey) ?? true }
+        set { setBool(newValue, Self.windowDraggingKey) }
+    }
+
+    // MARK: App-level settings: Icon
+
+    static let appIconKey = "\(keyPrefix)icon.current"
+
+    /// The chosen app icon ([03 §Icon] observed list with a CURRENT ICON marker). Per device: the
+    /// Dock icon belongs to this Mac's app (inferred). An unknown raw value (a newer build's
+    /// variant) reads as the default. B84.
+    public var appIconChoice: AppIconChoice {
+        get { stringValue(Self.appIconKey).flatMap(AppIconChoice.init(rawValue:)) ?? .default }
+        set { setString(newValue.rawValue, Self.appIconKey) }
+    }
+
     // MARK: App-level settings: Developer
 
     static let javaScriptFromAppleEventsKey = "\(keyPrefix)developer.allowJavaScriptFromAppleEvents"

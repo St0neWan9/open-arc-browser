@@ -65,6 +65,14 @@ struct MainWindowContent: View {
                     LibraryView(model: model, sidebar: sidebar, library: model.library, palette: palette, windowSize: proxy.size)
                 } else {
                     browserContent(layout: layout, palette: palette)
+                    // "Allow window dragging from the top of webpages": the short handle at the top
+                    // of the page area. [06 §13], [03 §Advanced] observed. B84. The single page only:
+                    // split panes have their own bars, and the toolbar strip is already chrome.
+                    if model.activeSplitLayout == nil && !layout.isWebToolbarShown && !model.spaceFlow.isCreating
+                        && sidebar.selectedEaselID == nil {
+                        WindowDragStripLayer(settings: model.controller.feedback.settings, layout: layout,
+                                             isBlankPage: isBlankPage, palette: palette)
+                    }
                 }
 
                 // Hidden sidebar: it floats out over the web panel from the left edge. [06 §14] B34.
@@ -150,6 +158,13 @@ struct MainWindowContent: View {
         .background(WindowAppearanceApplier(appearance: palette.appearance))
         // A clear, non-opaque window so the blur and the tint show the desktop. [07 §8.4] B64.
         .background(TranslucentWindowConfigurator { isFullScreen = $0 })
+    }
+
+    /// The page area shows no page: no tab, no address yet, or about:blank. [06 §13] observed: the
+    /// drag handle shows in a new window or on a blank page.
+    private var isBlankPage: Bool {
+        guard model.selectedLiveTab != nil, let url = sidebar.selectedURL else { return true }
+        return url.absoluteString == "about:blank"
     }
 
     /// The engine tab whose permission bubble goes under the URL box: the selected tab's, while
@@ -347,6 +362,88 @@ struct SurfaceHostRepresentable: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: SurfaceContainerView, coordinator: ()) {
         nsView.clear()
+    }
+}
+
+/// The window-drag strip at the top of the page area. [06 §13] observed: a short bar centered at
+/// the top of the page area, shown in a new window or on a blank page. On a loaded page the grab
+/// area stays and the handle shows while the pointer is over it (inferred). Dragging it moves the
+/// window; a double-click zooms like the title bar (inferred). B84.
+struct WindowDragStripLayer: View {
+    @ObservedObject var settings: AdvancedBehaviorSettings
+    let layout: MainWindowLayout
+    let isBlankPage: Bool
+    let palette: ThemePalette
+    @State private var isHovered = false
+
+    var body: some View {
+        let frame = layout.windowDragStripFrame(isEnabled: settings.allowsWindowDragFromPageTop)
+        if !frame.isEmpty {
+            let handle = MainWindowLayout.dragHandleSize
+            ZStack {
+                PageTopDragArea { isHovered = $0 }
+                Capsule()
+                    .fill(palette.windowBackground.swiftUI.opacity(0.9))
+                    .overlay(Capsule().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
+                    .frame(width: handle.width, height: handle.height)
+                    .opacity(isBlankPage || isHovered ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: frame.width, height: frame.height)
+            .accessibilityElement()
+            .accessibilityLabel("Move window")
+            .accessibilityIdentifier("openarc.windowDragStrip")
+            .offset(x: frame.minX, y: frame.minY)
+        }
+    }
+}
+
+/// AppKit grab area of the drag strip: drags the window, zooms it on a double-click (the user's
+/// title-bar double-click setting, like a title bar; inferred) and reports hover. An AppKit view
+/// so it sits above the engine's native page view and gets the mouse before it.
+struct PageTopDragArea: NSViewRepresentable {
+    var onHover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> DragView {
+        let view = DragView()
+        view.onHover = onHover
+        return view
+    }
+
+    func updateNSView(_ nsView: DragView, context: Context) {
+        nsView.onHover = onHover
+    }
+
+    final class DragView: NSView {
+        var onHover: ((Bool) -> Void)?
+        private var tracking: NSTrackingArea?
+
+        override var mouseDownCanMoveWindow: Bool { true }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+            addTrackingArea(area)
+            tracking = area
+        }
+
+        override func mouseEntered(with event: NSEvent) { onHover?(true) }
+        override func mouseExited(with event: NSEvent) { onHover?(false) }
+
+        override func mouseDown(with event: NSEvent) {
+            guard let window else { return }
+            if event.clickCount == 2 {
+                let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+                switch action {
+                case "Minimize": window.performMiniaturize(nil)
+                case "None": break
+                default: window.performZoom(nil)
+                }
+            } else {
+                window.performDrag(with: event)
+            }
+        }
     }
 }
 

@@ -242,7 +242,7 @@ final class SidebarDragTests: XCTestCase {
         XCTAssertEqual(taps, 2)
         vm.endDrag()
 
-        vm.controller.dependencies.preferences.playsReorderHaptics = false
+        vm.controller.feedback.settings.playsReorderHaptics = false
         vm.beginDrag(.tab(f.today1))
         vm.updateDropTarget(at: CGPoint(x: listX, y: y), in: g)
         XCTAssertEqual(taps, 2, "off: no haptic")

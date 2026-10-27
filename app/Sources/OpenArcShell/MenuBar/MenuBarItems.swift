@@ -263,6 +263,8 @@ extension ShellModel {
     public func copySelectedURL() {
         guard let url = sidebar.selectedURL else { return }
         siteControls.pasteboard.writeURL(url)
+        // Our own copy sound when "Play Open Arc sound effects" is on (B84, [03 §Advanced]).
+        controller.feedback.play(.copy)
     }
 
     /// Edit ▸ Copy URL as Markdown (⌥⇧⌘C): `[title](url)` of the selected tab. [01 §Edit],
