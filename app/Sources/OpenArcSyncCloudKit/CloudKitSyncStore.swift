@@ -83,6 +83,12 @@ public actor CloudKitSyncStore: SyncStore {
     private var cycleFailure: String?
     private var retryAttempt = 0
     private var retryScheduled = false
+    /// A confirming `syncNow` is queued after an automatic engine cycle (see `finishEngineCycle`).
+    private var confirmationScheduled = false
+    /// Number of `syncNow` calls running; their engine cycles are finished by `syncNow` itself.
+    private var manualSyncDepth = 0
+    /// Message of the last `.failed` phase, shown again while its retry is still waiting.
+    private var lastFailureMessage: String?
 
     /// Production initializer. No CloudKit object is created until `start(database:)`.
     /// - Parameter stateStorage: where to persist sync state; nil uses the database's
@@ -171,17 +177,20 @@ public actor CloudKitSyncStore: SyncStore {
             if phase == .unavailable(.notConfigured) { throw CloudKitSyncStoreError.unavailable(.notConfigured) }
             throw CloudKitSyncStoreError.notStarted
         }
+        manualSyncDepth += 1
+        defer { manualSyncDepth -= 1 }
         await applyDeferredRemoteChanges()
         do {
             try await driver.fetchChanges()
             try await driver.sendChanges()
-            // Reset the backoff only after a clean cycle; a send that reported per-record
-            // failures has already scheduled the next (longer) retry.
-            if cycleFailure == nil { retryAttempt = 0 }
         } catch {
             handleOperationError(error)
+            await persist()
             throw error
         }
+        // Only here, with both halves returned without an error, is the cycle known to be good.
+        finishConfirmedCycle()
+        await persist()
     }
 
     public func resetLocalSyncState() async {
@@ -240,6 +249,7 @@ public actor CloudKitSyncStore: SyncStore {
 
     private func setPhase(_ phase: SyncStatus.Phase) {
         self.phase = phase
+        if case .failed(let message) = phase { lastFailureMessage = message }
         publishStatus()
     }
 
@@ -256,25 +266,65 @@ public actor CloudKitSyncStore: SyncStore {
         if cycleFailure == nil { cycleFailure = message }
     }
 
-    /// - Parameter afterSend: true at the end of a send. Only a clean send resets the retry
-    ///   backoff: a successful fetch says nothing about whether the failing uploads recovered.
+    /// End of a `syncNow` whose fetch and send both returned without an error. The only place
+    /// that advances `lastSyncedAt` and resets the retry backoff (B63).
     ///
     /// Remote changes that could not be applied locally (staged for retry) keep the status at
     /// `.failed` and do not advance `lastSyncedAt`: the local data is not in sync yet, even when
     /// the send half of the cycle succeeded. Decided by the user (plan Q3).
-    private func finishCycle(afterSend: Bool) {
+    private func finishConfirmedCycle() {
+        // A per-record failure has already scheduled the next (longer) retry; keep its backoff.
+        if cycleFailure == nil { retryAttempt = 0 }
         guard !isAccountBlocked else { return }
         let hasStagedRemoteChanges = !state.deferredUpserts.isEmpty || !state.deferredDeletions.isEmpty
         if let cycleFailure {
             setPhase(.failed(message: cycleFailure))
         } else if hasStagedRemoteChanges {
-            if afterSend { retryAttempt = 0 }
             setPhase(.failed(message: "Some changes from iCloud could not be saved yet; will retry."))
         } else {
             state.lastSyncedAt = clock()
-            if afterSend { retryAttempt = 0 }
             setPhase(.idle)
         }
+    }
+
+    /// End of an engine fetch or send (`didFetchChanges` / `didSendChanges`).
+    ///
+    /// CKSyncEngine throws errors only to explicit `fetchChanges()` / `sendChanges()` calls. In
+    /// its automatic syncs a failed internal operation (database subscription save, zone fetch;
+    /// seen in D4 as HTTP 500, CKError 15) is not reported at all: the cycle simply ends. So the
+    /// end of an automatic cycle proves nothing. It never advances `lastSyncedAt`; instead a
+    /// confirming `syncNow` runs at once, which surfaces any error and then retries with backoff.
+    /// Failures the cycle did report show as `.failed` and schedule a backoff retry. (B63)
+    private func finishEngineCycle(_ reason: DriverSyncReason?) {
+        guard !isAccountBlocked else { return }
+        if let cycleFailure { setPhase(.failed(message: cycleFailure)) }
+        // A running `syncNow` finishes its own cycles. Without a reason (macOS < 14.2) a cycle
+        // that ends while `syncNow` runs is taken to be that call's.
+        let finishedByCaller = reason == .manual || (reason == nil && manualSyncDepth > 0)
+        guard !finishedByCaller else { return }
+        if cycleFailure != nil {
+            scheduleRetry(suggested: nil)
+        } else if retryScheduled {
+            // The engine ran on its own while a retry waits: nothing is confirmed yet, so keep
+            // showing the failure instead of "syncing" until the retry settles it.
+            setPhase(.failed(message: lastFailureMessage ?? "Sync failed; will retry."))
+        } else {
+            scheduleConfirmation()
+        }
+    }
+
+    private func scheduleConfirmation() {
+        guard !retryScheduled, !confirmationScheduled else { return }
+        confirmationScheduled = true
+        retryScheduler.schedule(after: 0) { [weak self] in
+            await self?.runConfirmation()
+        }
+    }
+
+    private func runConfirmation() async {
+        confirmationScheduled = false
+        guard driver != nil, !retryScheduled else { return }
+        try? await syncNow()
     }
 
     // MARK: - Persistence
@@ -301,7 +351,11 @@ public actor CloudKitSyncStore: SyncStore {
             setPhase(.failed(message: Self.describe(error)))
             scheduleRetry(suggested: nil)
         case .resolveConflict, .resetSystemFieldsAndResend, .discard:
+            // Outside a record result there is no change to drop: the whole operation failed
+            // (e.g. serverRejectedRequest / HTTP 500 on the subscription save in D4). Keep
+            // everything pending and retry with backoff. (B63)
             setPhase(.failed(message: Self.describe(error)))
+            scheduleRetry(suggested: nil)
         }
     }
 
@@ -615,10 +669,18 @@ extension CloudKitSyncStore: SyncEngineDriverDelegate {
             if saved.contains(zone.zoneID) { state.zoneSaved = true }
             if let error = failed[zone.zoneID] {
                 noteFailure("Creating the iCloud zone failed: CloudKit error \(error.code.rawValue)")
-                if case .accountUnavailable(let reason) = CloudKitErrorPolicy.classify(error) {
+                switch CloudKitErrorPolicy.classify(error) {
+                case .accountUnavailable(let reason):
                     setPhase(.unavailable(reason))
-                } else {
+                case .quotaExceeded:
                     driver?.addPendingZoneSave(zone)
+                case .retry(let after):
+                    driver?.addPendingZoneSave(zone)
+                    scheduleRetry(suggested: after)
+                case .resolveConflict, .recreateZone, .resetSystemFieldsAndResend, .discard:
+                    // Records cannot go up without the zone: keep trying with backoff. (B63)
+                    driver?.addPendingZoneSave(zone)
+                    scheduleRetry(suggested: nil)
                 }
             }
         case .sentRecordChanges(let sent):
@@ -626,10 +688,8 @@ extension CloudKitSyncStore: SyncEngineDriverDelegate {
         case .willFetchChanges, .willSendChanges:
             cycleFailure = nil
             if !isAccountBlocked { setPhase(.syncing) }
-        case .didFetchChanges:
-            finishCycle(afterSend: false)
-        case .didSendChanges:
-            finishCycle(afterSend: true)
+        case .didFetchChanges(let reason), .didSendChanges(let reason):
+            finishEngineCycle(reason)
         }
         await persist()
         publishStatus()

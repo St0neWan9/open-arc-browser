@@ -719,6 +719,117 @@ final class CloudKitSyncStoreTests: XCTestCase {
         XCTAssertEqual(phase, .disabled)
     }
 
+    // MARK: - Automatic engine syncs (B63)
+
+    /// D4: CKSyncEngine's first automatic sync failed inside the engine (subscription save,
+    /// HTTP 500 / CKError 15) and reported nothing; the store stamped "last synced" anyway.
+    func testAutomaticCycleWithoutResultsDoesNotStampLastSynced() async throws {
+        let h = StoreHarness(records: [.tab(Fx.tab())])
+        try await h.start()
+        let driver = try h.driver
+        await h.store.enqueue([.save(tabID)])
+
+        await driver.emitAutomaticCycle()
+
+        let status = await h.store.currentStatus()
+        XCTAssertNil(status.lastSyncedAt, "the end of an automatic cycle proves nothing")
+        XCTAssertEqual(status.pendingChangeCount, 1)
+        XCTAssertEqual(h.scheduler.delays, [0], "a confirming sync is queued at once")
+        let persisted = await h.persisted
+        XCTAssertNil(persisted.lastSyncedAt)
+        XCTAssertFalse(persisted.zoneSaved)
+    }
+
+    /// Plan Q3: a failed sync stays "failed, will retry" and does not advance lastSyncedAt.
+    func testFailingFirstAutomaticSyncReportsFailureAndRetriesWithBackoff() async throws {
+        let h = StoreHarness(records: [.tab(Fx.tab()), .folder(Fx.folder())])
+        try await h.start()
+        let driver = try h.driver
+        await h.store.enqueue([.save(tabID), .save(folderID)])
+        await driver.emitAutomaticCycle()
+
+        // The confirming sync surfaces the engine's error: the subscription save was rejected.
+        driver.failNextFetch(ckError(.serverRejectedRequest))
+        let confirmed = await h.scheduler.runNext()
+        XCTAssertTrue(confirmed)
+
+        let failed = await h.store.currentStatus()
+        XCTAssertEqual(failed.phase, .failed(message: "CloudKit error \(CKError.Code.serverRejectedRequest.rawValue)"))
+        XCTAssertNil(failed.lastSyncedAt)
+        XCTAssertEqual(failed.pendingChangeCount, 2, "nothing is dropped for an operation-level error")
+        XCTAssertEqual(h.scheduler.delays, [0, 2], "retry scheduled with the first backoff step")
+        XCTAssertTrue(driver.sentBatches.isEmpty)
+        var persisted = await h.persisted
+        XCTAssertNil(persisted.lastSyncedAt)
+
+        // Another automatic cycle while the retry waits keeps the failure visible.
+        await driver.emitAutomaticCycle()
+        let waiting = await h.store.currentStatus()
+        XCTAssertEqual(waiting.phase, failed.phase)
+        XCTAssertNil(waiting.lastSyncedAt)
+        XCTAssertEqual(h.scheduler.queuedCount, 1, "no second retry is queued")
+
+        // The retry fails again: the backoff grows.
+        driver.failNextFetch(ckError(.serverRejectedRequest))
+        await h.scheduler.runNext()
+        XCTAssertEqual(h.scheduler.delays, [0, 2, 4])
+
+        // The next retry succeeds and clears the failure.
+        await h.scheduler.runNext()
+        let recovered = await h.store.currentStatus()
+        XCTAssertEqual(recovered, SyncStatus(phase: .idle, lastSyncedAt: Fx.t(1000), pendingChangeCount: 0))
+        XCTAssertEqual(h.scheduler.queuedCount, 0)
+        persisted = await h.persisted
+        XCTAssertTrue(persisted.zoneSaved)
+        XCTAssertEqual(persisted.lastSyncedAt, Fx.t(1000))
+
+        // Backoff was reset by the success.
+        driver.failNextFetch(ckError(.serverRejectedRequest))
+        try? await h.store.syncNow()
+        XCTAssertEqual(h.scheduler.delays, [0, 2, 4, 2])
+    }
+
+    func testAutomaticZoneSaveFailureReportsFailureAndRetries() async throws {
+        let h = StoreHarness(records: [.tab(Fx.tab())])
+        try await h.start()
+        let driver = try h.driver
+        await h.store.enqueue([.save(tabID)])
+
+        await driver.emitAutomaticCycle(sendEvents: [
+            .sentZoneChanges(saved: [], failed: [Fx.zoneID: ckError(.serverRejectedRequest)]),
+        ])
+
+        let failed = await h.store.currentStatus()
+        guard case .failed = failed.phase else { return XCTFail("expected failed, got \(failed.phase)") }
+        XCTAssertNil(failed.lastSyncedAt)
+        XCTAssertEqual(failed.pendingChangeCount, 1)
+        // The clean fetch half queued a confirmation; the failed send half queued the backoff retry.
+        XCTAssertEqual(h.scheduler.delays, [0, 2])
+        XCTAssertTrue(driver.zoneSavePending, "the zone save stays pending")
+
+        // The confirmation stands aside for the pending retry: still failed, nothing stamped.
+        await h.scheduler.runNext()
+        let waiting = await h.store.currentStatus()
+        XCTAssertEqual(waiting, failed)
+        XCTAssertTrue(driver.sentBatches.isEmpty)
+
+        await h.scheduler.runNext()
+        let recovered = await h.store.currentStatus()
+        XCTAssertEqual(recovered, SyncStatus(phase: .idle, lastSyncedAt: Fx.t(1000), pendingChangeCount: 0))
+        let zoneSaved = await h.persisted.zoneSaved
+        XCTAssertTrue(zoneSaved)
+    }
+
+    func testPermanentOperationErrorStillRetries() async throws {
+        let h = StoreHarness()
+        try await h.start()
+        try h.driver.failNextSend(ckError(.serverRejectedRequest))
+        try? await h.store.syncNow()
+        let phase = await h.store.currentStatus().phase
+        XCTAssertEqual(phase, .failed(message: "CloudKit error \(CKError.Code.serverRejectedRequest.rawValue)"))
+        XCTAssertEqual(h.scheduler.delays, [2])
+    }
+
     // MARK: - Status stream
 
     func testStatusStreamReportsSyncCycleAndPendingCount() async throws {

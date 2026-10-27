@@ -62,6 +62,16 @@ struct DriverFetchedDeletion: Hashable, Sendable {
     var recordType: String
 }
 
+/// Why the engine ran a fetch or send, mirroring `CKSyncEngine.SyncReason`.
+enum DriverSyncReason: Hashable, Sendable {
+    /// The engine's own automatic sync. CKSyncEngine reports no error for these: a failure of its
+    /// internal operations (database subscription, zone fetch) only shows as a cycle that ends
+    /// without results, so the store must not read the end of the cycle as success (B63).
+    case scheduled
+    /// A `fetchChanges()` / `sendChanges()` call; errors are thrown to the caller.
+    case manual
+}
+
 /// Engine events, translated from `CKSyncEngine.Event`.
 enum SyncDriverEvent: Sendable {
     /// New engine state (server change tokens, engine-side pending list). Persist it.
@@ -72,9 +82,10 @@ enum SyncDriverEvent: Sendable {
     case sentZoneChanges(saved: [CKRecordZone.ID], failed: [CKRecordZone.ID: CKError])
     case sentRecordChanges(DriverSentRecordChanges)
     case willFetchChanges
-    case didFetchChanges
+    /// nil when the engine does not say (the fetch context needs macOS 14.2).
+    case didFetchChanges(DriverSyncReason?)
     case willSendChanges
-    case didSendChanges
+    case didSendChanges(DriverSyncReason?)
 }
 
 /// Receives engine callbacks. Implemented by the store.
@@ -205,6 +216,10 @@ final class CKSyncEngineDriver: SyncEngineDriver, CKSyncEngineDelegate, @uncheck
         return CKSyncEngine.RecordZoneChangeBatch(recordsToSave: batch.recordsToSave, recordIDsToDelete: batch.recordIDsToDelete)
     }
 
+    private static func reason(_ reason: CKSyncEngine.SyncReason) -> DriverSyncReason {
+        reason == .manual ? .manual : .scheduled
+    }
+
     private static func translate(_ event: CKSyncEngine.Event) -> SyncDriverEvent? {
         switch event {
         case .stateUpdate(let update):
@@ -247,9 +262,15 @@ final class CKSyncEngineDriver: SyncEngineDriver, CKSyncEngineDelegate, @uncheck
                 failedDeletes: sent.failedRecordDeletes.map { DriverFailedDelete(recordID: $0.key, error: $0.value) }
             ))
         case .willFetchChanges: return .willFetchChanges
-        case .didFetchChanges: return .didFetchChanges
+        case .didFetchChanges(let fetched):
+            // The fetch context exists from macOS 14.2; before that the reason is unknown and the
+            // store decides by whether one of its own `syncNow` calls is running.
+            if #available(macOS 14.2, *) {
+                return .didFetchChanges(Self.reason(fetched.context.reason))
+            }
+            return .didFetchChanges(nil)
         case .willSendChanges: return .willSendChanges
-        case .didSendChanges: return .didSendChanges
+        case .didSendChanges(let sent): return .didSendChanges(Self.reason(sent.context.reason))
         case .willFetchRecordZoneChanges, .didFetchRecordZoneChanges: return nil
         @unknown default: return nil
         }
