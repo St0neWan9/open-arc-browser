@@ -1,6 +1,22 @@
 import CloudKit
+import os
 import OpenArcModel
 import OpenArcSyncAPI
+
+/// Sync diagnostics: fetch triggers, fetched record counts, merge results. Same subsystem and
+/// category as the app's push registration log, so one `log stream --predicate 'subsystem ==
+/// "org.openarc.browser" AND category == "sync"'` shows the whole path. Counts and record names
+/// (type + UUID) only; never record contents.
+enum SyncLog {
+    static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "org.openarc.browser", category: "sync")
+
+    /// "Space=1 Tab=3" for a list of record ids.
+    static func countsByType(_ ids: [SyncRecordID]) -> String {
+        var counts: [String: Int] = [:]
+        for id in ids { counts[id.type.rawValue, default: 0] += 1 }
+        return counts.keys.sorted().map { "\($0)=\(counts[$0]!)" }.joined(separator: " ")
+    }
+}
 
 /// Errors thrown by `CloudKitSyncStore` itself (CloudKit errors are rethrown as they are).
 public enum CloudKitSyncStoreError: Error, Hashable, Sendable {
@@ -201,11 +217,14 @@ public actor CloudKitSyncStore: SyncStore {
         }
         manualSyncDepth += 1
         defer { manualSyncDepth -= 1 }
+        SyncLog.logger.info("syncNow: fetch + zone poll + send")
         await applyDeferredRemoteChanges()
         do {
-            // Database level, never restricted to our zone: other devices' changes are found
-            // through the database change feed from the saved token (B86).
+            // Database level, never restricted to our zone (B86). The engine may still skip the
+            // request when it believes nothing changed, so the zone poll below is what actually
+            // asks the server (D4 2026-10-27).
             try await driver.fetchChanges(.allZones)
+            try await pollZone(driver)
             try await driver.sendChanges()
         } catch {
             handleOperationError(error)
@@ -408,6 +427,29 @@ public actor CloudKitSyncStore: SyncStore {
 
     // MARK: - Remote changes
 
+    /// Reads our zone's changes since the last poll, straight from the server, and merges them
+    /// like an engine fetch (B86). CKSyncEngine's `fetchChanges` sends no request unless it
+    /// already knows a zone changed (from a push, or a database fetch it considers due about once
+    /// a day); D4 2026-10-27 showed a relaunched instance logging "no zone IDs needing to be
+    /// fetched" and never seeing a Space another instance had uploaded, while the same saved
+    /// state with the engine's fetch forced returned it at once. Duplicates of what the engine
+    /// delivers merge to no change (`RecordMerge`, ties to the server), and this device's own
+    /// uploads come back the same way. The token is ours, apart from the engine's state.
+    private func pollZone(_ driver: any SyncEngineDriver) async throws {
+        let changes = try await driver.fetchZoneChanges(zone.zoneID, since: state.zonePollToken)
+        if changes.failedRecordCount > 0 {
+            SyncLog.logger.error("zone poll: \(changes.failedRecordCount, privacy: .public) records could not be read")
+        }
+        if !changes.modified.isEmpty || !changes.deleted.isEmpty {
+            SyncLog.logger.info("zone poll: \(changes.modified.count, privacy: .public) modified, \(changes.deleted.count, privacy: .public) deleted")
+            await handleFetched(modified: changes.modified, deleted: changes.deleted)
+        } else {
+            SyncLog.logger.debug("zone poll: no changes")
+        }
+        // Advanced even if applying failed: `applyRemote` keeps failed copies as deferred changes.
+        state.zonePollToken = changes.token
+    }
+
     /// Merges server copies with local copies and applies the result in one batch. On failure the
     /// server copies are kept and retried later (the engine has already advanced its change token).
     private func applyRemote(serverRecords: [SyncRecord], deletions: [SyncRecordID]) async {
@@ -460,8 +502,13 @@ public actor CloudKitSyncStore: SyncStore {
                 state.deferredUpserts += serverRecords
                 state.deferredDeletions += deletions
                 noteFailure("Applying server changes failed: \(error)")
+                SyncLog.logger.error("merge: apply failed, \(serverRecords.count + deletions.count, privacy: .public) changes deferred: \(String(describing: error), privacy: .public)")
                 return
             }
+        }
+        SyncLog.logger.info("merge: upserted [\(SyncLog.countsByType(upserts.map(\.id)), privacy: .public)] deleted [\(SyncLog.countsByType(deletions), privacy: .public)] resend \(resend.count, privacy: .public) superseded \(superseded.count, privacy: .public) of \(serverRecords.count, privacy: .public) server records")
+        for record in upserts {
+            SyncLog.logger.debug("merge: upserted \(record.id.recordName, privacy: .public)")
         }
         // Only after the apply succeeded, and only if no newer local change arrived meanwhile.
         for (id, generation) in superseded where state.pending.remove(id, ifGeneration: generation) {
@@ -493,6 +540,7 @@ public actor CloudKitSyncStore: SyncStore {
             serverRecords.append(record)
         }
         let deletions = deleted.compactMap { mapper.syncRecordID(from: $0.recordID) }
+        SyncLog.logger.info("fetched: modified [\(SyncLog.countsByType(serverRecords.map(\.id)), privacy: .public)] (\(modified.count - serverRecords.count, privacy: .public) skipped) deleted [\(SyncLog.countsByType(deletions), privacy: .public)]")
         await applyRemote(serverRecords: serverRecords, deletions: deletions)
     }
 
@@ -641,6 +689,7 @@ public actor CloudKitSyncStore: SyncStore {
         let knownRecords = state.systemFields.keys.compactMap(RecordMapper.syncRecordID(fromRecordName:))
         state.systemFields.removeAll()
         state.zoneSaved = false
+        state.zonePollToken = nil
         inFlight.removeAll()
         switch reason {
         case .encryptedDataReset:
@@ -663,6 +712,7 @@ public actor CloudKitSyncStore: SyncStore {
             // Keep local data and the pending queue (edits made while signed out still go up
             // after the next sign-in); drop everything tied to the old account.
             state.engineState = nil
+            state.zonePollToken = nil
             state.systemFields.removeAll()
             state.zoneSaved = false
             inFlight.removeAll()
@@ -722,7 +772,10 @@ extension CloudKitSyncStore: SyncEngineDriverDelegate {
         case .willFetchChanges, .willSendChanges:
             cycleFailure = nil
             if !isAccountBlocked { setPhase(.syncing) }
-        case .didFetchChanges(let reason), .didSendChanges(let reason):
+        case .didFetchChanges(let reason):
+            SyncLog.logger.debug("engine fetch ended (\(String(describing: reason), privacy: .public))")
+            finishEngineCycle(reason)
+        case .didSendChanges(let reason):
             finishEngineCycle(reason)
         }
         await persist()

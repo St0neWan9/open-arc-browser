@@ -10,7 +10,11 @@ import OpenArcSyncAPI
 /// - a save with a change tag for a record the server does not have fails with `unknownItem`;
 /// - every accepted save gets a fresh change tag and lands in a change log;
 /// - each device fetches the log from its own cursor (its own writes included, as a zone change
-///   fetch returns them), collapsed to the latest change per record.
+///   fetch returns them), collapsed to the latest change per record;
+/// - the store's zone poll (`fetchZoneChanges`) reads the same log from the token it passes, so
+///   by default every change reaches a device twice (engine fetch and poll), as on CloudKit;
+/// - `engineSkipsFetch` makes the engine fetch return nothing, like CKSyncEngine when no push
+///   told it a zone changed ("no zone IDs needing to be fetched", D4); then only the poll sees changes.
 // @unchecked: every mutable stored property is read and written only under `lock` (`Mutex` needs macOS 15).
 final class FakeServer: @unchecked Sendable {
     private enum Change {
@@ -26,6 +30,7 @@ final class FakeServer: @unchecked Sendable {
     private var _uploadCount = 0
     private var _conflictCount = 0
     private var _holdFetches = false
+    private var _engineSkipsFetch = false
 
     /// Every record save or delete a device sent, accepted or not.
     var uploadCount: Int { lock.withLock { _uploadCount } }
@@ -35,6 +40,12 @@ final class FakeServer: @unchecked Sendable {
     var holdFetches: Bool {
         get { lock.withLock { _holdFetches } }
         set { lock.withLock { _holdFetches = newValue } }
+    }
+
+    /// While true, engine fetches return nothing; only the store's zone poll sees changes.
+    var engineSkipsFetch: Bool {
+        get { lock.withLock { _engineSkipsFetch } }
+        set { lock.withLock { _engineSkipsFetch = newValue } }
     }
 
     /// The server's copy of a record, decoded.
@@ -51,6 +62,48 @@ final class FakeServer: @unchecked Sendable {
         driver.fetchHandler = { [weak self] in
             self?.fetch(for: device) ?? []
         }
+        driver.zonePollHandler = { [weak self] token in
+            self?.poll(since: token) ?? DriverZoneChanges(token: token)
+        }
+    }
+
+    /// The zone poll: the log after `token` (a log position), collapsed per record.
+    private func poll(since token: Data?) -> DriverZoneChanges {
+        lock.withLock {
+            let start = token.flatMap { Int(String(decoding: $0, as: UTF8.self)) } ?? 0
+            let end = log.count
+            let token = Data(String(end).utf8)
+            guard !_holdFetches else { return DriverZoneChanges(token: Data(String(start).utf8)) }
+            let (modified, deleted) = changes(in: start..<end)
+            return DriverZoneChanges(modified: modified, deleted: deleted, token: token)
+        }
+    }
+
+    /// Latest state per record of the log entries in `range`, in first-seen order. Call under `lock`.
+    private func changes(in range: Range<Int>) -> ([CKRecord], [DriverFetchedDeletion]) {
+        var latest: [String: Change] = [:]
+        var order: [String] = []
+        for change in log[range] {
+            let name: String
+            switch change {
+            case .saved(let n), .deleted(let n, _): name = n
+            }
+            if latest[name] == nil { order.append(name) }
+            latest[name] = change
+        }
+        var modified: [CKRecord] = []
+        var deleted: [DriverFetchedDeletion] = []
+        for name in order {
+            switch latest[name] {
+            case .saved:
+                if let ck = records[name] { modified.append(ck) }
+            case .deleted(_, let type):
+                deleted.append(DriverFetchedDeletion(recordID: CKRecord.ID(recordName: name, zoneID: Fx.zoneID), recordType: type))
+            case nil:
+                break
+            }
+        }
+        return (modified, deleted)
     }
 
     private func send(_ batch: DriverBatch) -> DriverSentRecordChanges {
@@ -89,31 +142,10 @@ final class FakeServer: @unchecked Sendable {
 
     private func fetch(for device: String) -> [SyncDriverEvent] {
         lock.withLock {
-            guard !_holdFetches else { return [] }
+            guard !_holdFetches, !_engineSkipsFetch else { return [] }
             let start = cursors[device] ?? 0
             cursors[device] = log.count
-            var latest: [String: Change] = [:]
-            var order: [String] = []
-            for change in log[start...] {
-                let name: String
-                switch change {
-                case .saved(let n), .deleted(let n, _): name = n
-                }
-                if latest[name] == nil { order.append(name) }
-                latest[name] = change
-            }
-            var modified: [CKRecord] = []
-            var deleted: [DriverFetchedDeletion] = []
-            for name in order {
-                switch latest[name] {
-                case .saved:
-                    if let ck = records[name] { modified.append(ck) }
-                case .deleted(_, let type):
-                    deleted.append(DriverFetchedDeletion(recordID: CKRecord.ID(recordName: name, zoneID: Fx.zoneID), recordType: type))
-                case nil:
-                    break
-                }
-            }
+            let (modified, deleted) = changes(in: start..<log.count)
             guard !modified.isEmpty || !deleted.isEmpty else { return [] }
             return [.fetchedRecordChanges(modified: modified, deleted: deleted)]
         }
@@ -344,6 +376,131 @@ final class TwoDeviceSyncTests: XCTestCase {
             XCTAssertNil(onB)
         }
     }
+}
+
+/// B86 / D4 (2026-10-27): CKSyncEngine sends no fetch request when it does not know a zone
+/// changed (no push arrived), so an already-synced or relaunched instance never saw a Space
+/// another instance uploaded. The store's own zone poll in `syncNow` (launch catch-up,
+/// activation, push, Sync Now; B65) must find it anyway. Our own sync design; inferred.
+final class ZonePollTests: XCTestCase {
+
+    private let spaceID = SyncRecordID(type: .space, uuid: Fx.uuid(3))
+
+    func testChangeFromOtherDeviceArrivesWhenEngineSkipsFetch() async throws {
+        let server = FakeServer()
+        let a = StoreHarness(records: [.space(Fx.space())]) { server.connect($0, as: "A") }
+        let b = StoreHarness { server.connect($0, as: "B") }
+        try await b.start()
+        try await b.store.syncNow()
+        server.engineSkipsFetch = true
+
+        try await a.start()
+        await a.store.enqueue([.save(spaceID)])
+        try await a.store.syncNow()
+        XCTAssertNotNil(server.record(spaceID), "A uploaded the Space")
+
+        try await b.store.syncNow()
+        let onB = await b.database.record(for: spaceID)
+        XCTAssertEqual(onB?.withoutSystemFields, SyncRecord.space(Fx.space()).withoutSystemFields, "B got A's Space without an engine fetch")
+        let pending = await b.persisted.pending
+        XCTAssertTrue(pending.isEmpty, "adopting the server copy uploads nothing")
+    }
+
+    /// The relaunch case of D4: B quits, A uploads, B starts again from its saved state. The
+    /// detached catch-up `syncNow` after `start` polls from the saved token.
+    func testRelaunchedDeviceCatchesUpThroughZonePoll() async throws {
+        let server = FakeServer()
+        server.engineSkipsFetch = true
+        let bStorage = InMemoryStateStorage()
+        let b = StoreHarness(storage: bStorage) { server.connect($0, as: "B") }
+        try await b.start()
+        try await b.store.syncNow()
+        await b.store.stop()
+        let savedToken = await b.persisted.zonePollToken
+        XCTAssertNotNil(savedToken, "the poll token is persisted")
+
+        let a = StoreHarness(records: [.space(Fx.space())]) { server.connect($0, as: "A") }
+        try await a.start()
+        await a.store.enqueue([.save(spaceID)])
+        try await a.store.syncNow()
+
+        var saved = await bStorage.decoded
+        saved.engineState = Data("engine".utf8)
+        try await bStorage.saveState(saved.encoded())
+        let relaunched = StoreHarness(storage: bStorage) { server.connect($0, as: "B") }
+        try await relaunched.start()
+        XCTAssertEqual(relaunched.scheduler.delays, [0], "catch-up sync queued")
+        await relaunched.scheduler.runNext()
+        XCTAssertEqual(try relaunched.driver.zonePollTokens, [savedToken], "polled from the saved token")
+        let onB = await relaunched.database.record(for: spaceID)
+        XCTAssertNotNil(onB)
+    }
+
+    /// Both the engine and the poll deliver the same change: it is applied once and nothing goes
+    /// back up (ties go to the server, `ConflictPolicy`).
+    func testDuplicateDeliveryFromEngineAndPollIsHarmless() async throws {
+        let server = FakeServer()
+        let a = StoreHarness(records: [.space(Fx.space())]) { server.connect($0, as: "A") }
+        let b = StoreHarness { server.connect($0, as: "B") }
+        try await a.start()
+        try await b.start()
+        await a.store.enqueue([.save(spaceID)])
+        try await a.store.syncNow()
+        let uploads = server.uploadCount
+
+        for _ in 0..<3 {
+            try await b.store.syncNow()
+            try await a.store.syncNow()
+        }
+        XCTAssertEqual(server.uploadCount, uploads, "no echo uploads")
+        let onB = await b.database.record(for: spaceID)
+        XCTAssertNotNil(onB)
+        let pending = await b.persisted.pending
+        XCTAssertTrue(pending.isEmpty)
+    }
+
+    func testPollTokenAdvancesAndResetsOnSignOut() async throws {
+        let h = StoreHarness()
+        let driver = FakeDriverBox()
+        try await h.start()
+        let fake = try h.driver
+        fake.zonePollHandler = { token in
+            driver.calls += 1
+            return DriverZoneChanges(token: Data("t\(driver.calls)".utf8))
+        }
+        try await h.store.syncNow()
+        try await h.store.syncNow()
+        XCTAssertEqual(fake.zonePollTokens, [nil, Data("t1".utf8)])
+        let saved = await h.persisted.zonePollToken
+        XCTAssertEqual(saved, Data("t2".utf8))
+
+        await fake.emit(.accountChange(.signOut))
+        let afterSignOut = await h.persisted.zonePollToken
+        XCTAssertNil(afterSignOut, "a new account reads its zone from the start")
+    }
+
+    /// A failing poll fails the sync like a failed fetch: shown, retried with backoff, token kept.
+    func testPollErrorIsReportedAndRetried() async throws {
+        let h = StoreHarness()
+        try await h.start()
+        let fake = try h.driver
+        fake.zonePollHandler = { _ in throw CKError(.networkFailure) }
+        do {
+            try await h.store.syncNow()
+            XCTFail("expected the poll error")
+        } catch {}
+        let status = await h.store.currentStatus()
+        guard case .failed = status.phase else { return XCTFail("phase \(status.phase)") }
+        XCTAssertEqual(h.scheduler.delays.count, 1, "retry scheduled")
+        let token = await h.persisted.zonePollToken
+        XCTAssertNil(token)
+    }
+}
+
+/// Mutable counter for a `@Sendable` closure.
+// @unchecked: only touched from the one test task that runs the store calls sequentially.
+private final class FakeDriverBox: @unchecked Sendable {
+    var calls = 0
 }
 
 /// `XCTUnwrap` for a value produced by an `await` expression.

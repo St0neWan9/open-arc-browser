@@ -72,6 +72,17 @@ enum DriverSyncReason: Hashable, Sendable {
     case manual
 }
 
+/// Result of `SyncEngineDriver.fetchZoneChanges`: every change in one zone after a token,
+/// collapsed to the latest state per record.
+struct DriverZoneChanges: Sendable {
+    var modified: [CKRecord] = []
+    var deleted: [DriverFetchedDeletion] = []
+    /// Archived `CKServerChangeToken` to pass next time. nil when the zone does not exist (yet).
+    var token: Data?
+    /// Records the server listed but could not return (per-record errors); skipped.
+    var failedRecordCount = 0
+}
+
 /// Engine events, translated from `CKSyncEngine.Event`.
 enum SyncDriverEvent: Sendable {
     /// New engine state (server change tokens, engine-side pending list). Persist it.
@@ -129,6 +140,15 @@ protocol SyncEngineDriver: AnyObject, Sendable {
     var pendingChanges: [DriverRecordChange] { get }
     func addPendingZoneSave(_ zone: CKRecordZone)
     func fetchChanges(_ scope: DriverFetchScope) async throws
+    /// Reads the changes of one zone directly from the private database, from `token` (nil: the
+    /// whole zone), bypassing the engine. CKSyncEngine's `fetchChanges` only asks the server
+    /// about zones it already knows to be changed (a push, its own `needsToFetchDatabaseChanges`,
+    /// or a last database fetch about a day old); otherwise it logs "no zone IDs needing to be
+    /// fetched" and returns without a request. So without a push (dropped by APNs, or never
+    /// sent to the device that made the change) neither a relaunch nor an activation fetch saw
+    /// other instances' edits (D4 2026-10-27). The store polls its zone with this instead. (B86)
+    /// Not an engine call: allowed anywhere, but the store only calls it from `syncNow`.
+    func fetchZoneChanges(_ zoneID: CKRecordZone.ID, since token: Data?) async throws -> DriverZoneChanges
     func sendChanges() async throws
     /// Cancels in-flight work; the driver is not used afterwards.
     func cancel() async
@@ -199,6 +219,68 @@ final class CKSyncEngineDriver: SyncEngineDriver, CKSyncEngineDelegate, @uncheck
     func fetchChanges(_ scope: DriverFetchScope) async throws {
         assert(!EngineCallbackContext.isActive, "fetchChanges awaited inside a CKSyncEngine delegate callback")
         try await engine.fetchChanges(Self.fetchOptions(for: scope))
+    }
+
+    func fetchZoneChanges(_ zoneID: CKRecordZone.ID, since token: Data?) async throws -> DriverZoneChanges {
+        let database = container.privateCloudDatabase
+        var changeToken = token.flatMap(Self.unarchiveToken)
+        // Latest state per record across pages, in first-seen order; a later page wins.
+        enum Latest { case saved(CKRecord), deleted(DriverFetchedDeletion) }
+        var latest: [CKRecord.ID: Latest] = [:]
+        var order: [CKRecord.ID] = []
+        var failed = 0
+        func note(_ id: CKRecord.ID, _ value: Latest) {
+            if latest[id] == nil { order.append(id) }
+            latest[id] = value
+        }
+        while true {
+            let page: (modificationResultsByID: [CKRecord.ID: Result<CKDatabase.RecordZoneChange.Modification, any Error>],
+                       deletions: [CKDatabase.RecordZoneChange.Deletion],
+                       changeToken: CKServerChangeToken,
+                       moreComing: Bool)
+            do {
+                page = try await database.recordZoneChanges(inZoneWith: zoneID, since: changeToken)
+            } catch let error as CKError where error.code == .changeTokenExpired && changeToken != nil {
+                // The server forgot our token: read the whole zone again.
+                changeToken = nil
+                latest.removeAll()
+                order.removeAll()
+                failed = 0
+                continue
+            } catch let error as CKError where error.code == .zoneNotFound || error.code == .userDeletedZone {
+                // Not created yet (no device has uploaded) or removed; the engine reports a
+                // removal through its own database fetch.
+                return DriverZoneChanges()
+            }
+            for (id, result) in page.modificationResultsByID {
+                switch result {
+                case .success(let modification): note(id, .saved(modification.record))
+                case .failure: failed += 1
+                }
+            }
+            for deletion in page.deletions {
+                note(deletion.recordID, .deleted(DriverFetchedDeletion(recordID: deletion.recordID, recordType: deletion.recordType)))
+            }
+            changeToken = page.changeToken
+            if !page.moreComing { break }
+        }
+        var changes = DriverZoneChanges(token: changeToken.flatMap(Self.archiveToken), failedRecordCount: failed)
+        for id in order {
+            switch latest[id] {
+            case .saved(let record): changes.modified.append(record)
+            case .deleted(let deletion): changes.deleted.append(deletion)
+            case nil: break
+            }
+        }
+        return changes
+    }
+
+    static func archiveToken(_ token: CKServerChangeToken) -> Data? {
+        try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true)
+    }
+
+    static func unarchiveToken(_ data: Data) -> CKServerChangeToken? {
+        try? NSKeyedUnarchiver.unarchivedObject(ofClass: CKServerChangeToken.self, from: data)
     }
 
     func sendChanges() async throws {

@@ -295,6 +295,8 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
     typealias SendHandler = @Sendable (DriverBatch) async -> DriverSentRecordChanges
     /// Builds the events of a `fetchChanges` call when no scripted fetch is queued.
     typealias FetchHandler = @Sendable () async -> [SyncDriverEvent]
+    /// Answers `fetchZoneChanges` (the store's own zone poll). Default: no changes, token kept.
+    typealias ZonePollHandler = @Sendable (_ token: Data?) async throws -> DriverZoneChanges
 
     private let lock = NSLock()
     private weak var _delegate: (any SyncEngineDriverDelegate)?
@@ -307,6 +309,8 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
     private var _sendErrors: [any Error] = []
     private var _sendHandler: SendHandler?
     private var _fetchHandler: FetchHandler?
+    private var _zonePollHandler: ZonePollHandler?
+    private var _zonePollTokens: [Data?] = []
     private var _accountStatus: Result<CKAccountStatus, FakeError> = .success(.available)
     private var _cancelled = false
     private var _tagCounter = 0
@@ -340,6 +344,14 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
         get { lock.withLock { _fetchHandler } }
         set { lock.withLock { _fetchHandler = newValue } }
     }
+
+    var zonePollHandler: ZonePollHandler? {
+        get { lock.withLock { _zonePollHandler } }
+        set { lock.withLock { _zonePollHandler = newValue } }
+    }
+
+    /// The token passed to each `fetchZoneChanges` call, in order.
+    var zonePollTokens: [Data?] { lock.withLock { _zonePollTokens } }
 
     var sentBatches: [DriverBatch] { lock.withLock { _sentBatches } }
     var zoneSavePending: Bool { lock.withLock { _zoneSavePending } }
@@ -432,6 +444,12 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
         await callback(delegate, .willFetchChanges)
         for event in events { await callback(delegate, event) }
         await callback(delegate, .didFetchChanges(.manual))
+    }
+
+    func fetchZoneChanges(_ zoneID: CKRecordZone.ID, since token: Data?) async throws -> DriverZoneChanges {
+        lock.withLock { _zonePollTokens.append(token) }
+        guard let handler = zonePollHandler else { return DriverZoneChanges(token: token) }
+        return try await handler(token)
     }
 
     func sendChanges() async throws {
