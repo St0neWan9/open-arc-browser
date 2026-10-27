@@ -186,6 +186,14 @@ public enum CommandBarRanker {
     /// Empty query: most recently used open tabs (current space first, never the tab being viewed),
     /// then the closing app command. [04 §command bar] observed shape; ordering inferred.
     static func emptyQueryList(_ candidates: [CommandBarResult], context: CommandBarQueryContext, limit: Int) -> [CommandBarResult] {
+        // The incognito window's bar: the help rows only, no history and no open tabs.
+        // [06 §20.1] observed (B61).
+        if context.listsHelpOnlyWhenEmpty {
+            let help = CommandBarCommand.helpCommands.compactMap { command in
+                candidates.first { $0.action == .runCommand(command) }
+            }
+            return Array(help.prefix(max(0, limit)))
+        }
         let tabs = candidates
             .filter { result in
                 guard result.kind.isTab else { return false }

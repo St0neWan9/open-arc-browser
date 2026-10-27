@@ -175,6 +175,8 @@ public struct CommandBarSpacesSource: CommandBarSource {
         guard !context.trimmedText.isEmpty else { return [] }
         let ws = await workspace()
         let state = await state()
+        // An incognito window has no Spaces to go to or move to. [06 §20.2] observed (B61).
+        guard !state.isIncognito else { return [] }
         let spaces = ws.allLiveSpaces
         var out: [CommandBarResult] = []
         for (index, space) in spaces.enumerated() where space.id != context.currentSpaceID {

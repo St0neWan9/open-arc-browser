@@ -13,6 +13,7 @@ extension ShellModel {
         state.canFavoriteSelectedTab = !isIncognito && selectedTabID.flatMap { workspace.tabs[$0] }.map { tab in
             if case .today = tab.location { return true } else { return false }
         } == true
+        state.isIncognito = isIncognito
         return state
     }
 
@@ -46,6 +47,9 @@ extension ShellModel {
         }
         commandBar.sources = commandBarDefaultSources(workspace: workspace, commandState: state)
         paneCommandBar.sources = commandBarDefaultSources(workspace: workspace, commandState: state)
+        // The incognito window's empty bar lists the help rows only. [06 §20.1] observed (B61).
+        commandBar.listsHelpOnlyWhenEmpty = isIncognito
+        paneCommandBar.listsHelpOnlyWhenEmpty = isIncognito
     }
 }
 

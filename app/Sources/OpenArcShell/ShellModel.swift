@@ -168,7 +168,10 @@ public final class ShellModel: ObservableObject {
         switch request.kind {
         case .incognito:
             let incognito = controller.makeIncognito()
-            return ShellModel(controller: incognito, window: WindowUIState(), ownsController: true)
+            let model = ShellModel(controller: incognito, window: WindowUIState(), ownsController: true)
+            // The window opens with the command bar showing its help rows. [06 §20.1] observed (B61).
+            model.presentCommandBar(.newTab)
+            return model
         case .restore:
             let saved = controller.takePendingRestore() ?? controller.reopenState()
             return ShellModel(controller: controller, window: saved)
@@ -424,6 +427,10 @@ public final class ShellModel: ObservableObject {
         case .contactTheTeam:
             // No help surface yet; the row stays because it closes the empty-query list ([04 §command bar] observed).
             lastUnhandledCommand = command
+        case .airTrafficControl:
+            // Settings ▸ Links with the Air Traffic Control sheet ([06 §25] observed sheet). B61.
+            controller.requestAirTrafficControl()
+            if let open = openSettingsWindow { open() } else { lastUnhandledCommand = command }
         }
     }
 

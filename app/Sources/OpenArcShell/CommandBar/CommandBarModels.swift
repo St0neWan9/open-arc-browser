@@ -94,6 +94,9 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     // App
     case openSettings
     case contactTheTeam
+    /// Opens Settings ▸ Links with the Air Traffic Control sheet. A help row of the incognito
+    /// window's empty bar [06 §20.1] observed; the target is inferred from the name ([06 §25]).
+    case airTrafficControl
 
     /// Row title. [01 §menus] observed menu item names; "Archive Tab", "Collapse All Folders" and
     /// "Expand All Folders" are not in a menu and use their [02] shortcut-list names (observed).
@@ -137,6 +140,7 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .viewBoosts: return "View Boosts…"
         case .openSettings: return "Settings…"
         case .contactTheTeam: return "Contact the Team"
+        case .airTrafficControl: return "Air Traffic Control"
         }
     }
 
@@ -190,6 +194,7 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .viewBoosts: return ["boosts"]
         case .openSettings: return ["preferences", "settings"]
         case .contactTheTeam: return ["help", "feedback", "support"]
+        case .airTrafficControl: return ["links", "routes", "help"]
         }
     }
 
@@ -197,6 +202,8 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     public var shortcutHint: String? {
         switch self {
         case .newTab: return "⌘T"
+        // ⌘S, the View menu's key ([02 §tabs] observed 2026-10-25 on the real machine). B61.
+        case .toggleSidebar: return "⌘S"
         case .newWindow: return "⌘N"
         case .newIncognitoWindow: return "⇧⌘N"
         case .newLittleArcWindow: return "⌥⌘N"
@@ -216,9 +223,9 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .goForward: return "⌘]"
         case .openLibrary: return "⇧⌘L"
         case .openSettings: return "⌘,"
-        case .toggleSidebar, .favoriteTab, .separateFromSplit, .expandSplit, .newSpace, .editTheme, .renameSpace,
+        case .favoriteTab, .separateFromSplit, .expandSplit, .newSpace, .editTheme, .renameSpace,
              .manageSpaces, .newFolder, .collapseAllFolders, .expandAllFolders, .viewArchive,
-             .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .contactTheTeam:
+             .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .contactTheTeam, .airTrafficControl:
             return nil
         }
     }
@@ -228,6 +235,7 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     /// are not listed (they are with a split); with no back history "Go Back" is not listed (it is,
     /// with ⌘[, after a navigation). The other state-bound items follow the same rule (inferred).
     public func isAvailable(in state: CommandBarCommandState) -> Bool {
+        if state.isIncognito, Self.unavailableInIncognito.contains(self) { return false }
         switch self {
         case .archiveTab, .togglePin, .copyURL, .reload, .addSplitView:
             return state.hasSelectedTab
@@ -247,10 +255,25 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
              .nextTab, .previousTab:
             return state.hasSelectedSpace
         case .newTab, .newWindow, .newIncognitoWindow, .newLittleArcWindow, .toggleSidebar, .newSpace, .manageSpaces, .viewArchive,
-             .openLibrary, .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .openSettings, .contactTheTeam:
+             .openLibrary, .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .openSettings, .contactTheTeam,
+             .airTrafficControl:
             return true
         }
     }
+
+    /// Commands an incognito window's bar leaves out. Its Spaces menu is disabled as a whole and
+    /// its tab menu has no Pin ([06 §20.2] observed), so the Space commands and Pin are not
+    /// offered (plan B61); folders need the pinned area it does not have (inferred).
+    static let unavailableInIncognito: Set<CommandBarCommand> = [
+        .newSpace, .editTheme, .renameSpace, .nextSpace, .previousSpace, .manageSpaces,
+        .togglePin, .favoriteTab, .newFolder, .collapseAllFolders, .expandAllFolders,
+    ]
+
+    /// The help rows an incognito window's bar lists for an empty query, in the observed order.
+    /// [06 §20.1] observed: Contact the Team · The Browser Company · Air Traffic Control · Tips for
+    /// Organizing · Help Center. Ours keeps the two that have a surface; the company page, the
+    /// tips and the help center have no Open Arc counterpart yet (B61, reported).
+    public static let helpCommands: [CommandBarCommand] = [.contactTheTeam, .airTrafficControl]
 }
 
 /// The window state the command rows depend on (availability and the sidebar title). A plain
@@ -272,6 +295,8 @@ public struct CommandBarCommandState: Hashable, Sendable {
     /// Whether "Favorite Tab" applies: the selected tab is a Today tab of a normal window.
     /// [06 §21.4] observed for a Today tab; pinned tabs and incognito windows inferred (B55).
     public var canFavoriteSelectedTab: Bool = true
+    /// An incognito window: no Space commands, no Space rows (`unavailableInIncognito`). B61.
+    public var isIncognito: Bool = false
 
     public init(
         hasSelectedTab: Bool = true,
@@ -368,19 +393,24 @@ public struct CommandBarQueryContext: Hashable, Sendable {
     public var currentSpaceID: UUID?
     /// The tab being viewed; it never shows up in the empty-query list (inferred).
     public var currentTabID: UUID?
+    /// The empty query lists only the help commands, no tabs: the incognito window's bar.
+    /// [06 §20.1] observed (B61).
+    public var listsHelpOnlyWhenEmpty: Bool = false
 
     public init(
         text: String,
         mode: CommandBarMode,
         presentation: CommandBarPresentation = .window,
         currentSpaceID: UUID? = nil,
-        currentTabID: UUID? = nil
+        currentTabID: UUID? = nil,
+        listsHelpOnlyWhenEmpty: Bool = false
     ) {
         self.text = text
         self.mode = mode
         self.presentation = presentation
         self.currentSpaceID = currentSpaceID
         self.currentTabID = currentTabID
+        self.listsHelpOnlyWhenEmpty = listsHelpOnlyWhenEmpty
     }
 
     /// Query with surrounding whitespace removed.

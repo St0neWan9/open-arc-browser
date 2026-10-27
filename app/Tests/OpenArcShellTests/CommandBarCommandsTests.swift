@@ -63,7 +63,7 @@ final class CommandBarCommandsTests: XCTestCase {
             .goBack: "Go Back", .goForward: "Go Forward", .viewArchive: "View Archive…",
             .openLibrary: "Open Library…", .viewDownloads: "View Downloads…", .viewEasels: "View Easels…",
             .viewMedia: "View Media…", .viewBoosts: "View Boosts…", .openSettings: "Settings…",
-            .contactTheTeam: "Contact the Team",
+            .contactTheTeam: "Contact the Team", .airTrafficControl: "Air Traffic Control",
         ]
         XCTAssertEqual(Set(expected.keys), Set(CommandBarCommand.allCases), "every command has a spec title")
         for command in CommandBarCommand.allCases {
@@ -76,7 +76,7 @@ final class CommandBarCommandsTests: XCTestCase {
     /// [02] observed default keys; commands without a recorded key show no hint.
     func testShortcutHintsMatchDefaultShortcuts() {
         let expected: [CommandBarCommand: String] = [
-            .newTab: "⌘T", .newWindow: "⌘N", .newIncognitoWindow: "⇧⌘N", .newLittleArcWindow: "⌥⌘N", .restoreLastClosedTab: "⇧⌘T", .copyURL: "⇧⌘C",
+            .newTab: "⌘T", .toggleSidebar: "⌘S", .newWindow: "⌘N", .newIncognitoWindow: "⇧⌘N", .newLittleArcWindow: "⌥⌘N", .restoreLastClosedTab: "⇧⌘T", .copyURL: "⇧⌘C",
             .reload: "⌘R", .addSplitView: "⌃⇧=", .closeSplitPane: "⌃⇧-", .nextSpace: "⌥⌘→",
             .previousSpace: "⌥⌘←", .archiveTab: "⌘W", .togglePin: "⌘D", .nextTab: "⌥⌘↓",
             .previousTab: "⌥⌘↑", .clearToday: "⇧⌘K", .goBack: "⌘[", .goForward: "⌘]",
@@ -276,6 +276,11 @@ final class CommandBarCommandsTests: XCTestCase {
             RoutingCase(command: .openSettings) { m in XCTAssertEqual(m.lastUnhandledCommand, .openSettings) },
             // No help surface yet; the row is kept because it closes the empty list ([04 §command bar] observed).
             RoutingCase(command: .contactTheTeam) { m in XCTAssertEqual(m.lastUnhandledCommand, .contactTheTeam) },
+            // B61: Settings ▸ Links with the Air Traffic Control sheet; no Settings opener in tests.
+            RoutingCase(command: .airTrafficControl) { m in
+                XCTAssertEqual(m.controller.airTrafficControlRequests, 1)
+                XCTAssertEqual(m.lastUnhandledCommand, .airTrafficControl)
+            },
         ]
     }
 
@@ -304,7 +309,7 @@ final class CommandBarCommandsTests: XCTestCase {
             try await routing.setUp(model)
             model.perform(.runCommand(routing.command))
             try await routing.check(model)
-            if ![.newWindow, .newIncognitoWindow, .newLittleArcWindow, .openSettings, .contactTheTeam].contains(routing.command) {
+            if ![.newWindow, .newIncognitoWindow, .newLittleArcWindow, .openSettings, .contactTheTeam, .airTrafficControl].contains(routing.command) {
                 XCTAssertNil(model.lastUnhandledCommand, "\(routing.command)")
             }
             model.stop()
