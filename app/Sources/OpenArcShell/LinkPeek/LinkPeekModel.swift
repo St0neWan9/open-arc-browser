@@ -143,7 +143,19 @@ public final class LinkPeekModel: ObservableObject {
     /// [06 §22.3] observed. Returns the new tab's id.
     @discardableResult
     public func expand() -> UUID? {
-        guard let session, let spaceID = sidebar.selectedSpaceID else { return nil }
+        openInSpace(nil)
+    }
+
+    /// ⌘O, "Open Little Arc or Peek in…" ([02 §tabs] observed): the Peek page leaves Peek like a
+    /// Little Arc page leaves its window with ⌘O ([06 §21.7] observed there): it becomes the
+    /// selected top Today tab of `spaceID` (nil: the window's current Space, the default target
+    /// as in Little Arc), and the window switches to that Space. B82. With the default target the
+    /// result equals ⤢ (inferred: the spec shows no Space picker for Peek). Returns the new tab's id.
+    @discardableResult
+    public func openInSpace(_ target: UUID?) -> UUID? {
+        guard let session else { return nil }
+        let liveTarget = target.flatMap { controller.workspace.spaces[$0]?.meta.isTombstone == false ? $0 : nil }
+        guard let spaceID = liveTarget ?? sidebar.selectedSpaceID else { return nil }
         let url = page.url ?? session.url
         let id = controller.makeID()
         let stamp = controller.now()
@@ -156,6 +168,8 @@ public final class LinkPeekModel: ObservableObject {
             return nil
         }
         adopt(live, as: id)
+        // The session ended above, so switching Spaces does not close anything any more.
+        if sidebar.selectedSpaceID != spaceID { sidebar.selectSpace(spaceID) }
         sidebar.selectTab(id)
         return id
     }

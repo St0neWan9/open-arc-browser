@@ -915,11 +915,13 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     /// (plan B49, LinkPreview.swift): with Shift, a `.shiftClick` tab reports
     /// `.linkPreviewRequested`, else the page asks for a new window; without, an `.otherSiteLink`
     /// tab reports a link to another site, else the tab navigates.
-    public func simulateLinkClick(to url: URL, shift: Bool = false) async throws {
-        enum Outcome { case preview(LinkPreviewTriggers), newWindow, navigate }
+    /// `optionCommand`: a ⌥⌘-click, which asks for a `.littleArc` tab (plan B82) whatever the triggers.
+    public func simulateLinkClick(to url: URL, shift: Bool = false, optionCommand: Bool = false) async throws {
+        enum Outcome { case preview(LinkPreviewTriggers), newWindow, littleArc, navigate }
         let outcome: Outcome = try lock.withLock {
             guard !isClosed else { throw EngineError.tabClosed(id) }
             let isWeb = url.scheme == "http" || url.scheme == "https"
+            if optionCommand { return .littleArc }
             if shift {
                 return isWeb && linkPreviewTriggers.contains(.shiftClick) ? .preview(.shiftClick) : .newWindow
             }
@@ -938,6 +940,8 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
             }
         case .newWindow:
             onNewTabRequest?(NewTabRequest(opener: id, url: url, disposition: .newWindow, hasUserGesture: true))
+        case .littleArc:
+            onNewTabRequest?(NewTabRequest(opener: id, url: url, disposition: .littleArc, hasUserGesture: true))
         case .navigate:
             try await load(url)
         }

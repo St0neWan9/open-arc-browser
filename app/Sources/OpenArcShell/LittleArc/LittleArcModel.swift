@@ -89,6 +89,11 @@ public final class LittleArcModel: ObservableObject {
     @Published var spacePicker = LittleArcSpacePickerState()
     /// Profile the page was opened in (the Profile capsule names it). nil while compact.
     @Published private(set) var pageProfileID: UUID?
+    /// Last time the window was used (opened, navigated, left as key window). "Archive Little Arcs
+    /// after" counts from here (B82, `LittleArcArchive.swift`).
+    private(set) var lastActiveAt: Date
+    /// The window is the key window (in use: never archived). Set by the window configurator.
+    private(set) var isKeyWindow = false
 
     let shell: ShellModel
     private let engine: any BrowserEngine
@@ -105,6 +110,7 @@ public final class LittleArcModel: ObservableObject {
     public init(shell: ShellModel, initialURL: URL? = nil) {
         self.shell = shell
         self.engine = shell.dependencies.engine
+        self.lastActiveAt = shell.controller.now()
         let sidebar = shell.sidebar
         self.commandBar = CommandBarViewModel(
             sources: shell.commandBarSources(
@@ -125,6 +131,20 @@ public final class LittleArcModel: ObservableObject {
         } else {
             commandBar.open(mode: .newTab, currentSpaceID: shell.selectedSpaceID)
         }
+        // Idle windows are archived after "Archive Little Arcs after" (B82).
+        shell.controller.registerLittleArc(self)
+    }
+
+    /// The window was used now: the idle time starts again. B82.
+    func noteActivity() {
+        lastActiveAt = shell.controller.now()
+    }
+
+    /// The window became or stopped being the key window. Leaving it counts as its last use. B82.
+    func windowKeyStateChanged(isKey: Bool) {
+        guard isKeyWindow != isKey else { return }
+        isKeyWindow = isKey
+        noteActivity()
     }
 
     // MARK: Derived state
@@ -192,6 +212,7 @@ public final class LittleArcModel: ObservableObject {
     public func open(_ url: URL) {
         guard phase != .closed else { return }
         requestedURL = url
+        noteActivity()
         if let liveTab {
             engineWork.append(Task { [weak self] in
                 do { try await liveTab.load(url) } catch { self?.lastError = error }
@@ -224,6 +245,7 @@ public final class LittleArcModel: ObservableObject {
                 for await event in stream {
                     guard let self else { return }
                     self.page.apply(event)
+                    if case .urlChanged = event { self.noteActivity() }
                     // window.close(): the window closes with its page (inferred, C7b).
                     if event == .closeRequested { self.close() }
                 }
@@ -280,7 +302,15 @@ public final class LittleArcModel: ObservableObject {
         }
         liveTab = nil
         commandBar.dismiss()
+        shell.controller.unregisterLittleArc(self)
         onClose?()
+    }
+
+    /// "Archive Little Arcs after" closed this idle window; its page is already in the archive
+    /// (B82). Same fade as Escape (inferred).
+    func closeAfterArchive() {
+        closeStyle = .dismiss
+        close()
     }
 
     /// The window went away by other means (close button, ⌘W): it is already closing, so it is

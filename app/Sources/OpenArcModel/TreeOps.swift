@@ -20,6 +20,8 @@ public enum TreeError: Error, Equatable, Sendable {
     /// A split resize names no split node at that path, or the fractions do not fit its children
     /// (wrong count, not finite, not positive).
     case invalidSplitFractions
+    /// A new record's id is already taken (`archivePage`).
+    case idInUse(UUID)
 }
 
 /// Where to put a node within its target container.
@@ -501,6 +503,31 @@ public enum TreeOps {
         for tab in expired {
             s = archiveUnchecked(s, tab: tab, reason: .autoArchived, now: now)
         }
+        return s
+    }
+
+    /// Archives a page that never had a tab in the tree: an idle Little Arc window's page (plan
+    /// B82; [03 §Links] observed "Archive Little Arcs after", default 6 hours). Creates a live
+    /// `ArchiveItem` with id `id` and touches nothing else. `spaceID`, when given, must be a live
+    /// Space (the item restores there); nil leaves the item without a Space. Throws when `id` is
+    /// already used by an archive item or a tab (ids never repeat, see `ArchiveItem`).
+    public static func archivePage(
+        _ state: WorkspaceState,
+        id: UUID,
+        url: URL?,
+        title: String,
+        faviconURL: URL? = nil,
+        spaceID: UUID?,
+        reason: ArchiveReason = .autoArchived,
+        now: Date
+    ) throws -> WorkspaceState {
+        if let spaceID { _ = try live(state.spaces, spaceID) }
+        guard state.archive[id] == nil, state.tabs[id] == nil else { throw TreeError.idInUse(id) }
+        var s = state
+        s.archive[id] = ArchiveItem(
+            id: id, url: url, title: title, faviconURL: faviconURL, spaceID: spaceID,
+            folderPath: [], reason: reason, archivedAt: now
+        )
         return s
     }
 

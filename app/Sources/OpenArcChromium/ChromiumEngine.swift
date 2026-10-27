@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import OpenArcModel
 import OpenArcEngine
 import OpenArcCore
@@ -317,7 +318,10 @@ final class ChromiumEngineCore {
         broadcaster.yield(.newTabRequested(NewTabRequest(
             opener: opener,
             url: request.url,
-            disposition: NewTabDisposition(request.disposition),
+            disposition: NewTabDisposition(
+                request.disposition, hasUserGesture: request.hasUserGesture,
+                hasPendingContents: request.hasPendingContents, modifiers: CGEventSource.flagsState(.combinedSessionState)
+            ),
             hasUserGesture: request.hasUserGesture,
             pendingTab: token
         )))
@@ -438,6 +442,20 @@ extension NewTabDisposition {
         case .newWindow: self = .newWindow
         case .popup: self = .popup
         default: self = .foregroundTab
+        }
+    }
+
+    /// Plan B82: Chromium folds a ⌥⌘-click into a background tab (⌘ wins over ⌥), and
+    /// `OACNewTabDisposition` has no Little Arc case yet (SWIFT_PROTOCOL_CHANGES.md §14). Until the
+    /// bridge reports it, a user-gesture URL request for a background tab while ⌥ and ⌘ (and not ⇧)
+    /// are still held is a ⌥⌘-click. The delegate call is a posted task a few milliseconds after
+    /// the click, so the keys are still down; a script-opened window (pending contents) never is.
+    init(_ disposition: OACNewTabDisposition, hasUserGesture: Bool, hasPendingContents: Bool, modifiers: CGEventFlags) {
+        let optionCommand = modifiers.contains(.maskAlternate) && modifiers.contains(.maskCommand) && !modifiers.contains(.maskShift)
+        if disposition == .backgroundTab, hasUserGesture, !hasPendingContents, optionCommand {
+            self = .littleArc
+        } else {
+            self.init(disposition)
         }
     }
 }

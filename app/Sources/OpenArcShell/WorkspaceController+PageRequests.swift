@@ -63,11 +63,23 @@ extension WorkspaceController {
     /// Places a tab the page asked for. See the file header for the rules.
     func handleNewTabRequest(_ request: NewTabRequest) {
         guard !pageRequests.isStopped else { return }
+        var request = request
         let openerTabID = request.opener.flatMap(modelTabID(forEngineTab:))
+        // ⌥⌘-click in a Little Arc page: another Little Arc (B82). Its engine tab has no model tab.
+        if request.disposition == .littleArc, openerTabID == nil, let opener = request.opener,
+           littleArcArchive.openModels.contains(where: { $0.liveTab?.id == opener }) {
+            if !openLinkClickInLittleArc(request) { decline(request) }
+            return
+        }
         // Not ours: an opener another controller (or a Little Arc window) owns, or an
         // opener-less request while this is an incognito controller.
         if request.opener != nil, openerTabID == nil { return }
         if request.opener == nil, isOffTheRecord { return }
+        // ⌥⌘-click a link (B82): a Little Arc window when the setting is on, else what ⌘-click does.
+        if request.disposition == .littleArc {
+            if openLinkClickInLittleArc(request) { return }
+            request.disposition = .backgroundTab
+        }
 
         let window = openerTabID.flatMap(windowShowing) ?? activeWindowSidebar
         guard let spaceID = openerTabID.flatMap(spaceOfOpener) ?? window?.selectedSpaceID ?? activeSpaceID else {
@@ -110,7 +122,7 @@ extension WorkspaceController {
             } else {
                 loadInBackground(id)
             }
-        case .backgroundTab:
+        case .backgroundTab, .littleArc:
             loadInBackground(id)
         case .newWindow:
             loadInBackground(id)
@@ -175,6 +187,22 @@ extension WorkspaceController {
                 self?.pageRequests.adopting.remove(id)
             }
         }
+    }
+
+    /// "Open Little Arc when you ⌥⌘-click a link" (B82, [03 §Links] observed switch): the link
+    /// opens in a new Little Arc window, already expanded on the page (like a link from another
+    /// app, B24). Returns false when the switch is off, the controller is incognito (a Little Arc
+    /// window is never off the record, inferred), the URL is not a web link or no window opener
+    /// is installed; the caller then treats the click as a ⌘-click.
+    func openLinkClickInLittleArc(_ request: NewTabRequest) -> Bool {
+        guard dependencies.preferences.opensLittleArcOnOptionCommandClick, !isOffTheRecord,
+              ExternalOpen.isWebLink(request.url), let open = openLittleArcWindow else { return false }
+        // The engine made no tab worth keeping: the Little Arc page loads the URL itself.
+        decline(request)
+        let id = issueLittleArcWindowID()
+        littleArcLaunchURLs[id] = request.url
+        open(id)
+        return true
     }
 
     private func decline(_ request: NewTabRequest) {
