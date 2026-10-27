@@ -152,7 +152,7 @@ final class UpdatesTests: XCTestCase {
     func testMenuAndSettingsViewsBuild() {
         let checker = FakeUpdateChecker()
         let model = UpdatesModel(checker: checker, preferences: .inMemory())
-        _ = UpdateCommands(model: model).body
+        _ = UpdateMenuItem(model: model).body
         let host = NSHostingView(rootView: Form { UpdateSettingsSection(model: model) }.formStyle(.grouped))
         host.frame = CGRect(x: 0, y: 0, width: SettingsTokens.windowWidth, height: 300)
         host.layoutSubtreeIfNeeded()

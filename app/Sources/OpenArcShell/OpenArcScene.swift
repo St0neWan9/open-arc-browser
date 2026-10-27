@@ -52,9 +52,7 @@ public struct OpenArcScene: Scene {
         .handlesExternalEvents(matching: [])
         .commands {
             BrowserCommands(controller: controller)
-            DefaultBrowserCommands(model: controller.defaultBrowser)
-            BookmarkImportCommands(controller: controller)
-            UpdateCommands(model: controller.updates)
+            AppMenuCommands(controller: controller)
             ExternalOpenCommands(inbox: externalOpenInbox, controller: controller)
             OnboardingCommands(controller: controller)
         }
@@ -64,6 +62,7 @@ public struct OpenArcScene: Scene {
             SettingsRootView(shell: controller.appHost())
                 .appDependencies(dependencies)
         }
+        .commands { SettingsGroupCommands(controller: controller) }
 
         // Little Arc: a command-bar-only floating window without title bar or sidebar. [06 §7]
         // observed. Each window gets a fresh id, so every ⌥⌘N opens a new one (inferred). It acts
@@ -111,8 +110,12 @@ struct BrowserCommands: Commands {
     }
 }
 
-/// Menu items with their default shortcuts. Titles from [01 §menus], keys from [02], both observed.
-/// Only commands that have a working implementation are listed; the rest come with their surfaces.
+/// The menu bar's window-bound menus. Titles from [01 §menus], keys from [02], both observed.
+/// Items, order and separator groups follow [01 §菜单项图标与缩进] (E20 capture), listed in
+/// `MenuBarCatalog`; the item views live in `MenuBarItems.swift`. Only commands that have a working
+/// implementation are listed; the rest come with their surfaces. No item gets an icon of ours:
+/// macOS adds its standard ones by action, and a group is indented only when one of its items has
+/// one ([01 §菜单项图标与缩进] observed), so groups are split exactly as in Arc.
 struct ShellCommands: Commands {
     @ObservedObject var model: ShellModel
     /// A browser window is key; without one the window-bound items are disabled.
@@ -121,191 +124,62 @@ struct ShellCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            // [01 §File] observed order; keys [02 §窗口与应用] observed.
-            Button("New Tab…") { model.presentCommandBar(.newTab) }
-                .keyboardShortcut("t", modifiers: .command)
-                .disabled(!hasWindow)
-            Button("New Window") { openBrowserWindow(.newWindow) }
-                .keyboardShortcut("n", modifiers: .command)
-            Button("Blank Window") { openBrowserWindow(.blank) }
-                .keyboardShortcut("n", modifiers: [.control, .command])
-            Button("New Incognito Window") { openBrowserWindow(.incognito) }
-                .keyboardShortcut("n", modifiers: [.shift, .command])
-            Button("New Little Arc Window") {
-                // Keys typed before the new window has the keyboard wait for it (B29).
-                NewWindowTypeAhead.shared.begin(.littleArc)
-                openWindow(id: LittleArcScene.id, value: model.controller.issueLittleArcWindowID())
-            }
-                .keyboardShortcut("n", modifiers: [.option, .command])
-            // [01 §File] observed: Restore Last Closed Tab precedes Open Command Bar.
-            Button("Restore Last Closed Tab") { model.sidebar.restoreLastClosedTab() }
-                .keyboardShortcut("t", modifiers: [.shift, .command])
-                .disabled(!hasWindow || !model.sidebar.canRestoreLastClosedTab)
-            Button("Open Command Bar") { model.presentCommandBar(.currentTab) }
-                .keyboardShortcut("l", modifiers: .command)
-                .disabled(!hasWindow)
-            // [01 §File] observed: New Easel follows New Profile; ⌃⇧E [02] observed. B56.
-            Button("New Easel") { model.newEasel() }
-                .keyboardShortcut("e", modifiers: [.control, .shift])
-                .disabled(!hasWindow || !model.canCreateEasel)
-            // New Profile comes with its surface. Close Window closes whichever
-            // window is key (browser, Little Arc or Settings). [01 §File, 02] observed.
-            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
-                .keyboardShortcut("w", modifiers: [.shift, .command])
+            FileMenuItems(model: model, hasWindow: hasWindow, openWindow: openWindow)
         }
 
-        // [01 §File] observed: Save Page As, then Print, at the end of the menu. ⌘P [02 §页面与导航]
-        // observed; Save Page As has no key in [02]. The system Page Setup… / Print… items are
-        // replaced (the spec lists only "Print"). B25. Both live in the print group: SwiftUI leaves
-        // the save group (`.saveItem`) out of the menu of an app without document scenes, so an
-        // item placed after it never showed (C15).
-        // No system Close (⌘W) / Close All (⌥⌘W): they took ⌘W from Tabs ▸ Archive Tab (B19).
+        // [01 §File] observed: Capture… · Capture Full Page · Capture in Portrait Mode · Save Page
+        // As · Print end the menu, one group. The system Page Setup… / Print… items are replaced
+        // (the spec lists only "Print"). B25. They live in the print group: SwiftUI leaves the
+        // save group (`.saveItem`) out of the menu of an app without document scenes, so an item
+        // placed after it never showed (C15).
+        // No system Close (⌘W) / Close All (⌥⌘W): they took ⌘W from Archive Tab (B19).
         NoSystemCloseCommands()
+        CommandGroup(replacing: .importExport) {}
         CommandGroup(replacing: .printItem) {
-            // [01 §File] observed: Capture… · Capture Full Page · Capture in Portrait Mode before
-            // Save Page As; ⇧⌘2 for Capture… [02] observed, none for the other two. B51.
-            Button("Capture…") { model.beginRegionCapture() }
-                .keyboardShortcut("2", modifiers: [.shift, .command])
-                .disabled(!hasWindow || !model.canCapturePage)
-            Button("Capture Full Page") { model.captureFullPage() }
-                .disabled(!hasWindow || !model.canCapturePage)
-            Button("Capture in Portrait Mode") { model.beginPortraitCapture() }
-                .disabled(!hasWindow || !model.canCapturePage)
-            Button("Save Page As") { model.savePageAs() }
-                .disabled(!hasWindow || !model.canRunPageCommands)
-            Button("Print") { model.printPage() }
-                .keyboardShortcut("p", modifiers: .command)
-                .disabled(!hasWindow || !model.canRunPageCommands)
+            FilePageMenuItems(model: model, hasWindow: hasWindow)
         }
 
-        // Edit ▸ Find ▸ after Select All. [01 §Edit] observed items; keys [02 §页面与导航] observed
-        // ⌘F / ⌘G / ⇧⌘G. Use Selection to Find has no key in [02]. Find and Replace and Jump to
-        // Selection come when the page can do them. B25.
+        // Edit: Copy URL / Copy URL as Markdown follow the pasteboard group; Find ▸ opens the
+        // group before the system text-editing items. [01 §Edit] observed order. B25, B62.
         CommandGroup(after: .pasteboard) {
+            EditCopyURLMenuItems(model: model, hasWindow: hasWindow)
+        }
+        CommandGroup(before: .textEditing) {
             FindMenu(model: model, findBar: model.findBar, hasWindow: hasWindow)
         }
+        // No `TextEditingCommands`: with it SwiftUI drops this Find menu for the system one, whose
+        // items never reach the page. So the standard Spelling and Grammar / Substitutions /
+        // Transformations / Speech submenus of [01 §Edit] are not shown (B62 report).
 
-        // [01 §View] observed: Appearance ▸ is the first View item, before Hide Sidebar. B21.
-        CommandGroup(before: .sidebar) {
-            AppearanceMenu(model: model)
+        // View: our groups replace the system sidebar group (its own "Show Sidebar" would add a
+        // sidebar icon and indent its group) and the toolbar group (system tab-bar items). Enter
+        // Full Screen stays the system item, alone in the last group. [01 §菜单项图标与缩进] observed.
+        CommandGroup(replacing: .toolbar) {}
+        CommandGroup(replacing: .sidebar) {
+            ViewMenuItems(model: model, hasWindow: hasWindow)
         }
 
-        CommandGroup(after: .sidebar) {
-            Group {
-                // ⌘S toggles the sidebar. [02 §tabs] observed 2026-10-25. Stop Loading has no key in [02].
-                Button(model.sidebarToggleTitle) { model.toggleSidebar() }
-                    .keyboardShortcut("s", modifiers: .command)
-                // [01 §View] observed after Hide Sidebar; ⇧⌘D and the Hide Toolbar title [06 §17.1]
-                // observed. Global: every window follows. B43.
-                WebToolbarMenuItem(settings: model.webToolbar)
-                Button("Stop Loading") { model.sidebar.reloadOrStop() }
-                    .disabled(model.sidebar.reloadMode != .stop)
-                Button("Refresh the Page") { model.sidebar.reloadOrStop() }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(model.selectedTabID == nil)
-                // [01 §View] observed after Refresh the Page; ⇧⌘R [02] observed.
-                Button("Force Refresh the Page") { model.forceReload() }
-                    .keyboardShortcut("r", modifiers: [.shift, .command])
-                    .disabled(model.selectedLiveTab == nil)
-                Button("Add Split View") { model.addSplitView() }
-                    .keyboardShortcut("=", modifiers: [.control, .shift])
-                // [01 §View] observed: the split items are available only while a split exists.
-                // ⌃⇧- is listed in [02 §split]; the other two have no recorded key.
-                Button("Close this Split Pane") { model.closeSplitPane() }
-                    .keyboardShortcut("-", modifiers: [.control, .shift])
-                    .disabled(!model.hasActiveSplit)
-                Button("Separate Page from Split View") { model.separatePageFromSplitView() }
-                    .disabled(!model.hasActiveSplit)
-                Button("Expand Current Split") { model.toggleExpandCurrentSplit() }
-                    .disabled(!model.hasActiveSplit)
-                // [01 §View] observed order after the split items; ⌘0 / ⌘+ / ⌘- [02] observed.
-                Button("Zoom to Actual Size") { model.resetZoom() }
-                    .keyboardShortcut("0", modifiers: .command)
-                    .disabled(!model.canResetZoom)
-                Button("Zoom In") { model.zoomIn() }
-                    .keyboardShortcut("+", modifiers: .command)
-                    .disabled(!model.canZoomIn)
-                Button("Zoom Out") { model.zoomOut() }
-                    .keyboardShortcut("-", modifiers: .command)
-                    .disabled(!model.canZoomOut)
-            }
-            .disabled(!hasWindow)
-            // [01 §View] observed: Developer ▸ after the zoom items (Cast comes with its surface). B25.
-            DeveloperMenu(model: model, hasWindow: hasWindow)
-        }
-
-        CommandMenu("Spaces") {
-            // An incognito window has no Spaces to edit or switch. inferred.
-            Group {
-                // [01 §Spaces] observed. [02] lists no shortcut for these, so none is invented.
-                Button("New Space…") { model.spaceFlow.beginCreate() }
-                // [01 §Spaces] observed: Edit Theme… precedes Rename Space. The bubble opens at the window's lower left. [06 §2]
-                Button("Edit Theme…") { if let id = model.selectedSpaceID { model.spaceFlow.beginEditTheme(spaceID: id) } }
-                    .disabled(model.selectedSpaceID == nil || model.spaceFlow.isCreating)
-                Button("Rename Space") { if let id = model.selectedSpaceID { model.spaceFlow.beginRename(spaceID: id) } }
-                    .disabled(model.selectedSpaceID == nil)
-                Divider()
-                Button("Next Space") { model.sidebar.stepSpace(by: 1) }
-                    .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
-                Button("Previous Space") { model.sidebar.stepSpace(by: -1) }
-                    .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
-                Divider()
-                ForEach(Array(model.sidebar.dockSpaces.prefix(9).enumerated()), id: \.element.id) { index, space in
-                    Button("Go to “\(space.name)”") { model.sidebar.goToSpace(number: index + 1) }
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
-                }
-            }
-            .disabled(!hasWindow || model.isIncognito)
-        }
-
-        CommandMenu("Tabs") {
-            Group {
-                Button("Archive Tab") { if let id = model.selectedTabID { model.sidebar.closeOrUnloadTab(id) } }
-                    .keyboardShortcut("w", modifiers: .command)
-                    .disabled(model.selectedTabID == nil)
-                Button("Pin/Unpin Tab") { if let id = model.selectedTabID { model.sidebar.togglePin(id) } }
-                    .keyboardShortcut("d", modifiers: .command)
-                    .disabled(model.selectedTabID == nil)
-                Button("New Folder…") { model.sidebar.requestNewFolder() }
-                Divider()
-                Button("Next Tab") { model.sidebar.stepTab(by: 1) }
-                    .keyboardShortcut(.downArrow, modifiers: [.option, .command])
-                Button("Previous Tab") { model.sidebar.stepTab(by: -1) }
-                    .keyboardShortcut(.upArrow, modifiers: [.option, .command])
-                Divider()
-                ForEach(1...9, id: \.self) { number in
-                    Button(number == 9 ? "Go to Last Sidebar Item" : "Go to Sidebar Item \(number)") {
-                        model.sidebar.goToSidebarItem(number: number)
-                    }
-                    .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
-                }
-                Divider()
-                Button("Clear Today") { model.sidebar.clearToday() }
-                    .keyboardShortcut("k", modifiers: [.shift, .command])
-                Button("Collapse All Folders") { model.sidebar.setAllFoldersExpanded(false) }
-                Button("Expand All Folders") { model.sidebar.setAllFoldersExpanded(true) }
-            }
-            .disabled(!hasWindow)
-        }
-
-        CommandGroup(before: .toolbar) {
-            Group {
-                Button("Back") { model.sidebar.goBack() }
-                    .keyboardShortcut("[", modifiers: .command)
-                    .disabled(!model.sidebar.canGoBack)
-                Button("Forward") { model.sidebar.goForward() }
-                    .keyboardShortcut("]", modifiers: .command)
-                    .disabled(!model.sidebar.canGoForward)
-            }
-            .disabled(!hasWindow)
-        }
+        SpacesAndTabsCommands(model: model, hasWindow: hasWindow)
     }
+}
 
-    /// Opens a browser window from the menu, on the key window's Space (inferred).
-    private func openBrowserWindow(_ kind: BrowserWindowRequest.Kind) {
-        // Keys typed before the new window is key wait for it (B29: ⌘N then ⌘T).
-        NewWindowTypeAhead.shared.begin(.browserWindow)
-        openWindow(id: BrowserWindowScene.id, value: model.issueMenuWindowRequest(kind, fromWindow: hasWindow))
+/// Spaces ▸ and Tabs ▸ ([01 §Spaces], [01 §Tabs] observed), then the hidden menu with the [02]
+/// shortcuts that no [01] menu lists (`MenuBarAdjuster` hides it). Apart from `ShellCommands`
+/// because a `Commands` body takes at most ten groups.
+struct SpacesAndTabsCommands: Commands {
+    @ObservedObject var model: ShellModel
+    let hasWindow: Bool
+
+    var body: some Commands {
+        CommandMenu("Spaces") {
+            SpacesMenuItems(model: model, hasWindow: hasWindow)
+        }
+        CommandMenu("Tabs") {
+            TabsMenuItems(model: model, hasWindow: hasWindow)
+        }
+        CommandMenu(MenuBarCatalog.keyOnlyMenuTitle) {
+            KeyOnlyMenuItems(model: model, hasWindow: hasWindow)
+        }
     }
 }
 

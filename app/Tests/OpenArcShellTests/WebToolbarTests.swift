@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import AppKit
 import OpenArcModel
 import OpenArcEngine
 import OpenArcDesign
@@ -462,6 +464,81 @@ final class WebToolbarTests: XCTestCase {
         await model.sidebar.settleEngineWork()
         XCTAssertFalse(model.hasActiveSplit)
         XCTAssertEqual(model.selectedTabID, right)
+        model.stop()
+    }
+
+    // MARK: Right-click menus (06 §28)
+
+    private func menuItems<Content: View>(_ content: Content) throws -> [NSMenuItem] {
+        guard #available(macOS 15, *) else { throw XCTSkip("NSHostingMenu needs macOS 15") }
+        let menu = NSHostingMenu(rootView: content)
+        menu.update()
+        return menu.items
+    }
+
+    private func titles(_ items: [NSMenuItem]) -> [String] {
+        items.filter { !$0.isHidden }.map { $0.isSeparatorItem ? "—" : $0.title }
+    }
+
+    /// 06 §28 observed: Copy URL · Share ▸ · Capture… · Capture Full Page ‖ Manage Extensions… ‖
+    /// Show Full URL · Hide Toolbar (Disable Shared Quotes is out of v1). No icons, no key hints.
+    func testToolbarContextMenuItems() async throws {
+        let model = makeModel()
+        model.toggleWebToolbar()
+        let id = try await selectExample(model)
+        let items = try menuItems(WebToolbarContextMenu(model: model, tabID: id, settings: model.webToolbar))
+        XCTAssertEqual(titles(items), ["Copy URL", "Share", "Capture…", "Capture Full Page", "—",
+                                       "Manage Extensions…", "—", "Show Full URL", "Hide Toolbar"])
+        // Share is the system share item, which keeps the system icon (B62 report).
+        for item in items where !item.isSeparatorItem && item.title != "Share" {
+            XCTAssertNil(item.image, "\(item.title): no icon (06 §28)")
+            XCTAssertEqual(item.keyEquivalent, "", "\(item.title): no key hint (06 §28)")
+        }
+        model.stop()
+    }
+
+    /// 06 §28: the menu's actions — Copy URL copies the bar's URL, Show Full URL toggles the
+    /// full-URL display (title "Hide Full URL" while on, inferred), Hide Toolbar turns it off,
+    /// Manage Extensions… opens the extensions page.
+    func testToolbarContextMenuActions() async throws {
+        let model = makeModel()
+        let pasteboard = RecordingPasteboardWriter()
+        model.siteControls.pasteboard = pasteboard
+        model.toggleWebToolbar()
+        let id = try await selectExample(model)
+
+        let copy = try XCTUnwrap(menuItems(WebToolbarContextMenu(model: model, tabID: id, settings: model.webToolbar)).first)
+        XCTAssertEqual(copy.title, "Copy URL")
+        model.webToolbarCopyLink(id)
+        XCTAssertEqual(pasteboard.written, [URL(string: "https://example.com")!])
+
+        XCTAssertFalse(model.webToolbar.showsFullURL)
+        XCTAssertEqual(model.webToolbar.fullURLMenuTitle, "Show Full URL")
+        model.webToolbar.showsFullURL.toggle()
+        XCTAssertTrue(model.webToolbar.showsFullURL, "the toolbar now shows the full URL (06 §17.2)")
+        XCTAssertEqual(model.webToolbar.fullURLMenuTitle, "Hide Full URL")
+        let fullURLTitles = try titles(menuItems(WebToolbarContextMenu(model: model, tabID: id, settings: model.webToolbar)))
+        XCTAssertTrue(fullURLTitles.contains("Hide Full URL"))
+
+        let tabsBefore = model.workspace.today(spaceID: try XCTUnwrap(model.selectedSpaceID)).count
+        model.openManageExtensions()
+        XCTAssertEqual(model.workspace.today(spaceID: try XCTUnwrap(model.selectedSpaceID)).count, tabsBefore + 1)
+
+        model.webToolbar.isShown = false
+        XCTAssertFalse(model.isWebToolbarShown, "Hide Toolbar = View ▸ Show Toolbar off (06 §28)")
+        model.stop()
+    }
+
+    /// 06 §28 observed: right-click on the sidebar top (URL box, traffic-light row) opens the
+    /// current Space's menu, the same items as the Space name's "⋯".
+    func testSidebarTopContextMenuIsTheSpaceMenu() throws {
+        let model = makeModel()
+        let items = try menuItems(SidebarSpaceMenu(viewModel: model.sidebar))
+        XCTAssertEqual(titles(items), ["Change Space Icon…", "Rename Space…", "Edit Theme Color…", "Set Profile", "—",
+                                       "New Folder", "Live Folders", "—", "Share Space…",
+                                       "Export “\(try XCTUnwrap(model.selectedSpace?.name))” into Folder", "—",
+                                       "Manage Spaces…", "—", "Delete Space"])
+        XCTAssertTrue(items.allSatisfy { $0.isSeparatorItem || $0.image == nil }, "no icons (06 §28)")
         model.stop()
     }
 }
