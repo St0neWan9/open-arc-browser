@@ -141,37 +141,104 @@ struct SpacePageOffset: ViewModifier {
 
 // MARK: - Theme bubble
 
-/// The theme bubble grows from its anchor with alpha 0 → 1 on one spring. [07 §11] observed:
-/// spring 0.31 s / 0.81 from ≈ 0 size at the anchor. Applied to the bubble's content; the
-/// container is still the system popover (plan B42), whose own close fade stays the system's
-/// until a custom panel can run `Motion.themeBubbleClose`.
-struct ThemeBubbleMotion: ViewModifier {
-    /// Point the bubble grows from: the corner or edge next to its anchor.
-    let anchor: UnitPoint
-    @State private var isShown = false
-
-    /// Scale the bubble starts from. [07 §11] observed ≈ 0 (the window grows from ≈ 0 × 0); a
-    /// small non-zero value keeps the layout valid.
-    static let initialScale: CGFloat = 0.01
-
-    func body(content: Content) -> some View {
-        content
-            .scaleEffect(isShown ? 1 : Self.initialScale, anchor: anchor)
-            .opacity(isShown ? 1 : 0)
-            .onAppear { withAnimation(ShellMotion.themeBubbleOpen) { isShown = true } }
-    }
-}
-
 extension ShellMotion {
     /// Theme bubble open. `Motion.themeBubbleOpen`.
     static var themeBubbleOpen: Animation? { Motion.themeBubbleOpen.curve.swiftUI }
-    /// Theme bubble close. `Motion.themeBubbleClose` (needs a custom panel, see `ThemeBubbleMotion`).
+    /// Theme bubble close. `Motion.themeBubbleClose`.
     static var themeBubbleClose: Animation? { Motion.themeBubbleClose.curve.swiftUI }
 }
 
-extension View {
-    /// Grows the view from `anchor` like Arc's theme bubble. [07 §11] observed.
-    func themeBubbleMotion(anchor: UnitPoint) -> some View {
-        modifier(ThemeBubbleMotion(anchor: anchor))
+/// Open / close motion of a floating bubble panel, run on the panel's root layer. [07 §11]
+/// observed (window-list sampler): the theme bubble grows from ≈ 0 × 0 at its anchor to full size
+/// with alpha 0 → 1 on one spring (0.31 s / 0.81), and shrinks back with alpha 1 → 0 on a slightly
+/// slower, more damped one (0.35 s / 0.85). A layer animation, so the panel keeps its final frame
+/// and the SwiftUI content lays out once.
+enum FloatingBubbleMotion {
+    enum Phase: Sendable { case open, close }
+
+    static func token(_ phase: Phase) -> MotionToken {
+        phase == .open ? Motion.themeBubbleOpen : Motion.themeBubbleClose
+    }
+
+    /// Scale the bubble grows from and shrinks to. [07 §11] observed ≈ 0 (the window grows from
+    /// ≈ 0 × 0, closes at ≈ 1 × 1); a small non-zero value keeps the transform invertible.
+    static let collapsedScale: CGFloat = 0.01
+
+    /// Animation keys on the layer.
+    static let scaleKey = "openarc.bubble.scale"
+    static let opacityKey = "openarc.bubble.opacity"
+
+    /// Point the bubble grows from, in the panel's root view (`size` = the panel, arrow included;
+    /// bottom-left origin like an unflipped AppKit view): the arrow tip, which touches the anchor;
+    /// without an arrow (Edit Theme… from a menu) the bottom-left corner. [07 §11] observed
+    /// "anchored at the bottom left, growing up and right" for Edit Theme…; the arrow tip for
+    /// attached bubbles is inferred.
+    static func growthOrigin(arrow: FloatingBubbleArrow?, size: CGSize) -> CGPoint {
+        guard let arrow else { return .zero }
+        switch arrow.edge {
+        case .leading: return CGPoint(x: 0, y: size.height - arrow.position)
+        case .top: return CGPoint(x: arrow.position, y: size.height)
+        }
+    }
+
+    /// A scale by `scale` that keeps `point` (in the layer's bounds) in place, for a layer whose
+    /// transform applies about `anchorPoint`.
+    static func transform(scale: CGFloat, about point: CGPoint, bounds: CGRect, anchorPoint: CGPoint) -> CATransform3D {
+        let pivot = CGPoint(x: bounds.minX + anchorPoint.x * bounds.width, y: bounds.minY + anchorPoint.y * bounds.height)
+        let dx = point.x - pivot.x, dy = point.y - pivot.y
+        return CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-dx, -dy, 0), CATransform3DMakeScale(scale, scale, 1)),
+                                   CATransform3DMakeTranslation(dx, dy, 0))
+    }
+
+    /// A Core Animation spring with the token's stiffness and damping (SwiftUI's definition, unit
+    /// mass), running until it settles.
+    static func spring(_ keyPath: String, from: Any, to: Any, phase: Phase) -> CASpringAnimation {
+        let animation = CASpringAnimation(keyPath: keyPath)
+        let constants = token(phase).curve.springConstants ?? (stiffness: 400, damping: 40)
+        animation.mass = 1
+        animation.stiffness = constants.stiffness
+        animation.damping = constants.damping
+        animation.fromValue = from
+        animation.toValue = to
+        animation.duration = animation.settlingDuration
+        if phase == .close {
+            // Hold the collapsed state until the panel is ordered out.
+            animation.fillMode = .forwards
+            animation.isRemovedOnCompletion = false
+        }
+        return animation
+    }
+
+    /// Runs `phase` on `layer`, growing from / shrinking to `origin`. `completion` runs once the
+    /// spring has settled (also right away when the user asked to reduce motion).
+    @MainActor
+    static func run(_ phase: Phase, on layer: CALayer, origin: CGPoint, reduceMotion: Bool,
+                    completion: (@MainActor () -> Void)? = nil) {
+        cancel(on: layer)
+        guard !reduceMotion else {
+            completion?()
+            return
+        }
+        let collapsed = NSValue(caTransform3D: transform(scale: collapsedScale, about: origin, bounds: layer.bounds,
+                                                         anchorPoint: layer.anchorPoint))
+        let identity = NSValue(caTransform3D: CATransform3DIdentity)
+        let scale = phase == .open ? spring("transform", from: collapsed, to: identity, phase: phase)
+            : spring("transform", from: identity, to: collapsed, phase: phase)
+        let fade = phase == .open ? spring("opacity", from: 0, to: 1, phase: phase)
+            : spring("opacity", from: 1, to: 0, phase: phase)
+        CATransaction.begin()
+        if let completion {
+            CATransaction.setCompletionBlock { MainActor.assumeIsolated { completion() } }
+        }
+        layer.add(scale, forKey: scaleKey)
+        layer.add(fade, forKey: opacityKey)
+        CATransaction.commit()
+    }
+
+    /// Stops a running open / close and leaves the layer at full size and alpha.
+    @MainActor
+    static func cancel(on layer: CALayer) {
+        layer.removeAnimation(forKey: scaleKey)
+        layer.removeAnimation(forKey: opacityKey)
     }
 }

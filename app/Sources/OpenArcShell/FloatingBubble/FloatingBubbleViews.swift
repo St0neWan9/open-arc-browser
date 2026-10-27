@@ -74,6 +74,9 @@ struct FloatingBubbleChrome<Content: View>: View {
     let isDark: Bool
     /// Translucent over a blur (live bubble) or opaque (snapshot tests, no blur behind).
     var tintOpacity: Double = Metrics.FloatingBubble.tintOpacity
+    /// Paint the theme bubble's gradient (glow → tint → gray, [07 §8.4] finding 3) instead of the
+    /// flat tint. The theme bubble and the Site Control Center use it ([07 §12]: same look).
+    var usesGradient = false
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -82,7 +85,12 @@ struct FloatingBubbleChrome<Content: View>: View {
         let bubble = FloatingBubbleShape.bubbleRect(in: CGRect(origin: .zero, size: outer), arrow: arrow)
         let b = Metrics.FloatingBubble.self
         ZStack(alignment: .topLeading) {
-            shape.fill(tint.swiftUI.opacity(tintOpacity))
+            if usesGradient {
+                shape.fill(ThemeDerivation.floatingPanelGradient(tint: tint, isDark: isDark, opacity: tintOpacity).swiftUI)
+                    .opacity(tintOpacity)
+            } else {
+                shape.fill(tint.swiftUI.opacity(tintOpacity))
+            }
             content()
                 .frame(width: size.width, height: size.height)
                 .offset(x: bubble.minX, y: bubble.minY)
@@ -102,6 +110,14 @@ struct FloatingBubbleChrome<Content: View>: View {
         case .leading: return CGSize(width: size.width + height, height: size.height)
         case .top: return CGSize(width: size.width, height: size.height + height)
         }
+    }
+}
+
+extension FloatingPanelGradient {
+    /// The SwiftUI form of the gradient (stops are opaque fills; the caller applies the opacity).
+    var swiftUI: LinearGradient {
+        LinearGradient(stops: stops.map { Gradient.Stop(color: $0.color.swiftUI, location: $0.location) },
+                       startPoint: UnitPoint(x: start.x, y: start.y), endPoint: UnitPoint(x: end.x, y: end.y))
     }
 }
 

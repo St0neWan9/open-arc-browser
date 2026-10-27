@@ -127,6 +127,10 @@ public struct ThemePalette: Hashable, Sendable {
     /// Panel outline: a 0.5 pt black ≈ 25 % hairline outside (light), a 0.5 pt ≈ #565656 line
     /// inside (dark). [07 §5] observed.
     public var commandBarOutline: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.25)
+    /// Second, outer 0.5 pt line of the dark panel: near black. [07 §5] observed (dark: a light
+    /// line inside plus a near-black line outside); black 85 % inferred. nil in light, where the
+    /// only line is the outer `commandBarOutline`.
+    public var commandBarOuterOutline: RGBAColor? = nil
     /// Unselected arrow box fill: black 4 % (light) [07 §5] observed; white 8 % (dark) inferred.
     /// The selected row's box is white with a theme-colored arrow. [07 §5] observed.
     public var commandBarArrowBoxFill: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.04)
@@ -302,9 +306,8 @@ public enum ThemeDerivation {
     /// (0.82) over Arc's neutral backdrop (#EEEEEE / #1E1E1E) matches the bubble body beside the
     /// color board on 9 presets × light / dark (E8 lossless): max 3.4 / 7.1 per channel. The former
     /// L 0.42 × 0.5 dark tint (an E11 JPEG reading near the top) missed the body by 39/255. Arc's
-    /// bubble is not flat: a fixed pink-violet glow at the top edge (≈ #FFE8FF light, #4B2046 dark,
-    /// the same for every theme) fades into the theme tint and then neutral gray toward the bottom
-    /// right; that gradient is observed but not implemented.
+    /// bubble is not flat: this tint is the middle stop of `floatingPanelGradient` (a fixed glow at
+    /// the top, neutral gray at the bottom right, [07 §8.4] finding 3).
     public static let floatingPanelLightness: Double = 0.982
     public static let floatingPanelChromaFactor: Double = 0.24
     public static let darkFloatingPanelLightness: Double = 0.318
@@ -519,6 +522,7 @@ public enum ThemeDerivation {
             palette.commandBarSecondaryText = withAlpha(white, 0.42)
             palette.commandBarSeparator = RGBAColor(hex: 0x363636)
             palette.commandBarOutline = RGBAColor(hex: 0x565656)
+            palette.commandBarOuterOutline = withAlpha(black, 0.85)
             palette.commandBarAccessoryFill = withAlpha(white, 0.08)
             palette.commandBarArrowBoxFill = withAlpha(white, 0.08)
             palette.floatingPanelInk = white

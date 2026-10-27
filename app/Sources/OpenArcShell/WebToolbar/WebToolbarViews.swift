@@ -278,7 +278,7 @@ extension View {
                 placement: .attached(.below),
                 style: FloatingBubbleStyle(width: SiteControlsLocalTokens.width, height: nil,
                                            cornerRadius: SiteControlsLocalTokens.cornerRadius,
-                                           tint: palette.floatingPanelBackground, isDark: palette.isDark),
+                                           tint: palette.floatingPanelBackground, isDark: palette.isDark, usesGradient: true),
                 content: AnyView(SiteControlsView(model: model).environment(\.colorScheme, palette.isDark ? .dark : .light)),
                 onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
             )

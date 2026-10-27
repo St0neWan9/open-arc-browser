@@ -53,7 +53,7 @@ struct SiteControlsURLBoxAccessories: View {
                             placement: .attached(.below),
                             style: FloatingBubbleStyle(width: SiteControlsLocalTokens.width, height: nil,
                                                        cornerRadius: SiteControlsLocalTokens.cornerRadius,
-                                                       tint: chrome.floatingPanelBackground, isDark: chrome.isDark),
+                                                       tint: chrome.floatingPanelBackground, isDark: chrome.isDark, usesGradient: true),
                             content: AnyView(SiteControlsView(model: model).environment(\.colorScheme, chrome.isDark ? .dark : .light)),
                             onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
                         )

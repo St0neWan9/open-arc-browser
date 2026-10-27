@@ -22,6 +22,8 @@ struct FloatingBubbleStyle {
     var isDark: Bool
     /// The bubble takes the keyboard (an extension popup's page, C14). Other bubbles never do.
     var becomesKey = false
+    /// The theme bubble's gradient instead of a flat tint (`FloatingBubbleChrome.usesGradient`).
+    var usesGradient = false
 }
 
 /// What the anchor asks for while the bubble is up.
@@ -72,7 +74,8 @@ struct FloatingBubbleAnchor: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: AnchorView, coordinator: FloatingBubbleController) {
         coordinator.request = nil
-        coordinator.hide()
+        // The anchor is going away (its view, maybe its window): no close motion.
+        coordinator.hide(animated: false)
     }
 
     final class AnchorView: NSView {
@@ -97,10 +100,19 @@ final class FloatingBubbleController: NSObject {
     private var monitors: [Any] = []
     private var observers: [NSObjectProtocol] = []
     private var isScheduled = false
+    /// Arrow of the bubble on screen, kept for the close motion after `appliedFrame` is cleared.
+    private var shownArrow: FloatingBubbleArrow?
     /// Pointer height captured when an Edit Theme bubble opens; it stays put afterwards.
     private var editThemePointerY: CGFloat?
     /// Last frame applied, in the parent's content coordinates.
     private(set) var appliedFrame: FloatingBubbleFrame?
+    /// The close spring is running; the panel is ordered out when it settles.
+    private(set) var isClosing = false
+    /// Counts close motions, so the completion of one that was cancelled (the bubble reopened)
+    /// cannot order out a later one.
+    private var closeGeneration = 0
+    /// Run the open / close springs ([07 §11]). Off in tests that need the panel at rest at once.
+    var animates = true
 
     func schedule() {
         guard !isScheduled else { return }
@@ -113,24 +125,51 @@ final class FloatingBubbleController: NSObject {
         }
     }
 
-    /// Hides the bubble without reporting a dismissal (the owner already closed it).
-    func hide() {
+    /// Hides the bubble without reporting a dismissal (the owner already closed it). It shrinks
+    /// back to its anchor and fades on `Motion.themeBubbleClose` first ([07 §11] observed), unless
+    /// `animated` is false (its window is closing).
+    func hide(animated: Bool = true) {
         removeMonitors()
-        if let panel {
-            let parent = panel.parent
-            let wasKey = panel.isKeyWindow
-            parent?.removeChildWindow(panel)
-            panel.orderOut(nil)
-            // A bubble that had the keyboard hands it back to its window.
-            if wasKey { parent?.makeKey() }
-        }
         editThemePointerY = nil
         appliedFrame = nil
+        guard let panel, panel.isVisible else {
+            isClosing = false
+            return
+        }
+        let wasKey = panel.isKeyWindow
+        // A bubble that had the keyboard hands it back to its window at once.
+        if wasKey { panel.parent?.makeKey() }
+        guard animated, animates, let layer = panel.contentView?.layer else {
+            orderOut(panel)
+            return
+        }
+        guard !isClosing else { return }
+        isClosing = true
+        // Clicks go through a closing bubble to what is behind it.
+        panel.ignoresMouseEvents = true
+        closeGeneration += 1
+        let generation = closeGeneration
+        let origin = FloatingBubbleMotion.growthOrigin(arrow: shownArrow, size: panel.frame.size)
+        FloatingBubbleMotion.run(.close, on: layer, origin: origin, reduceMotion: Self.reduceMotion) { [weak self, weak panel] in
+            guard let self, let panel, self.isClosing, self.closeGeneration == generation else { return }
+            self.orderOut(panel)
+        }
     }
+
+    /// Takes the panel off screen and resets its layer for the next open.
+    private func orderOut(_ panel: FloatingBubblePanel) {
+        isClosing = false
+        panel.ignoresMouseEvents = false
+        if let layer = panel.contentView?.layer { FloatingBubbleMotion.cancel(on: layer) }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
+    }
+
+    private static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     private func dismiss(_ reason: FloatingBubbleDismissReason) {
         let onDismiss = request?.onDismiss
-        hide()
+        hide(animated: reason != .windowClosed)
         onDismiss?(reason)
     }
 
@@ -162,9 +201,15 @@ final class FloatingBubbleController: NSObject {
         let frame = FloatingBubbleLayout.frame(for: placement, size: size, container: container, cornerRadius: style.cornerRadius)
         let outer = frame.outerFrame
         let chrome = FloatingBubbleChrome(size: size, cornerRadius: style.cornerRadius, arrow: frame.arrow,
-                                          tint: style.tint, isDark: style.isDark) { request.content }
+                                          tint: style.tint, isDark: style.isDark, usesGradient: style.usesGradient) { request.content }
 
         let panel = self.panel ?? makePanel()
+        // Shown again while closing: stop the close and keep the bubble up.
+        if isClosing, let layer = panel.contentView?.layer {
+            isClosing = false
+            panel.ignoresMouseEvents = false
+            FloatingBubbleMotion.cancel(on: layer)
+        }
         host?.rootView = AnyView(chrome)
         panel.appearance = NSAppearance(named: style.isDark ? .darkAqua : .aqua)
         let inWindow = CGRect(x: containerInWindow.minX + outer.minX, y: containerInWindow.maxY - outer.maxY,
@@ -175,6 +220,9 @@ final class FloatingBubbleController: NSObject {
             effect?.maskImage = Self.maskImage(size: outer.size, cornerRadius: style.cornerRadius, arrow: frame.arrow)
         }
         appliedFrame = frame
+        shownArrow = frame.arrow
+        // Read before `addChildWindow`, which already orders the panel in over a visible parent.
+        let isOpening = !panel.isVisible
         if panel.parent !== window {
             panel.parent?.removeChildWindow(panel)
             window.addChildWindow(panel, ordered: .above)
@@ -189,6 +237,11 @@ final class FloatingBubbleController: NSObject {
                 panel.orderFront(nil)
             }
         }
+        // Grow from the anchor with alpha on one spring. [07 §11] observed.
+        if isOpening, animates, let layer = panel.contentView?.layer {
+            FloatingBubbleMotion.run(.open, on: layer, origin: FloatingBubbleMotion.growthOrigin(arrow: frame.arrow, size: outer.size),
+                                     reduceMotion: Self.reduceMotion)
+        }
         installMonitors()
     }
 
@@ -201,6 +254,8 @@ final class FloatingBubbleController: NSObject {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.autoresizingMask = [.width, .height]
+        // Layer-backed so the open / close springs can scale and fade it (`FloatingBubbleMotion`).
+        effect.wantsLayer = true
         let host = FloatingBubbleHostingView(rootView: AnyView(EmptyView()))
         host.autoresizingMask = [.width, .height]
         host.sizingOptions = []
