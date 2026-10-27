@@ -22,8 +22,8 @@
 //   `isFinished` turns YES; the shell removes its view.
 // - Dropping the last reference to an unanswered request answers it with its default (alert:
 //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
-//   file chooser: cancel, external protocol: block, unresponsive page: wait), so a page never
-//   hangs.
+//   file chooser: cancel, external protocol: block, unresponsive page: wait, client certificate:
+//   continue without one), so a page never hangs.
 // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
 //   right away.
 //
@@ -38,7 +38,10 @@
 // policy decided to ask.
 //
 // Added in F1 step 2: the unresponsive-page prompt (plan C22) from the tab's
-// `WebContentsDelegate::RendererUnresponsive`.
+// `WebContentsDelegate::RendererUnresponsive`; the client-certificate picker (plan C25) from
+// //chrome's `ShowSSLClientCertificateSelector` (an Open Arc hook), after Chrome's policy
+// (AutoSelectCertificateForUrls) found nothing to pick on its own; the WebAuthn dialog (plan C21,
+// OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook).
 
 #import <OpenArcCore/OACDefines.h>
 #import <OpenArcCore/OACTab.h>
@@ -226,10 +229,48 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 - (void)leavePage;
 @end
 
+// MARK: - Client certificate (plan C25)
+
+/// One client certificate (an identity in the keychain) the site may get.
+OAC_EXPORT NS_SWIFT_SENDABLE
+@interface OACClientCertificate : NSObject
+/// The subject's display name (common name, else organization…).
+@property (nonatomic, readonly, copy) NSString *subjectName;
+/// The issuer's display name.
+@property (nonatomic, readonly, copy) NSString *issuerName;
+/// The end of the validity period.
+@property (nonatomic, readonly, copy) NSDate *validUntil;
+/// The certificate (DER), for a certificate viewer.
+@property (nonatomic, readonly, copy) NSData *DERData;
+- (instancetype)init NS_UNAVAILABLE;
++ (instancetype)new NS_UNAVAILABLE;
+@end
+
+/// A server asked for a client certificate during the TLS handshake and Chromium's policy did not
+/// pick one itself. `certificates` are the keychain identities that fit the server's list of
+/// accepted issuers (never empty: with none, the engine continues without asking). The network
+/// stack remembers the answer for the host until the browsing session ends, as in Chrome.
+///
+/// Default answer (dropped or cancelled): continue without a certificate. The engine withdraws the
+/// request when the tab closes (the connection is then aborted), the network request went away,
+/// or another prompt for the same host was answered.
+OAC_EXPORT NS_SWIFT_UI_ACTOR
+@interface OACClientCertificateRequest : OACDialogRequest
+/// The server that asks, "host:port".
+@property (nonatomic, readonly, copy) NSString *hostPort;
+@property (nonatomic, readonly, copy) NSArray<OACClientCertificate *> *certificates;
+/// Sends `certificates[index]` (macOS may ask the user to allow access to its private key).
+/// An index out of range continues without a certificate.
+- (void)selectCertificateAtIndex:(NSInteger)index NS_SWIFT_NAME(selectCertificate(at:));
+/// Continues the handshake without a certificate.
+- (void)continueWithoutCertificate;
+@end
+
 // MARK: - Delegate
 
 @class OACPasswordSavePrompt;
 @class OACAutofillPopup;
+@class OACWebAuthnDialog;
 
 /// Implemented by the shell. Each method returns YES when the shell will show UI and answer the
 /// request later, NO to let the bridge use the default answer right away.
@@ -253,6 +294,15 @@ NS_SWIFT_UI_ACTOR
 /// The page stopped responding (plan C22).
 - (BOOL)tab:(OACTab *)tab pageBecameUnresponsive:(OACUnresponsivePageRequest *)request
     NS_SWIFT_NAME(tab(_:pageBecameUnresponsive:));
+/// A site asks for a client certificate (plan C25).
+- (BOOL)tab:(OACTab *)tab selectClientCertificate:(OACClientCertificateRequest *)request
+    NS_SWIFT_NAME(tab(_:selectClientCertificate:));
+/// The passkey / security-key dialog (plan C21, OACWebAuthn.h).
+- (BOOL)tab:(OACTab *)tab showWebAuthnDialog:(OACWebAuthnDialog *)dialog
+    NS_SWIFT_NAME(tab(_:showWebAuthnDialog:));
+/// The WebAuthn dialog moved to another step or its content changed.
+- (void)tab:(OACTab *)tab didUpdateWebAuthnDialog:(OACWebAuthnDialog *)dialog
+    NS_SWIFT_NAME(tab(_:didUpdateWebAuthnDialog:));
 
 /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
 - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;

@@ -84,6 +84,18 @@ struct TabDialogOverlay: View {
             case .filePanel:
                 FileChooserPresenter(center: center, request: request)
                     .id(request.id)
+            case .webAuthn:
+                if case .webAuthn(let dialog) = request {
+                    ZStack(alignment: .top) {
+                        Color.black.opacity(DialogLocalTokens.scrimOpacity)
+                            .contentShape(Rectangle())
+                        WebAuthnSheetView(center: center, dialog: dialog)
+                            .frame(width: DialogLocalTokens.sheetWidth)
+                            .padding(.top, DialogLocalTokens.topInset)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    .id(request.id)
+                }
             case .dropdown:
                 // Never queued (`DialogCenter.autofillPopups`).
                 EmptyView()
@@ -117,6 +129,7 @@ struct DialogCardView: View {
     let presentation: DialogPresentation
     @State private var values: [String] = []
     @State private var isChecked = false
+    @State private var selection = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -131,6 +144,9 @@ struct DialogCardView: View {
             }
             ForEach(Array(presentation.fields.enumerated()), id: \.offset) { index, field in
                 fieldView(field, index: index)
+            }
+            if !presentation.choices.isEmpty {
+                choiceList
             }
             if let checkbox = presentation.checkbox {
                 Toggle(checkbox, isOn: $isChecked)
@@ -161,6 +177,43 @@ struct DialogCardView: View {
         .accessibilityIdentifier("openarc.dialog")
     }
 
+    /// Single-choice rows (C25 certificates): a click selects, a double click selects and accepts.
+    private var choiceList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(presentation.choices.enumerated()), id: \.offset) { index, choice in
+                let chosen = index == selection
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(choice.title)
+                        .font(Typography.settingsBody.font.weight(.medium))
+                        .lineLimit(1)
+                    Text(choice.detail)
+                        .font(Typography.settingsBody.font)
+                        .foregroundStyle(chosen ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(chosen ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(chosen ? Color.accentColor : Color.clear))
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    selection = index
+                    let answer = DialogPresentation.answer(
+                        for: request, button: presentation.buttons.count - 1, fieldValues: values,
+                        checkbox: isChecked, selection: index
+                    )
+                    center.answer(request.id, with: answer)
+                }
+                .onTapGesture { selection = index }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.secondary.opacity(0.3)))
+    }
+
     @ViewBuilder
     private func fieldView(_ field: DialogPresentation.Field, index: Int) -> some View {
         let binding = Binding(
@@ -178,7 +231,9 @@ struct DialogCardView: View {
     @ViewBuilder
     private func button(_ title: String, index: Int) -> some View {
         let action = {
-            let answer = DialogPresentation.answer(for: request, button: index, fieldValues: values, checkbox: isChecked)
+            let answer = DialogPresentation.answer(
+                for: request, button: index, fieldValues: values, checkbox: isChecked, selection: selection
+            )
             center.answer(request.id, with: answer)
         }
         if index == presentation.buttons.count - 1 {

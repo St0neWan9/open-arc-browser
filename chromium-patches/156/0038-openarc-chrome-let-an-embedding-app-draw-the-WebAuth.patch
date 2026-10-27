@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 15:33:09 -0700
+Subject: [PATCH] openarc: chrome: let an embedding app draw the WebAuthn
+ dialog and name its passkey keychain group
+
+Plan C21. Two Mac-only hooks for an app that embeds Chrome's browser
+process and owns the UI (chrome::EmbedderOwnsUI()):
+
+- AuthenticatorRequestDialogViewController::SetEmbedderFactory(): Create()
+  returns the embedder's controller instead of Chrome's tab-modal Views
+  dialog, which needs a Browser window (without one the WebAuthn flow had
+  no UI and timed out). The controller observes the dialog model and drives
+  it with the model's events, as Chrome's sheets do.
+- ChromeWebAuthenticationDelegate::SetKeychainAccessGroupOverride(): profile
+  passkeys (the Touch ID authenticator) use the embedder's keychain access
+  group instead of the compile-time <team>.<Chrome bundle id>.webauthn,
+  which an app signed with another team and bundle id is not entitled to
+  (device/fido then reports the authenticator unavailable).
+
+Without either call nothing changes.
+---
+ ...or_request_dialog_view_controller_views.cc | 27 +++++++++++++++++++
+ ...enticator_request_dialog_view_controller.h | 17 ++++++++++++
+ .../chrome_web_authentication_delegate.cc     | 22 +++++++++++++--
+ .../chrome_web_authentication_delegate.h      |  7 +++++
+ 4 files changed, 71 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/ui/views/webauthn/authenticator_request_dialog_view_controller_views.cc b/chrome/browser/ui/views/webauthn/authenticator_request_dialog_view_controller_views.cc
+index d90e0f67c706..6501345d805f 100644
+--- a/chrome/browser/ui/views/webauthn/authenticator_request_dialog_view_controller_views.cc
++++ b/chrome/browser/ui/views/webauthn/authenticator_request_dialog_view_controller_views.cc
+@@ -8,6 +8,7 @@
+ #include <utility>
+ 
+ #include "base/scoped_observation.h"
++#include "build/build_config.h"
+ #include "chrome/browser/ui/views/extensions/security_dialog_tracker.h"
+ #include "chrome/browser/ui/views/webauthn/authenticator_request_dialog_view.h"
+ #include "chrome/browser/ui/views/webauthn/authenticator_request_sheet_view.h"
+@@ -17,11 +18,37 @@
+ #include "components/web_modal/web_contents_modal_dialog_manager.h"
+ #include "ui/views/widget/widget.h"
+ 
++#if BUILDFLAG(IS_MAC)
++namespace {
++// Open Arc: see AuthenticatorRequestDialogViewController::SetEmbedderFactory.
++AuthenticatorRequestDialogViewController::EmbedderFactory g_embedder_factory =
++    nullptr;
++}  // namespace
++
++// static
++void AuthenticatorRequestDialogViewController::SetEmbedderFactory(
++    EmbedderFactory factory) {
++  g_embedder_factory = factory;
++}
++
++// static
++AuthenticatorRequestDialogViewController::EmbedderFactory
++AuthenticatorRequestDialogViewController::GetEmbedderFactory() {
++  return g_embedder_factory;
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ // static
+ std::unique_ptr<AuthenticatorRequestDialogViewController>
+ AuthenticatorRequestDialogViewController::Create(
+     content::WebContents* web_contents,
+     AuthenticatorRequestDialogModel* model) {
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the embedding app draws the dialog.
++  if (g_embedder_factory) {
++    return g_embedder_factory(web_contents, model);
++  }
++#endif
+   // The authenticator request dialog will only be shown for common user-facing
+   // WebContents, which have a |manager|. Most other sources without managers,
+   // like service workers and extension background pages, do not allow WebAuthn
+diff --git a/chrome/browser/ui/webauthn/authenticator_request_dialog_view_controller.h b/chrome/browser/ui/webauthn/authenticator_request_dialog_view_controller.h
+index 90d3186451fa..eb9b9ea341dd 100644
+--- a/chrome/browser/ui/webauthn/authenticator_request_dialog_view_controller.h
++++ b/chrome/browser/ui/webauthn/authenticator_request_dialog_view_controller.h
+@@ -7,6 +7,8 @@
+ 
+ #include <memory>
+ 
++#include "build/build_config.h"
++
+ struct AuthenticatorRequestDialogModel;
+ 
+ namespace content {
+@@ -22,6 +24,21 @@ class AuthenticatorRequestDialogViewController {
+       AuthenticatorRequestDialogModel* model);
+ 
+   virtual ~AuthenticatorRequestDialogViewController() = default;
++
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that embeds Chrome's browser process and owns the UI
++  // (chrome::EmbedderOwnsUI()) draws the WebAuthn dialog itself. When set,
++  // Create() returns the factory's controller instead of Chrome's tab-modal
++  // Views dialog (which needs a Browser window). The controller observes
++  // `model` and drives it the way Chrome's sheets do. Without a factory
++  // nothing changes.
++  using EmbedderFactory =
++      std::unique_ptr<AuthenticatorRequestDialogViewController> (*)(
++          content::WebContents* web_contents,
++          AuthenticatorRequestDialogModel* model);
++  static void SetEmbedderFactory(EmbedderFactory factory);
++  static EmbedderFactory GetEmbedderFactory();
++#endif  // BUILDFLAG(IS_MAC)
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_WEBAUTHN_AUTHENTICATOR_REQUEST_DIALOG_VIEW_CONTROLLER_H_
+diff --git a/chrome/browser/webauthn/chrome_web_authentication_delegate.cc b/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
+index 6fc50b6960f3..3b682d2e33d9 100644
+--- a/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
++++ b/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
+@@ -22,6 +22,7 @@
+ #include "base/location.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/no_destructor.h"
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
+ #include "base/task/task_traits.h"
+@@ -387,12 +388,29 @@ void ChromeWebAuthenticationDelegate::UpdateUserPasskeys(
+ }
+ 
+ #if BUILDFLAG(IS_MAC)
++namespace {
++// Open Arc: see SetKeychainAccessGroupOverride().
++std::string& KeychainAccessGroupOverride() {
++  static base::NoDestructor<std::string> group;
++  return *group;
++}
++}  // namespace
++
++// static
++void ChromeWebAuthenticationDelegate::SetKeychainAccessGroupOverride(
++    std::string group) {
++  KeychainAccessGroupOverride() = std::move(group);
++}
++
+ // static
+ ChromeWebAuthenticationDelegate::TouchIdAuthenticatorConfig
+ ChromeWebAuthenticationDelegate::TouchIdAuthenticatorConfigForProfile(
+     Profile* profile) {
+-  constexpr char kKeychainAccessGroup[] =
++  constexpr char kDefaultKeychainAccessGroup[] =
+       MAC_TEAM_IDENTIFIER_STRING "." MAC_BUNDLE_IDENTIFIER_STRING ".webauthn";
++  const std::string keychain_access_group =
++      KeychainAccessGroupOverride().empty() ? kDefaultKeychainAccessGroup
++                                            : KeychainAccessGroupOverride();
+ 
+   std::string metadata_secret = profile->GetPrefs()->GetString(
+       webauthn::pref_names::kWebAuthnTouchIdMetadataSecretPrefName);
+@@ -405,7 +423,7 @@ ChromeWebAuthenticationDelegate::TouchIdAuthenticatorConfigForProfile(
+   }
+ 
+   return TouchIdAuthenticatorConfig{
+-      .keychain_access_group = kKeychainAccessGroup,
++      .keychain_access_group = keychain_access_group,
+       .metadata_secret = std::move(metadata_secret)};
+ }
+ 
+diff --git a/chrome/browser/webauthn/chrome_web_authentication_delegate.h b/chrome/browser/webauthn/chrome_web_authentication_delegate.h
+index 48be3abb7e4f..1ad86a54cb1c 100644
+--- a/chrome/browser/webauthn/chrome_web_authentication_delegate.h
++++ b/chrome/browser/webauthn/chrome_web_authentication_delegate.h
+@@ -30,6 +30,13 @@ class ChromeWebAuthenticationDelegate final
+   // platform authenticator for the given Profile.
+   static TouchIdAuthenticatorConfig TouchIdAuthenticatorConfigForProfile(
+       Profile* profile);
++
++  // Open Arc: an app that embeds Chrome's browser process is signed with its
++  // own team and bundle id, so the compile-time keychain access group
++  // (<team>.<Chrome's bundle id>.webauthn) is not one of its entitlements.
++  // When set (before the first WebAuthn request), profile passkeys use
++  // `group` instead. An empty string restores the default.
++  static void SetKeychainAccessGroupOverride(std::string group);
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+   ChromeWebAuthenticationDelegate();

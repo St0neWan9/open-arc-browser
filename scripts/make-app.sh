@@ -2,7 +2,7 @@
 # Builds "Open Arc.app" from the Swift package in app/ without an Xcode project.
 #
 # Usage (from anywhere):
-#   scripts/make-app.sh [--dev] [--version 0.1.0] [--build N] [--universal] [--scratch-path DIR]
+#   scripts/make-app.sh [--dev [--bundle-suffix NAME]] [--version 0.1.0] [--build N] [--universal] [--scratch-path DIR]
 #                       [--out-dir DIR]
 #                       [--sign-identity SHA1 --keychain PATH [--keychain-password-file FILE]
 #                        [--provisioning-profile FILE]]
@@ -14,6 +14,14 @@
 #                   types); this script rewrites the exported drag types to <id>.<name> and drops
 #                   the Sparkle feed, so the dev build never updates itself. URL and document
 #                   types stay: registering for http/https does not make it the default browser.
+#   --bundle-suffix development builds only (with --dev): a separate test identity, bundle id
+#                   org.openarc.browser.dev-NAME, name "Open Arc Dev NAME", output
+#                   build/Open Arc Dev NAME.app (NAME: lowercase letters, digits, hyphens). Lets an
+#                   agent or a script launch its own copy next to the installed "Open Arc Dev"
+#                   without sharing its data dir, defaults domain, helper ids or Dock identity.
+#                   A hyphen, not a dot: the app accepts <release id>.<one label> as its own id
+#                   (PersistenceDefaults.isOwnBundleIdentifier) and would otherwise fall back to
+#                   the release id. Default: no suffix (unchanged behavior).
 #   --version       CFBundleShortVersionString (default 0.1.0)
 #   --build         CFBundleVersion, the build number (default 1)
 #   --universal     build arm64 + x86_64 (default: arm64 only)
@@ -59,6 +67,12 @@
 #                    reach the running app and CKSyncEngine fetches remote changes within seconds.
 #                    Without it the script warns and the app still builds: remote changes then
 #                    arrive at launch, on app activation (rate-limited) and on Sync Now.
+#                    Passkeys (plan C21): when the profile's keychain-access-groups allows
+#                    <team>.<bundle id>.webauthn (directly or through a wildcard such as
+#                    <team>.*), the app is signed with that group, where the engine stores
+#                    passkeys created on this Mac. Without it (no profile, ad-hoc, a profile that
+#                    does not allow the group) the app still launches; WebAuthn then offers
+#                    security keys only.
 #
 # Steps: release build of the OpenArcApp product, assemble build/Open Arc.app
 # (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns and OpenArc.sdef,
@@ -85,6 +99,7 @@ version="0.1.0"
 build_number="1"
 universal=0
 dev=0
+bundle_suffix=""
 scratch_path="$package_dir/.build/scratch-make-app"
 out_dir="$repo_root/build"
 sign_identity=""
@@ -92,11 +107,13 @@ keychain=""
 keychain_password_file=""
 provisioning_profile=""
 aps_environment=""            # from the provisioning profile, when it allows push (plan B65)
+webauthn_keychain_group=""    # set when the provisioning profile allows it (plan C21)
 icloud_container="iCloud.org.openarc.browser"   # CloudKitSyncStore.Configuration default
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev) dev=1; shift ;;
+        --bundle-suffix) bundle_suffix="$2"; shift 2 ;;
         --version) version="$2"; shift 2 ;;
         --build) build_number="$2"; shift 2 ;;
         --universal) universal=1; shift ;;
@@ -111,6 +128,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -n "$bundle_suffix" ]]; then
+    [[ $dev -eq 1 ]] || { echo "--bundle-suffix needs --dev" >&2; exit 2; }
+    [[ "$bundle_suffix" =~ ^[a-z0-9-]+$ ]] \
+        || { echo "--bundle-suffix takes lowercase letters, digits and hyphens" >&2; exit 2; }
+fi
 if [[ -n "$sign_identity" ]]; then
     [[ "$sign_identity" =~ ^[0-9A-Fa-f]{40}$ ]] \
         || { echo "--sign-identity takes the identity's SHA-1 (40 hex digits), not its name" >&2; exit 2; }
@@ -137,6 +159,10 @@ release_bundle_id="org.openarc.browser"   # placeholder id (CLAUDE.md, Decision 
 if [[ $dev -eq 1 ]]; then
     bundle_id="$release_bundle_id.dev"     # PersistenceDefaults.developmentBundleIdentifier
     app_name="Open Arc Dev"
+    if [[ -n "$bundle_suffix" ]]; then
+        bundle_id="$bundle_id-$bundle_suffix"
+        app_name="$app_name $bundle_suffix"
+    fi
 else
     bundle_id="$release_bundle_id"
     app_name="Open Arc"        # display name (Decision Q5)
@@ -180,6 +206,22 @@ if [[ -n "$provisioning_profile" ]]; then
         echo "warning: provisioning profile has no com.apple.developer.aps-environment: no CloudKit pushes;" \
              "remote changes arrive at launch, on activation and on Sync Now (enable Push Notifications" \
              "on the App ID and regenerate the profile)" >&2
+    fi
+    # plan C21: the passkey keychain group, when one of the profile's keychain-access-groups
+    # patterns (exact or ending in *) covers it.
+    wanted_group="$team_id.$bundle_id.webauthn"
+    while IFS= read -r pattern; do
+        pattern="${pattern#"${pattern%%[![:space:]]*}"}"
+        [[ -z "$pattern" || "$pattern" == "Array {" || "$pattern" == "}" ]] && continue
+        # shellcheck disable=SC2053 # the profile's pattern is a glob on purpose
+        if [[ "$wanted_group" == $pattern ]]; then
+            webauthn_keychain_group="$wanted_group"
+            break
+        fi
+    done < <(profile_value :Entitlements:keychain-access-groups)
+    if [[ -z "$webauthn_keychain_group" ]]; then
+        echo "warning: provisioning profile does not allow keychain group $wanted_group:" \
+             "passkeys on this Mac are off (security keys still work)" >&2
     fi
     echo "provisioning profile: $(profile_value :Name) ($(profile_value :UUID)), expires $(plutil -extract ExpirationDate raw "$profile_plist")" >&2
     rm -f "$profile_plist"
@@ -411,6 +453,11 @@ if [[ -n "$provisioning_profile" ]]; then
     if [[ -n "$aps_environment" ]]; then
         pb "Add :com.apple.developer.aps-environment string $aps_environment"
     fi
+    # plan C21: passkeys stored on this Mac (OACWebAuthn.h).
+    if [[ -n "$webauthn_keychain_group" ]]; then
+        pb "Add :keychain-access-groups array"
+        pb "Add :keychain-access-groups:0 string $webauthn_keychain_group"
+    fi
 fi
 sign --entitlements "$app_entitlements" "$app"
 
@@ -459,6 +506,13 @@ if [[ -n "$sign_identity" ]]; then
             echo "push: aps-environment $aps_environment" >&2
         else
             echo "push: none (profile has no aps-environment)" >&2
+        fi
+        if [[ -n "$webauthn_keychain_group" ]]; then
+            grep -q "<string>$webauthn_keychain_group</string>" <<<"$signed_entitlements" \
+                || { echo "missing keychain group $webauthn_keychain_group in $app" >&2; exit 1; }
+            echo "passkeys: keychain group $webauthn_keychain_group" >&2
+        else
+            echo "passkeys: none on this Mac (security keys only)" >&2
         fi
         echo "iCloud: container $icloud_container (CloudKit, Production), profile embedded" >&2
     fi

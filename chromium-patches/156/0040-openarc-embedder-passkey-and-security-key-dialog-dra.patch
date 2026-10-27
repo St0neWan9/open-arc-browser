@@ -1,0 +1,1123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 15:57:02 -0700
+Subject: [PATCH] openarc: embedder: passkey and security-key dialog drawn by
+ the shell
+
+Plan C21. Chrome's WebAuthn dialog is a tab-modal Views sheet of a Browser
+window; without one, navigator.credentials.create()/get() showed nothing
+and timed out. With the //chrome hooks of the earlier patch:
+
+- The bridge's AuthenticatorRequestDialogViewController describes the
+  request flow's current step as an OACWebAuthnDialog (OACWebAuthn.h): the
+  method list (passkeys on this Mac, this Mac, security key), confirmation,
+  "touch your security key", PIN entry / setup / change with Chromium's
+  error and attempts, touch again, fingerprint enrollment, account choice,
+  passkey creation, the private-window notice and errors with "try again".
+  Each change comes as -tab:didUpdateWebAuthnDialog:. The shell's choices
+  become the model's events, as Chrome's sheets send them; cancel (the
+  default) ends the request with NotAllowedError. The model closing its
+  view (done, or macOS's Touch ID / password prompt took over) withdraws
+  the request.
+- Passkeys on this Mac use the keychain access group
+  <team id>.<bundle id>.webauthn of the running app's signature
+  (SecCodeCopySigningInformation) instead of Chrome's compile-time group.
+  An ad-hoc build has no team: passkeys on this Mac are then unavailable
+  (device/fido checks the keychain-access-groups entitlement) and security
+  keys still work.
+- Not offered: iCloud Keychain passkeys (Apple's restricted
+  com.apple.developer.web-browser.public-key-credential entitlement), phones
+  (hybrid: Bluetooth and the QR flow) and Google Password Manager; such a
+  step shows an "unsupported" error the user can back out of.
+---
+ openarc/BUILD.gn                              |   8 +
+ openarc/bridge/oac_application.mm             |  41 ++
+ openarc/bridge/oac_webauthn.mm                | 674 ++++++++++++++++++
+ openarc/bridge/oac_webauthn_internal.h        |  22 +
+ .../public/OpenArcCore/OACDialogDelegate.h    |  10 +-
+ .../bridge/public/OpenArcCore/OACWebAuthn.h   | 200 ++++++
+ .../bridge/public/OpenArcCore/OpenArcCore.h   |   1 +
+ 7 files changed, 955 insertions(+), 1 deletion(-)
+ create mode 100644 openarc/bridge/oac_webauthn.mm
+ create mode 100644 openarc/bridge/oac_webauthn_internal.h
+ create mode 100644 openarc/bridge/public/OpenArcCore/OACWebAuthn.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 32b2f42ccc99..7e23c59316ba 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -51,6 +51,7 @@ openarc_public_headers = [
+   "bridge/public/OpenArcCore/OACTab.h",
+   "bridge/public/OpenArcCore/OACTabDelegate.h",
+   "bridge/public/OpenArcCore/OACTranslation.h",
++  "bridge/public/OpenArcCore/OACWebAuthn.h",
+   "bridge/public/OpenArcCore/OpenArcCore.h",
+ ]
+ 
+@@ -272,6 +273,8 @@ source_set("bridge") {
+               "bridge/oac_translation.mm",
+               "bridge/oac_translation_internal.h",
+               "bridge/oac_values.mm",
++              "bridge/oac_webauthn.mm",
++              "bridge/oac_webauthn_internal.h",
+               "browser/openarc_page_top_color.h",
+               "browser/openarc_page_top_color.mm",
+             ]
+@@ -297,6 +300,10 @@ source_set("bridge") {
+     "//chrome/browser/external_protocol",
+     "//chrome/browser/media/webrtc",
+     "//chrome/browser/ssl",
++    "//chrome/browser/ui/webauthn",
++    "//chrome/browser/webauthn",
++    "//chrome/browser/webauthn:chrome_web_authentication_delegate",
++    "//device/fido",
+     "//chrome/browser/ui/login",
+     "//chrome/browser/ui/autofill",
+     "//chrome/browser/ui/passwords",
+@@ -338,6 +345,7 @@ source_set("bridge") {
+     "AppKit.framework",
+     "CoreGraphics.framework",
+     "Foundation.framework",
++    "Security.framework",
+     "UniformTypeIdentifiers.framework",
+   ]
+ }
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index aaf434dd43e8..5ec477bb1eb5 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -5,12 +5,14 @@
+ #import <OpenArcCore/OACApplication.h>
+ 
+ #import <AppKit/AppKit.h>
++#import <Security/Security.h>
+ 
+ #include <memory>
+ #include <string>
+ #include <vector>
+ 
+ #include "base/apple/foundation_util.h"
++#include "base/apple/scoped_cftyperef.h"
+ #include "base/check.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+@@ -50,12 +52,49 @@
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_client_certificate_internal.h"
++#import "openarc/bridge/oac_webauthn_internal.h"
+ #import "openarc/bridge/oac_autofill_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
+ 
+ namespace {
+ 
++// Plan C21: the keychain access group of passkeys stored on this Mac,
++// "<team id>.<app bundle id>.webauthn" for the running app's signature. Empty
++// for an ad-hoc signed app (no team): Chrome's default group then applies,
++// which no build of ours is entitled to, so only security keys are offered.
++// The group is usable only when the app is signed with it in
++// keychain-access-groups (a Developer ID build with a matching provisioning
++// profile, scripts/make-app.sh); device/fido checks that itself.
++std::string WebAuthnKeychainAccessGroup() {
++  NSString* bundle_id = NSBundle.mainBundle.bundleIdentifier;
++  SecCodeRef code = nullptr;
++  if (!bundle_id.length ||
++      SecCodeCopySelf(kSecCSDefaultFlags, &code) != errSecSuccess) {
++    return std::string();
++  }
++  base::apple::ScopedCFTypeRef<SecCodeRef> scoped_code(code);
++  SecStaticCodeRef static_code = nullptr;
++  if (SecCodeCopyStaticCode(code, kSecCSDefaultFlags, &static_code) !=
++      errSecSuccess) {
++    return std::string();
++  }
++  base::apple::ScopedCFTypeRef<SecStaticCodeRef> scoped_static(static_code);
++  CFDictionaryRef info = nullptr;
++  if (SecCodeCopySigningInformation(static_code, kSecCSSigningInformation,
++                                    &info) != errSecSuccess) {
++    return std::string();
++  }
++  base::apple::ScopedCFTypeRef<CFDictionaryRef> scoped_info(info);
++  CFStringRef team = base::apple::GetValueFromDictionary<CFStringRef>(
++      info, kSecCodeInfoTeamIdentifier);
++  if (!team || CFStringGetLength(team) == 0) {
++    return std::string();
++  }
++  return base::SysCFStringRefToUTF8(team) + "." +
++         base::SysNSStringToUTF8(bundle_id) + ".webauthn";
++}
++
+ // The browser process's content objects. They live from start to shutdown and
+ // are destroyed on the main thread at the end of shutdown.
+ struct EngineState {
+@@ -290,6 +329,8 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   openarc::InstallBridgeAutofillHost();
+   // Client-certificate picker (plan C25).
+   openarc::InstallClientCertificateSelector();
++  // WebAuthn dialog and the keychain group of passkeys on this Mac (C21).
++  openarc::InstallWebAuthnDialog(WebAuthnKeychainAccessGroup());
+   // Page translation (plan B47): Chrome's translate bubble steps go to the
+   // tab's translate helper; no Google API key gate.
+   openarc::InstallTranslateHooks();
+diff --git a/openarc/bridge/oac_webauthn.mm b/openarc/bridge/oac_webauthn.mm
+new file mode 100644
+index 000000000000..920479bca14a
+--- /dev/null
++++ b/openarc/bridge/oac_webauthn.mm
+@@ -0,0 +1,674 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The WebAuthn dialog drawn by the shell (plan C21, OACWebAuthn.h). //chrome's
++// request flow (ChromeAuthenticatorRequestDelegate and its dialog controller)
++// stays in charge; its model asks AuthenticatorRequestDialogViewController to
++// create a view when a step needs a dialog. An Open Arc hook returns the
++// bridge's controller here, which describes the model's current step as an
++// OACWebAuthnDialog for the tab's dialog delegate and forwards the user's
++// choices as model events, the way Chrome's sheets do.
++
++#import "openarc/bridge/oac_webauthn_internal.h"
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/ui/webauthn/authenticator_request_dialog_view_controller.h"
++#include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
++#include "chrome/browser/webauthn/chrome_web_authentication_delegate.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "device/fido/pin.h"
++#include "device/fido/public/fido_transport_protocol.h"
++#include "device/fido/public/fido_types.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_requests_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++
++using Step = AuthenticatorRequestDialogModel::Step;
++using Mechanism = AuthenticatorRequestDialogModel::Mechanism;
++
++// MARK: - Value classes
++
++@implementation OACWebAuthnMechanism {
++  OACWebAuthnMechanismKind _kind;
++  NSString* _title;
++  NSString* _subtitle;
++}
++
++- (instancetype)initWithKind:(OACWebAuthnMechanismKind)kind
++                       title:(NSString*)title
++                    subtitle:(NSString*)subtitle {
++  if ((self = [super init])) {
++    _kind = kind;
++    _title = [title copy];
++    _subtitle = [subtitle copy];
++  }
++  return self;
++}
++
++- (OACWebAuthnMechanismKind)kind {
++  return _kind;
++}
++- (NSString*)title {
++  return _title;
++}
++- (NSString*)subtitle {
++  return _subtitle;
++}
++
++@end
++
++@implementation OACWebAuthnAccount {
++  NSString* _name;
++  NSString* _displayName;
++}
++
++- (instancetype)initWithName:(NSString*)name displayName:(NSString*)displayName {
++  if ((self = [super init])) {
++    _name = [name copy];
++    _displayName = [displayName copy];
++  }
++  return self;
++}
++
++- (NSString*)name {
++  return _name;
++}
++- (NSString*)displayName {
++  return _displayName;
++}
++
++@end
++
++// MARK: - The dialog request
++
++// What the dialog asks the controller to do; runs on the UI thread.
++enum class WebAuthnAction {
++  kAccept,
++  kSelectMechanism,
++  kSelectAccount,
++  kProvidePIN,
++  kChooseAnotherMethod,
++  kCancel,
++};
++
++@interface OACWebAuthnDialog ()
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                    handler:(base::RepeatingCallback<
++                                void(WebAuthnAction, NSInteger, NSString*)>)
++                                handler;
++- (void)updateOperation:(OACWebAuthnOperation)operation
++          relyingPartyID:(NSString*)relyingPartyID
++                userName:(NSString*)userName
++                    step:(OACWebAuthnStep)step
++              mechanisms:(NSArray<OACWebAuthnMechanism*>*)mechanisms
++          priorityIndex:(NSInteger)priorityIndex
++                accounts:(NSArray<OACWebAuthnAccount*>*)accounts
++  canChooseAnotherMethod:(BOOL)canChooseAnotherMethod
++               errorKind:(OACWebAuthnErrorKind)errorKind
++                canRetry:(BOOL)canRetry
++                pinError:(OACWebAuthnPINError)pinError
++    pinAttemptsRemaining:(NSInteger)pinAttemptsRemaining
++        minimumPINLength:(NSInteger)minimumPINLength
++     bioSamplesRemaining:(NSInteger)bioSamplesRemaining
++         bioSamplesTotal:(NSInteger)bioSamplesTotal
++                  isBusy:(BOOL)isBusy;
++@end
++
++@implementation OACWebAuthnDialog {
++  OACWebAuthnOperation _operation;
++  NSString* _relyingPartyID;
++  NSString* _userName;
++  OACWebAuthnStep _step;
++  NSArray<OACWebAuthnMechanism*>* _mechanisms;
++  NSInteger _priorityMechanismIndex;
++  NSArray<OACWebAuthnAccount*>* _accounts;
++  BOOL _canChooseAnotherMethod;
++  OACWebAuthnErrorKind _errorKind;
++  BOOL _canRetry;
++  OACWebAuthnPINError _pinError;
++  NSInteger _pinAttemptsRemaining;
++  NSInteger _minimumPINLength;
++  NSInteger _bioSamplesRemaining;
++  NSInteger _bioSamplesTotal;
++  BOOL _isBusy;
++  base::RepeatingCallback<void(WebAuthnAction, NSInteger, NSString*)> _handler;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                    handler:(base::RepeatingCallback<
++                                void(WebAuthnAction, NSInteger, NSString*)>)
++                                handler {
++  if ((self = [super initWithTab:tab origin:origin isFromSubframe:NO])) {
++    _handler = std::move(handler);
++    _relyingPartyID = @"";
++    _userName = @"";
++    _mechanisms = @[];
++    _accounts = @[];
++    _priorityMechanismIndex = -1;
++    _pinAttemptsRemaining = -1;
++    _bioSamplesRemaining = -1;
++    _bioSamplesTotal = -1;
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (void)updateOperation:(OACWebAuthnOperation)operation
++          relyingPartyID:(NSString*)relyingPartyID
++                userName:(NSString*)userName
++                    step:(OACWebAuthnStep)step
++              mechanisms:(NSArray<OACWebAuthnMechanism*>*)mechanisms
++          priorityIndex:(NSInteger)priorityIndex
++                accounts:(NSArray<OACWebAuthnAccount*>*)accounts
++  canChooseAnotherMethod:(BOOL)canChooseAnotherMethod
++               errorKind:(OACWebAuthnErrorKind)errorKind
++                canRetry:(BOOL)canRetry
++                pinError:(OACWebAuthnPINError)pinError
++    pinAttemptsRemaining:(NSInteger)pinAttemptsRemaining
++        minimumPINLength:(NSInteger)minimumPINLength
++     bioSamplesRemaining:(NSInteger)bioSamplesRemaining
++         bioSamplesTotal:(NSInteger)bioSamplesTotal
++                  isBusy:(BOOL)isBusy {
++  _operation = operation;
++  _relyingPartyID = [relyingPartyID copy];
++  _userName = [userName copy];
++  _step = step;
++  _mechanisms = [mechanisms copy];
++  _priorityMechanismIndex = priorityIndex;
++  _accounts = [accounts copy];
++  _canChooseAnotherMethod = canChooseAnotherMethod;
++  _errorKind = errorKind;
++  _canRetry = canRetry;
++  _pinError = pinError;
++  _pinAttemptsRemaining = pinAttemptsRemaining;
++  _minimumPINLength = minimumPINLength;
++  _bioSamplesRemaining = bioSamplesRemaining;
++  _bioSamplesTotal = bioSamplesTotal;
++  _isBusy = isBusy;
++}
++
++- (OACWebAuthnOperation)operation {
++  return _operation;
++}
++- (NSString*)relyingPartyID {
++  return _relyingPartyID;
++}
++- (NSString*)userName {
++  return _userName;
++}
++- (OACWebAuthnStep)step {
++  return _step;
++}
++- (NSArray<OACWebAuthnMechanism*>*)mechanisms {
++  return _mechanisms;
++}
++- (NSInteger)priorityMechanismIndex {
++  return _priorityMechanismIndex;
++}
++- (NSArray<OACWebAuthnAccount*>*)accounts {
++  return _accounts;
++}
++- (BOOL)canChooseAnotherMethod {
++  return _canChooseAnotherMethod;
++}
++- (OACWebAuthnErrorKind)errorKind {
++  return _errorKind;
++}
++- (BOOL)canRetry {
++  return _canRetry;
++}
++- (OACWebAuthnPINError)pinError {
++  return _pinError;
++}
++- (NSInteger)pinAttemptsRemaining {
++  return _pinAttemptsRemaining;
++}
++- (NSInteger)minimumPINLength {
++  return _minimumPINLength;
++}
++- (NSInteger)bioSamplesRemaining {
++  return _bioSamplesRemaining;
++}
++- (NSInteger)bioSamplesTotal {
++  return _bioSamplesTotal;
++}
++- (BOOL)isBusy {
++  return _isBusy;
++}
++
++- (void)send:(WebAuthnAction)action index:(NSInteger)index text:(NSString*)text {
++  if (self.isFinished || !_handler) {
++    return;
++  }
++  _handler.Run(action, index, text);
++}
++
++- (void)accept {
++  [self send:WebAuthnAction::kAccept index:-1 text:nil];
++}
++- (void)selectMechanismAtIndex:(NSInteger)index {
++  [self send:WebAuthnAction::kSelectMechanism index:index text:nil];
++}
++- (void)selectAccountAtIndex:(NSInteger)index {
++  [self send:WebAuthnAction::kSelectAccount index:index text:nil];
++}
++- (void)providePIN:(NSString*)PIN {
++  [self send:WebAuthnAction::kProvidePIN index:-1 text:PIN ?: @""];
++}
++- (void)chooseAnotherMethod {
++  [self send:WebAuthnAction::kChooseAnotherMethod index:-1 text:nil];
++}
++
++- (void)cancel {
++  if (![self markFinished]) {
++    return;
++  }
++  auto handler = std::move(_handler);
++  if (handler) {
++    handler.Run(WebAuthnAction::kCancel, -1, nil);
++  }
++}
++
++- (void)withdrawByEngine {
++  _handler.Reset();
++  [super withdrawByEngine];
++}
++
++@end
++
++// MARK: - The view controller
++
++namespace openarc {
++
++namespace {
++
++OACWebAuthnPINError PINErrorFor(device::pin::PINEntryError error) {
++  switch (error) {
++    case device::pin::PINEntryError::kNoError:
++      return OACWebAuthnPINErrorNone;
++    case device::pin::PINEntryError::kInternalUvLocked:
++      return OACWebAuthnPINErrorFingerprintLocked;
++    case device::pin::PINEntryError::kWrongPIN:
++      return OACWebAuthnPINErrorWrongPIN;
++    case device::pin::PINEntryError::kTooShort:
++      return OACWebAuthnPINErrorTooShort;
++    case device::pin::PINEntryError::kInvalidCharacters:
++      return OACWebAuthnPINErrorInvalidCharacters;
++    case device::pin::PINEntryError::kSameAsCurrentPIN:
++      return OACWebAuthnPINErrorSameAsCurrent;
++  }
++  return OACWebAuthnPINErrorNone;
++}
++
++// Our step and error for Chrome's step. nullopt: a step this embedder has no
++// view for (Google Password Manager, phones); it shows as an "unsupported"
++// error the user can back out of.
++struct StepDescription {
++  OACWebAuthnStep step;
++  OACWebAuthnErrorKind error = OACWebAuthnErrorKindNone;
++  // The error offers "Try again" (when the model allows it).
++  bool retry = false;
++};
++
++StepDescription DescribeStep(Step step) {
++  switch (step) {
++    case Step::kMechanismSelection:
++      return {OACWebAuthnStepChooseMethod};
++    case Step::kSelectPriorityMechanism:
++      return {OACWebAuthnStepConfirmMethod};
++    case Step::kUsbInsertAndActivate:
++      return {OACWebAuthnStepSecurityKey};
++    case Step::kClientPinEntry:
++      return {OACWebAuthnStepEnterPIN};
++    case Step::kClientPinSetup:
++      return {OACWebAuthnStepSetPIN};
++    case Step::kClientPinChange:
++      return {OACWebAuthnStepChangePIN};
++    case Step::kClientPinTapAgain:
++      return {OACWebAuthnStepTouchAgain};
++    case Step::kInlineBioEnrollment:
++      return {OACWebAuthnStepFingerprintEnrollment};
++    case Step::kRetryInternalUserVerification:
++      return {OACWebAuthnStepRetryVerification};
++    case Step::kResidentCredentialConfirmation:
++      return {OACWebAuthnStepConfirmSecurityKeyStorage};
++    case Step::kSelectAccount:
++    case Step::kPreSelectAccount:
++      return {OACWebAuthnStepChooseAccount};
++    case Step::kChromeProfileCreatePasskey:
++      return {OACWebAuthnStepCreatePasskey};
++    case Step::kOffTheRecordInterstitial:
++      return {OACWebAuthnStepPrivateWindowWarning};
++    case Step::kTimedOut:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindTimedOut};
++    case Step::kKeyNotRegistered:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindKeyNotRegistered,
++              true};
++    case Step::kKeyAlreadyRegistered:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindKeyAlreadyRegistered,
++              true};
++    case Step::kErrorNoPasskeys:
++    case Step::kErrorInternalUnrecognized:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindNoPasskeys,
++              step == Step::kErrorInternalUnrecognized};
++    case Step::kErrorNoAvailableTransports:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindNoMethods};
++    case Step::kClientPinErrorSoftBlock:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindPINTemporarilyLocked,
++              true};
++    case Step::kClientPinErrorHardBlock:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindPINLocked, true};
++    case Step::kClientPinErrorAuthenticatorRemoved:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindKeyRemoved, true};
++    case Step::kMissingCapability:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindMissingCapability,
++              true};
++    case Step::kStorageFull:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindStorageFull, true};
++    default:
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindUnsupported, true};
++  }
++}
++
++// Methods the shell can offer. Phones (hybrid), Apple's and Google's password
++// managers need entitlements, Bluetooth or a Google account this embedder does
++// not have, so they are left out.
++std::optional<OACWebAuthnMechanismKind> MechanismKindFor(
++    const Mechanism& mechanism) {
++  if (const auto* credential =
++          std::get_if<Mechanism::Credential>(&mechanism.type)) {
++    return credential->value().source == device::AuthenticatorType::kTouchID
++               ? std::optional(OACWebAuthnMechanismKindPasskeyOnThisMac)
++               : std::nullopt;
++  }
++  if (const auto* transport =
++          std::get_if<Mechanism::Transport>(&mechanism.type)) {
++    switch (transport->value()) {
++      case device::FidoTransportProtocol::kInternal:
++        return OACWebAuthnMechanismKindThisMac;
++      case device::FidoTransportProtocol::kUsbHumanInterfaceDevice:
++        return OACWebAuthnMechanismKindSecurityKey;
++      default:
++        return std::nullopt;
++    }
++  }
++  return std::nullopt;
++}
++
++class ShellWebAuthnDialogController
++    : public AuthenticatorRequestDialogViewController,
++      public AuthenticatorRequestDialogModel::Observer {
++ public:
++  ShellWebAuthnDialogController(content::WebContents* web_contents,
++                                AuthenticatorRequestDialogModel* model)
++      : model_(model), tab_(OACTabForWebContents(web_contents)) {
++    observation_.Observe(model_);
++    OACTab* tab = tab_;
++    base::WeakPtr<ShellWebAuthnDialogController> weak_this =
++        weak_factory_.GetWeakPtr();
++    dialog_ = [[OACWebAuthnDialog alloc]
++        initWithTab:tab
++             origin:OACOriginFromURLOrigin(web_contents->GetPrimaryMainFrame()
++                                                ->GetLastCommittedOrigin())
++            handler:base::BindRepeating(
++                        [](base::WeakPtr<ShellWebAuthnDialogController> self,
++                           WebAuthnAction action, NSInteger index,
++                           NSString* text) {
++                          // Answer from a fresh task: the model may destroy
++                          // this controller while it handles the event.
++                          base::SingleThreadTaskRunner::GetCurrentDefault()
++                              ->PostTask(
++                                  FROM_HERE,
++                                  base::BindOnce(
++                                      &ShellWebAuthnDialogController::Perform,
++                                      self, action, index,
++                                      base::SysNSStringToUTF16(text ?: @"")));
++                        },
++                        weak_this)];
++    Describe();
++    if (!tab || tab.isClosed) {
++      // No shell tab: cancel, as Chrome does for contents without a modal
++      // dialog host (the request would otherwise wait for its timeout).
++      [dialog_ cancel];
++      return;
++    }
++    OACWebAuthnDialog* dialog = dialog_;
++    OACPresentDialogRequest(
++        tab, dialog, @selector(tab:showWebAuthnDialog:),
++        ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++          return [delegate tab:owner showWebAuthnDialog:dialog];
++        });
++  }
++
++  ShellWebAuthnDialogController(const ShellWebAuthnDialogController&) = delete;
++  ShellWebAuthnDialogController& operator=(
++      const ShellWebAuthnDialogController&) = delete;
++
++  ~ShellWebAuthnDialogController() override {
++    // The model closes the dialog (request done, macOS took over, another
++    // UI style) by destroying its view controller.
++    [dialog_ withdrawByEngine];
++  }
++
++  // AuthenticatorRequestDialogModel::Observer:
++  void OnStepTransition() override { Update(); }
++  void OnSheetModelChanged() override { Update(); }
++  void OnButtonsStateChanged() override { Update(); }
++  void OnModelDestroyed(AuthenticatorRequestDialogModel* model) override {
++    observation_.Reset();
++    model_ = nullptr;
++  }
++
++ private:
++  void Update() {
++    if (!model_ || model_->should_dialog_be_closed()) {
++      return;  // The model resets this controller next.
++    }
++    Describe();
++    OACTab* tab = tab_;
++    OACWebAuthnDialog* dialog = dialog_;
++    OACPostToMainThread(^{
++      id<OACDialogDelegate> delegate = tab.dialogDelegate;
++      if (tab && !tab.isClosed && !dialog.isFinished &&
++          [delegate respondsToSelector:@selector(tab:didUpdateWebAuthnDialog:)]) {
++        [delegate tab:tab didUpdateWebAuthnDialog:dialog];
++      }
++    });
++  }
++
++  // Copies the model's current step into |dialog_|.
++  void Describe() {
++    if (!model_) {
++      return;
++    }
++    StepDescription description = DescribeStep(model_->step());
++    // Mechanisms the shell can offer, and their indices in the model.
++    NSMutableArray<OACWebAuthnMechanism*>* mechanisms = [NSMutableArray array];
++    mechanism_indices_.clear();
++    NSInteger priority = -1;
++    for (size_t i = 0; i < model_->mechanisms.size(); ++i) {
++      const Mechanism& mechanism = model_->mechanisms[i];
++      std::optional<OACWebAuthnMechanismKind> kind = MechanismKindFor(mechanism);
++      if (!kind) {
++        continue;
++      }
++      if (model_->priority_mechanism_index == i) {
++        priority = static_cast<NSInteger>(mechanism_indices_.size());
++      }
++      mechanism_indices_.push_back(i);
++      const bool is_passkey = *kind == OACWebAuthnMechanismKindPasskeyOnThisMac;
++      [mechanisms
++          addObject:[[OACWebAuthnMechanism alloc]
++                        initWithKind:*kind
++                               title:is_passkey
++                                         ? base::SysUTF16ToNSString(
++                                               mechanism.name)
++                                         : @""
++                            subtitle:is_passkey ? base::SysUTF16ToNSString(
++                                                      mechanism.display_name)
++                                                : @""]];
++    }
++    if (description.step == OACWebAuthnStepConfirmMethod && priority < 0) {
++      // The priority method is one we do not offer: show the list instead.
++      description = {OACWebAuthnStepChooseMethod};
++    }
++    NSMutableArray<OACWebAuthnAccount*>* accounts = [NSMutableArray array];
++    for (const auto& credential : model_->creds) {
++      [accounts addObject:[[OACWebAuthnAccount alloc]
++                              initWithName:base::SysUTF8ToNSString(
++                                               credential.user.name.value_or(
++                                                   ""))
++                               displayName:base::SysUTF8ToNSString(
++                                               credential.user.display_name
++                                                   .value_or(""))]];
++    }
++    NSInteger bio_total = model_->max_bio_samples.value_or(-1);
++    NSInteger bio_remaining = model_->bio_samples_remaining.value_or(-1);
++    [dialog_
++            updateOperation:model_->request_type ==
++                                    device::FidoRequestType::kMakeCredential
++                                ? OACWebAuthnOperationCreate
++                                : OACWebAuthnOperationSignIn
++             relyingPartyID:base::SysUTF8ToNSString(model_->relying_party_id)
++                   userName:base::SysUTF8ToNSString(
++                                model_->user_entity.name.value_or(""))
++                       step:description.step
++                 mechanisms:mechanisms
++              priorityIndex:priority
++                   accounts:accounts
++     canChooseAnotherMethod:mechanisms.count > 1 &&
++                            description.step != OACWebAuthnStepChooseMethod
++                  errorKind:description.error
++                   canRetry:description.retry && model_->offer_try_again_in_ui
++                   pinError:PINErrorFor(model_->pin_error)
++       pinAttemptsRemaining:model_->pin_attempts.value_or(-1)
++           minimumPINLength:model_->min_pin_length
++        bioSamplesRemaining:bio_remaining
++            bioSamplesTotal:bio_total
++                     isBusy:model_->ui_disabled_];
++  }
++
++  // The user's choice, as Chrome's sheets turn button presses into events.
++  void Perform(WebAuthnAction action, NSInteger index, std::u16string text) {
++    if (!model_) {
++      return;
++    }
++    const Step step = model_->step();
++    switch (action) {
++      case WebAuthnAction::kCancel:
++        model_->CancelAuthenticatorRequest();
++        return;
++      case WebAuthnAction::kChooseAnotherMethod:
++        model_->StartOver();
++        return;
++      case WebAuthnAction::kProvidePIN:
++        if (step == Step::kClientPinEntry || step == Step::kClientPinSetup ||
++            step == Step::kClientPinChange) {
++          model_->OnHavePIN(std::move(text));
++        }
++        return;
++      case WebAuthnAction::kSelectMechanism:
++        if (index >= 0 &&
++            static_cast<size_t>(index) < mechanism_indices_.size()) {
++          const size_t model_index = mechanism_indices_[index];
++          if (model_index < model_->mechanisms.size()) {
++            model_->mechanisms[model_index].callback.Run();
++          }
++        }
++        return;
++      case WebAuthnAction::kSelectAccount:
++        if (index < 0 || static_cast<size_t>(index) >= model_->creds.size()) {
++          return;
++        }
++        if (step == Step::kPreSelectAccount) {
++          model_->OnAccountPreselectedIndex(index);
++        } else if (step == Step::kSelectAccount) {
++          model_->OnAccountSelected(index);
++        }
++        return;
++      case WebAuthnAction::kAccept:
++        Accept(step);
++        return;
++    }
++  }
++
++  void Accept(Step step) {
++    switch (step) {
++      case Step::kSelectPriorityMechanism:
++        model_->OnUserConfirmedPriorityMechanism();
++        return;
++      case Step::kChromeProfileCreatePasskey:
++        model_->OnChromeProfileCreatePasskeyAccepted();
++        return;
++      case Step::kOffTheRecordInterstitial:
++        model_->OnOffTheRecordInterstitialAccepted();
++        return;
++      case Step::kResidentCredentialConfirmation:
++        model_->OnResidentCredentialConfirmed();
++        return;
++      case Step::kInlineBioEnrollment:
++        model_->OnBioEnrollmentDone();
++        return;
++      case Step::kSelectAccount:
++      case Step::kPreSelectAccount:
++        // A single account is chosen with the main button.
++        if (model_->creds.size() == 1) {
++          if (step == Step::kPreSelectAccount) {
++            model_->OnAccountPreselectedIndex(0);
++          } else {
++            model_->OnAccountSelected(0);
++          }
++        }
++        return;
++      default:
++        if (DescribeStep(step).retry && model_->offer_try_again_in_ui) {
++          model_->StartOver();
++        }
++        return;
++    }
++  }
++
++  raw_ptr<AuthenticatorRequestDialogModel> model_;  // Owns us.
++  __weak OACTab* tab_;
++  OACWebAuthnDialog* __strong dialog_ = nil;
++  // dialog_.mechanisms[i] is model_->mechanisms[mechanism_indices_[i]].
++  std::vector<size_t> mechanism_indices_;
++  base::ScopedObservation<AuthenticatorRequestDialogModel,
++                          AuthenticatorRequestDialogModel::Observer>
++      observation_{this};
++  base::WeakPtrFactory<ShellWebAuthnDialogController> weak_factory_{this};
++};
++
++std::unique_ptr<AuthenticatorRequestDialogViewController> CreateDialog(
++    content::WebContents* web_contents,
++    AuthenticatorRequestDialogModel* model) {
++  return std::make_unique<ShellWebAuthnDialogController>(web_contents, model);
++}
++
++}  // namespace
++
++void InstallWebAuthnDialog(const std::string& keychain_access_group) {
++  AuthenticatorRequestDialogViewController::SetEmbedderFactory(&CreateDialog);
++  ChromeWebAuthenticationDelegate::SetKeychainAccessGroupOverride(
++      keychain_access_group);
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/oac_webauthn_internal.h b/openarc/bridge/oac_webauthn_internal.h
+new file mode 100644
+index 000000000000..216c16bf7627
+--- /dev/null
++++ b/openarc/bridge/oac_webauthn_internal.h
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_WEBAUTHN_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_WEBAUTHN_INTERNAL_H_
++
++#import <OpenArcCore/OACWebAuthn.h>
++
++#include <string>
++
++namespace openarc {
++
++// Plan C21: registers the bridge's WebAuthn dialog with //chrome
++// (AuthenticatorRequestDialogViewController's embedder factory) and points
++// profile passkeys at |keychain_access_group| (<team>.<bundle id>.webauthn;
++// empty keeps Chrome's). Called once when the engine starts.
++void InstallWebAuthnDialog(const std::string& keychain_access_group);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BRIDGE_OAC_WEBAUTHN_INTERNAL_H_
+diff --git a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+index 120743531bda..e989f0eacc9e 100644
+--- a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+@@ -40,7 +40,8 @@
+ // Added in F1 step 2: the unresponsive-page prompt (plan C22) from the tab's
+ // `WebContentsDelegate::RendererUnresponsive`; the client-certificate picker (plan C25) from
+ // //chrome's `ShowSSLClientCertificateSelector` (an Open Arc hook), after Chrome's policy
+-// (AutoSelectCertificateForUrls) found nothing to pick on its own.
++// (AutoSelectCertificateForUrls) found nothing to pick on its own; the WebAuthn dialog (plan C21,
++// OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook).
+ 
+ #import <OpenArcCore/OACDefines.h>
+ #import <OpenArcCore/OACTab.h>
+@@ -269,6 +270,7 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ 
+ @class OACPasswordSavePrompt;
+ @class OACAutofillPopup;
++@class OACWebAuthnDialog;
+ 
+ /// Implemented by the shell. Each method returns YES when the shell will show UI and answer the
+ /// request later, NO to let the bridge use the default answer right away.
+@@ -295,6 +297,12 @@ NS_SWIFT_UI_ACTOR
+ /// A site asks for a client certificate (plan C25).
+ - (BOOL)tab:(OACTab *)tab selectClientCertificate:(OACClientCertificateRequest *)request
+     NS_SWIFT_NAME(tab(_:selectClientCertificate:));
++/// The passkey / security-key dialog (plan C21, OACWebAuthn.h).
++- (BOOL)tab:(OACTab *)tab showWebAuthnDialog:(OACWebAuthnDialog *)dialog
++    NS_SWIFT_NAME(tab(_:showWebAuthnDialog:));
++/// The WebAuthn dialog moved to another step or its content changed.
++- (void)tab:(OACTab *)tab didUpdateWebAuthnDialog:(OACWebAuthnDialog *)dialog
++    NS_SWIFT_NAME(tab(_:didUpdateWebAuthnDialog:));
+ 
+ /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
+ - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;
+diff --git a/openarc/bridge/public/OpenArcCore/OACWebAuthn.h b/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
+new file mode 100644
+index 000000000000..f0c367703252
+--- /dev/null
++++ b/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
+@@ -0,0 +1,200 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The passkey / security-key (WebAuthn) dialog, drawn by the shell (plan C21).
++//
++// Maps to: `EngineDialogRequest.webAuthn` (app/Sources/OpenArcEngine/DialogRequests.swift).
++//
++// Why shell-drawn (README §Keeping //chrome without its UI): Chrome draws its WebAuthn dialog with
++// Views as a tab-modal sheet of a `Browser` window. We keep //chrome's request flow (which
++// authenticators exist, which step comes next, PIN entry, account choice, errors) and replace only
++// its view: an Open Arc hook in //chrome hands the flow's model to the bridge, which describes the
++// current step here and forwards the user's choices back. The flow moves through several steps
++// while one request is open (choose a method, touch the security key, enter its PIN, pick an
++// account…); each change comes as `-tab:didUpdateWebAuthnDialog:` on the same object.
++//
++// What is supported:
++// - Security keys (USB / NFC readers that appear as USB HID; FIDO2 with PIN and fingerprint
++//   enrollment, and U2F).
++// - Passkeys stored on this Mac in the app's own keychain access group
++//   (<team id>.<bundle id>.webauthn), protected by Touch ID or the login password. They need the
++//   app's `keychain-access-groups` entitlement (a Developer ID build with a matching provisioning
++//   profile, scripts/make-app.sh); without it the engine offers security keys only. During a
++//   passkey operation macOS shows its own Touch ID / password prompt and this dialog closes.
++// Not supported:
++// - iCloud Keychain passkeys: they need Apple's restricted
++//   `com.apple.developer.web-browser.public-key-credential` entitlement, which this app does not
++//   have, so the engine never offers them.
++// - Phones and tablets as security keys (hybrid / caBLE, needs Bluetooth and the QR flow); the
++//   bridge leaves that method out.
++// - Google Password Manager passkeys (need a signed-in Google account).
++//
++// The look is not in docs/arc-spec (00 §A records the dialog exists; style unknown).
++
++#import <OpenArcCore/OACDialogDelegate.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++typedef NS_ENUM(NSInteger, OACWebAuthnOperation) {
++    /// `navigator.credentials.create()`: make a new passkey.
++    OACWebAuthnOperationCreate = 0,
++    /// `navigator.credentials.get()`: sign in with an existing passkey.
++    OACWebAuthnOperationSignIn = 1,
++};
++
++typedef NS_ENUM(NSInteger, OACWebAuthnStep) {
++    /// Choose how to continue (`mechanisms`).
++    OACWebAuthnStepChooseMethod = 0,
++    /// Confirm the single most likely method (`mechanisms[priorityMechanismIndex]`); accept goes on.
++    OACWebAuthnStepConfirmMethod = 1,
++    /// Insert the security key and touch it (no button; the key answers).
++    OACWebAuthnStepSecurityKey = 2,
++    /// Enter the security key's PIN (`-providePIN:`); `pinError`, `pinAttemptsRemaining`.
++    OACWebAuthnStepEnterPIN = 3,
++    /// The security key has no PIN yet: choose one (the shell asks twice and compares).
++    OACWebAuthnStepSetPIN = 4,
++    /// The security key requires a new PIN (the shell asks twice and compares).
++    OACWebAuthnStepChangePIN = 5,
++    /// Touch the security key again (after the PIN).
++    OACWebAuthnStepTouchAgain = 6,
++    /// Fingerprint enrollment on the security key: touch the sensor (`bioSamplesRemaining`);
++    /// accept when done.
++    OACWebAuthnStepFingerprintEnrollment = 7,
++    /// The key's fingerprint check failed; try again on the key (no button).
++    OACWebAuthnStepRetryVerification = 8,
++    /// Confirm storing sign-in data on the security key; accept goes on.
++    OACWebAuthnStepConfirmSecurityKeyStorage = 9,
++    /// Choose the account to sign in with (`accounts`, `-selectAccountAtIndex:`).
++    OACWebAuthnStepChooseAccount = 10,
++    /// Confirm creating a passkey on this Mac; accept goes on (macOS then asks for Touch ID or the
++    /// password).
++    OACWebAuthnStepCreatePasskey = 11,
++    /// A private window: the passkey outlives it. Accept goes on.
++    OACWebAuthnStepPrivateWindowWarning = 12,
++    /// The request failed (`errorKind`); accept retries when `canRetry`.
++    OACWebAuthnStepError = 13,
++};
++
++typedef NS_ENUM(NSInteger, OACWebAuthnErrorKind) {
++    OACWebAuthnErrorKindNone = 0,
++    /// The request timed out.
++    OACWebAuthnErrorKindTimedOut = 1,
++    /// The security key holds no passkey for this site.
++    OACWebAuthnErrorKindKeyNotRegistered = 2,
++    /// The security key already holds a passkey for this account.
++    OACWebAuthnErrorKindKeyAlreadyRegistered = 3,
++    /// No passkey for this site on this Mac.
++    OACWebAuthnErrorKindNoPasskeys = 4,
++    /// Nothing can answer this request (no platform passkeys, no security key support).
++    OACWebAuthnErrorKindNoMethods = 5,
++    /// Too many wrong PINs: remove and reinsert the key.
++    OACWebAuthnErrorKindPINTemporarilyLocked = 6,
++    /// Too many wrong PINs: the key must be reset.
++    OACWebAuthnErrorKindPINLocked = 7,
++    /// The key was removed during PIN entry.
++    OACWebAuthnErrorKindKeyRemoved = 8,
++    /// The key lacks a feature the site needs.
++    OACWebAuthnErrorKindMissingCapability = 9,
++    /// The key has no room for another passkey.
++    OACWebAuthnErrorKindStorageFull = 10,
++    /// A method this app does not support (phone, Bluetooth, cloud passkeys).
++    OACWebAuthnErrorKindUnsupported = 11,
++    /// Any other failure.
++    OACWebAuthnErrorKindOther = 12,
++};
++
++typedef NS_ENUM(NSInteger, OACWebAuthnPINError) {
++    OACWebAuthnPINErrorNone = 0,
++    OACWebAuthnPINErrorWrongPIN = 1,
++    OACWebAuthnPINErrorTooShort = 2,
++    OACWebAuthnPINErrorInvalidCharacters = 3,
++    OACWebAuthnPINErrorSameAsCurrent = 4,
++    /// The key's fingerprint check is locked: enter the PIN instead.
++    OACWebAuthnPINErrorFingerprintLocked = 5,
++};
++
++typedef NS_ENUM(NSInteger, OACWebAuthnMechanismKind) {
++    /// A passkey for one account, stored on this Mac (`title`: the account).
++    OACWebAuthnMechanismKindPasskeyOnThisMac = 0,
++    /// Save or use a passkey on this Mac (no account yet).
++    OACWebAuthnMechanismKindThisMac = 1,
++    /// A USB / NFC security key.
++    OACWebAuthnMechanismKindSecurityKey = 2,
++    /// Anything else the engine offers.
++    OACWebAuthnMechanismKindOther = 3,
++};
++
++/// One way to continue (a row of the method list).
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACWebAuthnMechanism : NSObject
++@property (nonatomic, readonly) OACWebAuthnMechanismKind kind;
++/// Account name for passkeys; empty for the others (the shell names them).
++@property (nonatomic, readonly, copy) NSString *title;
++/// The account's display name, if different (may be empty).
++@property (nonatomic, readonly, copy) NSString *subtitle;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// One account to choose (`OACWebAuthnStepChooseAccount`).
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACWebAuthnAccount : NSObject
++/// The account name (often an email address); may be empty.
++@property (nonatomic, readonly, copy) NSString *name;
++/// The display name; may be empty.
++@property (nonatomic, readonly, copy) NSString *displayName;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// The WebAuthn dialog of one request. Tab-modal. Its properties change while it is open
++/// (`-tab:didUpdateWebAuthnDialog:`). The actions do not finish the request; only `-cancel`
++/// (the request's default when the shell drops it) does. The engine withdraws the request when the
++/// flow hands over to macOS (Touch ID / password prompt), completes, or the tab navigates or closes;
++/// a later step that needs the dialog again comes as a new request.
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACWebAuthnDialog : OACDialogRequest
++@property (nonatomic, readonly) OACWebAuthnOperation operation;
++/// The relying party ("example.com").
++@property (nonatomic, readonly, copy) NSString *relyingPartyID;
++/// For `OACWebAuthnOperationCreate`: the account name the site creates a passkey for (may be empty).
++@property (nonatomic, readonly, copy) NSString *userName;
++@property (nonatomic, readonly) OACWebAuthnStep step;
++/// The ways to continue (`OACWebAuthnStepChooseMethod`, `ConfirmMethod`).
++@property (nonatomic, readonly, copy) NSArray<OACWebAuthnMechanism *> *mechanisms;
++/// The method `OACWebAuthnStepConfirmMethod` asks about, or -1.
++@property (nonatomic, readonly) NSInteger priorityMechanismIndex;
++/// The accounts to choose from (`OACWebAuthnStepChooseAccount`).
++@property (nonatomic, readonly, copy) NSArray<OACWebAuthnAccount *> *accounts;
++/// "Use another method" (back to the method list) makes sense.
++@property (nonatomic, readonly) BOOL canChooseAnotherMethod;
++@property (nonatomic, readonly) OACWebAuthnErrorKind errorKind;
++/// The error step offers to try again (`-accept`).
++@property (nonatomic, readonly) BOOL canRetry;
++@property (nonatomic, readonly) OACWebAuthnPINError pinError;
++/// PIN attempts left before the key locks, or -1 when unknown.
++@property (nonatomic, readonly) NSInteger pinAttemptsRemaining;
++/// Minimum PIN length the key accepts (Unicode code points).
++@property (nonatomic, readonly) NSInteger minimumPINLength;
++/// Fingerprint enrollment progress: samples left and in total (-1 while unknown).
++@property (nonatomic, readonly) NSInteger bioSamplesRemaining;
++@property (nonatomic, readonly) NSInteger bioSamplesTotal;
++/// The engine is busy (no input until the next update).
++@property (nonatomic, readonly) BOOL isBusy;
++
++/// The step's main button: continue, create, try again, done (see `OACWebAuthnStep`).
++- (void)accept;
++/// Chooses `mechanisms[index]`.
++- (void)selectMechanismAtIndex:(NSInteger)index NS_SWIFT_NAME(selectMechanism(at:));
++/// Chooses `accounts[index]`.
++- (void)selectAccountAtIndex:(NSInteger)index NS_SWIFT_NAME(selectAccount(at:));
++/// The PIN for `EnterPIN`, `SetPIN` or `ChangePIN` (the new PIN, already confirmed by the shell).
++- (void)providePIN:(NSString *)PIN NS_SWIFT_NAME(providePIN(_:));
++/// Back to the method list ("Use another method").
++- (void)chooseAnotherMethod;
++/// Cancels the request (the page gets NotAllowedError). The default answer.
++- (void)cancel;
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/openarc/bridge/public/OpenArcCore/OpenArcCore.h b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+index 549fbf12b0b7..f8065733594d 100644
+--- a/openarc/bridge/public/OpenArcCore/OpenArcCore.h
++++ b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+@@ -18,6 +18,7 @@
+ #import <OpenArcCore/OACJavaScript.h>
+ #import <OpenArcCore/OACDialogDelegate.h>
+ #import <OpenArcCore/OACAutofill.h>
++#import <OpenArcCore/OACWebAuthn.h>
+ #import <OpenArcCore/OACSiteSettings.h>
+ #import <OpenArcCore/OACDownloads.h>
+ #import <OpenArcCore/OACExtensions.h>
