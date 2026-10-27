@@ -28,7 +28,60 @@ extension ShellModel {
     public func splitPaneFrames(in container: CGRect) -> [SplitPaneFrame] {
         guard let layout = activeSplitLayout, let focused = selectedTabID else { return [] }
         if isSplitExpanded { return SplitPaneLayout.expandedFrames(focusedTabID: focused, in: container) }
-        return SplitPaneLayout.frames(for: layout.root, in: container)
+        return SplitPaneLayout.frames(for: displayedSplitRoot(layout), in: container)
+    }
+
+    /// The tree to draw: the live drag preview while a divider of this layout is dragged.
+    func displayedSplitRoot(_ layout: SplitLayout) -> SplitNode {
+        if let preview = splitResizePreview, preview.layoutID == layout.id { return preview.root }
+        return layout.root
+    }
+
+    /// Divider frames for the selected tab's split inside `container`; none while one pane is
+    /// expanded. [06 §21.6] observed: the 10 pt gap between panes is the divider.
+    public func splitDividerFrames(in container: CGRect) -> [SplitDividerFrame] {
+        guard let layout = activeSplitLayout, !isSplitExpanded else { return [] }
+        return SplitPaneLayout.dividers(for: displayedSplitRoot(layout), in: container)
+    }
+
+    /// One drag step of `divider`: `pointer` is the pointer along the divider's axis, measured
+    /// from the leading edge of the divider's split node. The panes follow at once; nothing is
+    /// stored until `endSplitDividerDrag()`. [06 §21.6] observed: live resize, the gap's center
+    /// follows the pointer, a 50 / 50 snap within ≈ 10 pt, 220 pt minimum per pane.
+    public func dragSplitDivider(_ divider: SplitDividerFrame, pointer: Double) {
+        guard let layout = activeSplitLayout, !isSplitExpanded else { return }
+        let root = displayedSplitRoot(layout)
+        guard let split = root.node(at: divider.path) else { return }
+        let length = divider.axis == .horizontal ? divider.splitFrame.width : divider.splitFrame.height
+        guard let fractions = SplitDividerDrag.fractions(for: split, dividerIndex: divider.index,
+                                                         splitLength: length, pointer: pointer),
+              let next = root.replacingFractions(at: divider.path, with: fractions) else { return }
+        splitResizePreview = SplitResizePreview(layoutID: layout.id, path: divider.path, root: next)
+    }
+
+    /// The divider was released: the dragged fractions are stored in the layout (one `layout`
+    /// stamp per drag, not per step). [06 §21.6] observed: the new ratio is kept after release.
+    public func endSplitDividerDrag() {
+        guard let preview = splitResizePreview else { return }
+        splitResizePreview = nil
+        guard case .split(_, let children)? = preview.root.node(at: preview.path) else { return }
+        setSplitFractions(layoutID: preview.layoutID, path: preview.path, fractions: children.map(\.fraction))
+    }
+
+    /// Stores the fractions a divider drag ended on, for the split node at `path` of layout
+    /// `layoutID`. [06 §21.6] observed: the ratio is kept after release, across tab switches and
+    /// with the sidebar hidden. Returns whether the workspace accepted it.
+    @discardableResult
+    public func setSplitFractions(layoutID: UUID, path: [Int], fractions: [Double]) -> Bool {
+        let now = controller.now()
+        do {
+            try controller.mutate(origin: sidebar) {
+                try TreeOps.setSplitFractions($0, layoutID: layoutID, path: path, fractions: fractions, now: now)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Clicking a pane focuses it, which selects its tab. A pane command bar belongs to its own

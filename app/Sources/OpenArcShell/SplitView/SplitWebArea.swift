@@ -39,6 +39,22 @@ struct SplitWebArea: View {
                 .frame(width: pane.frame.width, height: pane.frame.height)
                 .offset(x: pane.frame.minX, y: pane.frame.minY)
             }
+            // The gaps between panes are the dividers: grip, resize cursor and drag. B58.
+            ForEach(model.splitDividerFrames(in: container), id: \.id) { divider in
+                ZStack {
+                    SplitDividerGrip(axis: divider.axis)
+                    SplitDividerHandle(
+                        axis: divider.axis,
+                        dividerStart: divider.axis == .horizontal
+                            ? divider.frame.minX - divider.splitFrame.minX
+                            : divider.frame.minY - divider.splitFrame.minY,
+                        onDrag: { model.dragSplitDivider(divider, pointer: $0) },
+                        onEnd: { model.endSplitDividerDrag() }
+                    )
+                }
+                .frame(width: divider.frame.width, height: divider.frame.height)
+                .offset(x: divider.frame.minX, y: divider.frame.minY)
+            }
             // The command bar sits inside its pane, outside the pane's rounded clip.
             if let barTab = model.commandBarPaneTabID, let pane = panes.first(where: { $0.tabID == barTab }) {
                 PaneCommandBarOverlay(commandBar: model.paneCommandBar, palette: palette, paneFrame: pane.frame)

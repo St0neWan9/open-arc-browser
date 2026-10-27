@@ -8,8 +8,8 @@ import OpenArcDesign
 // Spec sources (docs/arc-spec/):
 //   [06 §5]  observed: the current tab goes to the left pane, the new tab to the right; the panes
 //            sit side by side with a gap of about 10 pt (`Metrics.SplitView.paneGap`).
-//   [00 §split view] the resize ratio was not tested, so equal widths are the default and the
-//            model's `SplitChild.fraction` is the hook for ratios.
+//   [06 §21.6] observed: a divider drag stores the ratio in `SplitChild.fraction` (B58, see
+//            `SplitDivider.swift`); new splits start at equal widths.
 
 /// Where one pane's tab surface goes.
 public struct SplitPaneFrame: Equatable, Sendable {

@@ -112,4 +112,32 @@ final class RecordMergeTests: XCTestCase {
         let profile = Profile(id: theme().id, name: "P", now: t0)
         XCTAssertNil(RecordMerge.merge(local: .theme(theme()), server: .profile(profile)))
     }
+
+    /// B58: a divider drag stores fractions in the `layout` group of `SplitLayout`
+    /// ([06 §21.6] observed: the ratio is what is kept). The later resize wins the whole tree,
+    /// a tie goes to the server, and a delete beats a later resize.
+    func testSplitFractionsFollowLayoutGroupPolicy() throws {
+        let profile = UUID(), space = UUID(), a = UUID(), b = UUID(), layoutID = UUID()
+        var s = TreeOps.createProfile(WorkspaceState(), id: profile, name: "P", now: t0)
+        s = try TreeOps.createSpace(s, id: space, profileID: profile, name: "S", now: t0)
+        for id in [a, b] { s = try TreeOps.openTab(s, id: id, spaceID: space, url: nil, title: "", now: t0) }
+        s = try TreeOps.addSplitPane(s, layoutID: layoutID, existingTabID: a, newTabID: b, now: t0)
+        let local = try XCTUnwrap(TreeOps.setSplitFractions(s, layoutID: layoutID, path: [], fractions: [0.3, 0.7], now: t(20)).splits[layoutID])
+        let server = try XCTUnwrap(TreeOps.setSplitFractions(s, layoutID: layoutID, path: [], fractions: [0.6, 0.4], now: t(10)).splits[layoutID])
+
+        let later = try XCTUnwrap(RecordMerge.merge(local: .splitLayout(local), server: .splitLayout(server)))
+        guard case .splitLayout(let merged) = later.merged else { return XCTFail("wrong type") }
+        XCTAssertEqual(merged.root, local.root)
+        XCTAssertTrue(later.needsUpload)
+
+        let tieServer = try XCTUnwrap(TreeOps.setSplitFractions(s, layoutID: layoutID, path: [], fractions: [0.6, 0.4], now: t(20)).splits[layoutID])
+        let tie = try XCTUnwrap(RecordMerge.merge(local: .splitLayout(local), server: .splitLayout(tieServer)))
+        guard case .splitLayout(let tieMerged) = tie.merged else { return XCTFail("wrong type") }
+        XCTAssertEqual(tieMerged.root, tieServer.root, "ties go to the server")
+
+        var deleted = server
+        deleted.meta.markDeleted(at: t(5))
+        let gone = try XCTUnwrap(RecordMerge.merge(local: .splitLayout(local), server: .splitLayout(deleted)))
+        XCTAssertTrue(gone.isDeleted, "delete wins over a later resize")
+    }
 }

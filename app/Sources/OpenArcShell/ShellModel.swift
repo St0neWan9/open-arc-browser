@@ -45,6 +45,8 @@ public final class ShellModel: ObservableObject {
     @Published public internal(set) var commandBarPaneTabID: UUID?
     /// "Expand Current Split" is on: only the focused pane shows. inferred.
     @Published public internal(set) var isSplitExpanded = false
+    /// The split tree while a divider is being dragged; stored on release. B58.
+    @Published public internal(set) var splitResizePreview: SplitResizePreview?
     /// Sidebar visibility (View ▸ Hide Sidebar). [01 §View] observed.
     @Published public private(set) var isSidebarVisible = true
     /// Last command the shell could not run itself (no surface for it yet). For tests/diagnostics.
