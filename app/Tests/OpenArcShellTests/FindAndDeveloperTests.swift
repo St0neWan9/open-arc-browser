@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 import XCTest
 import OpenArcModel
 import OpenArcEngine
@@ -111,6 +112,37 @@ final class FindAndDeveloperTests: XCTestCase {
     }
 
     // MARK: - Find bar ([01 §Edit] Find ▸, [02] ⌘F / ⌘G / ⇧⌘G)
+
+    /// B19: after ⌘F the bar's field has the keyboard in a real window, so typing searches instead
+    /// of going to the page; a second ⌘F selects the kept query. [02 §页面与导航] observed ⌘F.
+    func testFindFieldTakesKeyboardInAWindow() async throws {
+        let (id, _) = try await openPage("https://fruit.example")
+        findBar.show()
+        let host = NSHostingView(rootView: FindBarOverlay(host: FindBarHost(model: findBar, tabID: id)))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        defer { window.close() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "the find field must have the keyboard")
+        XCTAssertTrue(editor.isFieldEditor)
+        editor.insertText("apple", replacementRange: editor.selectedRange())
+        XCTAssertEqual(findBar.state(for: id).query, "apple")
+
+        window.makeFirstResponder(nil)
+        findBar.show()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let again = try XCTUnwrap(window.firstResponder as? NSTextView, "⌘F again focuses the field")
+        XCTAssertEqual(again.selectedRange(), NSRange(location: 0, length: 5), "the kept query is selected")
+
+        // A bar rebuilt without a new ⌘F (tab switch, Library and back) leaves the keyboard alone.
+        window.makeFirstResponder(nil)
+        window.contentView = NSHostingView(rootView: FindBarOverlay(host: FindBarHost(model: findBar, tabID: id)))
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(window.firstResponder is NSTextView, "no ⌘F, no focus steal")
+    }
 
     func testTypingSearchesAndShowsNOfM() async throws {
         let (id, live) = try await openPage("https://fruit.example")

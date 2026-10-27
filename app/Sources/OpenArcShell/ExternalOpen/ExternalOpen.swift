@@ -184,7 +184,10 @@ struct ExternalOpenCommands: Commands {
         let _ = controller.openLittleArcWindow = { id in open(id: LittleArcScene.id, value: id) }
         // Browser windows too: an opener taken from a window's view may outlive that window (B29).
         let _ = controller.installWindowOpener(sceneLevel: true) { request in open(id: BrowserWindowScene.id, value: request) }
-        EmptyCommands()
+        // An empty group, not `EmptyCommands()`: SwiftUI never evaluates a body that is only
+        // `EmptyCommands()`, so the openers above were never installed and a link that launched
+        // the app opened no window (B19, cold start). The group adds no menu item.
+        CommandGroup(after: .appInfo) {}
     }
 }
 

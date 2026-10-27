@@ -33,6 +33,16 @@ public final class FindBarModel: ObservableObject {
     @Published public private(set) var states: [UUID: FindBarState] = [:]
     /// Bumped by every ⌘F so the bar's text field takes keyboard focus again (and selects its text).
     @Published public private(set) var focusRequest = 0
+    /// The last `focusRequest` a bar's field acted on. A bar view that is rebuilt (tab switch,
+    /// Library and back) must not take the keyboard again for a request already served (B19).
+    private var servedFocusRequest = 0
+
+    /// Whether a ⌘F is waiting for a field to take the keyboard; marks it served.
+    func consumeFocusRequest() -> Bool {
+        guard servedFocusRequest != focusRequest else { return false }
+        servedFocusRequest = focusRequest
+        return true
+    }
 
     private let sidebar: SidebarViewModel
     /// Results live in the tab's live state; the bar redraws when it changes.

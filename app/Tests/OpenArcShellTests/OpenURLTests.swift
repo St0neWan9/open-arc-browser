@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 import XCTest
 import OpenArcModel
 import OpenArcEngine
@@ -172,6 +173,21 @@ final class OpenURLTests: XCTestCase {
         inbox.connect { delivered += $0 }
         XCTAssertEqual(delivered, [link])
         XCTAssertFalse(inbox.isWaiting)
+    }
+
+    /// B19 (cold start): the commands that install the window openers must have a body SwiftUI
+    /// evaluates. A body of only `EmptyCommands()` was skipped, so a link that launched the app
+    /// found no opener and no window came. Evaluating the body installs all three openers.
+    func testExternalOpenCommandsInstallOpeners() {
+        let inbox = ExternalOpenInbox()
+        let controller = makeController()
+        XCTAssertNil(inbox.fallbackWindowOpener)
+        let commands = ExternalOpenCommands(inbox: inbox, controller: controller)
+        let body = commands.body
+        XCTAssertNotNil(inbox.fallbackWindowOpener)
+        XCTAssertNotNil(controller.openLittleArcWindow)
+        XCTAssertNotNil(controller.openBrowserWindow)
+        XCTAssertFalse(type(of: body) == EmptyCommands.self, "SwiftUI skips a body that is only EmptyCommands")
     }
 
     /// An incognito window never takes external links; the frontmost normal window does.

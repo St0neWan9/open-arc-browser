@@ -113,6 +113,43 @@ final class SplitViewShellTests: XCTestCase {
         XCTAssertEqual(model.workspace.tabs[base]?.meta.isTombstone, false)
     }
 
+    /// [06 §5] observed: the bar opens in the new, empty pane to fill it. Choosing an open Today
+    /// tab there puts that tab in the pane and archives the empty one; the split stays (B19).
+    func testSwitchToTabFromEmptyPaneFillsThePane() async throws {
+        let model = makeModel()
+        let (base, new) = try await splitModel(model)
+        let other = try XCTUnwrap(model.sidebar.newTab(url: URL(string: "https://other.example")))
+        model.sidebar.selectTab(new)
+        model.presentCommandBarInPane(new)
+        model.perform(.switchToTab(tabID: other))
+        await model.sidebar.settleEngineWork()
+        XCTAssertEqual(model.activeSplitLayout?.root.tabIDs, [base, other])
+        XCTAssertEqual(model.selectedTabID, other)
+        XCTAssertEqual(model.workspace.tabs[new]?.meta.isTombstone, true, "the empty pane's tab is archived")
+        XCTAssertEqual(model.workspace.tabs[other]?.meta.isTombstone, false)
+        XCTAssertFalse(model.isCommandBarPresented)
+    }
+
+    /// A pane that already shows a page, or a tab that is in the split already, keeps the old
+    /// behavior: the tab is just selected and the split is unchanged.
+    func testSwitchToTabFromLoadedPaneOnlySelects() async throws {
+        let model = makeModel()
+        let (base, new) = try await splitModel(model)
+        model.perform(.switchToTab(tabID: base))
+        XCTAssertEqual(model.activeSplitLayout?.root.tabIDs, [base, new], "a split member is not moved")
+        XCTAssertEqual(model.selectedTabID, base)
+        model.sidebar.selectTab(new)
+        model.sidebar.navigateSelectedTab(to: URL(string: "https://loaded.example")!)
+        await model.sidebar.settleEngineWork()
+        let other = try XCTUnwrap(model.sidebar.newTab(url: URL(string: "https://other.example")))
+        model.sidebar.selectTab(new)
+        model.presentCommandBarInPane(new)
+        model.perform(.switchToTab(tabID: other))
+        XCTAssertEqual(model.activeSplitLayout?.root.tabIDs, nil, "the other tab is shown on its own")
+        XCTAssertEqual(model.selectedTabID, other)
+        XCTAssertEqual(model.workspace.tabs[new]?.meta.isTombstone, false)
+    }
+
     /// Closing one pane of three keeps the other two as a split; the neighbor takes focus.
     func testClosePaneOfThreeKeepsSplit() async throws {
         let model = makeModel()

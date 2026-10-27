@@ -919,6 +919,33 @@ final class SidebarDragTests: XCTestCase {
         vm.stop()
     }
 
+    /// B19, real mouse: the press that starts the drag selects the dragged tab ([06 §15.1]), so the
+    /// single panel shows that tab when the drop lands. The drop still pairs with the page that was
+    /// current before the press ([06 §15.7] observed), instead of being refused.
+    func testWebPanelDropAfterPressSelectPairsWithPreviousPage() throws {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        vm.selectTab(f.today3)
+        vm.pressSelect(.tab(f.today1))
+        XCTAssertEqual(vm.selectedTabID, f.today1, "mouse-down selects")
+        vm.beginDrag(.tab(f.today1))
+        // The panel now shows today1 itself.
+        let partner = try XCTUnwrap(vm.webPanelDropPartner(forPane: f.today1))
+        XCTAssertEqual(partner, f.today3)
+        XCTAssertTrue(vm.performWebPanelDrop(onTab: partner, side: .trailing))
+        let layout = try XCTUnwrap(vm.workspace.splits.values.first { !$0.meta.isTombstone })
+        XCTAssertEqual(layout.root.tabIDs, [f.today3, f.today1])
+        XCTAssertEqual(vm.selectedTabID, f.today1)
+
+        // Without a previous page (the press did not change the selection) the drop is refused.
+        vm.pressSelect(.tab(f.today2))
+        vm.pressSelect(.tab(f.today2))
+        vm.beginDrag(.tab(f.today2))
+        XCTAssertNil(vm.webPanelDropPartner(forPane: f.today2))
+        vm.endDrag()
+        vm.stop()
+    }
+
     /// The view model reports the preview title for tabs and folders.
     func testDragTitle() {
         let f = SidebarFixture()
