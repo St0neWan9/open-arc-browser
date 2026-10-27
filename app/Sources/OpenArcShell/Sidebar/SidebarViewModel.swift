@@ -235,6 +235,12 @@ public final class SidebarViewModel: ObservableObject {
 
     var urlBoxContent: SidebarURLBoxContent { SidebarURLBoxContent.make(url: selectedURL) }
 
+    /// The URL box shows the red struck-through lock before the domain (http). [06 §17.7] observed.
+    var urlBoxShowsInsecureLock: Bool {
+        guard case .domain = urlBoxContent else { return false }
+        return SidebarURLBoxContent.showsInsecureLock(url: selectedURL)
+    }
+
     var reloadMode: SidebarReloadMode { SidebarReloadMode.make(isLoading: selectedLiveState?.isLoading ?? false) }
 
     var canGoBack: Bool { selectedLiveState?.canGoBack ?? false }

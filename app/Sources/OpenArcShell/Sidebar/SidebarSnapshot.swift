@@ -356,4 +356,8 @@ enum SidebarURLBoxContent: Equatable {
         guard let url, let host = url.host, !host.isEmpty else { return .placeholder }
         return .domain(host, isSecure: url.scheme?.lowercased() == "https")
     }
+
+    /// Plain http pages get the red struck-through lock before the domain, in the toolbar and in
+    /// the sidebar URL box alike; https (and anything else) shows none. [06 §17.2, §17.7] observed.
+    static func showsInsecureLock(url: URL?) -> Bool { url?.scheme?.lowercased() == "http" }
 }

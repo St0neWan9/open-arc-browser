@@ -380,6 +380,35 @@ final class WebToolbarTests: XCTestCase {
         model.stop()
     }
 
+    /// 06 §17.7 (B59): with the toolbar off, the sidebar URL box shows the toolbar's red
+    /// struck-through lock before the domain on http pages only, in the leading 24 pt cell at x 14
+    /// with the domain from x 41; clicking it opens the Site Control Center (06 §17.3).
+    func testSidebarURLBoxShowsInsecureLockOnHTTP() async throws {
+        let model = makeModel()
+        XCTAssertFalse(model.webToolbar.isShown)
+        XCTAssertTrue(SidebarURLBoxContent.showsInsecureLock(url: URL(string: "http://info.cern.ch")))
+        XCTAssertFalse(SidebarURLBoxContent.showsInsecureLock(url: URL(string: "https://example.com")))
+        XCTAssertFalse(SidebarURLBoxContent.showsInsecureLock(url: nil))
+        XCTAssertEqual(WebToolbarState(tabID: nil, url: URL(string: "http://info.cern.ch")).showsInsecureLock, true,
+                       "the toolbar and the sidebar share one rule")
+
+        _ = try await selectExample(model)
+        XCTAssertFalse(model.sidebar.urlBoxShowsInsecureLock, "https shows no lock")
+
+        let opened = try await model.openNewTab(url: try XCTUnwrap(URL(string: "http://info.cern.ch/hypertext/WWW/TheProject.html")))
+        let id = try XCTUnwrap(opened)
+        XCTAssertEqual(model.sidebar.selectedTabID, id)
+        XCTAssertEqual(model.sidebar.urlBoxContent, .domain("info.cern.ch", isSecure: false))
+        XCTAssertTrue(model.sidebar.urlBoxShowsInsecureLock)
+        XCTAssertEqual(Metrics.Sidebar.addressFieldIconFrame, Rect2D(x: 14, y: 52, width: 24, height: 24))
+        XCTAssertEqual(Metrics.Sidebar.addressFieldTextLeadingAfterIcon, 41)
+
+        model.sidebar.requestFromMenu(.showSiteControls)
+        XCTAssertTrue(model.siteControls.isPresented)
+        XCTAssertEqual(model.siteControls.tabID, id)
+        model.stop()
+    }
+
     /// 06 §17.3: the split menu adds the new pane on the chosen side (Right / Left side by side,
     /// Top / Bottom stacked) and opens the command bar in it, like ⌃⇧=.
     func testSplitMenuAddsPaneOnEachSide() async throws {
