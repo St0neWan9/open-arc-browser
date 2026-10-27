@@ -48,7 +48,8 @@ public struct ScriptingFailure: Error, Equatable, Sendable {
         message: "Running JavaScript from Apple Events is turned off. Turn it on with View ▸ Developer ▸ Allow JavaScript from Apple Events."
     )
 
-    /// The engine cannot run JavaScript in a page (no evaluate call yet, see `ScriptingHost.evaluateJavaScript`).
+    /// The engine build cannot run JavaScript in a page (`EngineError.unsupported`, for example a
+    /// Chromium framework built before plan B71).
     public static let javaScriptUnavailable = ScriptingFailure(
         number: eventFailedNumber,
         message: "This version of Open Arc cannot run JavaScript in a page."
@@ -57,6 +58,23 @@ public struct ScriptingFailure: Error, Equatable, Sendable {
     /// A URL the tab cannot load. [06 §29.3] observed that Arc has its own message; its words are unknown.
     public static func invalidURL(_ text: String) -> ScriptingFailure {
         ScriptingFailure(number: eventFailedNumber, message: "“\(text)” is not a valid URL.")
+    }
+
+    /// The page's script threw or its promise rejected; the message is the page's exception text.
+    /// [06 §29.3] unknown (Arc's error); inferred: a script error with the exception text.
+    public static func javaScriptException(_ message: String) -> ScriptingFailure {
+        ScriptingFailure(number: eventFailedNumber, message: "The JavaScript failed: \(message)")
+    }
+
+    /// The script's failure as the script sees it (plan B71).
+    static func javaScript(_ error: any Error) -> ScriptingFailure {
+        switch error {
+        case let failure as ScriptingFailure: failure
+        case EngineError.javaScriptException(let message): .javaScriptException(message)
+        case EngineError.unsupported: .javaScriptUnavailable
+        case EngineError.tabClosed, EngineError.tabNotFound: .noSuchObject("tab")
+        default: .failed("The JavaScript failed: \(error)")
+        }
     }
 
     static func noSuchObject(_ what: String) -> ScriptingFailure {
@@ -98,10 +116,15 @@ public final class ScriptingHost {
     private var closeObservers: [UUID: NSObjectProtocol] = [:]
     private let makeID: () -> UUID
 
-    /// Runs `execute`'s JavaScript once the gate allows it. `BrowserTab` has no call to evaluate
-    /// JavaScript yet (a protocol change, plan B70 open question), so the default fails with
-    /// `ScriptingFailure.javaScriptUnavailable`; once the engine has one, this is where it is wired.
-    public var evaluateJavaScript: ScriptJavaScriptEvaluator = { _, _ in throw ScriptingFailure.javaScriptUnavailable }
+    /// Runs `execute`'s JavaScript once the gate allows it: the engine's
+    /// `BrowserTab.evaluateJavaScript` (plan B71), whose text result goes back to the script
+    /// unchanged. Tests replace it.
+    public var evaluateJavaScript: ScriptJavaScriptEvaluator = ScriptingHost.engineEvaluator
+
+    /// The default runner: the tab's engine call ([06 §29.3] observed command, result as text).
+    public static let engineEvaluator: ScriptJavaScriptEvaluator = { tab, source in
+        try await tab.evaluateJavaScript(source)
+    }
 
     init(makeID: @escaping () -> UUID = UUID.init) {
         self.makeID = makeID

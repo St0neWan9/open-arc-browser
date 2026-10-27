@@ -325,6 +325,10 @@ public enum EngineError: Error, Equatable, Sendable {
     /// "savePage"). The Chromium engine lists its unsupported commands in
     /// app/Sources/OpenArcChromium/ChromiumEngine.swift.
     case unsupported(String)
+    /// `BrowserTab.evaluateJavaScript` (plan B71): the page's script threw, or its promise was
+    /// rejected. The payload is the exception's message as the page reports it (for example
+    /// "ReferenceError: x is not defined").
+    case javaScriptException(String)
 }
 
 /// What `BrowserEngine.clearBrowsingData` removes.
@@ -452,6 +456,14 @@ public protocol BrowserTab: AnyObject, Sendable {
     func stopFinding(keepSelection: Bool) async
     /// The page's current selection (Use Selection to Find).
     func selectedText() async -> String
+    /// Runs `source` as a script in the main frame's page world (the page's own globals are
+    /// visible) and returns its completion value as text by `JavaScriptResultText`'s rules; a
+    /// promise is awaited first. For the AppleScript `execute` command (plan B71, [06 §29.3]
+    /// observed command; the shell enforces the [06 §29.4] gate before calling). Throws
+    /// `EngineError.javaScriptException` when the script throws or its promise rejects,
+    /// `.tabClosed` on a closed tab, and `.unsupported("evaluateJavaScript")` when the engine
+    /// build cannot run scripts.
+    func evaluateJavaScript(_ source: String) async throws -> String
     /// Edit menu commands on the focused frame ([01 §Edit] observed items).
     func perform(_ command: EditCommand) async
     /// File ▸ Print ([01 §File] observed item): the engine's print UI for the page (the Chromium

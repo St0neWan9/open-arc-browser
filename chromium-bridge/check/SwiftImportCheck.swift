@@ -78,6 +78,10 @@ func exerciseAPI(delegate: ImportCheckDelegate) throws {
         let version: String? = app.adBlockingRulesetVersion
         let blocked: Int = tab.blockedAdCount
         _ = (version, blocked)
+        // Plan B71: evaluate JavaScript (OACJavaScript.h).
+        tab.evaluateJavaScript("1 + 1") { (json: String?, error: Error?) in
+            _ = (json, (error as NSError?)?.code == OACError.javaScriptException.rawValue)
+        }
         _ = profile.downloads.items
         _ = profile.extensions.installedExtensions
     }

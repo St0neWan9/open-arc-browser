@@ -272,6 +272,17 @@ public enum FakeTabCommand: Hashable, Sendable {
     case neverTranslateSite
     /// Plan B51: `capture(_:)`.
     case capture(PageCaptureArea)
+    /// Plan B71: `evaluateJavaScript(_:)`, with the script source.
+    case evaluateJavaScript(String)
+}
+
+/// What the fake page answers to `evaluateJavaScript` (plan B71, `simulateJavaScriptOutcome`).
+public enum FakeJavaScriptOutcome: Equatable, Sendable {
+    /// The script's completion value as the engine hands it over: compact JSON text, nil for
+    /// `undefined`. The tab converts it with `JavaScriptResultText`, like the Chromium engine.
+    case value(json: String?)
+    /// The call fails with this error (`.javaScriptException`, `.unsupported`, …).
+    case failure(EngineError)
 }
 
 /// The answer a fake dialog request got (or its default when it was dropped).
@@ -340,6 +351,8 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private var hasBeforeUnloadHandler = false
     private var pageText: String?
     private var selection = ""
+    /// Plan B71: what `evaluateJavaScript` answers; default `undefined` (empty text).
+    private var javaScriptOutcome = FakeJavaScriptOutcome.value(json: nil)
     private var findActiveOrdinal = 0
     private var colorScheme: WebColorScheme
     /// The page has a video (`simulateVideo`); `isVideoPlaying` and `isInPictureInPicture` follow
@@ -615,6 +628,20 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     }
 
     public func selectedText() async -> String { lock.withLock { selection } }
+
+    /// Plan B71: answers with the outcome a test set (`simulateJavaScriptOutcome`); the script is
+    /// logged as `.evaluateJavaScript`, never run.
+    public func evaluateJavaScript(_ source: String) async throws -> String {
+        let outcome = try lock.withLock {
+            guard !isClosed else { throw EngineError.tabClosed(id) }
+            commandLog.append(.evaluateJavaScript(source))
+            return javaScriptOutcome
+        }
+        switch outcome {
+        case .value(let json): return JavaScriptResultText.text(fromJSON: json)
+        case .failure(let error): throw error
+        }
+    }
 
     public func perform(_ command: EditCommand) async { _ = record(.edit(command)) }
 
@@ -910,6 +937,9 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
 
     /// The page's current selection (`selectedText()`).
     public func simulateSelection(_ text: String) { lock.withLock { selection = text } }
+
+    /// What later `evaluateJavaScript` calls answer (plan B71).
+    public func simulateJavaScriptOutcome(_ outcome: FakeJavaScriptOutcome) { lock.withLock { javaScriptOutcome = outcome } }
 
     /// Simulates `window.close()` (or a page that agreed to close): `.closeRequested`.
     public func simulateWindowClose() {

@@ -400,7 +400,12 @@ extension EngineError {
         case .invalidURL: self = .invalidURL
         case .invalidArgument: self = .invalidArgument
         case .requestFinished: self = .requestFinished
-        @unknown default: self = .engineFailure(nsError.localizedDescription)
+        // Plain `default`, not `@unknown default`: codes added by newer bridge headers
+        // (`OACErrorJavaScriptException`, B71) must not turn into exhaustiveness warnings.
+        default:
+            self = nsError.code == ChromiumTabCore.javaScriptExceptionCode
+                ? .javaScriptException(nsError.localizedDescription)
+                : .engineFailure(nsError.localizedDescription)
         }
     }
 }

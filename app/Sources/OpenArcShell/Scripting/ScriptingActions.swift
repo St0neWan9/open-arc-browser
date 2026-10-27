@@ -279,10 +279,8 @@ extension ScriptingHost {
         guard let live = controller.liveTab(for: tabID) else { throw ScriptingFailure.failed("The tab has no web page.") }
         do {
             return try await evaluateJavaScript(live, script)
-        } catch let failure as ScriptingFailure {
-            throw failure
         } catch {
-            throw ScriptingFailure.failed("The JavaScript failed: \(error)")
+            throw ScriptingFailure.javaScript(error)
         }
     }
 
