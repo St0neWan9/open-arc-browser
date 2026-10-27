@@ -4,8 +4,8 @@ import OpenArcDesign
 
 // Entry points of the capture tools (plan B51): File ▸ Capture… (⇧⌘2) · Capture Full Page ·
 // Capture in Portrait Mode ([01 §File], [02] observed) and the Site Control Center's camera and
-// full page buttons ([06 §12], [06 §24] observed). Share and New Boost, the other two buttons,
-// have no surface yet and stay where `toolHandler` left them.
+// full page buttons ([06 §12], [06 §24] observed). The bubble's other two buttons are the Site
+// Control Center's own (B80): Share opens the system share picker, New Boost is inert.
 
 extension ShellModel {
     /// File ▸ Capture… and the Site Control Center's camera button. [06 §24.1] observed.
@@ -20,7 +20,8 @@ extension ShellModel {
     /// The capture items need a live web page in the selected tab (not an Easel).
     var canCapturePage: Bool { selectedLiveTab != nil && sidebar.selectedEaselID == nil }
 
-    /// Runs the Site Control Center's capture buttons; the other two keep doing nothing.
+    /// Runs the Site Control Center's capture buttons, and its "⋯" menu's Manage Boosts… (Library ▸
+    /// Boosts, the same page as Window ▸ View Boosts…; [06 §19.1] observed item, target inferred).
     func installCaptureHandlers() {
         siteControls.toolHandler = { [weak self] tool, tabID in
             guard let self, self.selectedTabID == tabID else { return }
@@ -30,6 +31,7 @@ extension ShellModel {
             case .share, .newBoost: break
             }
         }
+        siteControls.manageBoostsHandler = { [weak self] in self?.openLibrary(.boosts) }
     }
 
     /// The selected page in window coordinates, for the region overlay: the single panel's page

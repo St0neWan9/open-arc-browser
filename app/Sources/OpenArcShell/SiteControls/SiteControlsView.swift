@@ -119,10 +119,13 @@ struct SiteControlsView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.canRunTools)
+                .disabled(!model.canRun(tool))
                 .help(tool.title)
                 .accessibilityLabel(tool.title)
                 .accessibilityIdentifier("openarc.siteControls.tool.\(tool.rawValue)")
+                .background {
+                    if tool == .share { SharePickerAnchor(model: model) }
+                }
             }
         }
     }
@@ -186,24 +189,27 @@ struct SiteControlsView: View {
         }
     }
 
+    /// "Insecure" / "Secure" pill and "⋯". [06 §12], [06 §17.3] observed pill; [06 §19.1] observed
+    /// menu. The menu has no icons ([06 §19.1] lists titles only). Permission rows stay in the
+    /// Settings section.
     private var footer: some View {
         HStack {
             HStack(spacing: 3) {
-                Image(systemName: model.site?.isSecure == false ? "lock.open" : "lock.fill").font(.system(size: 10))
+                Image(systemName: model.site?.isSecure == false ? "lock.slash" : "lock.fill").font(.system(size: 10))
                 Text(model.securityLabel).font(Typography.panelRowDetail.font)
             }
             .padding(.horizontal, 6)
             .frame(height: SiteControlsLocalTokens.footerHeight)
             .background(Capsule().fill(Color.primary.opacity(0.06)))
+            .accessibilityElement(children: .combine)
             .accessibilityIdentifier("openarc.siteControls.security")
             Spacer()
             Menu {
-                Button("Clear Site Data") { model.clearSiteData() }
-                ForEach(model.menuPermissionKinds, id: \.self) { kind in
-                    Menu(kind.title) {
-                        Button("Ask") { model.setPermission(kind, .ask) }
-                        Button("Allow") { model.setPermission(kind, .allow) }
-                        Button("Block") { model.setPermission(kind, .block) }
+                ForEach(Array(SiteControlsMenuItem.groups.enumerated()), id: \.offset) { index, group in
+                    if index > 0 { Divider() }
+                    ForEach(group, id: \.self) { item in
+                        Button(item.title) { model.perform(item) }
+                            .disabled(!model.isEnabled(item))
                     }
                 }
             } label: {
@@ -222,6 +228,52 @@ struct SiteControlsView: View {
         Text(text)
             .font(Typography.panelHeader.font)
             .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - Share (B80)
+
+/// Sits behind the Share button and shows the system share picker for `shareRequest` below it.
+/// The picker reports back once, with or without a chosen service, and the bubble then closes.
+private struct SharePickerAnchor: NSViewRepresentable {
+    @ObservedObject var model: SiteControlsModel
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.model = model
+        guard let request = model.shareRequest, coordinator.shownSerial != request.serial else { return }
+        coordinator.shownSerial = request.serial
+        // After this update pass: the picker runs a modal menu loop.
+        DispatchQueue.main.async { [weak view] in
+            MainActor.assumeIsolated {
+                guard let view, view.window != nil, model.shareRequest?.serial == request.serial else {
+                    model.finishShare(serial: request.serial)
+                    return
+                }
+                coordinator.pending = request.serial
+                let picker = NSSharingServicePicker(items: [request.url])
+                picker.delegate = coordinator
+                picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+            }
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, @preconcurrency NSSharingServicePickerDelegate {
+        weak var model: SiteControlsModel?
+        var shownSerial: Int?
+        var pending: Int?
+
+        /// Called once per picker: with the chosen service, or nil when it was dismissed.
+        func sharingServicePicker(_ picker: NSSharingServicePicker, didChoose service: NSSharingService?) {
+            guard let serial = pending else { return }
+            pending = nil
+            model?.finishShare(serial: serial)
+        }
     }
 }
 

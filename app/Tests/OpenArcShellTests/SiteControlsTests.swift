@@ -174,8 +174,9 @@ final class SiteControlsTests: XCTestCase {
         XCTAssertEqual(sc.lastCloseReason, .pointerLeft)
     }
 
-    /// 06 §12 tool buttons: disabled without a handler; with one, they run and close the bubble.
-    /// The shell installs the capture handler (B51); taking it away disables them.
+    /// 06 §12 tool buttons: the capture buttons are disabled without a handler; with one, they run
+    /// and close the bubble. The shell installs the capture handler (B51). Share and New Boost are
+    /// the bubble's own and stay enabled (B80).
     func testToolButtons() async throws {
         let id = try await selectExampleTab()
         let sc = model.siteControls
@@ -183,6 +184,9 @@ final class SiteControlsTests: XCTestCase {
         XCTAssertTrue(sc.canRunTools)
         sc.toolHandler = nil
         XCTAssertFalse(sc.canRunTools)
+        XCTAssertFalse(sc.canRun(.captureArea))
+        XCTAssertTrue(sc.canRun(.share))
+        XCTAssertTrue(sc.canRun(.newBoost))
         var ran: [(SiteControlsTool, UUID)] = []
         sc.toolHandler = { ran.append(($0, $1)) }
         sc.run(.captureArea)
@@ -191,13 +195,98 @@ final class SiteControlsTests: XCTestCase {
         XCTAssertEqual(sc.lastCloseReason, .action)
     }
 
-    /// The "Secure" pill reads the scheme. [06 §12] observed "Secure"; "Not Secure" inferred.
+    /// The pill reads the scheme. [06 §12] observed "Secure"; [06 §17.3] observed "Insecure".
     func testSecurityLabel() async throws {
         let id = try XCTUnwrap(model.sidebar.newTab(url: URL(string: "http://plain.example"), title: "plain"))
         await model.sidebar.settleEngineWork()
         XCTAssertEqual(model.selectedTabID, id)
         model.siteControls.present()
-        XCTAssertEqual(model.siteControls.securityLabel, "Not Secure")
+        XCTAssertEqual(model.siteControls.securityLabel, "Insecure")
+    }
+
+    /// 06 §19.1 observed: the "⋯" menu is Clear Cache · Clear Cookies ‖ Manage Boosts… · New Boost… ‖
+    /// Manage Extensions… · Add Extension… ‖ All Site Settings…, nothing else (B80).
+    func testMenuOrder() {
+        XCTAssertEqual(SiteControlsMenuItem.groups.map { $0.map(\.title) }, [
+            ["Clear Cache", "Clear Cookies"],
+            ["Manage Boosts…", "New Boost…"],
+            ["Manage Extensions…", "Add Extension…"],
+            ["All Site Settings…"],
+        ])
+        XCTAssertEqual(SiteControlsMenuItem.groups.flatMap { $0 }, SiteControlsMenuItem.allCases)
+    }
+
+    /// 06 §19.1 menu items: each one's effect (inferred targets). New Boost… is inert (Boosts are
+    /// out of v1); Manage Boosts… opens Library ▸ Boosts; All Site Settings… opens the site's
+    /// settings page; Clear Cache reloads bypassing the cache; Clear Cookies clears site data.
+    func testMenuItems() async throws {
+        let id = try await selectExampleTab()
+        let live = try XCTUnwrap(model.sidebar.liveTab(for: id) as? FakeTab)
+        let sc = model.siteControls
+        sc.present()
+        XCTAssertTrue(SiteControlsMenuItem.allCases.allSatisfy(sc.isEnabled))
+
+        sc.perform(.newBoost)
+        sc.run(.newBoost)
+        XCTAssertTrue(sc.isPresented)
+        XCTAssertNil(model.library.section)
+
+        sc.perform(.clearCache)
+        await sc.settle()
+        XCTAssertTrue(live.commands.contains(.reload(bypassingCache: true)))
+        sc.perform(.clearCookies)
+        await sc.settle()
+        XCTAssertEqual(provider.appliedChanges, [.clearSiteData])
+        XCTAssertTrue(sc.isPresented)
+
+        sc.perform(.manageBoosts)
+        XCTAssertFalse(sc.isPresented)
+        XCTAssertEqual(model.library.section, .boosts)
+        model.exitLibrary()
+
+        try await model.activate(tabID: id)
+        sc.present()
+        sc.perform(.allSiteSettings)
+        XCTAssertFalse(sc.isPresented)
+        let opened = try XCTUnwrap(model.selectedTabID.flatMap { model.workspace.tabs[$0]?.url })
+        XCTAssertEqual(opened.absoluteString, "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com")
+
+        sc.manageBoostsHandler = nil
+        XCTAssertFalse(sc.isEnabled(.manageBoosts))
+    }
+
+    /// 06 §12 / §17.3 Share button (B80): asks for the system share picker with the page's link and
+    /// keeps the bubble open while it is up (also when the pointer leaves for the picker); the
+    /// bubble closes when the picker finishes. A stale picker's answer is ignored.
+    func testShareOpensSystemPicker() async throws {
+        let id = try await selectExampleTab()
+        let sc = model.siteControls
+        var captured: [SiteControlsTool] = []
+        sc.toolHandler = { tool, _ in captured.append(tool) }
+        sc.present()
+        sc.run(.share)
+        let request = try XCTUnwrap(sc.shareRequest)
+        XCTAssertEqual(request.tabID, id)
+        XCTAssertEqual(request.url, URL(string: "https://example.com"))
+        XCTAssertTrue(captured.isEmpty)
+        XCTAssertTrue(sc.isPresented)
+        sc.pointerExited()
+        XCTAssertTrue(sc.isPresented)
+
+        sc.finishShare(serial: request.serial - 1)
+        XCTAssertNotNil(sc.shareRequest)
+        sc.finishShare(serial: request.serial)
+        XCTAssertNil(sc.shareRequest)
+        XCTAssertFalse(sc.isPresented)
+        XCTAssertEqual(sc.lastCloseReason, .action)
+
+        // Closing the bubble drops a pending picker request; a new one gets a new serial.
+        sc.present()
+        sc.run(.share)
+        let second = try XCTUnwrap(sc.shareRequest)
+        XCTAssertGreaterThan(second.serial, request.serial)
+        sc.close(.escape)
+        XCTAssertNil(sc.shareRequest)
     }
 
     private func waitUntil(_ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
