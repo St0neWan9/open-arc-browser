@@ -62,7 +62,8 @@ final class TreeOpsSplitRepairTests: XCTestCase {
         XCTAssertEqual(children[0].fraction, 0.4, accuracy: 1e-9)
         XCTAssertEqual(children[1].fraction, 0.6, accuracy: 1e-9)
         XCTAssertEqual(repaired.meta.modifiedAt(SplitLayout.FieldGroup.layout), at(2))
-        XCTAssertEqual(repaired.meta.fieldGroupModifiedAt.keys.sorted(), ["layout"])
+        // Only `layout` is stamped; the row's title/icon group (B77) keeps its creation time.
+        XCTAssertEqual(repaired.meta.modifiedAt(SplitLayout.FieldGroup.naming), t0)
         XCTAssertEqual(out.tabs, s.tabs)
     }
 

@@ -216,6 +216,7 @@ public struct Folder: SyncableEntity, Hashable {
     public enum FieldGroup: String, SyncFieldGroup {
         /// spaceID + parentFolderID + sortKey, always moved together.
         case placement
+        /// Title and icon.
         case naming
         /// Expanded / collapsed.
         case display
@@ -227,15 +228,20 @@ public struct Folder: SyncableEntity, Hashable {
     /// nil means top level of the pinned area.
     public var parentFolderID: UUID?
     public var title: String
+    /// Icon set with Change Icon… (an emoji or an icon name, like `Space.icon`); nil = the folder
+    /// glyph. Part of the `naming` group. [06 §21.5] observed item (B77). Data written before the
+    /// field existed decodes as nil.
+    public var icon: String?
     public var isExpanded: Bool
     public var sortKey: SortKey
     public var meta: SyncMetadata
 
-    public init(id: UUID, spaceID: UUID, parentFolderID: UUID? = nil, title: String, isExpanded: Bool = true, sortKey: SortKey, now: Date) {
+    public init(id: UUID, spaceID: UUID, parentFolderID: UUID? = nil, title: String, icon: String? = nil, isExpanded: Bool = true, sortKey: SortKey, now: Date) {
         self.id = id
         self.spaceID = spaceID
         self.parentFolderID = parentFolderID
         self.title = title
+        self.icon = icon
         self.isExpanded = isExpanded
         self.sortKey = sortKey
         self.meta = .new(at: now, groups: FieldGroup.self)
@@ -273,7 +279,7 @@ public struct TabNode: SyncableEntity, Hashable {
         case placement
         /// Current URL, page title, favicon.
         case content
-        /// User-defined title (Rename…).
+        /// User-defined title (Rename…) and icon (Change Icon…).
         case naming
         /// Original URL of a pinned page (Edit Pinned Page ▸).
         case pin
@@ -289,6 +295,10 @@ public struct TabNode: SyncableEntity, Hashable {
     public var title: String
     /// Title set by the user; nil means use the page title.
     public var customTitle: String?
+    /// Icon set with Change Icon… (an emoji or an icon name, like `Space.icon`); nil = the
+    /// favicon. Part of the `naming` group. [06 §21.5] observed item (B77). Data written before
+    /// the field existed decodes as nil.
+    public var icon: String?
     /// Original URL captured when pinned / favorited (05 §context menus "Replace Pinned URL with Current", observed).
     public var pinnedURL: URL?
     public var faviconURL: URL?
@@ -302,6 +312,7 @@ public struct TabNode: SyncableEntity, Hashable {
         url: URL?,
         title: String,
         customTitle: String? = nil,
+        icon: String? = nil,
         pinnedURL: URL? = nil,
         faviconURL: URL? = nil,
         now: Date
@@ -312,6 +323,7 @@ public struct TabNode: SyncableEntity, Hashable {
         self.url = url
         self.title = title
         self.customTitle = customTitle
+        self.icon = icon
         self.pinnedURL = pinnedURL
         self.faviconURL = faviconURL
         self.lastActiveAt = now
@@ -413,18 +425,31 @@ public struct SplitChild: Codable, Hashable, Sendable {
 
 /// One split group. The sidebar treats the tabs in a group as a unit (06 §5, observed).
 public struct SplitLayout: SyncableEntity, Hashable {
-    public enum FieldGroup: String, SyncFieldGroup { case layout }
+    public enum FieldGroup: String, SyncFieldGroup {
+        /// spaceID + pane tree.
+        case layout
+        /// The split row's own title and icon (split row ▸ Rename… / Change Icon…). Added in B77;
+        /// records written before have no group time, which falls back to `createdAt`.
+        case naming
+    }
     public static let recordTypeName = "SplitLayout"
 
     public let id: UUID
     public var spaceID: UUID
     public var root: SplitNode
+    /// Title set with the split row's Rename…; nil shows the members' titles. [06 §21.5] observed
+    /// item (B77); what the row shows then is inferred.
+    public var title: String?
+    /// Icon set with the split row's Change Icon… (emoji or icon name); nil = the members' favicons.
+    public var icon: String?
     public var meta: SyncMetadata
 
-    public init(id: UUID, spaceID: UUID, root: SplitNode, now: Date) {
+    public init(id: UUID, spaceID: UUID, root: SplitNode, title: String? = nil, icon: String? = nil, now: Date) {
         self.id = id
         self.spaceID = spaceID
         self.root = root
+        self.title = title
+        self.icon = icon
         self.meta = .new(at: now, groups: FieldGroup.self)
     }
 }

@@ -50,8 +50,8 @@ enum Fx {
 
     static func folder(_ id: UUID = uuid(4), variant: Int = 0) -> Folder {
         variant == 0
-            ? Folder(id: id, spaceID: uuid(3), parentFolderID: uuid(40), title: "Reading", isExpanded: true, sortKey: key("i"), now: t0)
-            : Folder(id: id, spaceID: uuid(103), parentFolderID: uuid(140), title: "Docs", isExpanded: false, sortKey: key("x"), now: t0)
+            ? Folder(id: id, spaceID: uuid(3), parentFolderID: uuid(40), title: "Reading", icon: "📚", isExpanded: true, sortKey: key("i"), now: t0)
+            : Folder(id: id, spaceID: uuid(103), parentFolderID: uuid(140), title: "Docs", icon: "book", isExpanded: false, sortKey: key("x"), now: t0)
     }
 
     static func tab(_ id: UUID = uuid(5), variant: Int = 0) -> TabNode {
@@ -59,14 +59,14 @@ enum Fx {
         if variant == 0 {
             tab = TabNode(
                 id: id, location: .pinned(spaceID: uuid(3), folderID: uuid(4)), sortKey: key("i"),
-                url: URL(string: "https://a.example/page?q=1"), title: "A page", customTitle: "Mine",
+                url: URL(string: "https://a.example/page?q=1"), title: "A page", customTitle: "Mine", icon: "⭐️",
                 pinnedURL: URL(string: "https://a.example/"), faviconURL: URL(string: "https://a.example/favicon.ico"), now: t0
             )
             tab.lastActiveAt = t(1)
         } else {
             tab = TabNode(
                 id: id, location: .favorite(profileID: uuid(101)), sortKey: key("q"),
-                url: URL(string: "https://b.example/"), title: "B page", customTitle: "Theirs",
+                url: URL(string: "https://b.example/"), title: "B page", customTitle: "Theirs", icon: "star",
                 pinnedURL: URL(string: "https://b.example/start"), faviconURL: URL(string: "https://b.example/icon.png"), now: t0
             )
             tab.lastActiveAt = t(2)
@@ -93,7 +93,8 @@ enum Fx {
                 SplitChild(node: .pane(tabID: uuid(53)), fraction: 0.3),
                 SplitChild(node: .pane(tabID: uuid(54)), fraction: 0.7),
             ])
-        return SplitLayout(id: id, spaceID: variant == 0 ? uuid(3) : uuid(103), root: root, now: t0)
+        return SplitLayout(id: id, spaceID: variant == 0 ? uuid(3) : uuid(103), root: root,
+                           title: variant == 0 ? "Research" : "Compare", icon: variant == 0 ? "🔬" : "square.split.2x1", now: t0)
     }
 
     static func easel(_ id: UUID = uuid(8), variant: Int = 0) -> Easel {

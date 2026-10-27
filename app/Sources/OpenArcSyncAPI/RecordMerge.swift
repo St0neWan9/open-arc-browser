@@ -131,7 +131,9 @@ public enum RecordMerge {
             m.spaceID = l.spaceID
             m.parentFolderID = l.parentFolderID
             m.sortKey = l.sortKey
-        case .naming: m.title = l.title
+        case .naming:
+            m.title = l.title
+            m.icon = l.icon
         case .display: m.isExpanded = l.isExpanded
         }
     }
@@ -145,7 +147,9 @@ public enum RecordMerge {
             m.url = l.url
             m.title = l.title
             m.faviconURL = l.faviconURL
-        case .naming: m.customTitle = l.customTitle
+        case .naming:
+            m.customTitle = l.customTitle
+            m.icon = l.icon
         case .pin: m.pinnedURL = l.pinnedURL
         case .activity: m.lastActiveAt = l.lastActiveAt
         }
@@ -169,6 +173,9 @@ public enum RecordMerge {
         case .layout:
             m.spaceID = l.spaceID
             m.root = l.root
+        case .naming:
+            m.title = l.title
+            m.icon = l.icon
         }
     }
 

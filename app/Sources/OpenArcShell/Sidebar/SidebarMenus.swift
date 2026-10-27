@@ -8,10 +8,11 @@ import OpenArcDesign
 // menu follows [05 §context menus] (observed items, separators inferred like the favorite menu).
 // The incognito tab menu lives in `IncognitoSidebar.swift` ([06 §20.2]).
 //
-// Items whose feature does not exist yet stay visible and disabled (B55): Change Icon…, Customize
-// Page…, Edit Pinned Page ▸ Edit…, Share Folder…, Turn “<name>” into Space, Share Split View…,
-// a split row's Change Icon… / Rename…, Live Folders ▸, Share Space…,
-// Export “<name>” into Folder ▸, and Move to ▸ Profile ▸ for pinned tabs.
+// Items whose behavior the spec never observed stay visible and disabled (plan Q19): Customize
+// Page…, Share Folder…, Share Split View…, Live Folders ▸ and Share
+// Space…. B77 enabled Change Icon…, Edit Pinned Page ▸ Edit…, Show Unread Badge, Turn “<name>”
+// into Space, Export “<name>” into Folder ▸, Move to ▸ Profile ▸ / New Space…, and the split
+// row's Change Icon… / Rename….
 
 /// Which tab menu a row shows.
 enum SidebarTabMenuKind {
@@ -51,8 +52,15 @@ struct SidebarTabMenu: View {
         SidebarShareMenu(url: link)
         Divider()
 
-        // Change Icon… · Rename… · Mute (disabled without sound) · Customize Page…
-        Button("Change Icon…") {}.disabled(true)
+        // Show Unread Badge (favorites only; [05 §context menus] observed, listed before Change
+        // Icon…) · Change Icon… · Rename… · Mute (disabled without sound) · Customize Page…
+        if kind == .favorite {
+            Toggle("Show Unread Badge", isOn: Binding(
+                get: { viewModel.showsUnreadBadge(id) },
+                set: { _ in viewModel.toggleUnreadBadge(id) }
+            ))
+        }
+        Button("Change Icon…") { viewModel.beginChangeIcon(id) }
         Button("Rename…") { viewModel.beginRename(id) }
         Button(viewModel.liveState(for: id)?.isMuted == true ? "Unmute" : "Mute") { viewModel.toggleMute(id) }
             .disabled(viewModel.liveState(for: id)?.isAudible != true)
@@ -64,7 +72,7 @@ struct SidebarTabMenu: View {
             Menu("Edit Pinned Page") {
                 Button("Replace Pinned URL with Current") { viewModel.replacePinnedURLWithCurrent(id) }
                     .disabled(!viewModel.canReplacePinnedURL(id))
-                Button("Edit…") {}.disabled(true)
+                Button("Edit…") { viewModel.beginEditPinnedPage(id) }
             }
             Divider()
             Button("Open in Split View") { viewModel.openInSplitView(id) }
@@ -72,7 +80,7 @@ struct SidebarTabMenu: View {
             if kind == .favorite {
                 Menu("Move to") { SidebarProfileMoveMenu(viewModel: viewModel, tab: tab) }
             } else {
-                SidebarMoveToSpaceMenu(viewModel: viewModel, currentSpaceID: tab.location.spaceID, showsProfiles: true) { space in
+                SidebarMoveToSpaceMenu(viewModel: viewModel, itemID: id, currentSpaceID: tab.location.spaceID, profileTabID: id) { space in
                     viewModel.moveTab(id, toSpace: space)
                 }
             }
@@ -87,7 +95,7 @@ struct SidebarTabMenu: View {
             Divider()
             Button("Add Split View") { viewModel.openInSplitView(id) }
             Button("Duplicate") { viewModel.duplicateTab(id) }
-            SidebarMoveToSpaceMenu(viewModel: viewModel, currentSpaceID: tab.location.spaceID) { space in
+            SidebarMoveToSpaceMenu(viewModel: viewModel, itemID: id, currentSpaceID: tab.location.spaceID) { space in
                 viewModel.moveTab(id, toSpace: space)
             }
             Divider()
@@ -130,22 +138,21 @@ struct SidebarArchiveItems: View {
 }
 
 /// Move to ▸ for Today tabs, pinned tabs, folders and split rows: each Space (the current one
-/// checked) · — · New Space…. [06 §21.5] observed. Pinned tabs also list Profile ▸ first
-/// ([05 §context menus] observed, not implemented: disabled).
+/// checked) · — · New Space…, which moves the item into the Space once it is created (B77).
+/// [06 §21.5] observed. Pinned tabs also list Profile ▸ first ([05 §context menus] observed).
 struct SidebarMoveToSpaceMenu: View {
     @ObservedObject var viewModel: SidebarViewModel
+    /// The tab, folder or split layout the menu moves.
+    let itemID: UUID
     let currentSpaceID: UUID?
-    var showsProfiles = false
+    /// Set for a pinned tab: shows Profile ▸ (local profiles, B73) for it.
+    var profileTabID: UUID?
     let move: (UUID) -> Void
 
     var body: some View {
         Menu("Move to") {
-            if showsProfiles {
-                Menu("Profile") {
-                    ForEach(viewModel.menuProfiles, id: \.id) { profile in
-                        Button(profile.name) {}.disabled(true)
-                    }
-                }
+            if let profileTabID {
+                Menu("Profile") { SidebarProfileItems(viewModel: viewModel, tabID: profileTabID) }
                 Divider()
             }
             ForEach(viewModel.menuSpaces, id: \.id) { space in
@@ -155,8 +162,7 @@ struct SidebarMoveToSpaceMenu: View {
                 ))
             }
             Divider()
-            // Opens New Space; the item is not moved there afterwards (inferred gap, B55).
-            Button("New Space…") { viewModel.requestFromMenu(.newSpace) }.disabled(!viewModel.canRequest)
+            Button("New Space…") { viewModel.requestNewSpace(moving: itemID) }.disabled(!viewModel.canRequest)
         }
     }
 }
@@ -168,14 +174,24 @@ struct SidebarProfileMoveMenu: View {
     let tab: TabNode
 
     var body: some View {
-        let current: UUID? = if case .favorite(let p) = tab.location { viewModel.workspace.localProfileID(for: p) } else { nil }
-        Menu("Profile") {
-            ForEach(viewModel.menuProfiles, id: \.id) { profile in
-                Toggle(profile.name, isOn: Binding(
-                    get: { profile.id == current },
-                    set: { if $0 { viewModel.moveFavorite(tab.id, toProfile: profile.id) } }
-                ))
-            }
+        Menu("Profile") { SidebarProfileItems(viewModel: viewModel, tabID: tab.id) }
+    }
+}
+
+/// Each local profile (B73), the tab's own checked; picking another moves the tab there
+/// (`TreeOps.moveTabToProfile`). A profile without a Space cannot take a pinned tab: disabled.
+struct SidebarProfileItems: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let tabID: UUID
+
+    var body: some View {
+        let current = viewModel.profileID(ofTab: tabID)
+        ForEach(viewModel.menuProfiles, id: \.id) { profile in
+            Toggle(profile.name, isOn: Binding(
+                get: { profile.id == current },
+                set: { if $0, profile.id != current { viewModel.moveTabToProfile(tabID, profileID: profile.id) } }
+            ))
+            .disabled(profile.id != current && !viewModel.canMoveTab(tabID, toProfile: profile.id))
         }
     }
 }
@@ -213,12 +229,13 @@ struct SidebarSpaceMenu: View {
             .disabled(true)
             Divider()
             Button("Share Space…") {}.disabled(true)
+            let others = viewModel.menuSpaces.filter { $0.id != space.id }
             Menu("Export “\(space.name)” into Folder") {
-                ForEach(viewModel.menuSpaces.filter { $0.id != space.id }, id: \.id) { other in
-                    Button(other.name) {}.disabled(true)
+                ForEach(others, id: \.id) { other in
+                    Button(other.name) { viewModel.exportSpace(space.id, intoSpace: other.id) }
                 }
             }
-            .disabled(true)
+            .disabled(others.isEmpty)
             Divider()
             Button("Manage Spaces…") { viewModel.requestFromMenu(.manageSpaces) }.disabled(!canRequest)
             Divider()
@@ -239,13 +256,13 @@ struct SidebarFolderMenu: View {
         Button("Share Folder…") {}.disabled(true)
         Divider()
         Button("New Nested Folder…") { viewModel.requestNewFolder(parent: folder.id) }
-        Button("Turn “\(folder.title)” into Space") {}.disabled(true)
+        Button("Turn “\(folder.title)” into Space") { viewModel.turnFolderIntoSpace(folder.id) }
         Divider()
-        Button("Change Icon…") {}.disabled(true)
+        Button("Change Icon…") { viewModel.beginChangeIcon(folder.id) }
         Button("Rename…") { viewModel.beginRename(folder.id) }
         Divider()
         Button("Duplicate") { viewModel.duplicateFolder(folder.id) }
-        SidebarMoveToSpaceMenu(viewModel: viewModel, currentSpaceID: folder.spaceID) { space in
+        SidebarMoveToSpaceMenu(viewModel: viewModel, itemID: folder.id, currentSpaceID: folder.spaceID) { space in
             viewModel.moveFolder(folder.id, toSpace: space)
         }
         Divider()
@@ -278,11 +295,11 @@ struct SidebarSplitGroupMenu: View {
             SidebarSplitMemberMenu(viewModel: viewModel, tab: member)
         }
         Divider()
-        Button("Change Icon…") {}.disabled(true)
-        Button("Rename…") {}.disabled(true)
+        Button("Change Icon…") { viewModel.beginChangeIcon(layoutID) }
+        Button("Rename…") { viewModel.beginRename(layoutID) }
         Divider()
         Button("Duplicate") { viewModel.duplicateSplitGroup(layoutID) }
-        SidebarMoveToSpaceMenu(viewModel: viewModel, currentSpaceID: viewModel.splitLayout(layoutID)?.spaceID) { space in
+        SidebarMoveToSpaceMenu(viewModel: viewModel, itemID: layoutID, currentSpaceID: viewModel.splitLayout(layoutID)?.spaceID) { space in
             viewModel.moveSplitGroup(layoutID, toSpace: space)
         }
         Divider()

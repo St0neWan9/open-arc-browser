@@ -95,6 +95,7 @@ DEFINE SCHEMA
         placement_parentFolderID  STRING,
         placement_sortKey         STRING,
         naming_title              ENCRYPTED STRING,
+        naming_icon               ENCRYPTED STRING,
         display_isExpanded        INT64,
         meta_createdAt            TIMESTAMP,
         meta_modifiedAt           TIMESTAMP,
@@ -117,6 +118,7 @@ DEFINE SCHEMA
         content_title           ENCRYPTED STRING,
         content_faviconURL      ENCRYPTED STRING,
         naming_customTitle      ENCRYPTED STRING,
+        naming_icon             ENCRYPTED STRING,
         pin_url                 ENCRYPTED STRING,
         activity_lastActiveAt   TIMESTAMP,
         meta_createdAt          TIMESTAMP,
@@ -152,12 +154,15 @@ DEFINE SCHEMA
         "___recordID"           REFERENCE QUERYABLE,
         layout_spaceID          STRING,
         layout_root             BYTES,
+        naming_title            ENCRYPTED STRING,
+        naming_icon             ENCRYPTED STRING,
         meta_createdAt          TIMESTAMP,
         meta_modifiedAt         TIMESTAMP,
         meta_version            INT64,
         meta_isTombstone        INT64,
         meta_deletedAt          TIMESTAMP,
-        groupTime_layout        TIMESTAMP
+        groupTime_layout        TIMESTAMP,
+        groupTime_naming        TIMESTAMP
     );
 
     RECORD TYPE Easel (

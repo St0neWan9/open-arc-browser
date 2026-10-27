@@ -553,7 +553,7 @@ public final class ShellModel: ObservableObject {
         // An incognito window has no Spaces to create, edit or manage. inferred.
         if isIncognito {
             switch request {
-            case .newSpace, .renameSpace, .changeSpaceIcon, .editSpaceTheme, .manageSpaces, .newProfile: return
+            case .newSpace, .newSpaceWithItem, .renameSpace, .changeSpaceIcon, .editSpaceTheme, .manageSpaces, .newProfile: return
             default: break
             }
         }
@@ -564,6 +564,8 @@ public final class ShellModel: ObservableObject {
             if let id = selectedTabID { presentCommandBarInPane(id) } else { presentCommandBar(.newTab) }
         case .toggleSidebar: toggleSidebar()
         case .newSpace: spaceFlow.beginCreate()
+        // Move to ▸ New Space…: the item moves into the Space once it is created. [06 §21.5] B77.
+        case .newSpaceWithItem(let itemID): spaceFlow.beginCreate(moving: itemID)
         case .renameSpace(let spaceID): spaceFlow.beginRename(spaceID: spaceID)
         case .changeSpaceIcon(let spaceID): spaceFlow.beginChangeIcon(spaceID: spaceID)
         case .editSpaceTheme(let spaceID): spaceFlow.beginEditTheme(spaceID: spaceID)
@@ -571,8 +573,16 @@ public final class ShellModel: ObservableObject {
         case .openLibrary: openLibrary()
         case .showSiteControls: siteControls.present()
         case .newProfile(let spaceID): profileFlow.beginNewProfile(forSpace: spaceID)
-        default:
-            // Share, theme editor, profiles… have no surface yet.
+        // Tab menu Share: the system share picker for the tab's link. [06 §20.2], [06 §21.5] B77.
+        case .share(let tabID): sidebar.beginShare(tabID)
+        case .changeIcon(let tabID): sidebar.beginChangeIcon(tabID)
+        case .toggleUnreadBadge(let tabID): sidebar.toggleUnreadBadge(tabID)
+        case .editPinnedPage(let tabID): sidebar.beginEditPinnedPage(tabID)
+        case .moveTab(let tabID, let profileID): sidebar.moveTabToProfile(tabID, profileID: profileID)
+        case .exportSpace(let spaceID, let intoSpaceID): sidebar.exportSpace(spaceID, intoSpace: intoSpaceID)
+        case .setSpaceProfile(let spaceID, let profileID): sidebar.setSpaceProfile(spaceID, profileID: profileID)
+        case .shareSpace, .showLiveFolders:
+            // Not observed in the spec: the items stay disabled (plan Q19).
             break
         }
     }

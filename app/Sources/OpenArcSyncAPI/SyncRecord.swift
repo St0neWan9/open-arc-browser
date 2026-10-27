@@ -39,7 +39,8 @@ public enum SyncRecordType: String, Codable, CaseIterable, Hashable, Sendable {
         case .folder: return [Folder.FieldGroup.naming.rawValue]
         case .tab: return Set([TabNode.FieldGroup.content, .naming, .pin].map(\.rawValue))
         case .archiveItem: return [ArchiveItem.FieldGroup.content.rawValue]
-        case .splitLayout: return []
+        // The split row's own title and icon (B77) are user content; the pane tree stays plain.
+        case .splitLayout: return [SplitLayout.FieldGroup.naming.rawValue]
         // The title, and what an element draws (text, image bytes, stroke shapes), are user
         // content. Geometry, stacking and style stay plain.
         case .easel: return [Easel.FieldGroup.naming.rawValue]

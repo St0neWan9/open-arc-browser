@@ -390,8 +390,15 @@ struct SidebarFavoriteCell: View {
         let palette = viewModel.palette
         let isSelected = viewModel.isSelected(tab.id)
         let radius = CGFloat(Metrics.Sidebar.favoritesCornerRadius)
-        SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: SidebarLocalTokens.favoriteIconSize,
-                           tint: palette.ink(\.faviconPlaceholder).swiftUI, placeholder: .roundedSquare)
+        Group {
+            if let icon = tab.icon {
+                // Change Icon… replaces the favicon. [06 §21.5] observed item (B77).
+                SidebarCustomIconView(icon: icon, size: SidebarLocalTokens.favoriteIconSize, tint: palette.primaryText.swiftUI)
+            } else {
+                SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: SidebarLocalTokens.favoriteIconSize,
+                                   tint: palette.ink(\.faviconPlaceholder).swiftUI, placeholder: .roundedSquare)
+            }
+        }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.fill(palette: palette, isSelected: isSelected, surface: surface).swiftUI))
             .overlay {
@@ -405,12 +412,19 @@ struct SidebarFavoriteCell: View {
             }
             // The favorite whose Peek is open carries a small corner badge. [06 §22.2] observed (B49).
             .overlay(alignment: .topTrailing) {
-                if viewModel.linkPeekSourceTabID == tab.id { LinkPeekSourceBadge() }
+                if viewModel.linkPeekSourceTabID == tab.id {
+                    LinkPeekSourceBadge()
+                } else if let count = viewModel.unreadCount(tab.id), count > 0 {
+                    // Show Unread Badge. [05 §context menus] observed item; look inferred (B77).
+                    FavoriteUnreadBadge(count: count)
+                }
             }
             .contentShape(Rectangle())
             .onTapGesture { viewModel.selectTab(tab.id) }
             .contextMenu { SidebarTabMenu(viewModel: viewModel, tab: tab, kind: .favorite) }
-            .help(tab.displayTitle)
+            // With the badge on, the hover tip reports the unread state ("No unread emails, you can
+            // exhale! 🌿", [06 §12] observed); otherwise the title. B77.
+            .help(viewModel.favoriteHoverTip(tab.id) ?? tab.displayTitle)
             .accessibilityLabel(tab.displayTitle)
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier("openarc.sidebar.favorite.\(tab.id.uuidString)")

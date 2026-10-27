@@ -34,6 +34,9 @@ public enum SidebarRequest: Equatable, Sendable {
     case editPinnedPage(tabID: UUID)
     case moveTab(tabID: UUID, toProfile: UUID)
     case newSpace
+    /// Move to ▸ New Space…: opens New Space; once it is created the item (tab, folder or split
+    /// layout id) moves there. [06 §21.5] observed item (B77).
+    case newSpaceWithItem(itemID: UUID)
     case changeSpaceIcon(spaceID: UUID)
     case renameSpace(spaceID: UUID)
     case editSpaceTheme(spaceID: UUID)
@@ -99,6 +102,12 @@ public final class SidebarViewModel: ObservableObject {
     @Published private(set) var quickListFolderID: UUID?
     /// Text in the quick list's "Search <folder>…" field. [06 §14] observed field; filtering inferred.
     @Published var quickListQuery = ""
+    /// Tab, folder or split layout whose Change Icon… sheet is open. [06 §21.5] observed item. B77.
+    @Published var iconPickerItemID: UUID?
+    /// Pinned tab or favorite whose Edit Pinned Page ▸ Edit… sheet is open. [06 §21.5] observed. B77.
+    @Published var pinnedPageEditorTabID: UUID?
+    /// Pending system share picker for a tab's link (tab menu Share). [06 §20.2] observed item. B77.
+    @Published var shareRequest: SidebarShareRequest?
 
     // MARK: Hooks for the shell
 
@@ -845,6 +854,9 @@ public final class SidebarViewModel: ObservableObject {
             mutate { try TreeOps.renameEasel($0, id: easelID, title: trimmed, now: now()) }
         } else if workspace.tabs[id] != nil {
             mutate { try TreeOps.renameTab($0, id: id, customTitle: trimmed.isEmpty ? nil : trimmed, now: now()) }
+        } else if workspace.splits[id] != nil {
+            // Split row ▸ Rename…; blank goes back to the members' titles. [06 §21.5] B77.
+            mutate { try TreeOps.renameSplit($0, layoutID: id, title: trimmed, now: now()) }
         } else if workspace.folders[id] != nil, !trimmed.isEmpty {
             mutate { try TreeOps.renameFolder($0, id: id, title: trimmed, now: now()) }
         }
