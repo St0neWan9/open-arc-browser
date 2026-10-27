@@ -240,6 +240,16 @@ public final class AppPreferences: @unchecked Sendable {
         set { setBool(newValue, Self.favoritesEmptyCardDismissedKey) }
     }
 
+    static let unreadBadgeTabIDsKey = "\(keyPrefix)sidebar.unreadBadgeTabIDs"
+
+    /// Favorites whose "Show Unread Badge" is on ([05 §context menus] observed item). Per device:
+    /// a display choice, like the dismissed empty card (inferred, B77). Ids of removed favorites
+    /// are harmless and stay until toggled.
+    public var unreadBadgeTabIDs: Set<UUID> {
+        get { Set(((value(Self.unreadBadgeTabIDsKey) as? [String]) ?? []).compactMap(UUID.init(uuidString:))) }
+        set { setValue(newValue.map(\.uuidString).sorted(), Self.unreadBadgeTabIDsKey) }
+    }
+
     // MARK: Storage
 
     func boolValue(_ key: String) -> Bool? { value(key) as? Bool }

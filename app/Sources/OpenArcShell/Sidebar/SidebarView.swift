@@ -122,6 +122,8 @@ public struct SidebarView: View {
         .sheet(isPresented: $viewModel.isNewFolderSheetPresented) {
             SidebarNewFolderSheet(viewModel: viewModel)
         }
+        // Change Icon…, Edit Pinned Page ▸ Edit… and the tab Share picker (B77).
+        .modifier(SidebarItemEditSheets(viewModel: viewModel))
         .sheet(isPresented: deleteBinding) {
             DeleteSpaceSheet(spaceName: deleteSpaceName, palette: palette) {
                 viewModel.cancelDeleteSpace()

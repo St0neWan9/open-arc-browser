@@ -83,6 +83,8 @@ public final class SpaceFlowModel: ObservableObject {
     @Published public private(set) var iconPickerSpaceID: UUID?
     /// Space whose theme bubble is open (Spaces ▸ Edit Theme… / Edit Theme Color…). [06 §2] observed.
     @Published public private(set) var themeEditorSpaceID: UUID?
+    /// Item that Move to ▸ New Space… moves into the Space being created (B77).
+    @Published public private(set) var pendingMoveItemID: UUID?
     /// Last rejected operation, for tests and diagnostics.
     @Published public private(set) var lastError: Error?
 
@@ -122,18 +124,22 @@ public final class SpaceFlowModel: ObservableObject {
     }
 
     /// Spaces ▸ New Space… / the dock "+" button: shows the creation view with a fresh form.
-    public func beginCreate() {
+    /// `moving` (Move to ▸ New Space…, [06 §21.5] observed item, B77) names a tab, folder or split
+    /// layout that moves into the Space once it is created; Cancel leaves it where it is.
+    public func beginCreate(moving itemID: UUID? = nil) {
         draftName = ""
         draftIcon = nil
         draftTheme = SpaceThemeDraft()
         draftProfileID = sidebar.currentProfileID
         renamingSpaceID = nil
         iconPickerSpaceID = nil
+        pendingMoveItemID = itemID
         isCreating = true
     }
 
     /// "Cancel": back to the sidebar, nothing changed. [06 §1] observed.
     public func cancelCreate() {
+        pendingMoveItemID = nil
         isCreating = false
     }
 
@@ -157,6 +163,12 @@ public final class SpaceFlowModel: ObservableObject {
             )
         }) else { return nil }
         isCreating = false
+        // Move to ▸ New Space…: the item goes into the new Space before the sidebar shows it, so a
+        // moved selected tab stays selected there (inferred).
+        if let item = pendingMoveItemID {
+            pendingMoveItemID = nil
+            sidebar.moveItem(item, toSpace: spaceID)
+        }
         sidebar.selectSpace(spaceID)
         return spaceID
     }

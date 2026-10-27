@@ -202,7 +202,7 @@ struct NewSpaceIllustration: View {
                 withAnimation(ShellMotion.spaceCreateFade) { isShown = true }
                 try? await Task.sleep(nanoseconds: UInt64((N.holdDuration) * 1_000_000_000))
                 guard !Task.isCancelled else { return }
-                withAnimation(ShellMotion.spaceCreateFade) { isShown = false }
+                withAnimation(ShellMotion.newSpaceIllustrationFade) { isShown = false }
                 try? await Task.sleep(nanoseconds: UInt64(N.fadeDuration * 1_000_000_000))
                 guard !Task.isCancelled else { return }
                 onFinished()

@@ -82,6 +82,9 @@ struct SidebarTabRowView: View {
                         .foregroundStyle(textColor)
                 } else if live?.isLoading == true {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
+                } else if let icon = tab.icon {
+                    // Change Icon… replaces the favicon. [06 §21.5] observed item (B77).
+                    SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor)
                 } else {
                     SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: iconSize, tint: placeholderTint(isSelected: isSelected, palette: palette), placeholder: .roundedSquare)
                 }
@@ -211,20 +214,31 @@ struct SidebarSplitGroupRowView: View {
 
     @Environment(\.windowSurface) private var surface
     @State private var isHovering = false
+    @State private var renameText = ""
+    @FocusState private var renameFocused: Bool
 
     var body: some View {
         let palette = viewModel.palette
         let isSelected = viewModel.isGroupSelected(group)
         let textColor = isSelected ? palette.selectedTabText.swiftUI : palette.rowTitleText.swiftUI
+        let layout = viewModel.splitLayout(group.layoutID)
 
         SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth) {
-            ForEach(Array(group.members.enumerated()), id: \.element.id) { index, member in
-                if index > 0 {
-                    Rectangle()
-                        .fill(textColor.opacity(SidebarLocalTokens.splitGroupDividerOpacity))
-                        .frame(width: SidebarLocalTokens.separatorThickness, height: SidebarLocalTokens.splitGroupDividerHeight)
+            if viewModel.renamingItemID == group.layoutID {
+                // Split row ▸ Rename…: inline, like a tab row. [06 §21.5] observed item (B77).
+                renameField(layout: layout, textColor: textColor)
+            } else if layout?.title != nil || layout?.icon != nil {
+                // A named split row shows its own icon and title instead of the members'. inferred (B77).
+                namedCell(layout: layout, textColor: textColor)
+            } else {
+                ForEach(Array(group.members.enumerated()), id: \.element.id) { index, member in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(textColor.opacity(SidebarLocalTokens.splitGroupDividerOpacity))
+                            .frame(width: SidebarLocalTokens.separatorThickness, height: SidebarLocalTokens.splitGroupDividerHeight)
+                    }
+                    memberCell(member, textColor: textColor, isFirst: index == 0)
                 }
-                memberCell(member, textColor: textColor, isFirst: index == 0)
             }
             accessory(textColor: textColor)
         }
@@ -238,6 +252,49 @@ struct SidebarSplitGroupRowView: View {
         .accessibilityIdentifier("openarc.sidebar.splitGroup.\(group.layoutID.uuidString)")
     }
 
+    /// The members' titles joined, the row's title when it has none of its own.
+    private var membersTitle: String {
+        group.members.map { $0.displayTitle.isEmpty ? "New Tab" : $0.displayTitle }.joined(separator: " | ")
+    }
+
+    private func namedCell(layout: SplitLayout?, textColor: Color) -> some View {
+        let iconSize = SidebarLocalTokens.rowIconSize
+        return HStack(spacing: SidebarLayout().rowTitleGap) {
+            Group {
+                if let icon = layout?.icon {
+                    SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor)
+                } else if let first = group.members.first {
+                    SidebarFaviconView(pngData: viewModel.faviconImage(for: first.id), size: iconSize, tint: textColor.opacity(0.3), placeholder: .roundedSquare)
+                }
+            }
+            .frame(width: iconSize, height: iconSize)
+            Text(layout?.title ?? membersTitle)
+                .font(Typography.tabRowTitle.font)
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func renameField(layout: SplitLayout?, textColor: Color) -> some View {
+        TextField("", text: $renameText)
+            .textFieldStyle(.plain)
+            .font(Typography.tabRowTitle.font)
+            .foregroundStyle(textColor)
+            .focused($renameFocused)
+            .onSubmit { viewModel.commitRename(group.layoutID, text: renameText) }
+            .onExitCommand { viewModel.cancelRename() }
+            .onChange(of: renameFocused) { _, focused in
+                if !focused, viewModel.renamingItemID == group.layoutID { viewModel.commitRename(group.layoutID, text: renameText) }
+            }
+            .onAppear {
+                renameText = layout?.title ?? membersTitle
+                renameFocused = true
+            }
+            .accessibilityIdentifier("openarc.sidebar.splitGroup.renameField")
+    }
+
     private func memberCell(_ member: TabNode, textColor: Color, isFirst: Bool) -> some View {
         let live = viewModel.liveState(for: member.id)
         let iconSize = SidebarLocalTokens.rowIconSize
@@ -245,6 +302,8 @@ struct SidebarSplitGroupRowView: View {
             Group {
                 if live?.isLoading == true {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
+                } else if let icon = member.icon {
+                    SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor)
                 } else {
                     SidebarFaviconView(pngData: viewModel.faviconImage(for: member.id), size: iconSize, tint: textColor.opacity(0.3), placeholder: .roundedSquare)
                 }
@@ -307,9 +366,16 @@ struct SidebarFolderRowView: View {
         SidebarRowFrame(fill: isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear, depth: depth) {
             // 18 pt symbol ≈ 21 × 16 ink; drawn in the 18 pt cell, overflowing it symmetrically
             // like the measured 22.5 pt ink (x 16–38.5).
-            Image(systemName: folder.isExpanded ? "folder" : "folder.fill")
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(textColor.opacity(0.8))
+            Group {
+                if let icon = folder.icon {
+                    // Change Icon… replaces the folder glyph. [06 §21.5] observed item (B77).
+                    SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor.opacity(0.8))
+                } else {
+                    Image(systemName: folder.isExpanded ? "folder" : "folder.fill")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(textColor.opacity(0.8))
+                }
+            }
                 .frame(width: iconSize, height: iconSize)
                 .padding(.trailing, SidebarLayout().rowTitleGap)
 

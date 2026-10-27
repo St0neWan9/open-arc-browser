@@ -59,6 +59,9 @@ enum ShellMotion {
     static var littleArcExpandToMain: Animation? { Motion.littleArcExpandToMain.curve.swiftUI }
     /// Peek opening (B49). `Motion.peekOpen` (curve unknown).
     static var peekOpen: Animation? { Motion.peekOpen.curve.swiftUI }
+    /// The new empty Space's illustration fading away ([06 §1] observed that it goes away; the
+    /// ease-out over `NewSpaceIllustrationTrigger.fadeDuration` is inferred). B75.
+    static var newSpaceIllustrationFade: Animation { .easeOut(duration: NewSpaceIllustrationTrigger.fadeDuration) }
 
     /// Transition of the Space page: the new page comes in from the side it lies on in the dock
     /// order and pushes the old one out the other side, by one page width, with no fade.

@@ -96,6 +96,7 @@ struct RecordMapper: Sendable {
             w.set(FolderFields.parentFolderID, v.parentFolderID?.uuidString)
             w.set(FolderFields.sortKey, v.sortKey.rawValue)
             w.set(FolderFields.title, v.title)
+            w.set(FolderFields.icon, v.icon)
             w.set(FolderFields.isExpanded, Int64(v.isExpanded ? 1 : 0))
         case .tab(let v):
             let kind: String
@@ -116,6 +117,7 @@ struct RecordMapper: Sendable {
             w.set(TabFields.title, v.title)
             w.set(TabFields.faviconURL, v.faviconURL?.absoluteString)
             w.set(TabFields.customTitle, v.customTitle)
+            w.set(TabFields.icon, v.icon)
             w.set(TabFields.pinnedURL, v.pinnedURL?.absoluteString)
             w.set(TabFields.lastActiveAt, v.lastActiveAt)
         case .archiveItem(let v):
@@ -129,6 +131,8 @@ struct RecordMapper: Sendable {
         case .splitLayout(let v):
             w.set(SplitLayoutFields.spaceID, v.spaceID.uuidString)
             w.set(SplitLayoutFields.root, Self.json(v.root))
+            w.set(SplitLayoutFields.title, v.title)
+            w.set(SplitLayoutFields.icon, v.icon)
         case .easel(let v):
             w.set(EaselFields.title, v.title)
         case .easelElement(let v):
@@ -213,6 +217,7 @@ struct RecordMapper: Sendable {
                 spaceID: try r.requiredUUID(FolderFields.spaceID),
                 parentFolderID: try r.optionalUUID(FolderFields.parentFolderID),
                 title: try r.required(FolderFields.title),
+                icon: r.optional(FolderFields.icon),
                 isExpanded: expanded != 0,
                 sortKey: try r.sortKey(FolderFields.sortKey),
                 now: now
@@ -235,6 +240,7 @@ struct RecordMapper: Sendable {
                 url: try r.optionalURL(TabFields.url),
                 title: try r.required(TabFields.title),
                 customTitle: r.optional(TabFields.customTitle),
+                icon: r.optional(TabFields.icon),
                 pinnedURL: try r.optionalURL(TabFields.pinnedURL),
                 faviconURL: try r.optionalURL(TabFields.faviconURL),
                 now: now
@@ -264,6 +270,8 @@ struct RecordMapper: Sendable {
                 id: uuid,
                 spaceID: try r.requiredUUID(SplitLayoutFields.spaceID),
                 root: try r.json(SplitLayoutFields.root),
+                title: r.optional(SplitLayoutFields.title),
+                icon: r.optional(SplitLayoutFields.icon),
                 now: now
             )
             v.meta = meta

@@ -107,8 +107,10 @@ enum FolderFields {
     static let parentFolderID = FieldSpec("placement_parentFolderID", G.placement)
     static let sortKey = FieldSpec("placement_sortKey", G.placement)
     static let title = FieldSpec("naming_title", G.naming, encrypted: true)
+    /// Added in B77 (Change Icon…). Older records have none: decodes as nil.
+    static let icon = FieldSpec("naming_icon", G.naming, encrypted: true)
     static let isExpanded = FieldSpec("display_isExpanded", G.display)
-    static let all = [spaceID, parentFolderID, sortKey, title, isExpanded]
+    static let all = [spaceID, parentFolderID, sortKey, title, icon, isExpanded]
 }
 
 enum TabFields {
@@ -123,9 +125,11 @@ enum TabFields {
     static let title = FieldSpec("content_title", G.content, encrypted: true)
     static let faviconURL = FieldSpec("content_faviconURL", G.content, encrypted: true)
     static let customTitle = FieldSpec("naming_customTitle", G.naming, encrypted: true)
+    /// Added in B77 (Change Icon…). Older records have none: decodes as nil.
+    static let icon = FieldSpec("naming_icon", G.naming, encrypted: true)
     static let pinnedURL = FieldSpec("pin_url", G.pin, encrypted: true)
     static let lastActiveAt = FieldSpec("activity_lastActiveAt", G.activity)
-    static let all = [locationKind, profileID, spaceID, folderID, sortKey, url, title, faviconURL, customTitle, pinnedURL, lastActiveAt]
+    static let all = [locationKind, profileID, spaceID, folderID, sortKey, url, title, faviconURL, customTitle, icon, pinnedURL, lastActiveAt]
 }
 
 enum ArchiveItemFields {
@@ -145,7 +149,11 @@ enum SplitLayoutFields {
     static let spaceID = FieldSpec("layout_spaceID", G.layout)
     /// JSON-encoded `SplitNode` (tab ids and fractions only, no user content).
     static let root = FieldSpec("layout_root", G.layout)
-    static let all = [spaceID, root]
+    /// The split row's title and icon, added in B77 with the `naming` group. Older records have
+    /// neither: both decode as nil.
+    static let title = FieldSpec("naming_title", G.naming, encrypted: true)
+    static let icon = FieldSpec("naming_icon", G.naming, encrypted: true)
+    static let all = [spaceID, root, title, icon]
 }
 
 enum EaselFields {
