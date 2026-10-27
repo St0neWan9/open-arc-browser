@@ -87,6 +87,13 @@ public final class SidebarViewModel: ObservableObject {
     @Published private(set) var dropTarget: SidebarDropTarget?
     /// Last error from a rejected operation (for tests and diagnostics).
     @Published public private(set) var lastError: Error?
+    /// Pinned tab that shows the faint "Double-click to rename" line under its title: the first
+    /// tab pinned on this device. [06 §4] observed (once). B76.
+    @Published private(set) var pinRenameHintTabID: UUID?
+    /// Folder whose hover quick list is showing. [06 §14] observed. B76.
+    @Published private(set) var quickListFolderID: UUID?
+    /// Text in the quick list's "Search <folder>…" field. [06 §14] observed field; filtering inferred.
+    @Published var quickListQuery = ""
 
     // MARK: Hooks for the shell
 
@@ -129,6 +136,14 @@ public final class SidebarViewModel: ObservableObject {
     private(set) var lastDragPointer: CGPoint?
     /// True while the auto-scroll loop runs.
     var isAutoScrolling: Bool { autoScrollTask != nil }
+    /// Seconds a folder must be hovered before its quick list shows. inferred (B76).
+    var quickListDelay: Double = FolderQuickListTokens.showDelay
+    /// Seconds the quick list stays after the pointer left both the folder row and the list, so
+    /// the pointer can cross the gap between them. inferred (B76).
+    var quickListDismissDelay: Double = FolderQuickListTokens.dismissDelay
+    /// Whether the pointer is over the quick list's panel right now (set by the presenter; nil in
+    /// tests). Hover events may not reach a child panel that is not key.
+    var quickListPointerProbe: (@MainActor () -> Bool)?
 
     // MARK: Dependencies and internals
 
@@ -161,6 +176,13 @@ public final class SidebarViewModel: ObservableObject {
     /// Edge (-1 left, +1 right) the drag pointer rests at; it stays set after the switch fired, so
     /// one stay at the edge switches once. inferred.
     private(set) var edgeSwitchDirection: Int?
+    /// Pending show or dismiss of the folder quick list.
+    private(set) var quickListTask: Task<Void, Never>?
+    /// Folder row under the pointer; whether the pointer is inside the quick list; whether the
+    /// quick list has the keyboard (its search field was clicked).
+    private var quickListHoveredFolderID: UUID?
+    private var isPointerInQuickList = false
+    private var isQuickListFocused = false
 
     /// A window's sidebar on the shared controller. A stale or missing Space id falls back to the
     /// first live Space.
@@ -207,6 +229,7 @@ public final class SidebarViewModel: ObservableObject {
     /// the scheduler).
     public func stop() {
         hoverTask?.cancel()
+        quickListTask?.cancel()
         endDrag()
         controllerChanges = nil
         controller.unregister(self)
@@ -705,12 +728,14 @@ public final class SidebarViewModel: ObservableObject {
     public func pinTab(_ id: UUID) {
         // An incognito window has no pinned area. [06 §20.2] observed (B48).
         guard !isIncognito else { return }
-        mutate { try TreeOps.pinTab($0, id: id, now: now()) }
+        let before = workspace
+        if mutate({ try TreeOps.pinTab($0, id: id, now: now()) }) { notePins(since: before) }
     }
 
     /// Unpin ("Remove Pin"): the tab returns to the top of Today. The target position is
     /// inferred ([06 §13] says new tabs go to the top; unpinning is unobserved).
     public func unpinTab(_ id: UUID) {
+        if pinRenameHintTabID == id { pinRenameHintTabID = nil }
         guard let spaceID = workspace.tabs[id]?.location.spaceID ?? selectedSpaceID else { return }
         mutate { try TreeOps.moveTab($0, id: id, to: .today(spaceID: spaceID), position: .first, now: now()) }
     }
@@ -795,6 +820,9 @@ public final class SidebarViewModel: ObservableObject {
 
     public func beginRename(_ id: UUID) {
         hoverEnded(id)
+        dismissQuickList()
+        // The hint has done its job once the user renames the tab. inferred (B76).
+        if pinRenameHintTabID == id { pinRenameHintTabID = nil }
         renamingItemID = id
     }
 
@@ -836,6 +864,8 @@ public final class SidebarViewModel: ObservableObject {
 
     public func toggleFolder(_ id: UUID) {
         guard let folder = workspace.folders[id] else { return }
+        // The folder opens in place: its quick list is no longer needed. inferred (B76).
+        dismissQuickList()
         mutate { try TreeOps.setFolderExpanded($0, id: id, isExpanded: !folder.isExpanded, now: now()) }
     }
 
@@ -852,6 +882,7 @@ public final class SidebarViewModel: ObservableObject {
 
     public func selectSpace(_ id: UUID) {
         guard workspace.spaces[id].map({ !$0.meta.isTombstone }) == true, id != selectedSpaceID else { return }
+        dismissQuickList()
         selectedSpaceID = id
         // The remembered tab stays unselected while another window shows it. inferred.
         if let remembered = lastSelectedTab[id], workspace.tabs[remembered].map({ !$0.meta.isTombstone }) == true {
@@ -1016,6 +1047,7 @@ public final class SidebarViewModel: ObservableObject {
     /// `isSessionActive`, when given, is polled by a watchdog as a fallback and must return whether
     /// the drag is still going. Tests omit it and call `endDrag()` themselves.
     func beginDrag(_ item: SidebarDragItem, isSessionActive: (@MainActor () -> Bool)? = nil) {
+        dismissQuickList()
         let beforePress = selectionBeforePress
         endDrag()
         selectionBeforePress = beforePress
@@ -1263,7 +1295,10 @@ public final class SidebarViewModel: ObservableObject {
         guard let plan = dropPlan(for: target) else { return false }
         let layoutID: UUID? = plan.action.needsLayoutID ? makeID() : nil
         let stamp = now()
+        let before = workspace
         guard mutate({ try SidebarDropPlanner.apply(plan, to: $0, layoutID: layoutID, now: stamp) }) else { return false }
+        // Dragging a tab into the pinned area pins it, too (first-pin hint, [06 §4]).
+        notePins(since: before)
         finishDrop(plan, target: target, droppedTabID: nil)
         return true
     }
@@ -1405,5 +1440,170 @@ public final class SidebarViewModel: ObservableObject {
         dockHoverTask?.cancel()
         dockHoverTask = nil
         dockHoverSpaceID = nil
+    }
+}
+
+// MARK: - Sidebar list details (B76)
+
+extension SidebarViewModel {
+
+    // MARK: First-pin rename hint
+
+    /// Whether the row of `id` shows the "Double-click to rename" line. [06 §4] observed.
+    func showsPinRenameHint(_ id: UUID) -> Bool {
+        pinRenameHintTabID == id && renamingItemID != id
+    }
+
+    /// After a change that may have pinned tabs: the first tab pinned on this device gets the
+    /// rename hint, once. [06 §4] observed ("on the first pin"); the per-device flag in
+    /// `ui-state.json` is inferred. With several tabs pinned at once the first in sidebar order
+    /// gets it. The hint lasts until the tab is renamed or unpinned, or the app quits. inferred.
+    fileprivate func notePins(since before: WorkspaceState) {
+        guard !isIncognito, !controller.pinRenameHintShown else { return }
+        func wasPinned(_ id: UUID) -> Bool {
+            before.tabs[id].map { !$0.meta.isTombstone && $0.location.isPinned } ?? false
+        }
+        let newlyPinned = Set(workspace.tabs.values
+            .filter { !$0.meta.isTombstone && $0.location.isPinned && !wasPinned($0.id) }
+            .map(\.id))
+        guard !newlyPinned.isEmpty else { return }
+        let firstInList = snapshot.pinned.first { newlyPinned.contains($0.id) }?.id
+        pinRenameHintTabID = firstInList ?? newlyPinned.min { $0.uuidString < $1.uuidString }
+        controller.markPinRenameHintShown()
+    }
+
+    // MARK: Selected row jump button
+
+    /// The list row that stands for the selected tab: its own row, or the split-group row that
+    /// holds it. Nil for a favorite, a tab hidden in a collapsed folder, or no selection.
+    var selectedListRowID: UUID? {
+        guard let id = selectedTabID else { return nil }
+        let snap = snapshot
+        if let group = snap.splitGroup(containing: id) { return group.layoutID }
+        return (snap.pinned + snap.today).contains { $0.id == id } ? id : nil
+    }
+
+    /// The ↓ / ↑ button: scrolls the list so the selected row (at `rowFrame`, sidebar root space)
+    /// is in the middle of `viewport` (the visible list, same space). [06 §15.8] observed (the
+    /// button points toward the selected row); centering it is inferred.
+    func revealSelectedRow(rowFrame: CGRect, viewport: CGRect) {
+        guard let scroller = listScroller, let metrics = scroller.metrics else { return }
+        scroller.scroll(toOffset: SidebarSelectionJump.revealOffset(rowFrame: rowFrame, viewport: viewport, metrics: metrics))
+    }
+
+    // MARK: Trackpad swipe between Spaces
+
+    /// A horizontal two-finger swipe over the sidebar pages to the neighbor Space. [05 §window
+    /// hierarchy] observed ("swipe or click the dock to switch"). Unlike ⌥⌘← / ⌥⌘→ it does not
+    /// wrap: the Spaces are a row of pages and there is no page past the last one. inferred.
+    func swipeSpace(by delta: Int) {
+        guard draggingItem == nil, !isDraggingExternalURL, delta != 0 else { return }
+        let spaces = dockSpaces
+        guard let current = spaces.firstIndex(where: { $0.id == selectedSpaceID }),
+              spaces.indices.contains(current + delta) else { return }
+        dismissQuickList()
+        selectSpace(spaces[current + delta].id)
+    }
+
+    // MARK: Folder quick list
+
+    /// The pointer entered a folder row. After `quickListDelay` the folder's quick list shows; a
+    /// list already open for another folder moves to this one at once. [06 §14] observed (hover
+    /// opens it); the delay is inferred. Only a collapsed folder that holds tabs has one: an open
+    /// folder already lists its tabs below it. inferred.
+    func folderHoverBegan(_ id: UUID) {
+        quickListHoveredFolderID = id
+        guard draggingItem == nil, !isDraggingExternalURL, renamingItemID == nil, !isQuickListFocused,
+              let folder = workspace.folders[id], !folder.meta.isTombstone, !folder.isExpanded,
+              !FolderQuickList.tabs(inFolder: id, workspace: workspace).isEmpty else {
+            if quickListFolderID != id { scheduleQuickListDismiss() }
+            return
+        }
+        quickListTask?.cancel()
+        quickListTask = nil
+        guard quickListFolderID != id else { return }
+        if quickListFolderID != nil {
+            quickListQuery = ""
+            quickListFolderID = id
+            return
+        }
+        let delay = quickListDelay
+        quickListTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.quickListHoveredFolderID == id else { return }
+            self.quickListQuery = ""
+            self.quickListFolderID = id
+        }
+    }
+
+    /// The pointer left a folder row: a pending list is cancelled; an open one closes after
+    /// `quickListDismissDelay` unless the pointer reaches it.
+    func folderHoverEnded(_ id: UUID) {
+        guard quickListHoveredFolderID == id else { return }
+        quickListHoveredFolderID = nil
+        scheduleQuickListDismiss()
+    }
+
+    /// The pointer entered or left the quick list itself.
+    func quickListHoverChanged(_ inside: Bool) {
+        isPointerInQuickList = inside
+        if inside {
+            quickListTask?.cancel()
+            quickListTask = nil
+        } else {
+            scheduleQuickListDismiss()
+        }
+    }
+
+    /// The quick list took the keyboard (its search field was clicked) or gave it up. While it has
+    /// it, the pointer may leave; giving it up (a click elsewhere) closes the list. inferred.
+    func quickListFocusChanged(_ focused: Bool) {
+        isQuickListFocused = focused
+        if focused {
+            quickListTask?.cancel()
+            quickListTask = nil
+        } else if quickListFolderID != nil {
+            dismissQuickList()
+        }
+    }
+
+    /// Closes the quick list now (Esc, a pick, a drag, a Space switch, a rename).
+    func dismissQuickList() {
+        quickListTask?.cancel()
+        quickListTask = nil
+        isPointerInQuickList = false
+        isQuickListFocused = false
+        quickListQuery = ""
+        quickListFolderID = nil
+    }
+
+    /// Opens a tab picked in the quick list and closes the list.
+    func openFromQuickList(_ tabID: UUID) {
+        dismissQuickList()
+        selectTab(tabID)
+    }
+
+    /// Rows of a folder's quick list for the current query, with relative times.
+    func quickListRows(folderID: UUID) -> [FolderQuickListRow] {
+        FolderQuickList.rows(folderID: folderID, workspace: workspace, query: quickListQuery, now: now())
+    }
+
+    private func scheduleQuickListDismiss() {
+        quickListTask?.cancel()
+        quickListTask = nil
+        guard quickListFolderID != nil, !isQuickListFocused else { return }
+        let delay = quickListDismissDelay
+        quickListTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, !self.isPointerInQuickList, !self.isQuickListFocused,
+                  self.quickListHoveredFolderID == nil || self.quickListHoveredFolderID != self.quickListFolderID
+            else { return }
+            if self.quickListPointerProbe?() == true {
+                // Still over the list: check again later instead of closing under the pointer.
+                self.scheduleQuickListDismiss()
+                return
+            }
+            self.dismissQuickList()
+        }
     }
 }

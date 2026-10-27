@@ -141,6 +141,9 @@ public final class WorkspaceController: ObservableObject {
     /// First-run onboarding is finished or skipped on this device (D9, own design). Saved in
     /// `ui-state.json`; see `OnboardingLaunch` for the launch rule.
     var onboardingCompleted = true
+    /// The first-pin "Double-click to rename" line was shown on this device. [06 §4] observed
+    /// (once); saved in `ui-state.json` (B76).
+    private(set) var pinRenameHintShown = false
     /// The first-run onboarding flow (D9).
     public private(set) lazy var onboarding = OnboardingModel(controller: self)
 
@@ -205,6 +208,7 @@ public final class WorkspaceController: ObservableObject {
         if let persistence, !persistence.isReadOnly, let saved = UIStateFile.load(from: persistence.directory) {
             pendingRestores = saved.restorableWindows
             libraryFlags = LibraryUIFlags(mediaIntroDismissed: saved.mediaIntroDismissed, lastSection: saved.lastLibrarySection)
+            pinRenameHintShown = saved.pinRenameHintShown
         }
         onboardingCompleted = OnboardingLaunch.isCompleted(persistence: persistence)
         if let persistence {
@@ -878,8 +882,16 @@ public final class WorkspaceController: ObservableObject {
             windows: open.isEmpty ? lastClosedWindow.map { [$0] } ?? [] : open,
             mediaIntroDismissed: libraryFlags.mediaIntroDismissed,
             lastLibrarySection: libraryFlags.lastSection,
-            onboardingCompleted: onboardingCompleted
+            onboardingCompleted: onboardingCompleted,
+            pinRenameHintShown: pinRenameHintShown
         )
+    }
+
+    /// Records that the first-pin rename hint was shown and saves the UI state. B76.
+    func markPinRenameHintShown() {
+        guard !pinRenameHintShown else { return }
+        pinRenameHintShown = true
+        saveUIState()
     }
 
     /// Writes `ui-state.json` next to the workspace file. Skipped without persistence and when the

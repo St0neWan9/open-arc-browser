@@ -32,6 +32,10 @@ public struct UIState: Codable, Hashable, Sendable {
     /// already had a workspace, so the Shell treats nil as "do not show" unless there was no
     /// workspace file. Per device, never synced.
     public var onboardingCompleted: Bool?
+    /// The faint "Double-click to rename" line under the title of the first tab pinned on this
+    /// device was shown. [06 §4] observed: it appears on the first pin only. Per device, never
+    /// synced (inferred: a hint belongs to the device it taught). False in older files.
+    public var pinRenameHintShown: Bool
 
     public init(
         selectedSpaceID: UUID? = nil,
@@ -40,7 +44,8 @@ public struct UIState: Codable, Hashable, Sendable {
         mediaIntroDismissed: Bool = false,
         lastLibrarySection: String? = nil,
         windows: [WindowUIState] = [],
-        onboardingCompleted: Bool? = nil
+        onboardingCompleted: Bool? = nil,
+        pinRenameHintShown: Bool = false
     ) {
         self.version = Self.currentVersion
         self.selectedSpaceID = selectedSpaceID
@@ -50,6 +55,7 @@ public struct UIState: Codable, Hashable, Sendable {
         self.lastLibrarySection = lastLibrarySection
         self.windows = windows
         self.onboardingCompleted = onboardingCompleted
+        self.pinRenameHintShown = pinRenameHintShown
     }
 
     /// A state for these windows: the top-level fields copy the first window (for older builds).
@@ -57,7 +63,8 @@ public struct UIState: Codable, Hashable, Sendable {
         windows: [WindowUIState],
         mediaIntroDismissed: Bool = false,
         lastLibrarySection: String? = nil,
-        onboardingCompleted: Bool? = nil
+        onboardingCompleted: Bool? = nil,
+        pinRenameHintShown: Bool = false
     ) {
         let first = windows.first ?? WindowUIState()
         self.init(
@@ -67,7 +74,8 @@ public struct UIState: Codable, Hashable, Sendable {
             mediaIntroDismissed: mediaIntroDismissed,
             lastLibrarySection: lastLibrarySection,
             windows: windows,
-            onboardingCompleted: onboardingCompleted
+            onboardingCompleted: onboardingCompleted,
+            pinRenameHintShown: pinRenameHintShown
         )
     }
 
@@ -82,6 +90,7 @@ public struct UIState: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case version, selectedSpaceID, selectedTabID, isSidebarVisible, mediaIntroDismissed, lastLibrarySection, windows
         case onboardingCompleted
+        case pinRenameHintShown
     }
 
     /// Missing keys fall back to defaults, so an older or partial file still restores what it has.
@@ -95,6 +104,7 @@ public struct UIState: Codable, Hashable, Sendable {
         lastLibrarySection = try c.decodeIfPresent(String.self, forKey: .lastLibrarySection)
         windows = try c.decodeIfPresent([WindowUIState].self, forKey: .windows) ?? []
         onboardingCompleted = try c.decodeIfPresent(Bool.self, forKey: .onboardingCompleted)
+        pinRenameHintShown = try c.decodeIfPresent(Bool.self, forKey: .pinRenameHintShown) ?? false
     }
 }
 
