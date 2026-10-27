@@ -45,7 +45,10 @@ struct MainWindowContent: View {
         // While the Create Space view is up the window uses the default light neutral theme. [06 §1] observed.
         let palette = model.windowPalette
         GeometryReader { proxy in
-            let layout = model.windowLayout(size: proxy.size)
+            let baseLayout = model.windowLayout(size: proxy.size)
+            // Peek shrinks the page behind it (B49, [06 §22.2] observed).
+            let showsLinkPeek = model.linkPeek.isOpen && !model.library.isActive
+            let layout = showsLinkPeek ? baseLayout.withPeekInset() : baseLayout
             ZStack(alignment: .topLeading) {
                 // The window background is the space theme color, with no separate title bar. [04 §window structure]
                 WindowBackgroundView(palette: palette)
@@ -61,6 +64,16 @@ struct MainWindowContent: View {
                 if model.showsSidebarPeek {
                     SidebarPeekOverlay(sidebar: sidebar, siteControls: model.siteControls, windowSize: proxy.size)
                         .transition(SidebarPeekOverlay.transition(windowSize: proxy.size))
+                }
+
+                // Peek: the link preview over the dimmed page. [06 §22] B49.
+                if showsLinkPeek {
+                    LinkPeekOverlay(
+                        peek: model.linkPeek,
+                        layout: LinkPeekLayout(windowSize: proxy.size, webPanelFrame: baseLayout.webPanelFrame),
+                        palette: palette,
+                        handlesEscape: !model.isCommandBarPresented
+                    )
                 }
 
                 // A pane command bar is drawn inside its pane by `SplitWebArea`.

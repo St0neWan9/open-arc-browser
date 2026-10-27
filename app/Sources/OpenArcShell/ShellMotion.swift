@@ -57,6 +57,8 @@ enum ShellMotion {
     static var littleArcClose: Animation? { Motion.littleArcClose.curve.swiftUI }
     /// Little Arc content scale to 98 % on "Open in <Space>". `Motion.littleArcExpandToMain`.
     static var littleArcExpandToMain: Animation? { Motion.littleArcExpandToMain.curve.swiftUI }
+    /// Peek opening (B49). `Motion.peekOpen` (curve unknown).
+    static var peekOpen: Animation? { Motion.peekOpen.curve.swiftUI }
 
     /// Transition of the Space page: the new page comes in from the side it lies on in the dock
     /// order and pushes the old one out the other side, by one page width, with no fade.

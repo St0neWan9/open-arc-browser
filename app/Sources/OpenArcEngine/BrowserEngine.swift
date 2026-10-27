@@ -229,6 +229,9 @@ public enum TabEvent: Hashable, Sendable {
     case translationChanged(PageTranslation)
     /// The pointer is over a link (nil: it left). Status bubble, inferred.
     case hoveredLinkChanged(URL?)
+    /// The tab dropped a link click for the shell to preview (Peek, plan B49, LinkPreview.swift).
+    /// Only for the triggers set with `BrowserTab.setLinkPreviewTriggers`.
+    case linkPreviewRequested(LinkPreviewRequest)
     /// Find-in-page results for the current search (`BrowserTab.find`).
     case findResultChanged(FindResult)
     case renderProcessGone
@@ -490,6 +493,12 @@ public protocol BrowserTab: AnyObject, Sendable {
     /// Never offer translation on this site again, and show the original. [06 §19.3] observed
     /// "Never Translate This Site". Undone by `EngineTranslation.resetDecisions`.
     func neverTranslateSite() async
+
+    // MARK: Link preview (plan B49, [06 §22.1])
+
+    /// Which link clicks this tab drops and reports as `.linkPreviewRequested` instead of
+    /// navigating (none by default). Takes effect for the next click. See LinkPreview.swift.
+    func setLinkPreviewTriggers(_ triggers: LinkPreviewTriggers) async
 
     /// View hosting for this tab (one surface per tab; several can be on screen in split view).
     var surface: any TabSurface { get }

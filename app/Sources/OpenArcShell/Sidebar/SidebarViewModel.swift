@@ -66,6 +66,9 @@ public final class SidebarViewModel: ObservableObject {
     /// Direction of the latest Space switch, for the sidebar's paging transition. [07 §11] B40.
     let spacePager = SpacePagerState()
     @Published public private(set) var selectedTabID: UUID?
+    /// The open Peek page's URL and its source tab (B49, set by `LinkPeekModel`).
+    @Published var linkPeekURL: URL?
+    @Published var linkPeekSourceTabID: UUID?
     /// Item being renamed inline (tab or folder).
     @Published public internal(set) var renamingItemID: UUID?
     @Published public var isNewFolderSheetPresented = false
@@ -236,6 +239,8 @@ public final class SidebarViewModel: ObservableObject {
 
     /// Tab shown in the URL box: its live URL if loaded, else the stored one.
     var selectedURL: URL? {
+        // While Peek is open the address shows the Peek page. [06 §22.2] observed (B49).
+        if let linkPeekURL { return linkPeekURL }
         guard let id = selectedTabID else { return nil }
         return liveState(for: id)?.url ?? workspace.tabs[id]?.url
     }

@@ -321,8 +321,14 @@ struct LinksPane: View {
             Section {
                 Text("Peek lets you preview a link without opening a new tab.")
                     .foregroundStyle(.secondary)
-                PendingToggle(id: "links.peekShiftClick")
-                PendingToggle(id: "links.peekOtherSites")
+                Toggle(
+                    SettingsCatalog.control("links.peekShiftClick").label,
+                    isOn: Binding(get: { model.opensPeekOnShiftClick }, set: { model.opensPeekOnShiftClick = $0 })
+                )
+                Toggle(
+                    SettingsCatalog.control("links.peekOtherSites").label,
+                    isOn: Binding(get: { model.opensPeekForOtherSites }, set: { model.opensPeekForOtherSites = $0 })
+                )
             } header: { Text("Peek") }
             Section {
                 LabeledContent("Choose where links open inside Open Arc") {

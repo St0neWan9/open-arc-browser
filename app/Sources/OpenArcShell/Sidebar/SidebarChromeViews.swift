@@ -398,6 +398,10 @@ struct SidebarSpaceNameRowView: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .frame(width: moreWidth, height: CGFloat(more.height))
+            // The favorite whose Peek is open carries a small corner badge. [06 §22.2] observed (B49).
+            .overlay(alignment: .topTrailing) {
+                if viewModel.linkPeekSourceTabID == tab.id { LinkPeekSourceBadge() }
+            }
             .accessibilityElement(children: .ignore)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("More")

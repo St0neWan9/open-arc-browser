@@ -351,6 +351,8 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private var allowsAutomaticPictureInPicture = true
     private var colorSchemeLog: [WebColorScheme] = []
     private var pendingTranslationFailure: TranslationFailure?
+    /// Clicks the page drops for the shell (plan B49, `setLinkPreviewTriggers`).
+    private var linkPreviewTriggers: LinkPreviewTriggers = []
     private let broadcaster = AsyncBroadcaster<TabEvent>()
     private let dialogBroadcaster = AsyncBroadcaster<EngineDialogRequest>()
     private let titleProvider: FakeEngine.TitleProvider
@@ -855,6 +857,45 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
 
     public func simulateSecurity(_ level: SecurityLevel) {
         update(\.security, level, event: .securityChanged(level))
+    }
+
+    /// Plan B49: the triggers last set with `setLinkPreviewTriggers`. For tests.
+    public var currentLinkPreviewTriggers: LinkPreviewTriggers { lock.withLock { linkPreviewTriggers } }
+
+    public func setLinkPreviewTriggers(_ triggers: LinkPreviewTriggers) async {
+        lock.withLock { linkPreviewTriggers = triggers }
+    }
+
+    /// Simulates the user clicking a link to `url` in the page, as the Chromium engine treats it
+    /// (plan B49, LinkPreview.swift): with Shift, a `.shiftClick` tab reports
+    /// `.linkPreviewRequested`, else the page asks for a new window; without, an `.otherSiteLink`
+    /// tab reports a link to another site, else the tab navigates.
+    public func simulateLinkClick(to url: URL, shift: Bool = false) async throws {
+        enum Outcome { case preview(LinkPreviewTriggers), newWindow, navigate }
+        let outcome: Outcome = try lock.withLock {
+            guard !isClosed else { throw EngineError.tabClosed(id) }
+            let isWeb = url.scheme == "http" || url.scheme == "https"
+            if shift {
+                return isWeb && linkPreviewTriggers.contains(.shiftClick) ? .preview(.shiftClick) : .newWindow
+            }
+            if isWeb, linkPreviewTriggers.contains(.otherSiteLink), let current = state.url,
+               current.scheme == "http" || current.scheme == "https",
+               !LinkPreviewTriggers.isSameSite(current, url) {
+                return .preview(.otherSiteLink)
+            }
+            return .navigate
+        }
+        switch outcome {
+        case .preview(let trigger):
+            lock.withLock {
+                guard !isClosed else { return }
+                broadcaster.yield(.linkPreviewRequested(LinkPreviewRequest(url: url, trigger: trigger)))
+            }
+        case .newWindow:
+            onNewTabRequest?(NewTabRequest(opener: id, url: url, disposition: .newWindow, hasUserGesture: true))
+        case .navigate:
+            try await load(url)
+        }
     }
 
     public func simulateHoveredLink(_ url: URL?) {

@@ -90,6 +90,8 @@ public final class WorkspaceController: ObservableObject {
     public let favicons: FaviconCache
     /// State of page-initiated tabs and engine-event observation (C7b, WorkspaceController+PageRequests.swift).
     let pageRequests = PageRequestState()
+    /// Link preview triggers sent to live tabs (B49, LinkPeek/WorkspaceController+LinkPeek.swift).
+    let linkPeekRouting = LinkPeekRouting()
     private var engineWork: [Task<Void, Never>] = []
     /// Last queued command per engine tab: the next one waits for it, so commands reach each
     /// engine tab in the order they were issued (`enqueueTabCommand`).
@@ -299,6 +301,7 @@ public final class WorkspaceController: ObservableObject {
         dependencies.persistence?.submit(changesFrom: old, to: new)
         for sidebar in liveSidebars where sidebar !== origin { sidebar.workspaceDidChange() }
         syncWebColorSchemes()
+        syncLinkPreviewTriggers()
         reconcileLiveTabProfiles()
     }
 
@@ -308,6 +311,7 @@ public final class WorkspaceController: ObservableObject {
         workspace = new
         for sidebar in liveSidebars { sidebar.workspaceDidChange() }
         syncWebColorSchemes()
+        syncLinkPreviewTriggers()
         reconcileLiveTabProfiles()
     }
 
@@ -473,6 +477,7 @@ public final class WorkspaceController: ObservableObject {
         if reconcileProfile(of: id) { return }
         sentColorSchemes[id] = initialColorScheme
         syncWebColorScheme(of: id)
+        syncLinkPreviewTriggers(of: id)
         dialogs.observe(live)
         liveStates[id] = SidebarTabLiveState(snapshot: await live.currentState())
         rememberFavicon(of: id)
@@ -498,6 +503,7 @@ public final class WorkspaceController: ObservableObject {
         case .urlChanged, .titleChanged: syncContent(id)
         case .closeRequested: pageRequestedClose(id)
         case .activationRequested: pageRequestedActivation(id)
+        case .linkPreviewRequested(let request): linkPreviewRequested(request, from: id)
         default: break
         }
     }
