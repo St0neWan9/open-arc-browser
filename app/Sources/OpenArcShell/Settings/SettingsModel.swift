@@ -358,6 +358,12 @@ public final class SettingsModel: ObservableObject {
         set { updateEditedProfileSettings { $0.searchEngine = newValue } }
     }
 
+    /// "Include search engine suggestions" ([03 §Profiles] observed toggle), per profile. B66.
+    public var includesSearchSuggestions: Bool {
+        get { editedProfileSettings.includesSearchSuggestions }
+        set { updateEditedProfileSettings { $0.includesSearchSuggestions = newValue } }
+    }
+
     public var archiveLifetime: ArchiveLifetime {
         get { ArchiveLifetime.closest(to: editedProfileSettings.todayLifetime) }
         set { updateEditedProfileSettings { $0.todayLifetime = newValue.interval } }

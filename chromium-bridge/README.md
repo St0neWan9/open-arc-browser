@@ -25,7 +25,8 @@ chromium-bridge/
     ├── OACExtensions.h            a profile's extensions, action popups, install confirmation (C14)
     ├── OACTranslation.h           page translation state and commands, translation settings reset (B47)
     ├── OACCapture.h               visible-rectangle and full-page capture (B51)
-    └── OACJavaScript.h            run a script in the page for AppleScript `execute` (B71)
+    ├── OACJavaScript.h            run a script in the page for AppleScript `execute` (B71)
+    └── OACAutocomplete.h          history search and search suggestions for the command bar (B66)
 ```
 
 The design is our own. It uses only Chromium's public embedder concepts (the content API and the `//chrome` layer's services); it does not follow any other browser's bridge.
@@ -140,7 +141,7 @@ What we keep:
 
 What we replace:
 - `Browser`, `BrowserWindow`, `BrowserView`, `TabStripModel`: not created for our tabs. Chrome code that walks `BrowserList` to find "the active tab" gets a small adapter in our patch set (C5) or a feature switch off. Tabs live in the shell's sidebar; Chromium sees a list of `WebContents` owned by `OACTab`s.
-- Omnibox views and the location bar: the shell's command bar (⌘L, ⌘T) already does this. Autocomplete providers (history, search suggestions) are offered later through a bridge surface if the command bar needs them; not in this header set.
+- Omnibox views and the location bar: the shell's command bar (⌘L, ⌘T) already does this. Since B66 the bridge hands the command bar raw history matches and search suggestion bodies (`OACAutocomplete.h`); Chrome's `AutocompleteController` and its providers are not used (§Command bar history and suggestions).
 - Every dialog, bubble and infobar: routed to `OACDialogDelegate` (JS dialogs, auth, permissions, file chooser, external protocol), `OACDownloads` (download bubble), `OACExtensions` (install dialog, toolbar, popups), and since C13 the password save bubble and the autofill dropdown (`OACAutofill.h`, also delivered through `OACDialogDelegate`).
 - `WebContentsDelegate`: implemented by the bridge per tab, never by `Browser`. `AddNewContents` / `OpenURLFromTab` become `OACNewTabRequest`; `CloseContents` becomes `tabDidRequestClose:`; fullscreen, keyboard events, context menus and find replies go to `OACTabDelegate`.
 
@@ -162,6 +163,7 @@ What we replace:
 | B47 page translation | `OACTranslation.h`: `OACTab.translationState` (`OACTranslationState`), `translateToLanguage:`, `revertTranslation`, `neverTranslateSite`, `tabDidChangeTranslationState:`; `-[OACProfile resetTranslationSettings]`; `OACApplication.translationTargetLanguages` | `BrowserTabState.translation` (`PageTranslation`), `TabEvent.translationChanged`, `BrowserTab.translate(to:) / revertTranslation() / neverTranslateSite()`, `BrowserEngine.translation` (`EngineTranslation`) | done (B47, patches 0027–0028; §Translation) |
 | B51 page capture | `OACCapture.h`: `-[OACTab captureVisibleRect:completionHandler:]`, `-[OACTab captureFullPageWithMaximumAspectRatio:completionHandler:]` (PNG at the screen's density) | `BrowserTab.capture(_:)` with `PageCaptureArea` (`EngineSnapshot`) | done (B51, patch 0030) |
 | B71 AppleScript `execute` | `OACJavaScript.h`: `-[OACTab evaluateJavaScript:completionHandler:]` (result as JSON text, `OACErrorJavaScriptException`) | `BrowserTab.evaluateJavaScript(_:)`, `JavaScriptResultText`, `EngineError.javaScriptException` | header and Swift done; patch 0033 (§JavaScript evaluation) |
+| B66 command bar history + suggestions | `OACAutocomplete.h`: `-[OACProfile queryHistoryMatchingText:maximumCount:completionHandler:]` (`OACHistoryEntry`), `-[OACProfile fetchSearchSuggestionsFromURL:completionHandler:]`, `OACAutocompleteRequest -cancel` | `BrowserEngine.autocomplete` (`EngineAutocomplete`: `historyMatches`, `searchSuggestions`, `capabilities`), `HistoryMatch`, `SearchSuggestionRequest`, `SearchSuggestionParser` | header and Swift done; native staged in `pending/oac_autocomplete.mm` (§Command bar history and suggestions) |
 | C17 window tint from the page | `OACTabState.themeColor`, `tab:didChangeThemeColor:hasThemeColor:` (theme-color meta only) | `themeColor` | not needed: `06 §17.4` (E18) observed that the window and sidebar never follow the page |
 | C18 system codecs | nothing in the API: decoder routing is inside the GPU / media code | none | — |
 | Site Control Center (B13) | `OACSiteSettings` | `SiteSettingsProvider` | 1:1, see `OACSiteSettings.h` header comment; §5 for permission kinds |
@@ -271,9 +273,26 @@ Until a framework with the method is built, the Swift wrapper finds no `evaluate
 4. `chromium-bridge/build-framework.sh` (ninja `openarc_framework`, header sync check, xcframework into `app/Vendor/`).
 5. Check: `OPENARC_ENGINE_TESTS=1 swift test --filter ChromiumEngineConformanceTests` (its B71 block then exercises strings, numbers, objects, promises, undefined/null and a thrown ReferenceError instead of accepting `.unsupported`), and the B70 `osascript` / self-test `execute` with the gate on. Optionally replace the run-time selector lookup in `ChromiumJavaScript.swift` by the direct call once every framework in use has the header.
 
+## Command bar history and suggestions (B66)
+
+The command bar (`05 §command bar`, `04 §command bar`) lists browsing history pages and the search engine's suggestions (`06 §16.2`, `§19.1`, `§23` observed: a typed word with no matching command lists search suggestions; `03 §Profiles` observed: "Search engine" and "Include search engine suggestions" per profile; `06 §20.1` observed: the incognito bar has no history). The header (`OACAutocomplete.h`) and the Swift side (`app/Sources/OpenArcChromium/ChromiumAutocomplete.swift`) are in place; the implementation is staged in `pending/oac_autocomplete.mm` and has **not been compiled**.
+
+- **History**: `HistoryServiceFactory::GetForProfile(profile, EXPLICIT_ACCESS)->QueryHistory(text, options, …)` with `REMOVE_ALL_DUPLICATES`, `kExclude404s` and `max_count` 1…100; each `URLResult` becomes an `OACHistoryEntry` (URL, title, last visit, visit and typed counts; http/https only). Off-the-record profiles answer an empty list (they record no history), and the shell does not ask from an incognito window.
+- **Suggestions**: the shell builds the URL from its own `SearchEngine.suggestURLTemplate` (Chromium's TemplateURLService is not consulted, so the profile setting in our model stays the single source of truth); the bridge GETs it with `SimpleURLLoader` on the profile's default storage partition (`credentials_mode = kOmit`, `LOAD_DO_NOT_SAVE_COOKIES | LOAD_DISABLE_CACHE`, 1.5 s timeout, 64 KiB limit, traffic annotation `openarc_search_suggestions`) and returns the body; `SearchSuggestionParser` (OpenArcEngine) reads the OpenSearch JSON. An incognito window sends through its off-the-record profile when that exists (before its first tab it uses the on-disk partition, which keeps nothing of the request).
+- **Cancellation**: each call returns an `OACAutocompleteRequest`; `-cancel` drops the history task tracker / URL loader and runs the handler once with an empty result. The Swift wrapper calls it from the calling task's cancellation handler, so each keystroke cancels the previous query.
+- **Capability check**: until a framework with these methods is built, `ChromiumAutocomplete.capabilities` is empty (selectors looked up at run time, `OACHistoryEntry` read by key) and the command bar shows no history and no suggestions; everything else works.
+
+**Main-session steps (not done by the B66 task):**
+1. In `~/chromium/src` on `openarc/156`: copy `chromium-bridge/pending/oac_autocomplete.mm` to `openarc/bridge/oac_autocomplete.mm` and `chromium-bridge/include/OpenArcCore/{OACAutocomplete.h,OpenArcCore.h}` to `openarc/bridge/public/OpenArcCore/`.
+2. `openarc/BUILD.gn`: add `"bridge/public/OpenArcCore/OACAutocomplete.h"` to `openarc_public_headers` and `"bridge/oac_autocomplete.mm"` to the `bridge` source set; add deps `//chrome/browser/history`, `//components/history/core/browser`, `//components/keyed_service/core`, `//net`, `//services/network/public/cpp` (most are already pulled in by `:importer` / `:embedder`; `gn check` will name any missing one). The exports list already matches `_OBJC_CLASS_$_OAC*`.
+3. Build (`autoninja -C out/Release openarc_framework`) and fix what the compiler finds (the file was written against 156 headers but never compiled). If `GURL` from `NSURL` needs it, `net/base/apple/url_conversions.h` is the include.
+4. Commit as a new patch, subject `openarc: embedder: history search and search suggestions for the command bar`, then `chromium-patches/export.sh` (writes the next `00NN-…patch`) and delete `chromium-bridge/pending/`.
+5. `chromium-bridge/build-framework.sh` (ninja `openarc_framework`, header sync check, xcframework into `app/Vendor/`).
+6. Check: `OPENARC_ENGINE_TESTS=1 swift test --filter ChromiumEngineConformanceTests` (its B66 block), then in the app: visit a page, close it (not archive), next day / after relaunch type its title in ⌘T → a clock row; type "swift" → the engine's suggestions after the local rows; Settings ▸ Profiles ▸ "Include search engine suggestions" off → none; an incognito window → suggestions, no history. Optionally replace the run-time selector lookups in `ChromiumAutocomplete.swift` by direct calls once every framework in use has the header.
+
 ## Open points for review
 
 1. Whether `OpenArcChromium` should be `@MainActor` throughout and satisfy the nonisolated `BrowserEngine` requirements by hopping, or whether `BrowserEngine` itself becomes `@MainActor` (SWIFT_PROTOCOL_CHANGES.md §11). The bridge works either way.
 2. Script-opened tabs (`window.open`) need adoption of an engine-made tab; `NewTabRequest` cannot express it today (§1). Without the change, `window.opener` and `postMessage` to popups (OAuth sign-in flows) break.
 3. DevTools docking: the header opens DevTools in its own window; docking it into the web panel needs a second surface per tab, decided in C15.
-4. Command bar autocomplete from Chromium's history and search providers is not exposed; decide when the command bar needs real history (after C9).
+4. Command bar autocomplete: decided in B66 (raw history + suggestion bodies, shell ranks; §Command bar history and suggestions). Most-visited sites and Chrome's history quick provider (in-memory URL index, prefix matching on typing) are not exposed; revisit if `QueryHistory` latency shows while typing.

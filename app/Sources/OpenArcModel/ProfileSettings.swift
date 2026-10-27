@@ -34,6 +34,20 @@ public enum SearchEngine: String, CaseIterable, Identifiable, Codable, Sendable 
         }
     }
 
+    /// Search suggestion URL template (OpenSearch JSON: `["query", ["suggestion", …]]`); `%@` is
+    /// replaced by the escaped query. The "Include search engine suggestions" toggle ([03
+    /// §Profiles] observed) asks the profile's engine; the endpoints are each engine's public
+    /// suggestion service (inferred, the spec records none).
+    public var suggestURLTemplate: String {
+        switch self {
+        case .google: return "https://www.google.com/complete/search?client=chrome&ie=UTF-8&oe=UTF-8&q=%@"
+        case .bing: return "https://www.bing.com/osjson.aspx?query=%@"
+        case .duckDuckGo: return "https://duckduckgo.com/ac/?type=list&q=%@"
+        case .yahoo: return "https://search.yahoo.com/sugg/os?output=fxjson&command=%@"
+        case .ecosia: return "https://ac.ecosia.org/?type=list&q=%@"
+        }
+    }
+
     /// Lenient lookup: unknown or missing raw values give `.default`.
     public init(lenient rawValue: String?) {
         self = rawValue.flatMap(SearchEngine.init(rawValue:)) ?? .default
@@ -59,18 +73,23 @@ public struct ProfileSettings: Codable, Hashable, Sendable {
     public var searchEngine: SearchEngine
     /// How long an idle Today tab of this profile's Spaces lives before auto-archive.
     public var todayLifetime: TimeInterval
+    /// "Include search engine suggestions" ([03 §Profiles] observed toggle). Default on
+    /// (inferred: the captured pane showed it on). Plan B66.
+    public var includesSearchSuggestions: Bool
 
     public static let `default` = ProfileSettings()
 
     public init(
         searchEngine: SearchEngine = .default,
-        todayLifetime: TimeInterval = ArchivePolicy.defaultTodayLifetime
+        todayLifetime: TimeInterval = ArchivePolicy.defaultTodayLifetime,
+        includesSearchSuggestions: Bool = true
     ) {
         self.searchEngine = searchEngine
         self.todayLifetime = todayLifetime
+        self.includesSearchSuggestions = includesSearchSuggestions
     }
 
-    private enum CodingKeys: String, CodingKey { case searchEngine, todayLifetime }
+    private enum CodingKeys: String, CodingKey { case searchEngine, todayLifetime, includesSearchSuggestions }
 
     /// Every key is optional so data written before a setting existed decodes with its default.
     public init(from decoder: Decoder) throws {
@@ -78,6 +97,7 @@ public struct ProfileSettings: Codable, Hashable, Sendable {
         searchEngine = try c.decodeIfPresent(SearchEngine.self, forKey: .searchEngine) ?? .default
         let lifetime = try c.decodeIfPresent(TimeInterval.self, forKey: .todayLifetime)
         todayLifetime = ProfileSettings.validLifetime(lifetime)
+        includesSearchSuggestions = try c.decodeIfPresent(Bool.self, forKey: .includesSearchSuggestions) ?? true
     }
 
     /// A non-positive or missing lifetime would archive everything at once; use the default.

@@ -82,6 +82,17 @@ func exerciseAPI(delegate: ImportCheckDelegate) throws {
         tab.evaluateJavaScript("1 + 1") { (json: String?, error: Error?) in
             _ = (json, (error as NSError?)?.code == OACError.javaScriptException.rawValue)
         }
+        // Plan B66: history search and search suggestions (OACAutocomplete.h).
+        let history: OACAutocompleteRequest = profile.queryHistory(matching: "swift", maximumCount: 8) { (entries: [OACHistoryEntry]) in
+            for entry in entries {
+                _ = (entry.url, entry.title, entry.lastVisitDate, entry.visitCount, entry.typedCount)
+            }
+        }
+        history.cancel()
+        let fetch = profile.fetchSearchSuggestions(from: URL(string: "https://duckduckgo.com/ac/?q=swift")!) { (body: Data?) in
+            _ = body
+        }
+        fetch.cancel()
         _ = profile.downloads.items
         _ = profile.extensions.installedExtensions
     }

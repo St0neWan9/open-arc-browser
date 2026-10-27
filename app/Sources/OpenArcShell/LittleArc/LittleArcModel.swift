@@ -107,7 +107,7 @@ public final class LittleArcModel: ObservableObject {
         self.engine = shell.dependencies.engine
         let sidebar = shell.sidebar
         self.commandBar = CommandBarViewModel(
-            sources: commandBarDefaultSources(
+            sources: shell.commandBarSources(
                 workspace: { @MainActor in sidebar.workspace },
                 commandState: { @MainActor [weak shell] in shell?.littleArcCommandBarState ?? .everything }
             ),

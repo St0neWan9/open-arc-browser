@@ -52,6 +52,11 @@ final class TreeOpsProfileTests: XCTestCase {
         XCTAssertEqual(try decode(#"{"searchEngine":"ecosia","todayLifetime":0}"#), ProfileSettings(searchEngine: .ecosia))
         let roundTrip = ProfileSettings(searchEngine: .duckDuckGo, todayLifetime: 7 * 24 * hour)
         XCTAssertEqual(try JSONDecoder().decode(ProfileSettings.self, from: JSONEncoder().encode(roundTrip)), roundTrip)
+        // B66: "Include search engine suggestions" ([03 §Profiles] observed toggle) defaults on for
+        // data written before it existed, and round-trips when off.
+        XCTAssertTrue(try decode(#"{"searchEngine":"bing"}"#).includesSearchSuggestions)
+        let off = ProfileSettings(includesSearchSuggestions: false)
+        XCTAssertEqual(try JSONDecoder().decode(ProfileSettings.self, from: JSONEncoder().encode(off)), off)
     }
 
     // MARK: updateProfileSettings

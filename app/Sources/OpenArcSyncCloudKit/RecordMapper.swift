@@ -79,6 +79,7 @@ struct RecordMapper: Sendable {
             w.set(ProfileFields.name, v.name)
             w.set(ProfileFields.searchEngine, v.settings.searchEngine.rawValue)
             w.set(ProfileFields.todayLifetime, v.settings.todayLifetime)
+            w.set(ProfileFields.includesSearchSuggestions, Int64(v.settings.includesSearchSuggestions ? 1 : 0))
         case .theme(let v):
             w.set(ThemeFields.appearance, v.appearance.rawValue)
             w.set(ThemeFields.colors, Self.json(v.colors))
@@ -175,7 +176,8 @@ struct RecordMapper: Sendable {
             // engine (from a newer build) also falls back to the default.
             let settings = ProfileSettings(
                 searchEngine: SearchEngine(lenient: r.optional(ProfileFields.searchEngine)),
-                todayLifetime: ProfileSettings.validLifetime(r.optional(ProfileFields.todayLifetime))
+                todayLifetime: ProfileSettings.validLifetime(r.optional(ProfileFields.todayLifetime)),
+                includesSearchSuggestions: (r.optional(ProfileFields.includesSearchSuggestions) as Int64?).map { $0 != 0 } ?? true
             )
             var v = Profile(id: uuid, name: try r.required(ProfileFields.name), settings: settings, now: now)
             v.meta = meta

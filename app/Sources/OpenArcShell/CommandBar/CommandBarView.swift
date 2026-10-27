@@ -305,6 +305,7 @@ struct CommandBarRow: View {
         case .site: return "globe"
         case .pinned: return "pin"
         case .archive: return "archivebox"
+        case .history: return "clock"
         case .command: return "command"
         case .space: return "square.stack"
         case .search: return "magnifyingglass"

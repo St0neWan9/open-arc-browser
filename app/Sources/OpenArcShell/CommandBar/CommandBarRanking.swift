@@ -5,7 +5,12 @@ import Foundation
 // EVIDENCE: the spec only shows the UI. Observed: the first row is selected by default; open tabs
 // ("Switch to Tab") are listed before other candidates; with no input the list is open tabs and
 // ends with an app command such as "Contact the Team" [04 §command bar, 05 §command bar].
-// Everything else here is INFERRED, in particular all scores and tie-breaks.
+// Everything else here is INFERRED, in particular all scores and tie-breaks. For a typed query
+// (plan B66): matching open tabs first, then the typed URL / "search for" row, archived items, app
+// commands and browsing history pages by match strength (a history page below an open tab or
+// archived item of the same match, raised by its frecency), and the engine's search suggestions
+// last, in the engine's order ([06 §16.2, §19.1, §23] observed: a word with no matching command
+// lists search suggestions).
 
 public enum CommandBarRanker {
     /// Open tabs shown for an empty query (the fifth row is the closing command). inferred from the
@@ -28,6 +33,13 @@ public enum CommandBarRanker {
         static let urlSubstring: Double = 300
         static let suggestionBase: Double = 300
         static let allTokens: Double = 250
+        /// Browsing history rows (plan B66) rank below an open tab or archived item of the same
+        /// match tier (open tabs first, [05 §command bar] observed), then rise with the page's
+        /// frecency, and never fall below web suggestions (pages the user visited before generic
+        /// suggestions). All three values inferred.
+        static let historyPenalty: Double = 150
+        static let historyFrecencyWeight: Double = 60
+        static let historyFloor: Double = 305
         static let archivePenalty: Double = 100
         static let currentSpaceBonus: Double = 10
         /// App commands and space rows never outrank an exact tab match (exact title or URL):
@@ -79,6 +91,10 @@ public enum CommandBarRanker {
         case .archivedItem:
             guard let value = textScore(query: query, title: result.title, url: result.url) else { return nil }
             return value - Score.archivePenalty
+        case .historyItem:
+            guard let value = textScore(query: query, title: result.title, url: result.url) else { return nil }
+            let frecency = min(max(result.frecency, 0), 1)
+            return max(value - Score.historyPenalty + Score.historyFrecencyWeight * frecency, Score.historyFloor)
         case .command:
             var best = textScore(query: query, title: result.title, url: nil)
             if case .runCommand(let command) = result.action {
@@ -152,15 +168,18 @@ public enum CommandBarRanker {
 
     /// Drops rows that duplicate a better row (input is already sorted best first):
     /// - an archived item with the URL of an open tab;
+    /// - a history page with the URL of an open tab, an archived item or the typed URL;
     /// - a typed-URL row when a tab or archived item has the same URL (switch to it instead);
     /// - a suggestion equal to the typed text (the search row covers it).
     static func deduplicate(_ sorted: [CommandBarResult], query: String) -> [CommandBarResult] {
         var tabKeys = Set<String>()
         var archivedKeys = Set<String>()
+        var typedKeys = Set<String>()
         for result in sorted {
             guard let url = result.url else { continue }
             if result.kind.isTab { tabKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .archivedItem { archivedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
+            if result.kind == .typedURL { typedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
         }
         let foldedQuery = CommandBarTextNormalizer.fold(query)
         var seenSuggestions = Set<String>()
@@ -170,6 +189,10 @@ public enum CommandBarRanker {
             switch result.kind {
             case .archivedItem:
                 if let key, tabKeys.contains(key) { continue }
+            case .historyItem:
+                // A visited page that is open, archived or exactly what was typed has its row
+                // already (switch / restore / open). inferred (B66).
+                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) { continue }
             case .typedURL:
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) { continue }
             case .searchSuggestion:

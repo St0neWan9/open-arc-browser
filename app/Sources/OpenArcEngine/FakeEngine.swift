@@ -43,11 +43,15 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     private let fakeAdBlocking = FakeAdBlocking()
     private let fakeTranslation = FakeTranslation()
     private let fakeImporterService = FakeImporter()
+    private let fakeAutocompleteService: FakeAutocomplete
 
+    /// - Parameter clock: visit times of the fake history (plan B66); default the system clock.
     public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle,
-                pageTopColorProvider: PageTopColorProvider? = nil) {
+                pageTopColorProvider: PageTopColorProvider? = nil,
+                clock: @escaping @Sendable () -> Date = { Date() }) {
         self.titleProvider = titleProvider
         self.pageTopColorProvider = pageTopColorProvider
+        self.fakeAutocompleteService = FakeAutocomplete(clock: clock)
     }
 
     public static let defaultTitle: TitleProvider = { url in url.host ?? url.absoluteString }
@@ -67,6 +71,9 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     public var importer: any EngineImporter { fakeImporterService }
     /// Typed access for tests (plan D3b).
     public var fakeImporter: FakeImporter { fakeImporterService }
+    public var autocomplete: any EngineAutocomplete { fakeAutocompleteService }
+    /// Typed access for tests (plan B66).
+    public var fakeAutocomplete: FakeAutocomplete { fakeAutocompleteService }
 
     /// Ids of all live tabs (for tests and debug UI).
     public var tabIDs: Set<EngineTabID> {
@@ -168,10 +175,12 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
             deletedProfiles.append(profileID)
         }
         zoomMap.removeAll(profileID: profileID)
+        fakeAutocompleteService.removeHistory(profileID: profileID)
     }
 
     public func clearBrowsingData(_ profileID: Profile.ID, types: BrowsingDataTypes, since: Date?) async {
         lock.withLock { clearedData.append(ClearedBrowsingData(profileID: profileID, types: types, since: since)) }
+        if types.contains(.history) { fakeAutocompleteService.removeHistory(profileID: profileID, since: since) }
     }
 
     // MARK: Test hooks
@@ -224,6 +233,12 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
         )
         tab.onSiteZoomChange = { [weak self] source, key, factor in self?.propagateZoom(from: source, key: key, factor: factor) }
         tab.onNewTabRequest = { [weak self] request in self?.broadcaster.yield(.newTabRequested(request)) }
+        // On-disk tabs record their navigations in the profile's history; off-the-record tabs
+        // never do (plan B66).
+        if !isOffTheRecord {
+            let history = fakeAutocompleteService
+            tab.onVisit = { url, title in history.addVisit(url: url, title: title, profileID: profileID) }
+        }
         try lock.withLock {
             guard !isShutDown else { throw EngineError.shuttingDown }
             guard liveTabs[id] == nil else { throw EngineError.duplicateTabID(id) }
@@ -373,6 +388,9 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private let zoomMap: FakeZoomMap
     var onSiteZoomChange: (@Sendable (EngineTabID, FakeZoomMap.Key, Double) -> Void)?
     var onNewTabRequest: (@Sendable (NewTabRequest) -> Void)?
+    /// A navigation committed (URL, title): the engine records it in the history (plan B66).
+    /// Set once by FakeEngine before the tab escapes, like `onNewTabRequest`.
+    var onVisit: (@Sendable (URL, String) -> Void)?
 
     init(
         id: EngineTabID,
@@ -1148,6 +1166,10 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     /// the documented event sequence.
     private func mutate(_ change: () -> URL?) throws {
         let changed = try applyNavigation(change)
+        if changed, let onVisit {
+            let (url, title) = lock.withLock { (state.url, state.title) }
+            if let url, url.scheme == "http" || url.scheme == "https" { onVisit(url, title) }
+        }
         if changed {
             let surface = fakeSurface
             Task { @MainActor in surface.refresh() }

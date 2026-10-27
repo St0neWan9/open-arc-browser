@@ -73,7 +73,10 @@ enum ProfileFields {
     static let searchEngine = FieldSpec("settings_searchEngine", G.settings)
     /// "Archive tabs after" in seconds (Double). Added after the first schema, like `searchEngine`.
     static let todayLifetime = FieldSpec("settings_todayLifetime", G.settings)
-    static let all = [name, searchEngine, todayLifetime]
+    /// "Include search engine suggestions" as 0/1 (Int64). Added in B66; records saved before it
+    /// lack the key and decode as on (the default).
+    static let includesSearchSuggestions = FieldSpec("settings_includesSearchSuggestions", G.settings)
+    static let all = [name, searchEngine, todayLifetime, includesSearchSuggestions]
 }
 
 enum ThemeFields {

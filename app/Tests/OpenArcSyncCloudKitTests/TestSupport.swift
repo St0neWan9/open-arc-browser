@@ -31,7 +31,7 @@ enum Fx {
             id: id, name: variant == 0 ? "Personal" : "Work",
             settings: variant == 0
                 ? ProfileSettings(searchEngine: .duckDuckGo, todayLifetime: 24 * 3600)
-                : ProfileSettings(searchEngine: .ecosia, todayLifetime: 7 * 24 * 3600),
+                : ProfileSettings(searchEngine: .ecosia, todayLifetime: 7 * 24 * 3600, includesSearchSuggestions: false),
             now: t0
         )
     }

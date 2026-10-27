@@ -117,24 +117,44 @@ public final class CommandBarViewModel: ObservableObject {
         results.indices.contains(selectedIndex) ? results[selectedIndex] : nil
     }
 
-    /// Recomputes results for the current text. Results of a superseded query are discarded.
+    /// Recomputes results for the current text. Results of a superseded query are discarded, and
+    /// cancelling the calling task (the next keystroke does) cancels every source's work.
+    /// Deferred sources (search suggestions over the network, plan B66) do not hold up the list:
+    /// the other rows are published first, then the list is ranked again with the deferred rows
+    /// merged in, keeping the selected row when it is still there (inferred).
     public func refresh() async {
         generation &+= 1
         let ticket = generation
         let context = makeContext()
-        let sources = self.sources
-        let candidates: [CommandBarResult] = await withTaskGroup(of: (Int, [CommandBarResult]).self) { group in
-            for (index, source) in sources.enumerated() {
+        let immediate = sources.enumerated().filter { !$0.element.isDeferred }
+        let deferred = sources.enumerated().filter { $0.element.isDeferred }
+        let first = await Self.collect(immediate, context: context)
+        guard ticket == generation, !Task.isCancelled else { return }
+        results = CommandBarRanker.rank(first.flatMap(\.1), context: context, limit: maxResults)
+        resultsQuery = context.text
+        selectedIndex = 0
+        guard !deferred.isEmpty, !context.trimmedText.isEmpty else { return }
+        let late = await Self.collect(deferred, context: context)
+        guard ticket == generation, !Task.isCancelled, late.contains(where: { !$0.1.isEmpty }) else { return }
+        let all = (first + late).sorted { $0.0 < $1.0 }.flatMap(\.1)
+        let selectedID = selectedResult?.id
+        results = CommandBarRanker.rank(all, context: context, limit: maxResults)
+        selectedIndex = selectedID.flatMap { id in results.firstIndex { $0.id == id } } ?? 0
+    }
+
+    /// Runs sources concurrently; answers (source index, rows) pairs sorted by index.
+    private nonisolated static func collect(
+        _ sources: [(offset: Int, element: any CommandBarSource)],
+        context: CommandBarQueryContext
+    ) async -> [(Int, [CommandBarResult])] {
+        await withTaskGroup(of: (Int, [CommandBarResult]).self) { group in
+            for (index, source) in sources {
                 group.addTask { (index, await source.results(for: context)) }
             }
             var collected: [(Int, [CommandBarResult])] = []
             for await item in group { collected.append(item) }
-            return collected.sorted { $0.0 < $1.0 }.flatMap(\.1)
+            return collected.sorted { $0.0 < $1.0 }
         }
-        guard ticket == generation, !Task.isCancelled else { return }
-        results = CommandBarRanker.rank(candidates, context: context, limit: maxResults)
-        resultsQuery = context.text
-        selectedIndex = 0
     }
 
     /// Waits for the refresh started by the latest text change (for tests).

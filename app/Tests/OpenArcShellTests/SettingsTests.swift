@@ -442,6 +442,8 @@ final class SettingsTests: XCTestCase {
             "profiles.learnMore", "profiles.searchSettings", "profiles.downloadLocation",
             "profiles.privacy", "profiles.passwords", "profiles.creditCards", "profiles.notifications",
             "profiles.autofill", "profiles.clearBrowsingData", "advanced.moreSettings",
+            // B66: per-profile search suggestions in the command bar (03 §Profiles).
+            "profiles.searchSuggestions",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {
