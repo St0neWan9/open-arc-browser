@@ -88,11 +88,67 @@ final class SplitViewLayoutTests: XCTestCase {
         XCTAssertEqual(frames[1].frame.width, 812)
     }
 
-    /// Expand Current Split: only the focused pane, full size. inferred.
-    func testExpandedShowsOnlyFocusedPane() {
-        let id = UUID()
-        let frames = SplitPaneLayout.expandedFrames(focusedTabID: id, in: container)
-        XCTAssertEqual(frames, [SplitPaneFrame(tabID: id, frame: container)])
+    /// 06 §21.6 observed: Expand Current Split makes the current pane maximal and the other the
+    /// 220 pt minimum, from any stored ratio. At 1634 wide: 220 + 10 + 1404.
+    func testExpandedFractionsTwoPanes() throws {
+        let ids = [UUID(), UUID()]
+        for f in [0.5, 0.283, 0.9] {
+            let node = root(ids, fractions: [f, 1 - f])
+            let right = SplitPaneLayout.expandedFrames(for: node, focusedTabID: ids[1], in: container)
+            XCTAssertEqual(right.map(\.tabID), ids)
+            XCTAssertEqual(right[0].frame.width, 220, accuracy: 1e-9)
+            XCTAssertEqual(right[1].frame.width, 1404, accuracy: 1e-9)
+            XCTAssertEqual(right[1].frame.maxX, container.width, accuracy: 1e-9)
+            guard case .split(_, let children) = SplitPaneLayout.expandedRoot(node, focusedTabID: ids[1], in: container) else {
+                return XCTFail("still a split")
+            }
+            XCTAssertEqual(children[0].fraction, 220.0 / 1624.0, accuracy: 1e-12)
+            XCTAssertEqual(children[1].fraction, 1404.0 / 1624.0, accuracy: 1e-12)
+            let left = SplitPaneLayout.expandedFrames(for: node, focusedTabID: ids[0], in: container)
+            XCTAssertEqual(left[0].frame.width, 1404, accuracy: 1e-9)
+            XCTAssertEqual(left[1].frame.width, 220, accuracy: 1e-9)
+        }
+    }
+
+    /// 06 §21.6 observed: running Expand Current Split again changes nothing.
+    func testExpandedIsIdempotent() {
+        let ids = [UUID(), UUID(), UUID()]
+        let node = root(ids, fractions: [0.2, 0.5, 0.3])
+        let once = SplitPaneLayout.expandedRoot(node, focusedTabID: ids[1], in: container)
+        let twice = SplitPaneLayout.expandedRoot(once, focusedTabID: ids[1], in: container)
+        XCTAssertEqual(SplitPaneLayout.frames(for: twice, in: container), SplitPaneLayout.frames(for: once, in: container))
+        // Three panes (inferred, same rule): the two others at 220, the current one the rest.
+        let widths = SplitPaneLayout.frames(for: once, in: container).map(\.frame.width)
+        XCTAssertEqual(widths.count, 3)
+        XCTAssertEqual(widths[0], 220, accuracy: 1e-9)
+        XCTAssertEqual(widths[1], 1634 - 440 - 20, accuracy: 1e-9)
+        XCTAssertEqual(widths[2], 220, accuracy: 1e-9)
+    }
+
+    /// Inferred: in a nested split the other panes take their minimum along each axis they share
+    /// with the current pane; a split stacked across the axis needs only one minimum.
+    func testExpandedNestedSplit() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let stacked = SplitNode.split(axis: .vertical, children: [SplitChild(node: .pane(tabID: b), fraction: 0.5),
+                                                                   SplitChild(node: .pane(tabID: c), fraction: 0.5)])
+        let node = SplitNode.split(axis: .horizontal, children: [SplitChild(node: .pane(tabID: a), fraction: 0.5),
+                                                                  SplitChild(node: stacked, fraction: 0.5)])
+        let frames = SplitPaneLayout.expandedFrames(for: node, focusedTabID: b, in: container)
+        let byID = Dictionary(uniqueKeysWithValues: frames.map { ($0.tabID, $0.frame) })
+        XCTAssertEqual(byID[a]?.width ?? 0, 220, accuracy: 1e-9)
+        XCTAssertEqual(byID[b]?.width ?? 0, 1404, accuracy: 1e-9)
+        XCTAssertEqual(byID[c]?.height ?? 0, 220, accuracy: 1e-9)
+        XCTAssertEqual(byID[b]?.height ?? 0, container.height - 230, accuracy: 1e-9)
+        let left = SplitPaneLayout.expandedFrames(for: node, focusedTabID: a, in: container)
+        XCTAssertEqual(left[1].frame.height, left[2].frame.height, accuracy: 1e-9, "across the axis the ratio is kept")
+    }
+
+    /// A container too small for the minimums, or a tab outside the tree, leaves the tree as is.
+    func testExpandedFallsBackWhenItCannotFit() {
+        let ids = [UUID(), UUID()]
+        let node = root(ids, fractions: [0.3, 0.7])
+        XCTAssertEqual(SplitPaneLayout.expandedRoot(node, focusedTabID: ids[0], in: CGRect(x: 0, y: 0, width: 400, height: 500)), node)
+        XCTAssertEqual(SplitPaneLayout.expandedRoot(node, focusedTabID: UUID(), in: container), node)
     }
 
     func testNeighborPanePrefersThePreviousOne() {

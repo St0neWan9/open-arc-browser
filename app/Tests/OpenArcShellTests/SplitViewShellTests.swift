@@ -182,25 +182,66 @@ final class SplitViewShellTests: XCTestCase {
         XCTAssertFalse(model.hasActiveSplit)
         model.closeSplitPane()
         model.separatePageFromSplitView()
-        model.toggleExpandCurrentSplit()
-        XCTAssertFalse(model.isSplitExpanded)
+        model.expandCurrentSplit()
+        XCTAssertNil(model.splitExpansion)
         _ = try await splitModel(model)
         XCTAssertTrue(model.hasActiveSplit)
     }
 
-    /// Expand Current Split shows only the focused pane; again shows all. inferred.
+    /// 06 §21.6 observed: View ▸ Expand Current Split makes the current pane maximal and the
+    /// other the 220 pt minimum; running it again changes nothing (not a toggle). Nothing is stored.
     func testExpandCurrentSplit() async throws {
         let model = makeModel()
-        let (_, new) = try await splitModel(model)
+        let (base, new) = try await splitModel(model)
         let container = CGRect(x: 0, y: 0, width: 1634, height: 965)
-        model.toggleExpandCurrentSplit()
-        XCTAssertEqual(model.splitPaneFrames(in: container), [SplitPaneFrame(tabID: new, frame: container)])
-        model.toggleExpandCurrentSplit()
-        XCTAssertEqual(model.splitPaneFrames(in: container).count, 2)
-        model.toggleExpandCurrentSplit()
+        let stored = model.workspace
+        model.expandCurrentSplit()
+        let expanded = model.splitPaneFrames(in: container)
+        XCTAssertEqual(expanded.map(\.tabID), [base, new])
+        XCTAssertEqual(expanded[0].frame.width, 220, accuracy: 1e-9)
+        XCTAssertEqual(expanded[1].frame.width, 1634 - 220 - 10, accuracy: 1e-9)
+        XCTAssertTrue(model.isSplitExpandedNow)
+        model.expandCurrentSplit()
+        XCTAssertEqual(model.splitPaneFrames(in: container), expanded, "again: no change")
+        model.perform(.runCommand(.expandSplit))
+        XCTAssertEqual(model.splitPaneFrames(in: container), expanded, "the command bar row: no change either")
+        XCTAssertEqual(model.workspace, stored, "window-local, not stored")
+
+        // The other pane becomes current: expanding now favors it.
         model.dismissCommandBar()
+        model.focusPane(base)
+        model.expandCurrentSplit()
+        XCTAssertEqual(model.splitPaneFrames(in: container)[0].frame.width, 1634 - 220 - 10, accuracy: 1e-9)
+
         model.separatePageFromSplitView()
         XCTAssertFalse(model.isSplitExpandedNow)
+        XCTAssertNil(model.splitExpansion)
+    }
+
+    /// 06 §21.6 observed: View ▸ Show Toolbar is disabled while a split is shown; the menu item
+    /// follows the split, and ⇧⌘D through the model does nothing then.
+    func testShowToolbarDisabledWhileSplitShown() async throws {
+        guard #available(macOS 15, *) else { throw XCTSkip("NSHostingMenu needs macOS 15") }
+        let model = makeModel()
+        defer { model.stop() }
+        func toolbarItem() -> NSMenuItem? {
+            let menu = NSHostingMenu(rootView: ViewMenuItems(model: model, hasWindow: true))
+            menu.update()
+            return menu.items.first { $0.title == model.webToolbar.menuTitle }
+        }
+        let wasShown = model.isWebToolbarShown
+        defer { model.webToolbar.isShown = wasShown }
+        XCTAssertTrue(model.canToggleWebToolbar)
+        XCTAssertEqual(toolbarItem()?.isEnabled, true)
+        _ = try await splitModel(model)
+        XCTAssertFalse(model.canToggleWebToolbar)
+        XCTAssertEqual(toolbarItem()?.isEnabled, false)
+        model.toggleWebToolbar()
+        XCTAssertEqual(model.isWebToolbarShown, wasShown, "disabled: no change")
+        model.dismissCommandBar()
+        model.separatePageFromSplitView()
+        XCTAssertTrue(model.canToggleWebToolbar)
+        XCTAssertEqual(toolbarItem()?.isEnabled, true)
     }
 
     /// The window lays out with a split, with and without the pane command bar. [06 §5] observed.
@@ -213,7 +254,7 @@ final class SplitViewShellTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         model.dismissCommandBar()
         host.layoutSubtreeIfNeeded()
-        model.toggleExpandCurrentSplit()
+        model.expandCurrentSplit()
         host.layoutSubtreeIfNeeded()
         XCTAssertTrue(model.hasActiveSplit)
     }

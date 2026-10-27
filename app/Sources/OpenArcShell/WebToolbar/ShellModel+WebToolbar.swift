@@ -48,7 +48,11 @@ extension ShellModel {
     public var isWebToolbarShown: Bool { webToolbar.isShown }
 
     /// View ▸ Show Toolbar / Hide Toolbar (⇧⌘D). Every window follows. [06 §17.1] observed.
-    public func toggleWebToolbar() { webToolbar.toggle() }
+    /// Not while this window shows a split: the item is disabled then. [06 §21.6] observed (B79).
+    public func toggleWebToolbar() {
+        guard canToggleWebToolbar else { return }
+        webToolbar.toggle()
+    }
 
     /// What the bar of `tabID` (nil: the empty panel) shows.
     public func webToolbarState(for tabID: UUID?) -> WebToolbarState {
@@ -147,7 +151,7 @@ extension ShellModel {
     /// takes the command bar, as ⌃⇧= does. [06 §17.3] observed items; the rest follows [06 §5].
     public func addSplit(_ placement: WebToolbarSplitPlacement, beside tabID: UUID? = nil) {
         if let tabID { focusPane(tabID) }
-        isSplitExpanded = false
+        splitExpansion = nil
         sidebar.addSplitView(axis: placement.axis, side: placement.side)
     }
 
