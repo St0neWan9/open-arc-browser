@@ -285,7 +285,10 @@ final class FakeRetryScheduler: RetryScheduling, @unchecked Sendable {
 /// - `sendChanges` asks the delegate for batches, offering each pending change at most once per
 ///   call, removes the sent changes from the pending list, and reports the outcome built by
 ///   `sendHandler` (default: every save and delete succeeds, saved records get a change tag);
-/// - `fetchChanges` emits the scripted fetch events between willFetch / didFetch.
+/// - `fetchChanges` emits the scripted fetch events between willFetch / didFetch;
+/// - every delegate call runs inside `EngineCallbackContext`, as in `CKSyncEngineDriver`, and an
+///   engine call made from inside a callback is recorded in `callsInsideCallback` (CKSyncEngine
+///   traps on it).
 // @unchecked: every mutable stored property is read and written only under `lock` (`Mutex` needs macOS 15).
 final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
     typealias SendHandler = @Sendable (DriverBatch) async -> DriverSentRecordChanges
@@ -306,6 +309,8 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
     private var _accountStatus: Result<CKAccountStatus, FakeError> = .success(.available)
     private var _cancelled = false
     private var _tagCounter = 0
+    private var _fetchScopes: [DriverFetchScope] = []
+    private var _callsInsideCallback: [String] = []
     let engineState: Data?
 
     init(engineState: Data? = nil) {
@@ -345,9 +350,35 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
     func failNextFetch(_ error: any Error) { lock.withLock { _fetchErrors.append(error) } }
     func failNextSend(_ error: any Error) { lock.withLock { _sendErrors.append(error) } }
 
+    /// Fetch scopes of every `fetchChanges` call, in order.
+    var fetchScopes: [DriverFetchScope] { lock.withLock { _fetchScopes } }
+    /// Engine calls (`fetchChanges`, `sendChanges`, `cancel`) made from inside a delegate
+    /// callback, directly or from a task that inherited the callback context. CKSyncEngine traps
+    /// on these (D4). (B86)
+    var callsInsideCallback: [String] { lock.withLock { _callsInsideCallback } }
+
+    private func noteEngineCall(_ name: String) {
+        guard EngineCallbackContext.isActive else { return }
+        lock.withLock { _callsInsideCallback.append(name) }
+    }
+
+    /// One delegate callback, inside the callback context as `CKSyncEngineDriver` sets it.
+    private func callback(_ delegate: any SyncEngineDriverDelegate, _ event: SyncDriverEvent) async {
+        await EngineCallbackContext.$isActive.withValue(true) {
+            await delegate.driverHandle(event)
+        }
+    }
+
+    private func nextBatchCallback(_ delegate: any SyncEngineDriverDelegate, _ pending: [DriverRecordChange]) async -> DriverBatch? {
+        await EngineCallbackContext.$isActive.withValue(true) {
+            await delegate.driverNextBatch(pending: pending)
+        }
+    }
+
     /// Delivers an event as the engine would, outside any fetch/send.
     func emit(_ event: SyncDriverEvent) async {
-        await delegate?.driverHandle(event)
+        guard let delegate else { return }
+        await callback(delegate, event)
     }
 
     /// Replays one automatic engine sync (`SyncReason.scheduled`) the way CKSyncEngine reports
@@ -355,12 +386,12 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
     /// save failed; only the events below reach the delegate. Pending changes are left alone.
     func emitAutomaticCycle(fetchEvents: [SyncDriverEvent] = [], sendEvents: [SyncDriverEvent] = []) async {
         guard let delegate else { return }
-        await delegate.driverHandle(.willFetchChanges)
-        for event in fetchEvents { await delegate.driverHandle(event) }
-        await delegate.driverHandle(.didFetchChanges(.scheduled))
-        await delegate.driverHandle(.willSendChanges)
-        for event in sendEvents { await delegate.driverHandle(event) }
-        await delegate.driverHandle(.didSendChanges(.scheduled))
+        await callback(delegate, .willFetchChanges)
+        for event in fetchEvents { await callback(delegate, event) }
+        await callback(delegate, .didFetchChanges(.scheduled))
+        await callback(delegate, .willSendChanges)
+        for event in sendEvents { await callback(delegate, event) }
+        await callback(delegate, .didSendChanges(.scheduled))
     }
 
     // MARK: SyncEngineDriver
@@ -388,41 +419,44 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
         }
     }
 
-    func fetchChanges() async throws {
+    func fetchChanges(_ scope: DriverFetchScope) async throws {
+        noteEngineCall("fetchChanges")
+        lock.withLock { _fetchScopes.append(scope) }
         let error: (any Error)? = lock.withLock { _fetchErrors.isEmpty ? nil : _fetchErrors.removeFirst() }
         if let error { throw error }
         let scripted: [SyncDriverEvent]? = lock.withLock { _fetchEvents.isEmpty ? nil : _fetchEvents.removeFirst() }
         var events = scripted ?? []
         if scripted == nil, let fetchHandler { events = await fetchHandler() }
         guard let delegate else { return }
-        await delegate.driverHandle(.willFetchChanges)
-        for event in events { await delegate.driverHandle(event) }
-        await delegate.driverHandle(.didFetchChanges(.manual))
+        await callback(delegate, .willFetchChanges)
+        for event in events { await callback(delegate, event) }
+        await callback(delegate, .didFetchChanges(.manual))
     }
 
     func sendChanges() async throws {
+        noteEngineCall("sendChanges")
         let error: (any Error)? = lock.withLock { _sendErrors.isEmpty ? nil : _sendErrors.removeFirst() }
         if let error { throw error }
         guard let delegate else { return }
-        await delegate.driverHandle(.willSendChanges)
+        await callback(delegate, .willSendChanges)
         let zoneSave: Bool = lock.withLock {
             defer { _zoneSavePending = false }
             return _zoneSavePending
         }
         if zoneSave {
             if case .success(.available) = accountStatusResult {
-                await delegate.driverHandle(.sentZoneChanges(saved: [Fx.zoneID], failed: [:]))
+                await callback(delegate, .sentZoneChanges(saved: [Fx.zoneID], failed: [:]))
             } else {
                 // Like CloudKit: without a usable account the zone save fails and stays pending.
                 lock.withLock { _zoneSavePending = true }
-                await delegate.driverHandle(.sentZoneChanges(saved: [], failed: [Fx.zoneID: CKError(.notAuthenticated)]))
+                await callback(delegate, .sentZoneChanges(saved: [], failed: [Fx.zoneID: CKError(.notAuthenticated)]))
             }
         }
         var offered: [DriverRecordChange] = []
         while true {
             let candidates = pendingChanges.filter { !offered.contains($0) }
             guard !candidates.isEmpty,
-                  let batch = await delegate.driverNextBatch(pending: candidates)
+                  let batch = await nextBatchCallback(delegate, candidates)
             else { break }
             offered += candidates
             let sent = batch.recordsToSave.map { DriverRecordChange.save($0.recordID) }
@@ -430,12 +464,13 @@ final class FakeDriver: SyncEngineDriver, @unchecked Sendable {
             removePending(sent)
             lock.withLock { _sentBatches.append(batch) }
             let result = await (sendHandler ?? defaultResult)(batch)
-            await delegate.driverHandle(.sentRecordChanges(result))
+            await callback(delegate, .sentRecordChanges(result))
         }
-        await delegate.driverHandle(.didSendChanges(.manual))
+        await callback(delegate, .didSendChanges(.manual))
     }
 
     func cancel() async {
+        noteEngineCall("cancel")
         lock.withLock { _cancelled = true }
     }
 

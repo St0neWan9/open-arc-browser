@@ -8,14 +8,21 @@ public enum CloudKitSyncStoreError: Error, Hashable, Sendable {
     case unavailable(SyncUnavailableReason)
 }
 
-/// Schedules a delayed retry. Injectable so tests never sleep.
+/// Schedules deferred work (retries, confirming syncs, cancelling a replaced engine). Injectable
+/// so tests never sleep. Implementations must not run `work` in the caller's task context: the
+/// store schedules from inside engine callbacks (see `TaskRetryScheduler`).
 protocol RetryScheduling: Sendable {
     func schedule(after delay: TimeInterval, _ work: @escaping @Sendable () async -> Void)
 }
 
+/// Runs the work in a detached task. The store schedules from inside CKSyncEngine delegate
+/// callbacks (B63's confirming `syncNow`, backoff retries); a plain `Task {}` there inherits the
+/// callback's task-local context, and CKSyncEngine traps when that task awaits `fetchChanges`
+/// (D4: "Cannot await a call into CKSyncEngine from within a delegate callback", ~1 s after
+/// launch). `work` hops to the store actor itself. (B86)
 struct TaskRetryScheduler: RetryScheduling {
     func schedule(after delay: TimeInterval, _ work: @escaping @Sendable () async -> Void) {
-        Task {
+        Task.detached {
             try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             await work()
         }
@@ -140,6 +147,13 @@ public actor CloudKitSyncStore: SyncStore {
             return
         }
         try await bringUpDriver()
+        // A fresh engine fetches everything on its own (D4: 1–2 s). An engine restored from
+        // saved state is not known to fetch at start, and the app's first activation fetch is
+        // throttled right after launch, so a relaunched instance catches up explicitly with a
+        // database-level fetch (B86). Detached and on the next turn: `start` never waits for the network.
+        if state.engineState != nil, driver != nil, !isAccountBlocked {
+            scheduleConfirmation()
+        }
     }
 
     public func stop() async {
@@ -189,7 +203,9 @@ public actor CloudKitSyncStore: SyncStore {
         defer { manualSyncDepth -= 1 }
         await applyDeferredRemoteChanges()
         do {
-            try await driver.fetchChanges()
+            // Database level, never restricted to our zone: other devices' changes are found
+            // through the database change feed from the saved token (B86).
+            try await driver.fetchChanges(.allZones)
             try await driver.sendChanges()
         } catch {
             handleOperationError(error)
@@ -330,7 +346,9 @@ public actor CloudKitSyncStore: SyncStore {
     }
 
     private func runConfirmation() async {
-        confirmationScheduled = false
+        // Cleared only when the confirmation is done: an automatic cycle that ends while it runs
+        // (e.g. the send half after the fetch half) is covered by it and queues no second one.
+        defer { confirmationScheduled = false }
         guard driver != nil, !retryScheduled else { return }
         try? await syncNow()
     }
@@ -657,7 +675,11 @@ public actor CloudKitSyncStore: SyncStore {
             inFlight.removeAll()
             setPhase(.unavailable(.accountChanged))
             await persist()
-            if let driver { await driver.cancel() }
+            // This runs inside the engine's `handleEvent`: awaiting `cancelOperations` here would
+            // trap in CKSyncEngine, so the old engine is cancelled outside the callback (B86).
+            if let old = driver {
+                retryScheduler.schedule(after: 0) { await old.cancel() }
+            }
             driver = nil
         }
     }
