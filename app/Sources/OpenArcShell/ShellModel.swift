@@ -313,6 +313,8 @@ public final class ShellModel: ObservableObject {
                 sidebar.selectTab(id)
                 return
             }
+            // From an empty split pane's bar the chosen tab fills that pane (B19).
+            if let pane, sidebar.fillEmptyPane(pane, with: id) { return }
             if let spaceID = workspace.tabs[id]?.location.spaceID, spaceID != selectedSpaceID {
                 sidebar.selectSpace(spaceID)
             }

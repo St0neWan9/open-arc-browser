@@ -80,6 +80,19 @@ public struct OpenArcScene: Scene {
         .windowResizability(.contentMinSize)
         .handlesExternalEvents(matching: [])
         .defaultPosition(.center)
+        // Each WindowGroup brings back the system save group unless it replaces it too (B19).
+        .commands { NoSystemCloseCommands() }
+    }
+}
+
+/// Empties the system save group. Its File ▸ Close (⌘W) and Close All (⌥⌘W) come before
+/// Tabs ▸ Archive Tab in the menu bar, so ⌘W closed the whole window instead of archiving the
+/// tab. [01 §File] observed has neither item; [02 §tabs] observed: ⌘W is Archive Tab. SwiftUI
+/// shows the group once any print group is replaced, and every `WindowGroup` that does not
+/// replace it adds it back, so the browser and Little Arc scenes both carry this. B19.
+struct NoSystemCloseCommands: Commands {
+    var body: some Commands {
+        CommandGroup(replacing: .saveItem) {}
     }
 }
 
@@ -142,6 +155,8 @@ struct ShellCommands: Commands {
         // replaced (the spec lists only "Print"). B25. Both live in the print group: SwiftUI leaves
         // the save group (`.saveItem`) out of the menu of an app without document scenes, so an
         // item placed after it never showed (C15).
+        // No system Close (⌘W) / Close All (⌥⌘W): they took ⌘W from Tabs ▸ Archive Tab (B19).
+        NoSystemCloseCommands()
         CommandGroup(replacing: .printItem) {
             Button("Save Page As") { model.savePageAs() }
                 .disabled(!hasWindow || !model.canRunPageCommands)

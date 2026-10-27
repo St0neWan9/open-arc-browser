@@ -21,6 +21,8 @@ enum FindBarTokens {
     static let shadowRadius: CGFloat = 8
     static let shadowOpacity: Double = 0.18
     static let placeholder = "Find in page"
+    /// Height of the text field line. Own design.
+    static let fieldHeight: CGFloat = 18
     /// Shown instead of "n of m" when the query matches nothing. Own wording.
     static let noMatches = "No matches"
 }
@@ -44,7 +46,6 @@ extension ShellModel {
 struct FindBarView: View {
     @ObservedObject var model: FindBarModel
     let tabID: UUID
-    @FocusState private var isFieldFocused: Bool
 
     var body: some View {
         let query = Binding(
@@ -55,17 +56,16 @@ struct FindBarView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("", text: query, prompt: Text(FindBarTokens.placeholder))
-                .textFieldStyle(.plain)
-                .font(Typography.addressField.font)
-                .focused($isFieldFocused)
-                // Enter: next match; ⇧Enter: previous match. Own design (browser convention).
-                .onKeyPress(keys: [.return]) { press in
-                    if press.modifiers.contains(.shift) { model.findPrevious() } else { model.findNext() }
-                    return .handled
-                }
-                .onExitCommand { model.close(tabID) }
-                .accessibilityIdentifier("openarc.findbar.field")
+            // Enter: next match; ⇧Enter: previous match. Own design (browser convention).
+            FindBarTextField(
+                text: query,
+                focusRequest: model.focusRequest,
+                consumeFocusRequest: model.consumeFocusRequest,
+                font: Typography.addressField.nsFont,
+                onReturn: { shift in if shift { model.findPrevious() } else { model.findNext() } },
+                onEscape: { model.close(tabID) }
+            )
+            .frame(height: FindBarTokens.fieldHeight)
             if let text = statusText {
                 Text(text)
                     .font(Typography.settingsCaption.font.monospacedDigit())
@@ -86,8 +86,6 @@ struct FindBarView: View {
         )
         .padding(.top, FindBarTokens.margin)
         .padding(.trailing, FindBarTokens.margin)
-        .onAppear { focusField() }
-        .onChange(of: model.focusRequest) { _, _ in focusField() }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.findbar")
     }
@@ -95,14 +93,6 @@ struct FindBarView: View {
     private var statusText: String? {
         guard let result = model.result(for: tabID) else { return nil }
         return result.matches == 0 && result.isFinal ? FindBarTokens.noMatches : FindBarModel.statusText(result)
-    }
-
-    /// Focuses the field and selects its text, so typing replaces a kept query.
-    private func focusField() {
-        isFieldFocused = true
-        DispatchQueue.main.async {
-            NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
-        }
     }
 
     private func button(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
@@ -115,6 +105,126 @@ struct FindBarView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+    }
+}
+
+/// The find bar's text field, backed by AppKit. A SwiftUI `@FocusState` request made in `onAppear`
+/// was lost in the real app: after ⌘F the bar showed but the page kept the keyboard, so typed text
+/// went to the page and the bar's select-all selected the whole page (B19, the same failure as the
+/// command bar's B26). This field takes the keyboard once per ⌘F (`focusRequest`), also when the
+/// request comes before the field is in a window, and selects its text so typing replaces a kept
+/// query. A field rebuilt later (tab switch, Library) leaves the keyboard where it is.
+struct FindBarTextField: NSViewRepresentable {
+    @Binding var text: String
+    /// `FindBarModel.focusRequest`; a new value focuses the field again.
+    let focusRequest: Int
+    /// `FindBarModel.consumeFocusRequest`: true once per ⌘F.
+    let consumeFocusRequest: () -> Bool
+    let font: NSFont
+    /// Return was pressed; the flag is true with Shift held.
+    let onReturn: (Bool) -> Void
+    let onEscape: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeNSView(context: Context) -> FocusingTextField {
+        let field = FocusingTextField(string: text)
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.usesSingleLineMode = true
+        field.lineBreakMode = .byClipping
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.font = font
+        field.placeholderAttributedString = NSAttributedString(
+            string: FindBarTokens.placeholder,
+            attributes: [.font: font, .foregroundColor: NSColor.placeholderTextColor]
+        )
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.setAccessibilityIdentifier("openarc.findbar.field")
+        field.delegate = context.coordinator
+        field.onMoveToWindow = { [weak coordinator = context.coordinator] in coordinator?.serveFocusRequest() }
+        context.coordinator.field = field
+        return field
+    }
+
+    func updateNSView(_ field: FocusingTextField, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        // Never replace text while an input method is composing.
+        let composing = (field.currentEditor() as? NSTextView)?.hasMarkedText() ?? false
+        if field.stringValue != text, !composing {
+            field.stringValue = text
+        }
+        coordinator.serveFocusRequest()
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: FocusingTextField, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 200, height: proposal.height ?? nsView.intrinsicContentSize.height)
+    }
+
+    /// An `NSTextField` that reports when it lands in a window.
+    final class FocusingTextField: NSTextField {
+        var onMoveToWindow: (() -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil { onMoveToWindow?() }
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: FindBarTextField
+        weak var field: FocusingTextField?
+
+        init(parent: FindBarTextField) {
+            self.parent = parent
+        }
+
+        /// Focuses the field for a ⌘F not served yet, once the field is in a window.
+        func serveFocusRequest() {
+            guard field?.window != nil, parent.consumeFocusRequest() else { return }
+            focus()
+        }
+
+        /// Makes the field first responder and selects its text; again on the next run-loop turn,
+        /// because SwiftUI may still move the first responder while it inserts the bar.
+        func focus() {
+            take()
+            DispatchQueue.main.async { [weak self] in self?.take() }
+        }
+
+        private func take() {
+            guard let field, let window = field.window else { return }
+            if let editor = field.currentEditor(), window.firstResponder === editor {
+                editor.selectAll(nil)
+                return
+            }
+            window.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field, parent.text != field.stringValue else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertLineBreak(_:)):
+                parent.onReturn(NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false)
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onEscape()
+                return true
+            default:
+                return false
+            }
+        }
     }
 }
 

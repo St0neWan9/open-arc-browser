@@ -138,6 +138,9 @@ public final class SidebarViewModel: ObservableObject {
     /// had focus. inferred: `SplitLayout` stores no focus; the selected tab is the focused pane.
     private var lastFocusedPane: [UUID: UUID] = [:]
     private var dragWatchTask: Task<Void, Never>?
+    /// The tab that was selected before a press selected another one ([06 §15.1]). A drag from
+    /// that press dropped on the web panel forms the split with this page (B19).
+    private(set) var selectionBeforePress: UUID?
     private var autoScrollTask: Task<Void, Never>?
     /// Visible list area of the last drag update (sidebar root space).
     private var autoScrollViewport: CGRect = .null
@@ -888,6 +891,32 @@ public final class SidebarViewModel: ObservableObject {
         mutate { try TreeOps.addSplitPane($0, layoutID: layoutID, existingTabID: base, newTabID: id, now: now()) }
     }
 
+    /// An open tab chosen in the command bar of a split pane that has no page yet (the empty pane
+    /// ⌃⇧= made) takes that pane's place, and the empty tab is archived the way ⌃⇧- would.
+    /// [06 §5] observed: the bar opens in the new pane to fill it; [06 §6] observed: its rows show
+    /// the Space name instead of "Switch to Tab". Leaving the split with an empty pane is inferred
+    /// to be wrong (B19). Only a Today tab of the same Space that is in no split qualifies: a pinned
+    /// tab keeps its place, another Space's tab cannot join this Space's split, and a tab of a split
+    /// (this one included) stays in it. Returns whether the pane was filled.
+    @discardableResult
+    func fillEmptyPane(_ pane: UUID, with id: UUID) -> Bool {
+        guard pane != id, let paneTab = workspace.tabs[pane], !paneTab.meta.isTombstone, paneTab.url == nil,
+              isInSplit(pane), !isInSplit(id), let chosen = workspace.tabs[id], !chosen.meta.isTombstone,
+              case .today(let spaceID) = chosen.location, paneTab.location.spaceID == spaceID,
+              controller.sidebar(showing: id, except: self) == nil else { return false }
+        let layoutID = makeID()
+        let ok = mutate { state in
+            let joined = try TreeOps.splitTab(state, layoutID: layoutID, tabID: id, targetTabID: pane,
+                                              side: .trailing, moveNextToTarget: true, now: now())
+            return try TreeOps.archiveTab(joined, id: pane, now: now())
+        }
+        guard ok else { return false }
+        closeLive(pane)
+        if selectedTabID == pane { selectedTabID = nil }
+        selectTab(id)
+        return true
+    }
+
     /// "Separate Page from Split View" (View menu): takes the tab out of its split layout and keeps
     /// the tab itself. [01 §View] observed the item.
     public func separateFromSplit(_ id: UUID) {
@@ -928,7 +957,9 @@ public final class SidebarViewModel: ObservableObject {
     /// `isSessionActive`, when given, is polled by a watchdog as a fallback and must return whether
     /// the drag is still going. Tests omit it and call `endDrag()` themselves.
     func beginDrag(_ item: SidebarDragItem, isSessionActive: (@MainActor () -> Bool)? = nil) {
+        let beforePress = selectionBeforePress
         endDrag()
+        selectionBeforePress = beforePress
         draggingItem = item
         hoverTask?.cancel()
         hoverCardTabID = nil
@@ -954,9 +985,13 @@ public final class SidebarViewModel: ObservableObject {
     /// page comes to the front). [06 §15.1] observed. Folders act on click only (toggle).
     func pressSelect(_ item: SidebarDragItem) {
         guard draggingItem == nil, renamingItemID == nil else { return }
+        selectionBeforePress = nil
         switch item {
         case .tab(let id):
-            if selectedTabID != id { selectTab(id) }
+            if selectedTabID != id {
+                selectionBeforePress = selectedTabID
+                selectTab(id)
+            }
         case .splitGroup(let id):
             selectSplitGroup(id)
         case .folder:
@@ -994,6 +1029,19 @@ public final class SidebarViewModel: ObservableObject {
         draggingItem = nil
         isDraggingExternalURL = false
         dropTarget = nil
+        selectionBeforePress = nil
+    }
+
+    /// The tab a drop on the web panel pairs with, for the pane showing `paneTabID`; nil when the
+    /// drop is refused. The press that started the drag selected the dragged tab ([06 §15.1]
+    /// observed), so the single panel now shows the dragged tab itself; [06 §15.7] observed that
+    /// the drop forms a split with the page that was current, so that page is used (B19).
+    func webPanelDropPartner(forPane paneTabID: UUID) -> UUID? {
+        guard case .tab(let id)? = draggingItem else { return nil }
+        guard paneTabID == id else { return paneTabID }
+        guard let before = selectionBeforePress, before != id,
+              let tab = workspace.tabs[before], !tab.meta.isTombstone else { return nil }
+        return before
     }
 
     private var isDragActive: Bool { draggingItem != nil || isDraggingExternalURL }

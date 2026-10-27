@@ -19,18 +19,18 @@ struct WebPanelDropDelegate: DropDelegate {
     func dropUpdated(info: DropInfo) -> DropProposal? {
         // The sidebar's indicator does not apply over the page.
         sidebar.clearDropTarget()
-        guard case .tab(let id)? = sidebar.draggingItem,
-              let target = SidebarWebPanelDrop.target(at: info.location, panes: panes),
-              target.tabID != id else { return DropProposal(operation: .forbidden) }
+        guard let target = SidebarWebPanelDrop.target(at: info.location, panes: panes),
+              sidebar.webPanelDropPartner(forPane: target.tabID) != nil else { return DropProposal(operation: .forbidden) }
         return DropProposal(operation: .move)
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        guard let target = SidebarWebPanelDrop.target(at: info.location, panes: panes) else {
+        guard let target = SidebarWebPanelDrop.target(at: info.location, panes: panes),
+              let partner = sidebar.webPanelDropPartner(forPane: target.tabID) else {
             sidebar.endDrag()
             return false
         }
-        return sidebar.performWebPanelDrop(onTab: target.tabID, side: target.side)
+        return sidebar.performWebPanelDrop(onTab: partner, side: target.side)
     }
 }
 
