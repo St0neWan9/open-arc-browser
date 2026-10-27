@@ -357,12 +357,15 @@ final class MultiWindowTests: XCTestCase {
         XCTAssertEqual(controller.browserWindows.count, 1)
     }
 
-    /// The incognito window gets the dark local theme and no Space commands. inferred.
+    /// The incognito window gets the fixed dark incognito colors (View ▸ Appearance Dark) and no
+    /// Space commands. [06 §20.1] observed colors (B48); the Space commands inferred.
     func testIncognitoLookAndSpaceCommands() throws {
-        let controller = makeController()
+        let preferences = AppPreferences.inMemory()
+        preferences.webAppearance = .dark
+        let controller = makeController(preferences: preferences)
         let incognito = ShellModel.window(for: BrowserWindowRequest(kind: .incognito), on: controller)
         addTeardownBlock { @MainActor in incognito.stop() }
-        XCTAssertEqual(incognito.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(IncognitoLocalTokens.themeColor), "[07 §8] window rule")
+        XCTAssertEqual(incognito.sidebar.palette.windowBackground, IncognitoTokens.windowBackground, "[06 §20.1] #0C0F14")
         XCTAssertLessThan(ThemeDerivation.luminance(incognito.sidebar.palette.windowBackground), 0.2, "a dark window")
         XCTAssertEqual(incognito.sidebar.palette.primaryText, RGBAColor(hex: 0xFFFFFF), "light text on the dark base")
         incognito.perform(.runCommand(.newSpace))

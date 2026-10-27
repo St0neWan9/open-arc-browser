@@ -25,7 +25,7 @@ public struct SidebarView: View {
     public var body: some View {
         GeometryReader { proxy in
             content(layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height),
-                                          isWebToolbarShown: isWebToolbarShown))
+                                          isWebToolbarShown: isWebToolbarShown, hidesFavorites: viewModel.isIncognito))
         }
         .frame(width: CGFloat(Metrics.Sidebar.width))
     }
@@ -55,7 +55,7 @@ public struct SidebarView: View {
                     }
                 }
 
-                // An incognito window has no favorites: the block keeps its place empty. inferred (B14).
+                // An incognito window has no favorites; the rows below move up (`hidesFavorites`). [06 §20.2] observed.
                 if !viewModel.isIncognito {
                     SidebarFavoritesView(viewModel: viewModel, favorites: snapshot.favorites, layout: layout)
                         .frame(width: favorites.width, height: favorites.height)
@@ -64,12 +64,15 @@ public struct SidebarView: View {
 
                 spacePage(layout: layout, snapshot: snapshot, listHeight: listHeight)
 
-                // No Space dock in an incognito window (one in-memory Space). inferred (B14).
-                if !viewModel.isIncognito {
-                    SidebarDockView(viewModel: viewModel, layout: layout)
-                        .frame(width: layout.width, height: layout.dockFrame.height)
-                        .offset(y: layout.dockFrame.minY)
+                // "Clear" at the right of the "Incognito Tabs" row. [06 §20.2] observed (B48).
+                if viewModel.isIncognito {
+                    IncognitoClearButton(viewModel: viewModel, layout: layout)
                 }
+
+                // An incognito window's dock has Home and "+" but no Space icons. [06 §20.2] observed (B48).
+                SidebarDockView(viewModel: viewModel, layout: layout)
+                    .frame(width: layout.width, height: layout.dockFrame.height)
+                    .offset(y: layout.dockFrame.minY)
             }
             .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
 

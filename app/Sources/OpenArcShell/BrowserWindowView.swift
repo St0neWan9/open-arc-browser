@@ -53,7 +53,7 @@ struct BrowserWindowRoot: View {
 }
 
 /// Finds the hosting `NSWindow` and reports key and close events to the model; installs the
-/// focus action used by the one-window-per-tab rule; gives incognito windows the dark appearance.
+/// focus action used by the one-window-per-tab rule.
 struct BrowserWindowObserver: NSViewRepresentable {
     let model: ShellModel
 
@@ -103,11 +103,8 @@ struct BrowserWindowObserver: NSViewRepresentable {
             // The app restores its own windows from `ui-state.json` (and never an incognito one),
             // so AppKit's window restoration stays off.
             window.isRestorable = false
-            if model.isIncognito {
-                // The incognito look: a dark window (spec gives none; inferred, local tokens).
-                window.appearance = NSAppearance(named: .darkAqua)
-                window.title = "\(AppIdentity.displayName) — \(IncognitoLocalTokens.windowTitle)"
-            }
+            // An incognito window carries no badge, not even in its title; its appearance comes from
+            // its palette like any window (`WindowAppearanceApplier`). [06 §20.1] observed (B48).
             model.focusWindow = { [weak window] in window.map(BrowserWindowObserver.bringToFront) }
             if window.isKeyWindow { model.windowDidBecomeKey() }
             // A tab was revealed in this window before it had an AppKit window (B29).
