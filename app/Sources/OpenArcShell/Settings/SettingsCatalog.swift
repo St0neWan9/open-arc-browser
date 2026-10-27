@@ -131,7 +131,7 @@ public enum SettingsCatalog {
     // MARK: Profiles [03 §Profiles]
 
     static let profiles: [SettingsControl] = [
-        // Live (B83): our help page in a tab (`ProfileHelpLinks.profiles`). inferred target.
+        // Live (B83): our help page in a tab (`OpenArcLinks.profilesHelp`). inferred target.
         SettingsControl("profiles.learnMore", "Learn more", .button, .live),
         SettingsControl("profiles.list", "Your Profiles", .list, .live),
         SettingsControl("profiles.add", "Add Profile", .button, .live),

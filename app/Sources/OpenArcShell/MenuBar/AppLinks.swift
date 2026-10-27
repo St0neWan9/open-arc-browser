@@ -6,18 +6,36 @@ import OpenArcPersistence
 // B72). [01 §Arc] observed: Share Arc, Privacy Policy; [01 §Help] observed: Getting Started,
 // Essential Keyboard Shortcuts, Contact the Team, Visit Help Center, Troubleshooting ▸.
 
-/// The project's public addresses. Placeholders: the product's final name and domain are not
-/// decided yet, so every link is defined here once. The reserved `.example` domain keeps a
-/// placeholder from reaching anyone's real site.
+/// The project's public pages, all built from one site address (plan B88). The product's final
+/// name and domain are not decided yet, so `siteHost` is a placeholder on the reserved `.example`
+/// domain, which keeps a click from reaching anyone's real site. Replace `siteHost` (and only it)
+/// when the project site exists; no other file may spell out a URL to these pages
+/// (`AppLinksTests` checks the sources). The appcast (`UpdateConfiguration.placeholderFeedURL`)
+/// and the ad-block manifest (`AdBlockRulesetUpdateConfiguration`) are feeds, not pages, and keep
+/// their own static-host placeholders.
 public enum OpenArcLinks {
+    /// The project site's host. Placeholder until the site exists.
+    public static let siteHost = "openarc.example"
+    /// The site's root.
+    public static let site = URL(string: "https://\(siteHost)/")!
+
     /// What Arc ▸ Share Open Arc shares ([01 §Arc] observed item "Share Arc").
-    public static let homepage = URL(string: "https://openarc.example/")!
+    public static let homepage = site
     /// Arc ▸ Privacy Policy ([01 §Arc] observed item).
-    public static let privacyPolicy = URL(string: "https://openarc.example/privacy")!
+    public static let privacyPolicy = page("privacy")
     /// Help ▸ Visit Help Center ([01 §Help] observed item).
-    public static let helpCenter = URL(string: "https://openarc.example/help")!
+    public static let helpCenter = page("help")
+    /// Settings ▸ Profiles "Learn more" (plan B83; inferred target: our help page on profiles).
+    public static let profilesHelp = page("help/profiles")
     /// Help ▸ Contact the Team ([01 §Help] observed item) and the command bar row of that name.
-    public static let contactTheTeam = URL(string: "mailto:team@openarc.example")!
+    public static let contactTheTeam = URL(string: "mailto:team@\(siteHost)")!
+
+    /// Every link above, for checks that all shipped links come from here.
+    public static let all: [URL] = [homepage, privacyPolicy, helpCenter, profilesHelp, contactTheTeam]
+
+    private static func page(_ path: String) -> URL {
+        site.appendingPathComponent(path, isDirectory: false)
+    }
 }
 
 /// What the app asks of the desktop: open a link in its default app, show a file in Finder, show

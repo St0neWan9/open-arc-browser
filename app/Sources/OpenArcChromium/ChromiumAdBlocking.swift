@@ -11,7 +11,8 @@ import OpenArcCore
 //
 // Filter-list updates (plan C19): `ChromiumAdBlockUpdates` checks our static host once after start
 // and then daily (`AdBlockRulesetUpdater`: signed manifest, hashes, atomic store swap, all in
-// OpenArcEngine and unit-tested there), and hands a new ruleset to the running engine with
+// OpenArcEngine and unit-tested there), only while ad blocking is switched on (plan B88,
+// `AdBlockRulesetUpdateScheduler`: `setEnabled(_:)` reports each switch change), and hands a new ruleset to the running engine with
 // `-[OACApplication loadAdBlockingRulesetFromDirectory:completionHandler:]`, which reindexes and
 // publishes it without a restart. Settings shows the new version through `rulesetVersionChanges()`.
 //
@@ -58,7 +59,11 @@ final class ChromiumAdBlocking: EngineAdBlocking {
     }
 
     func setEnabled(_ enabled: Bool) async {
-        await MainActor.run { (try? core.ensureStarted())?.isAdBlockingEnabled = enabled }
+        await MainActor.run {
+            (try? core.ensureStarted())?.isAdBlockingEnabled = enabled
+            // Plan B88: no update request while ad blocking is off; on again schedules a check.
+            updates.adBlockingChanged(isOn: enabled)
+        }
     }
 
     func isEnabled(forOrigin origin: SiteOrigin, profileID: Profile.ID) async -> Bool {
@@ -78,7 +83,8 @@ final class ChromiumAdBlocking: EngineAdBlocking {
 
 // MARK: - Updates (plan C19)
 
-/// The update loop. Main actor: it reads the engine's state and calls the bridge.
+/// The update loop (timing in `AdBlockRulesetUpdateScheduler`). Main actor: it reads the engine's
+/// state and calls the bridge.
 @MainActor
 final class ChromiumAdBlockUpdates {
     /// `-[OACApplication loadAdBlockingRulesetFromDirectory:completionHandler:]` (C19 patch).
@@ -91,7 +97,7 @@ final class ChromiumAdBlockUpdates {
     private let core: ChromiumEngineCore
     private let store: AdBlockRulesetStore
     private let versionChanges: AsyncBroadcaster<String>
-    private var task: Task<Void, Never>?
+    private var scheduler: AdBlockRulesetUpdateScheduler?
 
     init(core: ChromiumEngineCore, store: AdBlockRulesetStore, versionChanges: AsyncBroadcaster<String>) {
         self.core = core
@@ -105,24 +111,28 @@ final class ChromiumAdBlockUpdates {
     }
 
     func start() {
-        guard task == nil else { return }
+        guard scheduler == nil else { return }
         guard let manifestURL = AdBlockRulesetUpdateConfiguration.manifestURL() else {
             Self.logger.info("ad block updates off: no manifest URL (static host not set up)")
             return
         }
         let updater = AdBlockRulesetUpdater(manifestURL: manifestURL, store: store)
-        task = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: AdBlockRulesetUpdateConfiguration.initialDelay)
-            while !Task.isCancelled {
-                guard let self, await self.checkOnce(updater) else { return }
-                try? await Task.sleep(for: AdBlockRulesetUpdateConfiguration.checkInterval)
-            }
-        }
+        let core = core
+        let scheduler = AdBlockRulesetUpdateScheduler(
+            isAdBlockingEnabled: { (try? core.ensureStarted())?.isAdBlockingEnabled ?? false },
+            check: { [weak self] in await self?.checkOnce(updater) ?? false }
+        )
+        self.scheduler = scheduler
+        scheduler.start()
+    }
+
+    /// The ad-blocking switch changed (plan B88).
+    func adBlockingChanged(isOn: Bool) {
+        scheduler?.adBlockingChanged(isOn: isOn)
     }
 
     func stop() {
-        task?.cancel()
-        task = nil
+        scheduler?.stop()
     }
 
     /// One check; false ends the loop (engine gone, or a framework without live updates).

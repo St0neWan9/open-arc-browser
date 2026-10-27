@@ -58,13 +58,6 @@ public enum ProfileEnginePage: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Our help pages. inferred: Arc's "Learn more" opens its help center; ours points at the project
-/// site (the same placeholder host as the update feed, `UpdateChecker.placeholderFeedURL`) until
-/// it has real help pages.
-public enum ProfileHelpLinks {
-    public static let profiles = URL(string: "https://openarc.github.io/help/profiles")!
-}
-
 /// "Clear Browsing Data" time range. inferred (the spec records the row only): Chromium's ranges.
 public enum ClearBrowsingDataRange: String, CaseIterable, Identifiable, Sendable {
     case lastHour, last24Hours, last7Days, last4Weeks, allTime
@@ -203,7 +196,7 @@ extension SettingsModel {
     public func openProfilesHelp() -> UUID? {
         let controller = shell.controller
         guard let spaceID = controller.activeWindow?.selectedSpaceID ?? controller.workspace.allLiveSpaces.first?.id else { return nil }
-        return openInTab(ProfileHelpLinks.profiles, title: "Profiles", spaceID: spaceID)
+        return openInTab(OpenArcLinks.profilesHelp, title: "Profiles", spaceID: spaceID)
     }
 
     // MARK: Download location
