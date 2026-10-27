@@ -216,14 +216,21 @@ public final class SidebarViewModel: ObservableObject {
     var theme: Theme? { selectedSpace?.themeID.flatMap { workspace.themes[$0] } }
 
     /// The selected Space's palette; Automatic themes follow the system appearance (B21).
-    var palette: ThemePalette { ThemeDerivation.palette(for: theme, systemAppearance: controller.systemAppearance) }
+    var palette: ThemePalette {
+        // An incognito window has no Space theme: fixed neutral colors. [06 §20.1] observed (B48).
+        if isIncognito { return incognitoPalette }
+        return ThemeDerivation.palette(for: theme, systemAppearance: controller.systemAppearance)
+    }
 
     var snapshot: SidebarSnapshot {
-        SidebarSnapshot.make(workspace: workspace, spaceID: selectedSpaceID, profileID: currentProfileID)
+        var snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: selectedSpaceID, profileID: currentProfileID)
+        snapshot.hidesPinnedArea = isIncognito
+        return snapshot
     }
 
     /// Spaces in dock order. The dock shows every profile's spaces. [05 §window hierarchy] observed.
-    var dockSpaces: [Space] { workspace.allLiveSpaces }
+    /// An incognito window's dock shows no Space icons. [06 §20.2] observed (B48).
+    var dockSpaces: [Space] { isIncognito ? [] : workspace.allLiveSpaces }
 
     var selectedLiveState: SidebarTabLiveState? { selectedTabID.flatMap { liveState(for: $0) } }
 
@@ -684,6 +691,8 @@ public final class SidebarViewModel: ObservableObject {
 
     /// Pin (⌘D): the tab goes to the end of the pinned area. [06 §4] observed.
     public func pinTab(_ id: UUID) {
+        // An incognito window has no pinned area. [06 §20.2] observed (B48).
+        guard !isIncognito else { return }
         mutate { try TreeOps.pinTab($0, id: id, now: now()) }
     }
 
@@ -799,7 +808,8 @@ public final class SidebarViewModel: ObservableObject {
     @discardableResult
     public func createFolder(title: String, parent: UUID? = nil) -> UUID? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let spaceID = selectedSpaceID else { return nil }
+        // Folders live in the pinned area, which an incognito window lacks. [06 §20.2] observed (B48).
+        guard !trimmed.isEmpty, !isIncognito, let spaceID = selectedSpaceID else { return nil }
         let id = makeID()
         guard mutate({ try TreeOps.createFolder($0, id: id, spaceID: spaceID, parentFolderID: parent, title: trimmed, now: now()) }) else { return nil }
         isNewFolderSheetPresented = false
@@ -1073,7 +1083,7 @@ public final class SidebarViewModel: ObservableObject {
     /// The plan for the current drag over `target`, or nil. For an external URL the plan is computed
     /// for a scratch tab opened at the top of Today, so the same rules apply as for a tab move.
     func dropPlan(for target: SidebarDropTarget) -> SidebarDropPlan? {
-        guard let spaceID = selectedSpaceID else { return nil }
+        guard let spaceID = selectedSpaceID, incognitoAllowsDrop(on: target) else { return nil }
         if let item = draggingItem {
             return SidebarDropPlanner.plan(item: item, target: target, workspace: workspace, spaceID: spaceID, profileID: currentProfileID)
         }

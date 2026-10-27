@@ -21,17 +21,24 @@ struct SidebarLayout: Equatable {
     /// View ▸ Show Toolbar is on: no URL box and no back / forward / reload in the sidebar, and
     /// everything from the favorites down sits `contentShift` higher. [06 §17.1] observed.
     var isWebToolbarShown: Bool
+    /// The favorites block is absent (incognito window): the Space header and the list sit
+    /// `IncognitoTokens.sidebarContentShift` higher. [06 §20.2] observed (B48).
+    var hidesFavorites: Bool
 
     init(windowSize: CGSize = CGSize(width: Metrics.referenceWindowSize.width, height: Metrics.referenceWindowSize.height),
-         isWebToolbarShown: Bool = false) {
+         isWebToolbarShown: Bool = false, hidesFavorites: Bool = false) {
         self.windowSize = windowSize
         self.isWebToolbarShown = isWebToolbarShown
+        self.hidesFavorites = hidesFavorites
     }
 
     private var window: MainWindowLayout { MainWindowLayout(windowSize: windowSize, isWebToolbarShown: isWebToolbarShown) }
 
     /// Upward shift of the favorites, Space header and list (0 with the toolbar off). [06 §17.1] observed (46).
-    var contentShift: CGFloat { CGFloat(window.sidebarContentShift) }
+    /// Without favorites the header and list move up another 60. [06 §20.2] observed (B48).
+    var contentShift: CGFloat {
+        CGFloat(window.sidebarContentShift + (hidesFavorites ? IncognitoTokens.sidebarContentShift : 0))
+    }
 
     /// Whether the URL box and the back / forward / reload buttons are in the sidebar. [06 §17.1] observed.
     var showsAddressControls: Bool { !isWebToolbarShown }

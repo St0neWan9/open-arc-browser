@@ -126,7 +126,14 @@ struct SidebarTabRowView: View {
         }
         .simultaneousGesture(TapGesture(count: 2).onEnded { viewModel.beginRename(tab.id) })
         .onTapGesture { viewModel.selectTab(tab.id) }
-        .contextMenu { SidebarTabMenu(viewModel: viewModel, tab: tab, kind: area == .pinned ? .pinned : .today) }
+        .contextMenu {
+            // An incognito window has its own tab menu (no Pin / Move / Favorites). [06 §20.2] observed (B48).
+            if viewModel.isIncognito {
+                IncognitoTabMenu(viewModel: viewModel, tab: tab)
+            } else {
+                SidebarTabMenu(viewModel: viewModel, tab: tab, kind: area == .pinned ? .pinned : .today)
+            }
+        }
         .sidebarRowInteraction(viewModel: viewModel, id: tab.id)
         // Like the reference's outline row: a 41 pt row holding the icon cell and the title line.
         .accessibilityElement(children: .contain)

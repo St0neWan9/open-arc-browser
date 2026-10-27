@@ -120,7 +120,7 @@ struct MainWindowContent: View {
         .modifier(SpaceFlowSheets(flow: model.spaceFlow, workspace: sidebar.workspace, palette: model.windowPalette))
         .overlay(alignment: .topLeading) { themeEditorAnchor }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.
-        .background(WindowAppearanceApplier(appearance: model.isIncognito ? nil : palette.appearance))
+        .background(WindowAppearanceApplier(appearance: palette.appearance))
     }
 
     /// The engine tab whose permission bubble goes under the URL box: the selected tab's, while

@@ -431,8 +431,8 @@ struct SidebarDockView: View {
             }
             dockButton(layout.dockPlusFrame, top: top, symbol: "plus", glyphSize: SidebarLocalTokens.dockPlusGlyphSize,
                        glyphWeight: SidebarLocalTokens.dockPlusGlyphWeight, tint: tint,
-                       label: "New Space", id: "openarc.sidebar.dock.plus") {
-                viewModel.requestFromMenu(.newSpace)
+                       label: viewModel.isIncognito ? "New Tab" : "New Space", id: "openarc.sidebar.dock.plus") {
+                viewModel.dockPlusClicked()
             }
         }
         .frame(width: layout.width, height: layout.dockFrame.height, alignment: .topLeading)

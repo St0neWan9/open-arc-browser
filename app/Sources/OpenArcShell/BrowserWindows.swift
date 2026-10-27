@@ -42,22 +42,21 @@ public struct BrowserWindowRequest: Codable, Hashable, Sendable {
     }
 }
 
-/// Local tokens of the incognito window. [00 inventory] says the incognito look was not captured,
-/// so every value is unknown and our own: a dark neutral window with a light text palette (the
-/// palette derivation picks light text for a dark base).
+/// Local tokens of the incognito window's in-memory workspace. The look itself is fixed
+/// (`IncognitoTokens`, `ThemeDerivation.incognitoPalette`, [06 §20] observed, B48).
 enum IncognitoLocalTokens {
-    /// Window and sidebar color. unknown.
-    static let themeColor = RGBAColor(hex: 0x1F1F24)
-    /// The incognito theme keeps its own look in both system appearances (it is dark already), so
-    /// its appearance is fixed to light, which uses the color as is. inferred (B21).
-    static let themeAppearance: ThemeAppearance = .light
-    /// Name of the in-memory profile and Space. unknown.
+    /// Color recorded in the in-memory theme. The sidebar does not derive from it (the incognito
+    /// palette is fixed); it is the observed window color. [06 §20.1] observed.
+    static let themeColor = IncognitoTokens.windowBackground
+    /// Automatic, so the pages follow View ▸ Appearance and the system like the chrome does.
+    /// inferred (B48).
+    static let themeAppearance: ThemeAppearance = .automatic
+    /// Name of the in-memory profile. unknown (never shown).
     static let profileName = "Incognito"
-    static let spaceName = "Incognito"
-    /// SF Symbol shown in the space name row. unknown.
-    static let spaceIcon = "eyeglasses"
-    /// Window title suffix. unknown.
-    static let windowTitle = "Incognito"
+    /// The Space-name row reads "Incognito Tabs", without an icon (the name starts at x 13).
+    /// [06 §20.1] observed.
+    static let spaceName = "Incognito Tabs"
+    static let spaceIcon: String? = nil
 }
 
 extension AppPreferences {

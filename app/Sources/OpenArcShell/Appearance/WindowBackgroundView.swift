@@ -67,7 +67,7 @@ enum GrainTile {
 
 /// Gives the hosting window the Space's light or dark appearance, so system-drawn floating panels
 /// (popovers, menus, sheets) match it. [04 §dark mode] observed: floating panels go dark in a dark
-/// Space. nil leaves the window alone (incognito sets its own).
+/// Space (an incognito window: its fixed palette's, B48). nil leaves the window alone.
 struct WindowAppearanceApplier: NSViewRepresentable {
     let appearance: ResolvedAppearance?
 

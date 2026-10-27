@@ -111,6 +111,9 @@ struct SidebarSnapshot: Equatable {
     var today: [SidebarItemModel]
     /// Whether the pinned area has any content (folders or tabs, visible or collapsed).
     var hasPinnedContent: Bool
+    /// An incognito window: no pinned area and no divider, only "+ New Tab" and the tab rows.
+    /// [06 §20.2] observed (B48).
+    var hidesPinnedArea = false
 
     /// The divider (with "↓ Clear") separates the pinned area from Today tabs: it shows only while
     /// Today has tabs. Every observation agrees: [06 §4] an empty Space shows only "+ New Tab"
@@ -119,7 +122,7 @@ struct SidebarSnapshot: Equatable {
     /// directly by "+ New Tab" and no divider row when Today is empty, but pinned rows, the 17 pt
     /// divider, "+ New Tab", then the Today rows when it is not. inferred rule. (06 §4's "the divider
     /// only shows when the pinned area has content" contradicts the second example.)
-    var showsDivider: Bool { !today.isEmpty }
+    var showsDivider: Bool { !hidesPinnedArea && !today.isEmpty }
 
     /// "↓ Clear" archives Today tabs, so it is only active when there are some. inferred.
     var canClear: Bool { !today.isEmpty }
