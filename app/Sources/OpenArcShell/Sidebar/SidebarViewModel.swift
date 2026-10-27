@@ -42,6 +42,8 @@ public enum SidebarRequest: Equatable, Sendable {
     case showLiveFolders(spaceID: UUID)
     case exportSpace(spaceID: UUID, intoSpaceID: UUID)
     case manageSpaces
+    /// Space menu ▸ Set Profile ▸ New Profile…: the New Profile sheet, this Space preselected (B72).
+    case newProfile(spaceID: UUID)
     /// The dock's leftmost button (the Home button of [05 §window hierarchy], [07 §4] observed):
     /// opens the Library. inferred (its action was not recorded).
     case openLibrary
@@ -69,6 +71,9 @@ public final class SidebarViewModel: ObservableObject {
     /// The open Peek page's URL and its source tab (B49, set by `LinkPeekModel`).
     @Published var linkPeekURL: URL?
     @Published var linkPeekSourceTabID: UUID?
+    /// Spaces whose pinned area this window shows collapsed (View ▸ Collapse Pinned Tabs, B72).
+    /// Window state, not saved (inferred).
+    @Published var collapsedPinnedSpaceIDs: Set<UUID> = []
     /// Item being renamed inline (tab or folder).
     @Published public internal(set) var renamingItemID: UUID?
     @Published public var isNewFolderSheetPresented = false
@@ -258,6 +263,8 @@ public final class SidebarViewModel: ObservableObject {
     var snapshot: SidebarSnapshot {
         var snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: selectedSpaceID, profileID: currentProfileID)
         snapshot.hidesPinnedArea = isIncognito
+        // Collapse Pinned Tabs hides the pinned rows; the area keeps its content (B72, inferred).
+        if isPinnedAreaCollapsed { snapshot.pinned = [] }
         return snapshot
     }
 
@@ -569,8 +576,8 @@ public final class SidebarViewModel: ObservableObject {
     /// New Profile… (Set Profile ▸ / Move to ▸ Profile). Returns the new profile id.
     /// [01, 05 §context menus] observed menu items.
     @discardableResult
-    public func createProfile(name: String) -> UUID {
-        controller.createProfile(name: name)
+    public func createProfile(name: String, icon: String? = nil) -> UUID {
+        controller.createProfile(name: name, icon: icon)
     }
 
     /// Replaces a profile's synced settings (search engine, Today lifetime) through

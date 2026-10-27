@@ -1,7 +1,8 @@
 import SwiftUI
 import AppKit
+import OpenArcModel
 
-// The menu bar's items (plan B62), one view per menu or group so tests can render them with
+// The menu bar's items (plans B62, B72), one view per menu or group so tests can render them with
 // `NSHostingMenu` and compare against `MenuBarCatalog`. Titles [01 §menus] observed, keys [02]
 // observed, groups [01 §菜单项图标与缩进] observed (E20). `Divider()` separates groups; no item has an
 // icon of ours.
@@ -36,7 +37,10 @@ struct FileMenuItems: View {
             .keyboardShortcut("l", modifiers: .command)
             .disabled(!hasWindow)
         Divider()
-        // New Profile (before New Easel in [01]) comes with its surface. ⌃⇧E [02] observed. B56.
+        // The New Profile sheet ([06 §16.3] observed steps). Not in an incognito window (inferred). B72.
+        Button("New Profile") { model.profileFlow.beginNewProfile() }
+            .disabled(!hasWindow || model.isIncognito)
+        // ⌃⇧E [02] observed. B56.
         Button("New Easel") { model.newEasel() }
             .keyboardShortcut("e", modifiers: [.control, .shift])
             .disabled(!hasWindow || !model.canCreateEasel)
@@ -54,14 +58,17 @@ struct FileMenuItems: View {
     }
 }
 
-/// File ▸ Capture… … Print, the last File group. [01 §File] observed; ⇧⌘2 and ⌘P [02] observed.
-/// Share… (first in the group in [01]) is not built. Only Save Page As has an icon (the system's
-/// download tray, set by `MenuBarAdjuster`), which indents the group ([01 §菜单项图标与缩进] observed).
+/// File ▸ Share… … Print, the last File group. [01 §File] observed; ⇧⌘2 and ⌘P [02] observed.
+/// Only Save Page As has an icon (the system's download tray, set by `MenuBarAdjuster`), which
+/// indents the group ([01 §菜单项图标与缩进] observed).
 struct FilePageMenuItems: View {
     @ObservedObject var model: ShellModel
     let hasWindow: Bool
 
     var body: some View {
+        // The system share picker with the page's address (B72).
+        Button("Share…") { model.shareCurrentPage() }
+            .disabled(!hasWindow || model.sidebar.selectedURL == nil)
         Button("Capture…") { model.beginRegionCapture() }
             .keyboardShortcut("2", modifiers: [.shift, .command])
             .disabled(!hasWindow || !model.canCapturePage)
@@ -77,9 +84,11 @@ struct FilePageMenuItems: View {
     }
 }
 
-/// Edit ▸ Copy URL · Copy URL as Markdown. [01 §Edit] observed items; ⇧⌘C and ⌥⇧⌘C [02 §复制链接]
-/// observed. SwiftUI puts them after Select All; `MenuBarAdjuster` moves them right after Copy, as
-/// in Arc. Copy URL as Quote needs the page's selection and is not built.
+/// Edit ▸ Copy URL · Copy URL as Markdown · Copy URL as Quote, then Paste and Match Style.
+/// [01 §Edit] observed items; ⇧⌘C, ⌥⇧⌘C and ⌃⇧⌘C [02 §复制链接] observed; ⌥⇧⌘V is the macOS key
+/// for Paste and Match Style ([02] lists none). SwiftUI puts them after Select All;
+/// `MenuBarAdjuster` moves the copy items right after Copy and Paste and Match Style right after
+/// Paste, as in Arc (`MenuBarCatalog.itemsAfter`).
 struct EditCopyURLMenuItems: View {
     @ObservedObject var model: ShellModel
     let hasWindow: Bool
@@ -91,6 +100,14 @@ struct EditCopyURLMenuItems: View {
         Button("Copy URL as Markdown") { model.copySelectedURLAsMarkdown() }
             .keyboardShortcut("c", modifiers: [.option, .shift, .command])
             .disabled(!hasWindow || model.sidebar.selectedURL == nil)
+        Button("Copy URL as Quote") { model.copySelectedURLAsQuote() }
+            .keyboardShortcut("c", modifiers: [.control, .shift, .command])
+            .disabled(!hasWindow || model.sidebar.selectedURL == nil)
+        // Pastes into the page as plain text. The menu bar runs our command, so it reaches the
+        // page even when the engine's web view, not a text view of ours, has the keyboard.
+        Button("Paste and Match Style") { model.pasteAndMatchStyle() }
+            .keyboardShortcut("v", modifiers: [.option, .shift, .command])
+            .disabled(!hasWindow || !model.canRunPageCommands)
     }
 }
 
@@ -112,7 +129,9 @@ struct ViewMenuItems: View {
         .disabled(!hasWindow)
         // ⇧⌘D, title Hide Toolbar while shown [06 §17.1] observed. Global: every window follows. B43.
         WebToolbarMenuItem(settings: model.webToolbar)
-        // Collapse Pinned Tabs (last in this group in [01]) is not built.
+        // Hides the current Space's pinned rows in this window (B72, inferred behavior).
+        Button(model.collapsePinnedMenuTitle) { model.sidebar.toggleCollapsePinned() }
+            .disabled(!hasWindow || !(model.sidebar.canCollapsePinned || model.sidebar.isPinnedAreaCollapsed))
         Divider()
         Group {
             // ⌘. [01 §菜单项图标与缩进] view-crop.png observed.
@@ -150,7 +169,11 @@ struct ViewMenuItems: View {
                 .disabled(!model.canZoomOut)
         }
         .disabled(!hasWindow)
-        // Cast (its own group before Developer in [01]) is not built.
+        Divider()
+        // Cast: [01 §View] observed item, no key ([02]). Casting needs Chromium's media router,
+        // which the bridge does not expose (no cast API in OACTab.h), so the item stays disabled.
+        Button("Cast") {}
+            .disabled(true)
         Divider()
         DeveloperMenu(model: model, hasWindow: hasWindow)
         // The system Enter Full Screen follows in its own group.
@@ -173,22 +196,22 @@ struct SpacesMenuItems: View {
                 .disabled(model.selectedSpaceID == nil || model.spaceFlow.isCreating)
             Button("Rename Space") { if let id = model.selectedSpaceID { model.spaceFlow.beginRename(spaceID: id) } }
                 .disabled(model.selectedSpaceID == nil)
-            // Change Profile (after Rename Space in [01]) is not built.
+            // "Change <Space>'s Profile" sheet ([06 §16.3] observed). B72.
+            Button("Change Profile") { model.changeProfileOfCurrentSpace() }
+                .disabled(model.selectedSpaceID == nil)
             Divider()
             Button("Next Space") { model.sidebar.stepSpace(by: 1) }
                 .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
             Button("Previous Space") { model.sidebar.stepSpace(by: -1) }
                 .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
             Divider()
-            // One item per Space; the current one has a check ([01 §菜单项图标与缩进] observed). Arc
-            // shows each Space's own icon before its name; ours has none (a Space icon is an emoji
-            // or symbol name, not an image), so the list is not indented.
-            ForEach(Array(model.sidebar.dockSpaces.prefix(9).enumerated()), id: \.element.id) { index, space in
-                Toggle(space.name, isOn: Binding(
-                    get: { model.selectedSpaceID == space.id },
-                    set: { _ in model.sidebar.goToSpace(number: index + 1) }
-                ))
-                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
+            // One item per Space; the current one has a check, and each shows the Space's own icon
+            // before its name ([01 §菜单项图标与缩进] observed; a Space without an icon shows none).
+            // Items with ⌃1…⌃9 for the first nine ([02 §Space] observed); the rest have no key.
+            ForEach(Array(model.sidebar.dockSpaces.enumerated()), id: \.element.id) { index, space in
+                SpaceMenuItem(space: space, isCurrent: model.selectedSpaceID == space.id, number: index + 1) {
+                    model.sidebar.selectSpace(space.id)
+                }
             }
             Divider()
             // The Library's Spaces board is the Manage Spaces… surface ([06 §8] observed).
@@ -217,13 +240,123 @@ struct TabsMenuItems: View {
                 .keyboardShortcut(.downArrow, modifiers: [.option, .command])
             Button("Previous Tab") { model.sidebar.stepTab(by: -1) }
                 .keyboardShortcut(.upArrow, modifiers: [.option, .command])
-            // Reveal Tab in Sidebar (⌃Space in [02]) is not built.
+            // ⌃Space [02 §标签与侧边栏] observed ("Reveal Current Tab"). B72.
+            Button("Reveal Tab in Sidebar") { model.revealSelectedTabInSidebar() }
+                .keyboardShortcut(.space, modifiers: .control)
+                .disabled(model.selectedTabID == nil)
+            // The three-item split submenu of [01 §Tabs] is not built: its title and items were not
+            // recorded (`MenuBarCatalog.omittedItems`).
             Divider()
             Button("Clear Today") { model.sidebar.clearToday() }
                 .keyboardShortcut("k", modifiers: [.shift, .command])
-            // Reset all tabs in this Space is not built.
+            // No key ([02 §Space] observed). B72.
+            Button("Reset all tabs in this Space") { model.sidebar.resetAllPinnedTabsInSpace() }
+                .disabled(!model.sidebar.canResetPinnedTabs)
         }
         .disabled(!hasWindow)
+    }
+}
+
+/// One Space row of the Spaces menu: a check on the current Space, the Space's own icon
+/// ([01 §菜单项图标与缩进] observed), ⌃1…⌃9 for the first nine ([02 §Space] observed).
+struct SpaceMenuItem: View {
+    let space: Space
+    let isCurrent: Bool
+    let number: Int
+    let select: () -> Void
+
+    var body: some View {
+        let toggle = Toggle(isOn: Binding(get: { isCurrent }, set: { _ in select() })) {
+            if let image = SpaceMenuIcon.image(for: space.icon) {
+                Label { Text(space.name) } icon: { Image(nsImage: image) }
+            } else {
+                Text(space.name)
+            }
+        }
+        if number <= 9 {
+            toggle.keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .control)
+        } else {
+            toggle
+        }
+    }
+}
+
+/// A Space icon as a menu image. A Space icon is an emoji or an SF Symbol name (`Space.icon`);
+/// menus take images, so an emoji is drawn into one. 16 pt, the size of macOS menu icons (inferred).
+enum SpaceMenuIcon {
+    static let size: CGFloat = 16
+
+    static func image(for icon: String?) -> NSImage? {
+        guard let icon, !icon.isEmpty else { return nil }
+        if let first = icon.unicodeScalars.first, !first.isASCII {
+            let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+                let text = NSAttributedString(string: icon, attributes: [.font: NSFont.systemFont(ofSize: size * 0.8)])
+                let bounds = text.size()
+                text.draw(at: NSPoint(x: rect.midX - bounds.width / 2, y: rect.midY - bounds.height / 2))
+                return true
+            }
+            image.accessibilityDescription = icon
+            return image
+        }
+        let image = NSImage(systemSymbolName: icon, accessibilityDescription: icon)
+        image?.isTemplate = true
+        return image
+    }
+}
+
+/// Window ▸ Stay On Top, first in the system window group ([01 §Window] observed). A toggle with
+/// a check while on (inferred).
+struct WindowMenuItems: View {
+    @ObservedObject var model: ShellModel
+    let hasWindow: Bool
+
+    var body: some View {
+        Toggle("Stay On Top", isOn: Binding(get: { model.staysOnTop }, set: { _ in model.toggleStayOnTop() }))
+            .disabled(!hasWindow)
+    }
+}
+
+/// Help ▸ items after the system search field ([01 §Help] observed items, no icons). The groups
+/// are ours (not recorded). Restore Data and Export Arc Notes are omitted
+/// (`MenuBarCatalog.omittedItems`). Items that open a page need a browser window.
+struct HelpMenuItems: View {
+    @ObservedObject var model: ShellModel
+    let hasWindow: Bool
+
+    var body: some View {
+        Group {
+            Button("Getting Started") { model.openGettingStarted() }
+            Button("Essential Keyboard Shortcuts") { model.openKeyboardShortcutsPage() }
+        }
+        .disabled(!hasWindow)
+        Button("Contact the Team") { model.contactTheTeam() }
+        Button("Visit Help Center") { model.openHelpCenter() }
+            .disabled(!hasWindow)
+        Divider()
+        Menu("Troubleshooting") {
+            Button("Reveal Open Arc Data") { model.revealAppData() }
+            Button("Copy Open Arc Info") { model.copyAppInfo() }
+        }
+    }
+}
+
+/// Arc ▸ Share Open Arc, after Settings… ([01 §Arc] observed "Share Arc"; no key in [02]).
+struct ShareOpenArcMenuItem: View {
+    let desktop: any DesktopServices
+
+    var body: some View {
+        Button("Share Open Arc") { desktop.share([OpenArcLinks.homepage]) }
+    }
+}
+
+/// Arc ▸ Privacy Policy, after Services ([01 §Arc] observed). Opens a tab, so it needs a window.
+struct PrivacyPolicyMenuItem: View {
+    @ObservedObject var model: ShellModel
+    let hasWindow: Bool
+
+    var body: some View {
+        Button("Privacy Policy") { model.openPrivacyPolicy() }
+            .disabled(!hasWindow)
     }
 }
 

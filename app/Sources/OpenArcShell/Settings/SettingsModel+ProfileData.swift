@@ -61,7 +61,7 @@ public enum ProfileEnginePage: String, CaseIterable, Identifiable, Sendable {
 /// Our help pages. inferred: Arc's "Learn more" opens its help center; ours points at the project
 /// site (the same placeholder host as the update feed, `UpdateChecker.placeholderFeedURL`) until
 /// it has real help pages.
-public enum HelpPages {
+public enum ProfileHelpLinks {
     public static let profiles = URL(string: "https://openarc.github.io/help/profiles")!
 }
 
@@ -203,7 +203,7 @@ extension SettingsModel {
     public func openProfilesHelp() -> UUID? {
         let controller = shell.controller
         guard let spaceID = controller.activeWindow?.selectedSpaceID ?? controller.workspace.allLiveSpaces.first?.id else { return nil }
-        return openInTab(HelpPages.profiles, title: "Profiles", spaceID: spaceID)
+        return openInTab(ProfileHelpLinks.profiles, title: "Profiles", spaceID: spaceID)
     }
 
     // MARK: Download location

@@ -1,9 +1,11 @@
 import Foundation
 
-// Titles and structure of the menu bar (plan B62). Acceptance: [01] all sections; groups and
+// Titles and structure of the menu bar (plans B62, B72). Acceptance: [01] all sections; groups and
 // icons from [01 §菜单项图标与缩进] (E20 capture, observed). Each `[String]` below is one group,
-// in order; separators fall between groups. Only items we build are listed (see the report of
-// B62 for the [01] items that are not built yet); a group that would be empty is left out.
+// in order; separators fall between groups. A group that would be empty is left out.
+//
+// Every [01] item is built except the ones in `omittedItems`, each with its reason. The Archive
+// menu's View History and Clear Archive are plan B69's.
 
 enum MenuBarCatalog {
     /// Title of the hidden menu that carries [02] shortcuts no [01] menu lists (Archive Tab ⌘W,
@@ -12,6 +14,22 @@ enum MenuBarCatalog {
 
     /// Our Edit ▸ Find ▸ submenu; any other "Find" submenu is a system duplicate.
     static let findMenuTitle = "Find"
+
+    /// [01] items we do not build, with the reason (plan B72).
+    static let omittedItems: [String: String] = [
+        // Arc ▸ Sign Out: Open Arc has no account; sync uses the iCloud account of the Mac.
+        "Sign Out": "no account to sign out of (iCloud sync)",
+        // Help ▸ Restore Data: [01 §Help] lists the item only; what it restores is unknown.
+        "Restore Data": "behavior unknown in the spec",
+        // Help ▸ Export Arc Notes: Notes are gone from Arc 1.170 ([06 §23]) and not in Open Arc.
+        "Export Arc Notes": "no Notes feature",
+        // Help ▸ Troubleshooting ▸ Record Trace / Open Task Manager: need engine tracing and a
+        // process list the bridge does not expose.
+        "Record Trace": "needs engine tracing support",
+        "Open Task Manager": "needs a process list from the engine",
+        // Tabs ▸ the three-item split submenu: [01 §Tabs] records neither its title nor its items.
+        "Tabs split submenu": "title and items not recorded",
+    ]
 
     /// System items whose titles differ in [01]/[02], by action. Observed: "Hide Other Windows"
     /// ([01 §Arc], [02 §窗口与应用] ⌥⌘H); "Minimize Window" ([01 §Window], [02] ⌘M).
@@ -24,54 +42,75 @@ enum MenuBarCatalog {
     /// action. macOS picks a menu item's standard icon from its action; SwiftUI buttons have none,
     /// so `MenuBarAdjuster` gives these items the image macOS uses for the action. In Arc these
     /// icons are what indent View's zoom group and File's last group ([01 §菜单项图标与缩进]
-    /// observed: magnifier +/− on Zoom In / Zoom Out, the download tray on Save Page As).
+    /// observed: magnifier +/− on Zoom In / Zoom Out, the download tray on Save Page As, the
+    /// clipboard on Paste and Match Style).
     static let standardIconActions: [String: [String: String]] = [
         "View": ["Zoom In": "zoomIn:", "Zoom Out": "zoomOut:"],
         "File": ["Save Page As": "saveDocument:"],
+        "Edit": ["Paste and Match Style": "pasteAndMatchStyle:"],
     ]
 
-    /// Edit items that follow Copy directly, in this order ([01 §Edit] observed: Copy · Copy URL ·
-    /// Copy URL as Markdown · Copy URL as Quote · Paste). SwiftUI can only place them after the
-    /// pasteboard group (after Select All); `MenuBarAdjuster` moves them.
-    static let afterCopyItems = ["Copy URL", "Copy URL as Markdown"]
+    /// Edit items that SwiftUI can only place after the pasteboard group (after Select All), each
+    /// list moved right after the system item with that action ([01 §Edit] observed order: Copy ·
+    /// Copy URL · Copy URL as Markdown · Copy URL as Quote · Paste · Paste and Match Style).
+    static let itemsAfter: [(action: String, titles: [String])] = [
+        ("copy:", ["Copy URL", "Copy URL as Markdown", "Copy URL as Quote"]),
+        ("paste:", ["Paste and Match Style"]),
+    ]
+
+    /// Our Edit ▸ Find ▸ items. [01 §Edit] observed; keys [02 §页面与导航] observed.
+    static let findItems = ["Find…", "Find and Replace", "Find Next", "Find Previous", "Use Selection to Find", "Jump to Selection"]
+
+    /// The system Edit submenus that follow Find ([01 §Edit] observed, plan Q15). SwiftUI's
+    /// `TextEditingCommands` adds the first four; Format comes from `TextFormattingCommands` as a
+    /// top-level menu, and `MenuBarAdjuster` shows it inside Edit instead.
+    static let systemEditSubmenus = ["Spelling and Grammar", "Substitutions", "Transformations", "Speech", "Format"]
+
+    /// Identifier of the Edit ▸ Format item `MenuBarAdjuster` adds.
+    static let formatMirrorIdentifier = "org.openarc.menu.format"
 
     // MARK: Groups we build, per menu ([01] order; [01 §菜单项图标与缩进] groups)
 
     /// Arc menu, between About and Services. [01 §菜单项图标与缩进] observed: Settings… · Share Arc ·
-    /// Set as Default Browser ‖ Import from Another Browser… · Check for Updates…. Share Arc is not
-    /// built.
+    /// Set as Default Browser ‖ Import from Another Browser… · Check for Updates…. Share Arc is
+    /// ours: Share Open Arc.
     static let appGroups: [[String]] = [
-        ["Settings…", "Set as Default Browser"],
+        ["Settings…", "Share Open Arc", "Set as Default Browser"],
         ["Import from Another Browser…", "Check for Updates…"],
     ]
 
-    /// File. [01 §菜单项图标与缩进] observed groups. New Profile and Share… are not built.
+    /// Arc menu, after the system Services item in its group ([01 §菜单项图标与缩进] observed:
+    /// Services · Privacy Policy).
+    static let appServicesGroupItems = ["Privacy Policy"]
+
+    /// File. [01 §菜单项图标与缩进] observed groups.
     static let fileGroups: [[String]] = [
         ["New Tab…", "New Window", "Blank Window", "New Incognito Window", "New Little Arc Window", "Restore Last Closed Tab"],
         ["Open Command Bar"],
-        ["New Easel"],
+        ["New Profile", "New Easel"],
         ["Close Window"],
-        ["Capture…", "Capture Full Page", "Capture in Portrait Mode", "Save Page As", "Print"],
+        ["Share…", "Capture…", "Capture Full Page", "Capture in Portrait Mode", "Save Page As", "Print"],
     ]
 
     /// View. [01 §菜单项图标与缩进] observed (view-crop.png): Appearance ‖ Hide Sidebar · Show Toolbar ·
     /// Collapse Pinned Tabs ‖ Stop Loading · Refresh the Page · Force Refresh the Page ‖ split items ‖
     /// zoom items ‖ Cast ‖ Developer ‖ Enter Full Screen (system). Only the zoom group and Enter Full
-    /// Screen carry icons, so only they are indented. Collapse Pinned Tabs and Cast are not built.
+    /// Screen carry icons, so only they are indented.
     static let viewGroups: [[String]] = [
         ["Appearance"],
-        ["Hide Sidebar", "Show Toolbar"],
+        ["Hide Sidebar", "Show Toolbar", "Collapse Pinned Tabs"],
         ["Stop Loading", "Refresh the Page", "Force Refresh the Page"],
         ["Add Split View", "Close this Split Pane", "Separate Page from Split View", "Expand Current Split"],
         ["Zoom to Actual Size", "Zoom In", "Zoom Out"],
+        ["Cast"],
         ["Developer"],
     ]
 
-    /// Spaces. [01 §Spaces] observed order, [01 §菜单项图标与缩进] groups. Change Profile and
-    /// Manage Spaces… are listed in [01]; Manage Spaces… is built (the Library's Spaces board).
-    /// The Space list sits between Previous Space and Manage Spaces….
+    /// Spaces. [01 §Spaces] observed order, [01 §菜单项图标与缩进] groups. The Space list sits
+    /// between Previous Space and Manage Spaces…. An incognito window has no Change Profile
+    /// ([06 §20.2] observed).
     static let spacesGroups: [[String]] = [
-        ["New Space…", "Edit Theme…", "Rename Space"],
+        ["New Space…", "Edit Theme…", "Rename Space", "Change Profile"],
         ["Next Space", "Previous Space"],
         // One item per Space, then:
         ["Manage Spaces…"],
@@ -79,11 +118,11 @@ enum MenuBarCatalog {
 
     /// Tabs. [01 §Tabs] observed, groups from the E20 capture (tabs-crop.png): New Tab… · Pin Tab ·
     /// New Folder… ‖ Next Tab · Previous Tab · Reveal Tab in Sidebar ‖ Clear Today · Reset all tabs
-    /// in this Space. Reveal Tab in Sidebar and Reset all tabs in this Space are not built.
+    /// in this Space.
     static let tabsGroups: [[String]] = [
         ["New Tab…", "Pin/Unpin Tab", "New Folder…"],
-        ["Next Tab", "Previous Tab"],
-        ["Clear Today"],
+        ["Next Tab", "Previous Tab", "Reveal Tab in Sidebar"],
+        ["Clear Today", "Reset all tabs in this Space"],
     ]
 
     /// Archive. [01 §Archive] observed; E20 (archive-crop.png): Go Back · Go Forward ‖ View History ·
@@ -98,11 +137,26 @@ enum MenuBarCatalog {
         ["Add Extension…", "Manage Extensions…"],
     ]
 
+    /// Window: our item at the top of the system window group ([01 §Window] observed: Stay On Top ·
+    /// Minimize Window · …).
+    static let windowSystemGroupItems = ["Stay On Top"]
+
     /// Window, our group between the system window groups and Bring All to Front. [01 §Window],
     /// [01 §菜单项图标与缩进] observed: no icons, no indent.
     static let windowGroups: [[String]] = [
         ["Open Library…", "View Downloads…", "View Easels…", "View Media…", "View Boosts…"],
     ]
+
+    /// Help, after the system search field. [01 §Help] observed items; no icons
+    /// ([01 §菜单项图标与缩进] observed). The groups are ours (not recorded). Show Welcome Again
+    /// (onboarding, D9) follows in its own group.
+    static let helpGroups: [[String]] = [
+        ["Getting Started", "Essential Keyboard Shortcuts", "Contact the Team", "Visit Help Center"],
+        ["Troubleshooting"],
+    ]
+
+    /// Help ▸ Troubleshooting ▸ ([01 §Help] observed "Reveal Arc Data", "Copy Arc Info"; our name).
+    static let troubleshootingItems = ["Reveal Open Arc Data", "Copy Open Arc Info"]
 
     /// Key-only commands ([02] observed keys, in no [01] menu).
     static let keyOnlyItems: [String] = ["Archive Tab", "Open Extensions"]

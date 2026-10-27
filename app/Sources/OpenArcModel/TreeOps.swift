@@ -50,9 +50,10 @@ public enum TreeOps {
     // MARK: Profiles
 
     /// Creates a profile (File ▸ New Profile, Set Profile ▸ New Profile…). [01, 05 §context menus] observed.
-    public static func createProfile(_ state: WorkspaceState, id: UUID, name: String, now: Date) -> WorkspaceState {
+    /// `icon` is an emoji or an icon name (nil: the default icon).
+    public static func createProfile(_ state: WorkspaceState, id: UUID, name: String, icon: String? = nil, now: Date) -> WorkspaceState {
         var s = state
-        s.profiles[id] = Profile(id: id, name: name, now: now)
+        s.profiles[id] = Profile(id: id, name: name, icon: icon, now: now)
         return s
     }
 

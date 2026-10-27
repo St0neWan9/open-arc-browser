@@ -57,6 +57,10 @@ public struct AppDependencies: Sendable {
     /// Asks where Export Data saves its file (B84). The default cancels, so tests and previews
     /// never show a panel; the app passes `SavePanelExportPicker`.
     public var exportPicker: any ExportDestinationPicker
+    /// Opens links in other apps, reveals files, shows the share picker (menu bar, B72). The
+    /// default records the requests, so tests and previews never open Mail or Finder; the app
+    /// passes `SystemDesktopServices`.
+    public var desktop: any DesktopServices
 
     public init(
         engine: any BrowserEngine,
@@ -69,7 +73,8 @@ public struct AppDependencies: Sendable {
         mediaFolders: LibraryMediaFolders = .none,
         feedbackOutput: (any FeedbackOutput)? = nil,
         appIconDisplay: (any AppIconDisplay)? = nil,
-        exportPicker: (any ExportDestinationPicker)? = nil
+        exportPicker: (any ExportDestinationPicker)? = nil,
+        desktop: (any DesktopServices)? = nil
     ) {
         self.engine = engine
         self.sync = sync
@@ -82,6 +87,7 @@ public struct AppDependencies: Sendable {
         self.feedbackOutput = feedbackOutput ?? SilentFeedbackOutput()
         self.appIconDisplay = appIconDisplay ?? RecordingAppIconDisplay()
         self.exportPicker = exportPicker ?? CancelledExportPicker()
+        self.desktop = desktop ?? RecordingDesktopServices()
     }
 
     /// FakeEngine + sync disabled + no persistence (never touches the disk). Used for UI
