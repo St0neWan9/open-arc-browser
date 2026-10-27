@@ -76,6 +76,8 @@ public final class SidebarViewModel: ObservableObject {
     @Published var newFolderParentID: UUID?
     /// Space the user asked to delete (drives the confirmation).
     @Published public internal(set) var pendingSpaceDeletionID: UUID?
+    /// Archive ▸ Clear Archive is waiting for the user's confirmation (B69).
+    @Published public internal(set) var isClearArchiveConfirmationPresented = false
     /// Tab whose hover card is showing.
     @Published private(set) var hoverCardTabID: UUID?
     @Published private(set) var draggingItem: SidebarDragItem?
@@ -110,6 +112,10 @@ public final class SidebarViewModel: ObservableObject {
     var edgeSwitchRightDelay: Double = SidebarLocalTokens.edgeSwitchRightDelay
     /// Seconds a drag must stay in an auto-scroll band before the list scrolls. [06 §15.8] observed.
     var autoScrollDwell: Double = SidebarLocalTokens.autoScrollDwell
+    /// Plays the reorder haptic: a tap on the trackpad each time an in-app drag moves to a new drop
+    /// position, while "Haptic feedback when reordering tabs" is on ([03 §Advanced] observed toggle,
+    /// default on; when it fires is inferred). Tests replace it. B68.
+    var playReorderHaptic: @MainActor () -> Void = SidebarReorderHaptic.play
     /// Poll interval of the drag watchdog (see `beginDrag`).
     var dragWatchInterval: Double = SidebarLocalTokens.dragWatchInterval
     /// Seconds between two auto-scroll steps while a drag hovers an edge band of the list. inferred.
@@ -887,6 +893,28 @@ public final class SidebarViewModel: ObservableObject {
         if let tab = selectedTabID, workspace.tabs[tab]?.meta.isTombstone == true { selectedTabID = nil }
     }
 
+    // MARK: Clear Archive (B69)
+
+    /// Whether the archive holds anything to clear. The menu item is disabled otherwise (inferred).
+    public var canClearArchive: Bool { !workspace.archiveNewestFirst.isEmpty }
+
+    /// Archive ▸ Clear Archive ([01 §Archive] observed item): asks first, since the archived tabs
+    /// cannot be brought back (our decision; the spec does not record a confirmation).
+    public func requestClearArchive() {
+        guard canClearArchive else { return }
+        isClearArchiveConfirmationPresented = true
+    }
+
+    public func cancelClearArchive() { isClearArchiveConfirmationPresented = false }
+
+    /// Confirmed: every archive item is removed (`TreeOps.clearArchive`, tombstones). No tab is
+    /// archived or closed.
+    public func confirmClearArchive() {
+        guard isClearArchiveConfirmationPresented else { return }
+        isClearArchiveConfirmationPresented = false
+        _ = mutate { TreeOps.clearArchive($0, now: now()) }
+    }
+
     func requestFromMenu(_ r: SidebarRequest) { request(r) }
 
     // MARK: Split view
@@ -1144,7 +1172,12 @@ public final class SidebarViewModel: ObservableObject {
     func updateDropTarget(_ target: SidebarDropTarget) -> Bool {
         let accepted = dropPlan(for: target) != nil
         let new: SidebarDropTarget? = accepted ? target : nil
-        if dropTarget != new { dropTarget = new }
+        if dropTarget != new {
+            dropTarget = new
+            if new != nil, draggingItem != nil, controller.dependencies.preferences.playsReorderHaptics {
+                playReorderHaptic()
+            }
+        }
         // Hovering a dot switches the Space even when a drop there would change nothing (the item
         // already lives in that Space): the switch is for placing it inside. [06 §15.6] observed.
         trackDockHover(target)

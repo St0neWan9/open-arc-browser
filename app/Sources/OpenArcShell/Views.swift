@@ -22,6 +22,7 @@ public struct MainWindowView: View {
     public var body: some View {
         MainWindowContent(model: model, sidebar: model.sidebar, webToolbar: model.webToolbar)
             .modifier(LaunchNoticeAlert(model: model))
+            .modifier(ClearArchiveConfirmation(sidebar: model.sidebar))
     }
 }
 

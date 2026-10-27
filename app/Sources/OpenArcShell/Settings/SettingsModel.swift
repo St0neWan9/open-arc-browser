@@ -363,7 +363,29 @@ public final class SettingsModel: ObservableObject {
         }
     }
 
+    // MARK: General
+
+    /// "Warn before quitting". [03 §General] observed, on by default; a per-device app setting
+    /// read when the user quits (B68).
+    public var warnsBeforeQuitting: Bool {
+        get { preferences.warnsBeforeQuitting }
+        set {
+            objectWillChange.send()
+            preferences.warnsBeforeQuitting = newValue
+        }
+    }
+
     // MARK: Advanced
+
+    /// "Haptic feedback when reordering tabs". [03 §Advanced] observed, on by default; a
+    /// per-device app setting read by the sidebar drag (B68).
+    public var playsReorderHaptics: Bool {
+        get { preferences.playsReorderHaptics }
+        set {
+            objectWillChange.send()
+            preferences.playsReorderHaptics = newValue
+        }
+    }
 
     /// Software update controls (D7), shared with the app menu.
     public var updates: UpdatesModel { shell.controller.updates }

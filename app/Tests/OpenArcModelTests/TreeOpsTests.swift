@@ -239,6 +239,29 @@ final class TreeOpsTests: XCTestCase {
         XCTAssertTrue(s.archiveNewestFirst.isEmpty)
     }
 
+    /// 01 §Archive (Clear Archive, B69): every archive item is tombstoned (delete by tombstone);
+    /// live tabs and older tombstones are left as they were.
+    func testClearArchiveTombstonesItemsAndLeavesTabsAlone() throws {
+        var f = try Fixture()
+        let a = UUID(), b = UUID(), kept = UUID(), restored = UUID()
+        for id in [a, b, kept] {
+            f.state = try TreeOps.openTab(f.state, id: id, spaceID: f.spaceID, url: nil, title: "", now: f.t0)
+        }
+        f.state = try TreeOps.archiveTab(f.state, id: a, now: f.t0)
+        f.state = try TreeOps.archiveTab(f.state, id: b, now: f.t0)
+        // `a` was restored earlier: its item is already a tombstone.
+        f.state = try TreeOps.restoreFromArchive(f.state, itemID: a, newTabID: restored, spaceID: f.spaceID, now: f.at(1))
+        let earlier = try XCTUnwrap(f.state.archive[a]).meta
+
+        let s = TreeOps.clearArchive(f.state, now: f.at(9))
+        XCTAssertTrue(s.archiveNewestFirst.isEmpty)
+        XCTAssertEqual(s.archive.count, 2, "items are tombstoned, not removed")
+        XCTAssertEqual(s.archive[b]?.meta.deletedAt, f.at(9))
+        XCTAssertEqual(s.archive[a]?.meta, earlier, "an old tombstone is not stamped again")
+        XCTAssertEqual(Set(s.today(spaceID: f.spaceID).map(\.id)), [kept, restored], "no tab is archived")
+        XCTAssertEqual(s.tabs, f.state.tabs)
+    }
+
     // MARK: Split view
 
     func testSplitAddAndRemoveCollapsesToSinglePage() throws {

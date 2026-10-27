@@ -174,7 +174,10 @@ struct GeneralPane: View {
         Form {
             Section {
                 PendingToggle(id: "general.info")
-                PendingToggle(id: "general.warnBeforeQuitting")
+                // [03 §General] observed, on by default. Live since B68.
+                Toggle(SettingsCatalog.control("general.warnBeforeQuitting").label, isOn: Binding(
+                    get: { model.warnsBeforeQuitting }, set: { model.warnsBeforeQuitting = $0 }
+                ))
             }
             Section("Previews") {
                 CatalogButton(id: "general.previewsSettings")
@@ -411,7 +414,12 @@ struct AdvancedPane: View {
         Form {
             Section {
                 ForEach(Self.toggleIDs, id: \.self) { id in
-                    if id == "advanced.restoreWindows" {
+                    if id == "advanced.reorderHaptics" {
+                        // [03 §Advanced] observed, on by default. Live since B68.
+                        Toggle(SettingsCatalog.control(id).label, isOn: Binding(
+                            get: { model.playsReorderHaptics }, set: { model.playsReorderHaptics = $0 }
+                        ))
+                    } else if id == "advanced.restoreWindows" {
                         // [03 §Advanced] observed, off by default. Live since B14.
                         Toggle(SettingsCatalog.control(id).label, isOn: Binding(
                             get: { model.restoresWindows }, set: { model.restoresWindows = $0 }

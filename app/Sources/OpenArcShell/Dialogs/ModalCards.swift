@@ -248,6 +248,64 @@ struct DeleteSpaceSheet: View {
     }
 }
 
+/// Archive ▸ Clear Archive confirmation (B69). The spec records the menu item only ([01 §Archive]
+/// observed); the question, its texts and the red Clear button are ours (inferred), drawn as the
+/// Delete Space card ([07 §6] observed geometry) because both are destructive.
+struct ClearArchiveSheet: View {
+    let palette: ThemePalette
+    let onCancel: () -> Void
+    let onClear: () -> Void
+
+    static let title = "Clear your Archive?"
+    static let message = "This will permanently remove every archived tab. Open tabs are not affected."
+    static let clearButton = "Clear"
+
+    var body: some View {
+        let d = Metrics.Dialog.self
+        ModalCard(size: d.deleteSpaceSize, palette: palette) {
+            Image(nsImage: NSApp?.applicationIconImage ?? NSImage())
+                .resizable()
+                .frame(width: CGFloat(d.appIconSize), height: CGFloat(d.appIconSize))
+                .padding(.top, CGFloat(d.appIconTop))
+            Text(Self.title)
+                .textStyle(Typography.dialogTitle, ink: palette.dialogInk)
+                .lineLimit(1)
+                .frame(height: CGFloat(Typography.dialogTitle.lineHeight))
+                .padding(.top, CGFloat(d.deleteTitleTop - d.appIconTop - d.appIconSize))
+            Text(Self.message)
+                .textStyle(Typography.dialogBody, ink: palette.dialogInk)
+                .padding(.top, CGFloat(d.deleteBodyTop - d.deleteTitleTop - Typography.dialogTitle.lineHeight))
+        } buttons: {
+            AnyView(Group {
+                ModalCardButton(title: "Cancel", keyCap: "ESC", role: .cancel, palette: palette, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                ModalCardButton(title: Self.clearButton, keyCap: "↵", role: .destructive, palette: palette, action: onClear)
+                    .keyboardShortcut(.defaultAction)
+            })
+        }
+        .accessibilityIdentifier("openarc.clearArchive")
+    }
+}
+
+/// Shows the Clear Archive confirmation of the window's sidebar model, whether the window shows
+/// the browser view or the Library.
+struct ClearArchiveConfirmation: ViewModifier {
+    @ObservedObject var sidebar: SidebarViewModel
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: Binding(
+            get: { sidebar.isClearArchiveConfirmationPresented },
+            set: { if !$0 { sidebar.cancelClearArchive() } }
+        )) {
+            ClearArchiveSheet(palette: sidebar.palette) {
+                sidebar.cancelClearArchive()
+            } onClear: {
+                sidebar.confirmClearArchive()
+            }
+        }
+    }
+}
+
 /// Sheet layout values 07 did not measure. Each is our own; evidence `unknown`.
 enum ModalCardTokens {
     /// Title top edge inside the New Folder card. unknown (the title x 38 is observed).

@@ -174,6 +174,47 @@ final class LibraryTests: XCTestCase {
         model.stop()
     }
 
+    // MARK: Archive menu [01 §Archive] (B69)
+
+    /// Clear Archive asks first: Cancel keeps every item; confirming empties the archive and
+    /// archives or closes no tab.
+    func testClearArchiveAsksThenClearsOnlyTheArchive() throws {
+        let model = makeModel()
+        model.sidebar.closeTab(fixture.today2)
+        model.sidebar.closeTab(fixture.today3)
+        XCTAssertEqual(model.workspace.archiveNewestFirst.count, 2)
+        let liveTabs = Set(model.workspace.tabs.values.filter { !$0.meta.isTombstone }.map(\.id))
+
+        XCTAssertTrue(model.sidebar.canClearArchive)
+        model.sidebar.requestClearArchive()
+        XCTAssertTrue(model.sidebar.isClearArchiveConfirmationPresented, "destructive: asks first")
+        model.sidebar.cancelClearArchive()
+        XCTAssertEqual(model.workspace.archiveNewestFirst.count, 2, "Cancel changes nothing")
+
+        model.sidebar.requestClearArchive()
+        model.sidebar.confirmClearArchive()
+        XCTAssertFalse(model.sidebar.isClearArchiveConfirmationPresented)
+        XCTAssertTrue(model.workspace.archiveNewestFirst.isEmpty)
+        XCTAssertTrue(model.library.archiveGroups.isEmpty)
+        XCTAssertEqual(Set(model.workspace.tabs.values.filter { !$0.meta.isTombstone }.map(\.id)), liveTabs, "no tab archived")
+        XCTAssertFalse(model.sidebar.canClearArchive)
+        model.sidebar.requestClearArchive()
+        XCTAssertFalse(model.sidebar.isClearArchiveConfirmationPresented, "nothing to clear: no question")
+        model.stop()
+    }
+
+    /// View History opens the engine's history page in a new selected tab, out of the Library.
+    func testViewHistoryOpensTheHistoryPage() throws {
+        let model = makeModel()
+        model.openLibrary(.archivedTabs)
+        model.openHistory()
+        XCTAssertFalse(model.isLibraryActive)
+        let id = try XCTUnwrap(model.selectedTabID)
+        XCTAssertEqual(model.workspace.tabs[id]?.url, URL(string: "chrome://history/"))
+        XCTAssertEqual(model.workspace.today(spaceID: try XCTUnwrap(model.selectedSpaceID)).first?.id, id)
+        model.stop()
+    }
+
     // MARK: Spaces board [06 §8]
 
     /// One column per live space in dock order, with the sidebar's rows.

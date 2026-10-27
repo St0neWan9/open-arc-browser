@@ -434,6 +434,8 @@ final class SettingsTests: XCTestCase {
             "advanced.resetTranslatePrompts",
             // B49: the two Peek switches (06 §22.1, 03 §Links).
             "links.peekShiftClick", "links.peekOtherSites",
+            // B68: 03 §General Warn before quitting, 03 §Advanced reorder haptics.
+            "general.warnBeforeQuitting", "advanced.reorderHaptics",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {
@@ -444,6 +446,42 @@ final class SettingsTests: XCTestCase {
         // Shortcut customization is out of scope for now: read-only list. [02 §其他]
         XCTAssertFalse(SettingsCatalog.control("shortcuts.custom").isEnabled)
         XCTAssertFalse(SettingsCatalog.control("shortcuts.reset").isEnabled)
+    }
+
+    /// B68 (F1 #10): no disabled row waits on a plan task that is already done or closed
+    /// (D1 app project, C8 framework, B16 visual pass, B19 real-app check, C17 not needed).
+    func testNoPendingRowWaitsOnAFinishedTask() {
+        let finished: Set<String> = ["D1", "C8", "B16", "B19", "C17"]
+        for pane in SettingsPane.allCases {
+            for control in SettingsCatalog.controls(in: pane) {
+                guard case .pending(let task) = control.backing else { continue }
+                XCTAssertFalse(finished.contains(task), "\(control.id) waits on finished task \(task)")
+            }
+        }
+    }
+
+    /// [03 §General] observed: "Warn before quitting", on by default; per device. B68.
+    func testWarnBeforeQuittingIsOnByDefaultAndStored() {
+        let suite = makeSuite()
+        let preferences = AppPreferences(defaults: UserDefaults(suiteName: suite)!)
+        XCTAssertTrue(preferences.warnsBeforeQuitting)
+        let shell = makeShell(preferences: preferences)
+        let settings = SettingsModel(shell: shell)
+        XCTAssertTrue(settings.warnsBeforeQuitting)
+        settings.warnsBeforeQuitting = false
+        XCTAssertFalse(AppPreferences(defaults: UserDefaults(suiteName: suite)!).warnsBeforeQuitting, "kept on disk")
+        shell.stop()
+    }
+
+    /// [03 §Advanced] observed: "Haptic feedback when reordering tabs", on by default. B68.
+    func testReorderHapticsIsOnByDefaultAndStored() {
+        let preferences = AppPreferences.inMemory()
+        XCTAssertTrue(preferences.playsReorderHaptics)
+        let shell = makeShell(preferences: preferences)
+        let settings = SettingsModel(shell: shell)
+        settings.playsReorderHaptics = false
+        XCTAssertFalse(preferences.playsReorderHaptics)
+        shell.stop()
     }
 
     // MARK: [03 §Profiles] list
