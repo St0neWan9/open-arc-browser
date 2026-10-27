@@ -78,11 +78,20 @@ public enum SplitPaneLayout {
 
     /// The live split layout that contains `tabID`. [06 §5] observed: the sidebar and the web
     /// panel treat the tabs of a layout as a group.
+    ///
+    /// Defensive against layouts that still name tabs deleted or archived on another device (B67):
+    /// the returned copy's `root` holds only live panes (tab record present and not removed), and a
+    /// layout with fewer than two live panes, or a dead `tabID`, is not active. `TreeOps.repairSplits`
+    /// fixes the stored layout after each remote merge, so the copy normally equals the stored one;
+    /// a pane whose tab has not arrived yet is only hidden here, never removed from the layout.
     public static func activeLayout(in workspace: WorkspaceState, containing tabID: UUID?) -> SplitLayout? {
-        guard let tabID else { return nil }
-        return workspace.splits.values.first {
+        guard let tabID, workspace.isLiveSplitPane(tabID) else { return nil }
+        guard var layout = workspace.splits.values.first(where: {
             !$0.meta.isTombstone && $0.root.tabIDs.count > 1 && $0.root.tabIDs.contains(tabID)
-        }
+        }) else { return nil }
+        guard let root = workspace.livePanes(of: layout.root, dropMissing: true), root.tabIDs.count > 1 else { return nil }
+        layout.root = root
+        return layout
     }
 
     /// The pane to focus after `tabID` leaves `root`: the one before it, else the one after.
