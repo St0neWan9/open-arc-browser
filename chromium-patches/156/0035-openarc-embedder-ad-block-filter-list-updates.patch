@@ -1,16 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Open Arc Authors <dev@openarc.invalid>
-Date: Tue, 27 Oct 2026 08:49:09 -0700
-Subject: [PATCH] openarc: embedder: ad-block filter-list updates without a
- restart
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
-
-DRAFT, NOT APPLIED. Written against openarc/156 as exported in
-chromium-patches/156 (0018 and later) but neither compiled nor run; the
-main session applies, builds and tests it (chromium-bridge/README.md
-§Ad blocking, "Applying the C19 draft").
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 09:00:14 -0700
+Subject: [PATCH] openarc: embedder: ad-block filter-list updates
 
 Plan C19. The ad blocker (0018) shipped its EasyList + EasyPrivacy ruleset
 only inside the framework, so new filter lists needed an app release.
@@ -41,9 +32,9 @@ bridge method at run time).
 ---
  openarc/bridge/oac_application.mm             |  38 ++++++
  .../public/OpenArcCore/OACApplication.h       |  16 +++
- openarc/browser/openarc_ad_blocker.h          |  62 ++++++---
+ openarc/browser/openarc_ad_blocker.h          |  61 ++++++---
  openarc/browser/openarc_ad_blocker.mm         | 118 +++++++++++++++---
- 4 files changed, 199 insertions(+), 35 deletions(-)
+ 4 files changed, 198 insertions(+), 35 deletions(-)
 
 diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
 index 2c7169e6687c..e0a97e86462e 100644
@@ -122,19 +113,18 @@ index 69dd4d97fe25..9a730ab993e5 100644
  + (instancetype)new NS_UNAVAILABLE;
  @end
 diff --git a/openarc/browser/openarc_ad_blocker.h b/openarc/browser/openarc_ad_blocker.h
-index d58dec17e57d..e04d434b2402 100644
+index d58dec17e57d..d616b233bac6 100644
 --- a/openarc/browser/openarc_ad_blocker.h
 +++ b/openarc/browser/openarc_ad_blocker.h
-@@ -7,6 +7,8 @@
- 
+@@ -8,6 +8,7 @@
  #include <string>
  
-+#include "base/functional/callback.h"
-+
  #include "base/files/file_path.h"
++#include "base/functional/callback.h"
  #include "base/memory/raw_ptr.h"
  #include "base/no_destructor.h"
-@@ -48,22 +50,28 @@ namespace openarc {
+ #include "content/public/browser/web_contents_observer.h"
+@@ -48,22 +49,28 @@ namespace openarc {
  //   for every profile of the app and survives restarts; Settings reads and
  //   writes it through OACApplication.adBlockingEnabled.
  //
@@ -177,7 +167,7 @@ index d58dec17e57d..e04d434b2402 100644
    // Local State pref holding the global switch.
    static constexpr char kEnabledPref[] = "openarc.ad_blocking.enabled";
    // Development switch: load the ruleset from this directory instead of the
-@@ -81,14 +89,30 @@ class AdBlocker {
+@@ -81,14 +88,30 @@ class AdBlocker {
    void Initialize(PrefService* local_state);
    // Called before Local State goes away (PostMainMessageLoopRun).
    void Shutdown();

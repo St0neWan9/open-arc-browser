@@ -8,7 +8,6 @@ chromium-bridge/
 ├── SWIFT_PROTOCOL_CHANGES.md      gaps in app/Sources/OpenArcEngine found by this design (for review, not applied)
 ├── build-framework.sh             ninja build of OpenArcCore.framework -> app/Vendor/OpenArcCore.xcframework (C8)
 ├── build-adblock-ruleset.sh       EasyList + EasyPrivacy -> the framework's Resources/AdBlock (C16)
-├── pending/                       Chromium-side drafts not yet in chromium-patches/ (C19)
 ├── check-headers.sh               syntax check: Objective-C, Objective-C++ and Swift 6 import
 ├── check/SwiftImportCheck.swift   type-checked by the script; shows the API as Swift sees it
 └── include/OpenArcCore/           public headers of OpenArcCore.framework
@@ -160,7 +159,7 @@ What we replace:
 | C14 extensions | `OACExtensions` (installed list, actions per tab, `runActionOfExtension:onTab:` → `OACExtensionPopup`, Web Store install, unpacked loading, `OACExtensionInstallRequest`) | `EngineExtensions`, `ExtensionPopup`, `EngineDialogRequest.extensionInstall`, `SiteExtensionAction`, `SiteSettingsProvider.runExtensionAction` | done (C14, patches 0025–0026; see below) |
 | C15 DevTools, view source, PDF, PiP, print | `showDevToolsWithPanel:` / `closeDevTools` (own window per tab), `viewSource`, `print` (Swift `printPage()`, macOS print panel), `savePageToURL:format:…` (`OACSavePageFormat`), `hasPictureInPictureVideo` / `enterPictureInPictureAutomatically:` / `exitPictureInPicture`; PDF viewer is `//chrome`'s (needs patch 0019); PiP uses Chromium's own PiP window | `BrowserTab.print / savePage(to:format:) / showDevTools / viewSource / enterPictureInPicture(automatically:) / exitPictureInPicture`, `TabEvent.activationRequested` | done (C15, patches 0019–0021) |
 | C16 ad blocking | `OACApplication.adBlockingEnabled` / `adBlockingRulesetVersion`, `OACSiteSettings setAdBlockingEnabled:forOrigin:` / `isAdBlockingEnabledForOrigin:`, `OACTab.blockedAdCount` | `BrowserEngine.adBlocking` (`EngineAdBlocking`), `SiteSettingChange.adBlocking`, `isAdBlockingOn` | done (§Ad blocking) |
-| C19 filter-list updates | `-[OACApplication loadAdBlockingRulesetFromDirectory:completionHandler:]` (draft patch in `pending/`, called through a runtime check) | `EngineAdBlocking.rulesetVersionChanges()`, `AdBlockRulesetUpdater` | Swift done; Chromium side draft (§Filter-list updates) |
+| C19 filter-list updates | `-[OACApplication loadAdBlockingRulesetFromDirectory:completionHandler:]` (patch 0035, called through a runtime check) | `EngineAdBlocking.rulesetVersionChanges()`, `AdBlockRulesetUpdater` | done (C19, patch 0035, compiled and verified end to end; §Filter-list updates) |
 | B45 page top color (toolbar) | `OACTabState.pageTopColorKind` / `pageTopColor`, `tabDidSamplePageTopColor:` (sampled after each load, patch 0022) | `BrowserTabState.pageTopColor` (`PageTopColor`), `TabEvent.pageTopColorChanged` | done (B45) |
 | B47 page translation | `OACTranslation.h`: `OACTab.translationState` (`OACTranslationState`), `translateToLanguage:`, `revertTranslation`, `neverTranslateSite`, `tabDidChangeTranslationState:`; `-[OACProfile resetTranslationSettings]`; `OACApplication.translationTargetLanguages` | `BrowserTabState.translation` (`PageTranslation`), `TabEvent.translationChanged`, `BrowserTab.translate(to:) / revertTranslation() / neverTranslateSite()`, `BrowserEngine.translation` (`EngineTranslation`) | done (B47, patches 0027–0028; §Translation) |
 | B51 page capture | `OACCapture.h`: `-[OACTab captureVisibleRect:completionHandler:]`, `-[OACTab captureFullPageWithMaximumAspectRatio:completionHandler:]` (PNG at the screen's density) | `BrowserTab.capture(_:)` with `PageCaptureArea` (`EngineSnapshot`) | done (B51, patch 0030) |
@@ -241,7 +240,7 @@ Built-in ad blocking runs on Chromium's own subresource filter (`//components/su
 
 ### Filter-list updates (C19)
 
-New rulesets reach users between app releases from our static host ([00 §已定的服务策略] observed: the merged filter rules are static content the project hosts; the design below is ours). **Status: the Swift side and the publishing script are in the repository and tested; the Chromium side is a draft patch, not applied** (`chromium-bridge/pending/C19-openarc-embedder-ad-block-filter-list-updates.DRAFT.patch`). Until the patch is in the framework, the updater sees no bridge method at run time and stays off.
+New rulesets reach users between app releases from our static host ([00 §已定的服务策略] observed: the merged filter rules are static content the project hosts; the design below is ours). **Status: done.** The Swift side and the publishing script are in the repository and tested; the Chromium side is patch 0035 (`openarc: embedder: ad-block filter-list updates`), compiled into the framework and verified end to end against the local test host (below). With a framework older than 0035 the updater sees no bridge method at run time and stays off.
 
 **Host layout** (GitHub Pages next to the Sparkle appcast, `docs/release.md` §Choose the static host; placeholder `https://openarc.github.io/adblock/manifest.json` in `AdBlockRulesetUpdateConfiguration`, which keeps updates off while `isHostPlaceholder` is true):
 
@@ -259,20 +258,7 @@ adblock/rulesets/<version>/ATTRIBUTION
 
 **Publishing.** `scripts/publish-adblock-ruleset.sh [--out build/adblock-site]` builds the ruleset (`build-adblock-ruleset.sh <src> <out> -`, stage only), copies it to `<out>/adblock/rulesets/<version>/`, writes and signs the manifest (Homebrew OpenSSL 3; LibreSSL lacks Ed25519), re-verifies it, and refuses a key the app does not trust (`--allow-unknown-key` only for the rejection test). `--from <dir>` publishes an existing ruleset directory. Upload `rulesets/` first, then `manifest.json.sig` and `manifest.json`.
 
-**Applying the C19 draft** (main session; not done by C19):
-
-```sh
-cd ~/chromium/src && git checkout openarc/156 && git status --short   # clean tree
-git am --3way <repo>/chromium-bridge/pending/C19-openarc-embedder-ad-block-filter-list-updates.DRAFT.patch
-# fold it into the //openarc ad blocker commit, or keep it as its own commit after 0033 (it only touches //openarc)
-# the patch changes openarc/bridge/public/OpenArcCore/OACApplication.h: copy that header to
-#   <repo>/chromium-bridge/include/OpenArcCore/OACApplication.h (source of truth), then
-<repo>/chromium-bridge/check-headers.sh
-<repo>/chromium-bridge/build-framework.sh            # ninja openarc_framework + ruleset + xcframework
-<repo>/chromium-patches/export.sh                     # re-export the series; delete the pending/ draft
-```
-
-Then, in `ChromiumAdBlocking.swift`, the dynamic call may become `app.loadAdBlockingRuleset(from:completionHandler:)` once no older framework is in use.
+**Applied** (main session, 2026-10-27): the draft went onto `openarc/156` as its own commit after 0034 (it only touches `//openarc`); the only change while compiling was the include order in `openarc_ad_blocker.h`. The public header change is in `chromium-bridge/include/OpenArcCore/OACApplication.h`; `check-headers.sh` and `build-framework.sh` pass, and the exported framework has 71 symbols, all public API. In `ChromiumAdBlocking.swift` the dynamic call may become `app.loadAdBlockingRuleset(from:completionHandler:)` once no older framework is in use.
 
 **Local test host** (acceptance check of C19):
 
@@ -293,7 +279,7 @@ openssl genpkey -algorithm ed25519 -out /tmp/rogue.pem
 scripts/publish-adblock-ruleset.sh --from /tmp/oa-next --out /tmp/oa-site --key /tmp/rogue.pem --allow-unknown-key --serial 99999999999999
 ```
 
-Checked for C19 without the framework change: the updater with the real `URLSession` fetcher against this python host installed a ruleset, reported "up to date" on the second run, and rejected a manifest signed with another key (store untouched). The engine side (reindex without restart, Settings showing it) needs the applied patch.
+Verified with patch 0035 (2026-10-27, dev app built from a clean worktree, own `OPENARC_DATA_DIR`): with Settings ▸ Advanced already open showing the bundled `20261027-…`, the first check 30 s after start downloaded `20261028-…`, logged "… loaded", Chromium indexed it (`Subresource Filter/Indexed Rules/38/20261028-…`) and the footer switched to `20261028-…` without a restart. After a restart the engine loaded `Current` (the downloaded one), and the check reported "up to date". A manifest signed with another key (higher serial, later version) was logged as "rejected: badSignature" and left the store and `state.json` unchanged.
 
 **Attribution.** EasyList and EasyPrivacy are © The EasyList authors (https://easylist.to/), dual-licensed under Creative Commons Attribution-ShareAlike 3.0 Unported or GNU GPL v3 or later. Open Arc uses them under CC BY-SA 3.0, and the converted ruleset is distributed under the same license. The `ATTRIBUTION` file (list versions, URLs, license) ships next to the ruleset in the framework, and `scripts/make-app.sh` copies it to `Open Arc.app/Contents/Resources/ATTRIBUTION-AdBlock.txt`.
 
