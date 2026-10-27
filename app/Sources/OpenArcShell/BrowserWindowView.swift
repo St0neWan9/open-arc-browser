@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import OpenArcModel
 
 // SwiftUI side of browser windows (B14): the window root that owns its `ShellModel`, the AppKit
@@ -81,6 +82,14 @@ struct BrowserWindowObserver: NSViewRepresentable {
         }
     }
 
+    /// Sets `window`'s title to the model's (Space name, then page title), only when it changed.
+    /// [06 §1, §20.1] observed (B74).
+    @MainActor
+    static func applyTitle(of model: ShellModel, to window: NSWindow) {
+        let title = model.windowTitle
+        if window.title != title { window.title = title }
+    }
+
     /// Brings `window` to the front and makes it key, also from the Dock (minimized). B29.
     @MainActor
     static func bringToFront(_ window: NSWindow) {
@@ -92,6 +101,7 @@ struct BrowserWindowObserver: NSViewRepresentable {
     final class Coordinator: NSObject {
         private let model: ShellModel
         private weak var window: NSWindow?
+        private var titleChanges: AnyCancellable?
 
         init(model: ShellModel) {
             self.model = model
@@ -106,6 +116,15 @@ struct BrowserWindowObserver: NSViewRepresentable {
             // An incognito window carries no badge, not even in its title; its appearance comes from
             // its palette like any window (`WindowAppearanceApplier`). [06 §20.1] observed (B48).
             model.focusWindow = { [weak window] in window.map(BrowserWindowObserver.bringToFront) }
+            // The title follows the Space, then the page. [06 §1, §20.1] observed (B74).
+            // `objectWillChange` fires before the change lands: read the title on the next turn.
+            BrowserWindowObserver.applyTitle(of: model, to: window)
+            titleChanges = model.objectWillChange
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    guard let self, let window = self.window else { return }
+                    BrowserWindowObserver.applyTitle(of: self.model, to: window)
+                }
             // AppleScript sees the window from now on (B70).
             ScriptingHost.shared.register(model, window: window)
             if window.isKeyWindow { model.windowDidBecomeKey() }
@@ -135,6 +154,7 @@ struct BrowserWindowObserver: NSViewRepresentable {
         }
 
         @objc private func willClose(_ notification: Notification) {
+            titleChanges = nil
             model.focusWindow = nil
             model.windowDidClose()
         }
