@@ -61,7 +61,7 @@ Cite the spec section with the label, for example `docs/arc-spec/04-visual-metri
      - unit tests and scripts
      - matching styles against reference screenshots item by item
 2. The main session schedules and merges work, and the Chromium build stays in the main session.
-   - Each subagent runs on the model its task specifies (opus or sonnet).
+   - Every subagent runs on the session's configured model (currently Opus 5.5 via the API); the Opus / Sonnet split above names roles, not the model that runs an agent.
    - Parallel tasks work in disjoint directories (this repo is not a git repository yet, so there are no worktrees). Each task changes only its own module or subfolder, and the main session wires the pieces together.
    - Parallel builds must not share `app/.build`: pass a private `--scratch-path` to `swift build` and `swift test`.
 3. Interfaces come before parallel work.
