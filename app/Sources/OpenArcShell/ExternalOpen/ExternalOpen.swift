@@ -15,7 +15,8 @@ import OpenArcModel
 // With the Links setting "Open links from other apps in Little Arc" on ([03 §Links] observed
 // toggle; B24), a web link opens in a new Little Arc window instead, already expanded on the page;
 // local files still open as Today tabs (inferred).
-// Air Traffic Control rules (plan E5) plug in through `ExternalLinkRouting`.
+// Air Traffic Control rules (plan B52, [06 §25]) plug in through `ExternalLinkRouting`
+// (`AirTrafficControlRouter`).
 
 /// What an external URL opens as.
 public enum ExternalOpenDestination: Equatable, Sendable {

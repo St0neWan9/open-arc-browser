@@ -169,7 +169,8 @@ public enum SettingsCatalog {
         SettingsControl("links.archiveLittleArcsAfter", "Archive Little Arcs after", .picker(defaultValue: "6 hours"), .pending(task: "B10 follow-up")),
         SettingsControl("links.peekShiftClick", "Shift-click a link to open it in Peek", .toggle(defaultValue: true), .pending(task: "E2")),
         SettingsControl("links.peekOtherSites", "Open links to other sites in Peek (Favorites and Pinned Tabs only)", .toggle(defaultValue: true), .pending(task: "E2")),
-        SettingsControl("links.airTrafficControl", "Air Traffic Control…", .button, .pending(task: "E5")),
+        // Live (B52): opens the route sheet. [06 §25.1] observed.
+        SettingsControl("links.airTrafficControl", "Air Traffic Control…", .button, .live),
     ]
 
     // MARK: Shortcuts [02 §其他]
