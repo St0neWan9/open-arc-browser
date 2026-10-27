@@ -106,6 +106,8 @@ struct BrowserWindowObserver: NSViewRepresentable {
             // An incognito window carries no badge, not even in its title; its appearance comes from
             // its palette like any window (`WindowAppearanceApplier`). [06 §20.1] observed (B48).
             model.focusWindow = { [weak window] in window.map(BrowserWindowObserver.bringToFront) }
+            // AppleScript sees the window from now on (B70).
+            ScriptingHost.shared.register(model, window: window)
             if window.isKeyWindow { model.windowDidBecomeKey() }
             // A tab was revealed in this window before it had an AppKit window (B29).
             if model.takeFocusOnAttach() { BrowserWindowObserver.bringToFront(window) }

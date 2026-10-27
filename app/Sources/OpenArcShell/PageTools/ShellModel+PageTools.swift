@@ -47,7 +47,7 @@ extension ShellModel {
     public func showNetworkInspector() { runOnTargetPage { await $0.showDevTools(.network) } }
 
     /// View ▸ Developer ▸ Allow JavaScript from Apple Events. A per-device toggle, off by default
-    /// (inferred). It only gates our future AppleScript support; nothing reads it yet.
+    /// (inferred). It gates AppleScript's `execute` (B70, `ScriptingHost.execute`, [06 §29.4]).
     public var allowsJavaScriptFromAppleEvents: Bool {
         get { dependencies.preferences.allowsJavaScriptFromAppleEvents }
         set {

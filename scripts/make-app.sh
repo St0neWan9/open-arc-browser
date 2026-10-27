@@ -61,7 +61,7 @@
 #                    arrive at launch, on app activation (rate-limited) and on Sync Now.
 #
 # Steps: release build of the OpenArcApp product, assemble build/Open Arc.app
-# (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns,
+# (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns and OpenArc.sdef,
 # PkgInfo, Frameworks/Sparkle.framework with an @executable_path/../Frameworks rpath,
 # and Frameworks/OpenArcCore.framework when app/Vendor/OpenArcCore.xcframework exists,
 # plan C8), give the OpenArcCore helper apps the app's bundle id prefix (plan C10:
@@ -217,6 +217,8 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$binary" "$app/Contents/MacOS/$product"
 cp "$bundle_src/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+# AppleScript dictionary (plan B70); Info.plist names it in OSAScriptingDefinition.
+cp "$bundle_src/OpenArc.sdef" "$app/Contents/Resources/OpenArc.sdef"
 cp "$bundle_src/Info.plist" "$app/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$build_number" "$app/Contents/Info.plist"
@@ -462,6 +464,7 @@ if [[ -n "$sign_identity" ]]; then
     fi
 fi
 plutil -lint "$app/Contents/Info.plist" >&2
+xmllint --noout "$app/Contents/Resources/$(plutil -extract OSAScriptingDefinition raw "$app/Contents/Info.plist")" >&2
 [[ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == "$bundle_id" ]] \
     || { echo "unexpected bundle id in $app" >&2; exit 1; }
 echo "bundle id: $bundle_id" >&2

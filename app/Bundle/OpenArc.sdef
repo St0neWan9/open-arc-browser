@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<!--
+  Scripting dictionary of Open Arc (plan B70). scripts/make-app.sh copies it into
+  Contents/Resources; Info.plist names it in OSAScriptingDefinition.
+
+  Terms, four-letter codes and read-only flags are the public scripting interface recorded in
+  docs/arc-spec/06-flows.md §29 (observed), so scripts written for it compile against Open Arc.
+  Descriptions, Cocoa class names, keys and methods are our own; the implementation lives in
+  app/Sources/OpenArcShell/Scripting/. One suite only ("Standard Suite", core), as in §29.1.
+  get / set come from Cocoa scripting and are not declared here (§29.1 inferred).
+-->
+<dictionary title="Open Arc Terminology">
+  <suite name="Standard Suite" code="core" description="Windows, Spaces and tabs of Open Arc.">
+
+    <command name="make" code="corecrel" description="Make a new window or tab. Tell a window or a Space to make a tab there; a tab made by the application opens in a Little Arc window.">
+      <cocoa class="OAScriptMakeCommand"/>
+      <access-group identifier="*"/>
+      <parameter name="new" code="kocl" type="type" description="The kind of object to make.">
+        <cocoa key="ObjectClass"/>
+      </parameter>
+      <parameter name="with properties" code="prdt" type="record" optional="yes" description="Starting values of the new object's properties.">
+        <cocoa key="KeyDictionary"/>
+      </parameter>
+      <result type="specifier" description="A reference to the new object."/>
+    </command>
+
+    <command name="count" code="corecnte" description="Count the elements of an object.">
+      <cocoa class="NSCountCommand"/>
+      <access-group identifier="*"/>
+      <direct-parameter type="specifier" description="The object whose elements are counted."/>
+      <parameter name="each" code="kocl" type="type" optional="yes" description="The kind of element to count.">
+        <cocoa key="ObjectClass"/>
+      </parameter>
+      <result type="integer" description="The number of elements."/>
+    </command>
+
+    <class name="application" code="capp" description="The Open Arc application.">
+      <cocoa class="NSApplication"/>
+      <element type="window" description="Browser windows, front to back.">
+        <cocoa key="openArcScriptWindows"/>
+      </element>
+      <element type="tab" access="w" description="Only for making a tab: it opens in a new Little Arc window.">
+        <cocoa key="openArcScriptLittleArcTabs"/>
+      </element>
+      <property name="name" code="pnam" type="text" access="r" description="The application's name.">
+        <cocoa key="openArcScriptName"/>
+      </property>
+      <property name="frontmost" code="pisf" type="boolean" access="r" description="Whether Open Arc is the active application.">
+        <cocoa key="openArcScriptFrontmost"/>
+      </property>
+      <property name="version" code="vers" type="text" access="r" description="The application's version.">
+        <cocoa key="openArcScriptVersion"/>
+      </property>
+      <responds-to command="quit">
+        <cocoa method="handleQuitScriptCommand:"/>
+      </responds-to>
+    </class>
+
+    <command name="close" code="coreclos" description="Close a window or a tab.">
+      <direct-parameter type="specifier" description="The window or tab to close."/>
+    </command>
+
+    <class name="window" code="WiND" plural="windows" description="A browser window.">
+      <cocoa class="OAScriptableWindow"/>
+      <element type="tab" access="rw" description="Tabs of the window's current Space: favorites, pinned tabs, then Today.">
+        <cocoa key="scriptingTabs"/>
+      </element>
+      <element type="space" description="Spaces the window can show.">
+        <cocoa key="scriptingSpaces"/>
+      </element>
+      <property name="id" code="ID  " type="text" access="r" description="The window's unique identifier.">
+        <cocoa key="scriptingID"/>
+      </property>
+      <property name="name" code="pnam" type="text" access="r" description="The window's full title.">
+        <cocoa key="scriptingName"/>
+      </property>
+      <property name="index" code="pidx" type="integer" description="The window's place in the front-to-back order.">
+        <cocoa key="scriptingIndex"/>
+      </property>
+      <property name="closeable" code="hclb" type="boolean" access="r" description="Whether the window has a close button.">
+        <cocoa key="scriptingCloseable"/>
+      </property>
+      <property name="minimizable" code="ismn" type="boolean" access="r" description="Whether the window can be minimized.">
+        <cocoa key="scriptingMinimizable"/>
+      </property>
+      <property name="minimized" code="pmnd" type="boolean" description="Whether the window is minimized.">
+        <cocoa key="scriptingMinimized"/>
+      </property>
+      <property name="resizable" code="prsz" type="boolean" access="r" description="Whether the window can be resized.">
+        <cocoa key="scriptingResizable"/>
+      </property>
+      <property name="visible" code="pvis" type="boolean" description="Whether the window is shown.">
+        <cocoa key="scriptingVisible"/>
+      </property>
+      <property name="zoomable" code="iszm" type="boolean" access="r" description="Whether the window can be zoomed.">
+        <cocoa key="scriptingZoomable"/>
+      </property>
+      <property name="zoomed" code="pzum" type="boolean" description="Whether the window is zoomed.">
+        <cocoa key="scriptingZoomed"/>
+      </property>
+      <property name="active tab" code="acTa" type="tab" access="r" description="The tab selected in the window.">
+        <cocoa key="scriptingActiveTab"/>
+      </property>
+      <property name="active space" code="acSp" type="space" access="r" description="The Space the window shows.">
+        <cocoa key="scriptingActiveSpace"/>
+      </property>
+      <property name="incognito" code="inco" type="boolean" description="Whether this is an incognito window. Set it only when making the window.">
+        <cocoa key="scriptingIncognito"/>
+      </property>
+      <property name="mode" code="mode" type="text" description="&quot;normal&quot; or &quot;incognito&quot;. Set it only when making the window.">
+        <cocoa key="scriptingMode"/>
+      </property>
+      <responds-to command="close">
+        <cocoa method="handleCloseScriptCommand:"/>
+      </responds-to>
+    </class>
+
+    <command name="select" code="CrSelect" description="Select a tab, switching its window to the tab's Space.">
+      <direct-parameter type="specifier" description="The tab to select."/>
+    </command>
+
+    <command name="go back" code="CrSuBack" description="Go back in the tab's history, if possible.">
+      <direct-parameter type="specifier" description="The tab."/>
+    </command>
+
+    <command name="go forward" code="CrSuFwd " description="Go forward in the tab's history, if possible.">
+      <direct-parameter type="specifier" description="The tab."/>
+    </command>
+
+    <command name="reload" code="CrSuRlod" description="Load the tab's page again.">
+      <direct-parameter type="specifier" description="The tab."/>
+    </command>
+
+    <command name="stop" code="CrSustop" description="Stop loading the tab's page.">
+      <direct-parameter type="specifier" description="The tab."/>
+    </command>
+
+    <command name="execute" code="CrSuExJa" description="Run JavaScript in the tab's page and return the result as text. Needs View ▸ Developer ▸ Allow JavaScript from Apple Events.">
+      <direct-parameter type="specifier" description="The tab."/>
+      <parameter name="javascript" code="JvSc" type="text" description="The JavaScript to run.">
+        <cocoa key="script"/>
+      </parameter>
+      <result type="text" description="The result, as text."/>
+    </command>
+
+    <class name="tab" code="tAbB" plural="tabs" description="A tab.">
+      <cocoa class="OAScriptableTab"/>
+      <property name="id" code="ID  " type="text" access="r" description="The tab's unique identifier.">
+        <cocoa key="scriptingID"/>
+      </property>
+      <property name="title" code="pnam" type="text" access="r" description="The tab's full title.">
+        <cocoa key="scriptingTitle"/>
+      </property>
+      <property name="URL" code="URL " type="text" access="rw" description="The tab's address. Setting it loads the new address.">
+        <cocoa key="scriptingURL"/>
+      </property>
+      <property name="loading" code="ldng" type="boolean" access="r" description="Whether the page is loading.">
+        <cocoa key="scriptingLoading"/>
+      </property>
+      <property name="location" code="loca" type="text" description="Where the tab sits in the sidebar: &quot;topApp&quot; (favorites), &quot;pinned&quot; or &quot;unpinned&quot; (Today).">
+        <cocoa key="scriptingLocation"/>
+      </property>
+      <responds-to command="select">
+        <cocoa method="handleSelectScriptCommand:"/>
+      </responds-to>
+      <responds-to command="go back">
+        <cocoa method="handleGoBackScriptCommand:"/>
+      </responds-to>
+      <responds-to command="go forward">
+        <cocoa method="handleGoForwardScriptCommand:"/>
+      </responds-to>
+      <responds-to command="reload">
+        <cocoa method="handleReloadScriptCommand:"/>
+      </responds-to>
+      <responds-to command="stop">
+        <cocoa method="handleStopScriptCommand:"/>
+      </responds-to>
+      <responds-to command="execute">
+        <cocoa method="handleExecuteScriptCommand:"/>
+      </responds-to>
+      <responds-to command="close">
+        <cocoa method="handleCloseScriptCommand:"/>
+      </responds-to>
+    </class>
+
+    <command name="focus" code="SpaFocus" description="Show the Space in its window.">
+      <direct-parameter type="specifier" description="The Space."/>
+    </command>
+
+    <class name="space" code="sPaC" plural="spaces" description="A Space.">
+      <cocoa class="OAScriptableSpace"/>
+      <element type="tab" access="rw" description="Tabs of the Space: favorites, pinned tabs, then Today.">
+        <cocoa key="scriptingTabs"/>
+      </element>
+      <property name="id" code="ID  " type="text" access="r" description="The Space's unique identifier.">
+        <cocoa key="scriptingID"/>
+      </property>
+      <property name="title" code="pnam" type="text" access="r" description="The Space's name.">
+        <cocoa key="scriptingTitle"/>
+      </property>
+      <responds-to command="focus">
+        <cocoa method="handleFocusScriptCommand:"/>
+      </responds-to>
+    </class>
+
+  </suite>
+</dictionary>

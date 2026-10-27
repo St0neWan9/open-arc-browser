@@ -47,6 +47,12 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<!-- AppleScript (plan B70, docs/arc-spec/06-flows.md §29.1 observed: scripting on, one sdef).
+	     scripts/make-app.sh copies app/Bundle/OpenArc.sdef into Contents/Resources. -->
+	<key>NSAppleScriptEnabled</key>
+	<true/>
+	<key>OSAScriptingDefinition</key>
+	<string>OpenArc.sdef</string>
 
 	<!--
 	  Custom drag-and-drop types. Each UTType(exportedAs:) in the sources must be
