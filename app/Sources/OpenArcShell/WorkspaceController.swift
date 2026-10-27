@@ -988,6 +988,10 @@ public final class WorkspaceController: ObservableObject {
             }
         }
         for id in event.changes.removed { next.removeRecord(id) }
+        // Splits left naming tabs another device deleted or archived lose those panes; a split
+        // with one live pane left ends (delete wins). The repair is a local change, so it is saved
+        // and uploaded like any edit. [B67, 06 §5 / §21.6]
+        next = TreeOps.repairSplits(next, now: now())
         guard next != workspace else { return }
         let gone = liveTabs.keys.filter { next.tabs[$0].map(\.meta.isTombstone) ?? true }
         commit(next, origin: nil)

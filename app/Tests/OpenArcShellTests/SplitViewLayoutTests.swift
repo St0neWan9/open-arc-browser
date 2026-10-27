@@ -115,15 +115,40 @@ final class SplitViewLayoutTests: XCTestCase {
         ws.splits[layoutID]?.meta.markDeleted(at: now)
         XCTAssertNil(SplitPaneLayout.activeLayout(in: ws, containing: a))
     }
+
+    /// B67: the lookup ignores panes whose tab was deleted or archived on another device, or has
+    /// not arrived yet, even before `TreeOps.repairSplits` ran. [06 §5] observed: one pane left is
+    /// a single page.
+    func testActiveLayoutIgnoresDeadPanes() throws {
+        let now = Date(timeIntervalSince1970: 0)
+        var ws = WorkspaceState()
+        let space = UUID(), a = UUID(), b = UUID(), c = UUID(), layoutID = UUID()
+        ws.layoutHelper(space: space, ids: [a, b, c], layoutID: layoutID, now: now)
+        ws.tabs[b]?.meta.markDeleted(at: now)
+        let layout = try XCTUnwrap(SplitPaneLayout.activeLayout(in: ws, containing: a))
+        XCTAssertEqual(layout.root.tabIDs, [a, c], "the deleted pane is hidden")
+        XCTAssertNil(SplitPaneLayout.activeLayout(in: ws, containing: b), "a deleted tab has no split")
+        XCTAssertEqual(ws.splits[layoutID]?.root.tabIDs, [a, b, c], "the lookup does not change the workspace")
+
+        ws.tabs[c] = nil  // not arrived yet (or purged)
+        XCTAssertNil(SplitPaneLayout.activeLayout(in: ws, containing: a), "one live pane: a single page")
+    }
 }
 
 private extension WorkspaceState {
-    /// Adds a two-pane layout without going through tabs (the lookup only reads the layout).
+    /// Adds a two-pane layout and its Today tabs (the lookup checks that the panes' tabs are live).
     mutating func layoutHelper(space: UUID, a: UUID, b: UUID, layoutID: UUID, now: Date) {
-        let node = SplitNode.split(axis: .horizontal, children: [
-            SplitChild(node: .pane(tabID: a), fraction: 0.5),
-            SplitChild(node: .pane(tabID: b), fraction: 0.5),
-        ])
+        layoutHelper(space: space, ids: [a, b], layoutID: layoutID, now: now)
+    }
+
+    /// Adds an equal-width side-by-side layout of `ids` and a Today tab for each id.
+    mutating func layoutHelper(space: UUID, ids: [UUID], layoutID: UUID, now: Date) {
+        for (id, key) in zip(ids, SortKey.sequence(count: ids.count)) {
+            tabs[id] = TabNode(id: id, location: .today(spaceID: space), sortKey: key, url: nil, title: "", now: now)
+        }
+        let node = SplitNode.split(axis: .horizontal, children: ids.map {
+            SplitChild(node: .pane(tabID: $0), fraction: 1 / Double(ids.count))
+        })
         splits[layoutID] = SplitLayout(id: layoutID, spaceID: space, root: node, now: now)
     }
 }
