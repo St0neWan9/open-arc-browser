@@ -64,6 +64,14 @@ final class CommandBarCommandsTests: XCTestCase {
             .openLibrary: "Open Library…", .viewDownloads: "View Downloads…", .viewEasels: "View Easels…",
             .viewMedia: "View Media…", .viewBoosts: "View Boosts…", .openSettings: "Settings…",
             .contactTheTeam: "Contact the Team", .airTrafficControl: "Air Traffic Control",
+            // B78: [06 §16.2] observed rows, [02 §tabs, §page] observed names.
+            .addTopSplit: "Add Top Split", .addLeftSplit: "Add Left Split", .addRightSplit: "Add Right Split",
+            .addBottomSplit: "Add Bottom Split", .convertToVerticalSplit: "Convert to Vertical Split View",
+            .convertToHorizontalSplit: "Convert to Horizontal Split View",
+            .clearCookiesAndRefresh: "Clear Cookies and Refresh", .moveToToday: "Move to Today",
+            .replacePinWithCurrentPage: "Replace Pin with Current Page",
+            .resetTabToOriginalURL: "Reset Tab to Original URL", .duplicateTab: "Duplicate",
+            .renameCurrentItem: "Rename Current Item",
         ]
         XCTAssertEqual(Set(expected.keys), Set(CommandBarCommand.allCases), "every command has a spec title")
         for command in CommandBarCommand.allCases {
@@ -204,6 +212,67 @@ final class CommandBarCommandsTests: XCTestCase {
                 XCTAssertTrue(m.hasActiveSplit)
                 XCTAssertNotNil(m.commandBarPaneTabID, "[06 §5] the bar opens in the new pane")
             },
+            // B78 [06 §16.2]: the four placements of the web toolbar's split menu [06 §17.3].
+            RoutingCase(command: .addTopSplit, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
+                try self.assertNewPane(m, axis: .vertical, newFirst: true)
+            },
+            RoutingCase(command: .addLeftSplit, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
+                try self.assertNewPane(m, axis: .horizontal, newFirst: true)
+            },
+            RoutingCase(command: .addRightSplit, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
+                try self.assertNewPane(m, axis: .horizontal, newFirst: false)
+            },
+            RoutingCase(command: .addBottomSplit, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
+                try self.assertNewPane(m, axis: .vertical, newFirst: false)
+            },
+            RoutingCase(command: .convertToVerticalSplit, setUp: { m in try await self.split(m) }) { m in
+                XCTAssertEqual(try self.splitAxis(m), .vertical)
+            },
+            RoutingCase(command: .convertToHorizontalSplit, setUp: { m in
+                try await self.split(m)
+                m.perform(.runCommand(.convertToVerticalSplit))
+            }) { m in
+                XCTAssertEqual(try self.splitAxis(m), .horizontal)
+            },
+            RoutingCase(command: .clearCookiesAndRefresh, setUp: { m in
+                m.siteControls.provider = FakeSiteSettingsProvider()
+                _ = try await self.selectFirstTab(m)
+            }) { m in
+                await m.sidebar.settleEngineWork()
+                let provider = try XCTUnwrap(m.siteControls.provider as? FakeSiteSettingsProvider)
+                XCTAssertEqual(provider.appliedChanges, [.clearSiteData])
+                let live = try XCTUnwrap(m.selectedLiveTab as? FakeTab)
+                XCTAssertEqual(live.commands, [.reload(bypassingCache: false)], "cleared first, then refreshed")
+            },
+            RoutingCase(command: .moveToToday, setUp: { m in _ = try await self.selectPinnedTab(m) }) { m in
+                let id = try XCTUnwrap(m.selectedTabID)
+                let space = try XCTUnwrap(m.selectedSpaceID)
+                XCTAssertEqual(m.workspace.tabs[id]?.location, .today(spaceID: space))
+                XCTAssertEqual(m.workspace.today(spaceID: space).first?.id, id, "top of Today")
+            },
+            RoutingCase(command: .replacePinWithCurrentPage, setUp: { m in try await self.navigatePinnedTabAway(m) }) { m in
+                let id = try XCTUnwrap(m.selectedTabID)
+                XCTAssertEqual(m.workspace.tabs[id]?.pinnedURL, self.elsewhere)
+            },
+            RoutingCase(command: .resetTabToOriginalURL, setUp: { m in try await self.navigatePinnedTabAway(m) }) { m in
+                await m.sidebar.settleEngineWork()
+                let id = try XCTUnwrap(m.selectedTabID)
+                let tab = try XCTUnwrap(m.workspace.tabs[id])
+                // Engine events of the earlier navigation arrive asynchronously; the model settles.
+                try await self.waitUntil { m.workspace.tabs[id]?.url == tab.pinnedURL }
+                let live = try XCTUnwrap(m.selectedLiveTab)
+                let url = await live.currentState().url
+                XCTAssertEqual(url, tab.pinnedURL)
+            },
+            RoutingCase(command: .duplicateTab, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
+                let copy = try XCTUnwrap(m.selectedTabID.flatMap { m.workspace.tabs[$0] })
+                let original = try XCTUnwrap(m.workspace.tabs.values.first { $0.url == copy.url && $0.id != copy.id })
+                XCTAssertNotEqual(copy.id, original.id, "the copy is selected")
+                XCTAssertEqual(m.workspace.today(spaceID: try XCTUnwrap(m.selectedSpaceID)).first?.id, copy.id)
+            },
+            RoutingCase(command: .renameCurrentItem, setUp: { m in _ = try await self.selectFirstTab(m) }) { m in
+                XCTAssertEqual(m.sidebar.renamingItemID, m.selectedTabID)
+            },
             RoutingCase(command: .closeSplitPane, setUp: { m in try await self.split(m) }) { m in
                 XCTAssertFalse(m.hasActiveSplit)
             },
@@ -282,6 +351,45 @@ final class CommandBarCommandsTests: XCTestCase {
                 XCTAssertEqual(m.lastUnhandledCommand, .airTrafficControl)
             },
         ]
+    }
+
+    private let elsewhere = URL(string: "https://elsewhere.example")!
+
+    /// The demo's pinned tab (example.com in the "Reading" folder).
+    private func pinnedTab(_ model: ShellModel) throws -> UUID {
+        try XCTUnwrap(model.workspace.tabs.values.first { tab in
+            if case .pinned = tab.location { return !tab.meta.isTombstone } else { return false }
+        }?.id)
+    }
+
+    private func selectPinnedTab(_ model: ShellModel) async throws -> UUID {
+        let id = try pinnedTab(model)
+        try await model.activate(tabID: id)
+        return id
+    }
+
+    /// Selects the pinned tab and navigates it away from its pinned URL.
+    private func navigatePinnedTabAway(_ model: ShellModel) async throws {
+        let id = try await selectPinnedTab(model)
+        model.sidebar.navigateSelectedTab(to: elsewhere)
+        await model.sidebar.settleEngineWork()
+        try await waitUntil { model.workspace.tabs[id]?.url == self.elsewhere }
+    }
+
+    private func splitAxis(_ model: ShellModel) throws -> SplitAxis? {
+        guard case .split(let axis, _) = try XCTUnwrap(model.activeSplitLayout).root else { return nil }
+        return axis
+    }
+
+    /// A new empty pane was added on the expected side of the selected tab, with the bar in it.
+    private func assertNewPane(_ model: ShellModel, axis: SplitAxis, newFirst: Bool, line: UInt = #line) throws {
+        let layout = try XCTUnwrap(model.activeSplitLayout, line: line)
+        guard case .split(let actual, let children) = layout.root else { return XCTFail("no split", line: line) }
+        XCTAssertEqual(actual, axis, line: line)
+        let new = try XCTUnwrap(model.selectedTabID, line: line)
+        XCTAssertEqual(children.first?.node == .pane(tabID: new), newFirst, line: line)
+        XCTAssertNil(model.workspace.tabs[new]?.url, "an empty pane", line: line)
+        XCTAssertEqual(model.commandBarPaneTabID, new, "[06 §5] the bar opens in the new pane", line: line)
     }
 
     /// Selects a tab and loads first.example then second.example in it.
@@ -490,5 +598,101 @@ final class CommandBarCommandsTests: XCTestCase {
         let command = CommandBarResult(id: "command:clearToday", kind: .command, title: "Clear Today", iconHint: .command, actionLabel: nil, action: .runCommand(.clearToday))
         let ctx = CommandBarQueryContext(text: "clear today", mode: .newTab)
         XCTAssertEqual(CommandBarRanker.rank([command, tab], context: ctx).map(\.id), ["tab:1", "command:clearToday"])
+    }
+
+    // MARK: B78 availability [06 §16.2]
+
+    private func listed(_ model: ShellModel, _ query: String) async -> [CommandBarCommand] {
+        let ctx = CommandBarQueryContext(text: query, mode: .newTab)
+        let state = model.commandBarCommandState
+        let rows = await CommandBarCommandsSource(state: { state }).results(for: ctx)
+        return CommandBarRanker.rank(rows, context: ctx, limit: 50).compactMap { row in
+            if case .runCommand(let command) = row.action { return command } else { return nil }
+        }
+    }
+
+    /// [06 §16.2] observed: with no split, "split" finds only Add Split View and Add Top / Left /
+    /// Right / Bottom Split; after a split Close this Split Pane, Expand Current Split and Convert
+    /// to Vertical Split View appear. The add rows carry no hint except ⌃⇧= ([02 §split] observed).
+    func testSplitRowsFollowTheSplit() async throws {
+        let model = makeModel()
+        defer { model.stop() }
+        _ = try await selectFirstTab(model)
+        let single = await listed(model, "split")
+        XCTAssertEqual(Set(single), [.addSplitView, .addTopSplit, .addLeftSplit, .addRightSplit, .addBottomSplit])
+        for command: CommandBarCommand in [.addTopSplit, .addLeftSplit, .addRightSplit, .addBottomSplit] {
+            XCTAssertNil(command.shortcutHint, "\(command): [02] lists no key")
+        }
+        try await split(model)
+        let splitRows = await listed(model, "split")
+        for command: CommandBarCommand in [.closeSplitPane, .expandSplit, .convertToVerticalSplit] {
+            XCTAssertTrue(splitRows.contains(command), "\(command)")
+        }
+        XCTAssertFalse(splitRows.contains(.convertToHorizontalSplit), "already side by side")
+        model.perform(.runCommand(.convertToVerticalSplit))
+        let stacked = await listed(model, "split")
+        XCTAssertTrue(stacked.contains(.convertToHorizontalSplit))
+        XCTAssertFalse(stacked.contains(.convertToVerticalSplit))
+    }
+
+    /// [06 §16.2] observed "Move to Today in <Space>" and "Replace Pin with Current Page": pinned
+    /// pages only. Replace / Reset need the page to have left its pinned URL (the menu's disabled
+    /// state, [06 §21.5] observed); a Today tab lists none of the three.
+    func testPinnedPageRowsNeedAPinnedTab() async throws {
+        let model = makeModel()
+        defer { model.stop() }
+        let pinned: [CommandBarCommand] = [.moveToToday, .replacePinWithCurrentPage, .resetTabToOriginalURL]
+        _ = try await selectFirstTab(model)
+        for command in pinned {
+            XCTAssertFalse(command.isAvailable(in: model.commandBarCommandState), "\(command) on a Today tab")
+        }
+        _ = try await selectPinnedTab(model)
+        let state = model.commandBarCommandState
+        XCTAssertTrue(CommandBarCommand.moveToToday.isAvailable(in: state))
+        XCTAssertEqual(CommandBarCommand.moveToToday.title(in: state), "Move to Today in Home")
+        XCTAssertFalse(CommandBarCommand.replacePinWithCurrentPage.isAvailable(in: state), "still on its pinned URL")
+        XCTAssertFalse(CommandBarCommand.resetTabToOriginalURL.isAvailable(in: state))
+        try await navigatePinnedTabAway(model)
+        XCTAssertTrue(CommandBarCommand.replacePinWithCurrentPage.isAvailable(in: model.commandBarCommandState))
+        XCTAssertTrue(CommandBarCommand.resetTabToOriginalURL.isAvailable(in: model.commandBarCommandState))
+        let rows = await listed(model, "move to today")
+        XCTAssertEqual(rows.first, .moveToToday)
+        for command in pinned + [.duplicateTab, .renameCurrentItem, .clearCookiesAndRefresh] {
+            XCTAssertNil(command.shortcutHint, "\(command): [02] lists no key")
+        }
+    }
+
+    /// Duplicate / Rename Current Item need a tab; rename needs a row with a rename field (not a
+    /// split member). Clear Cookies and Refresh needs a web page. Every one is hidden otherwise.
+    func testTabRowsNeedASuitableTab() async throws {
+        let model = makeModel()
+        defer { model.stop() }
+        let none = model.commandBarCommandState
+        for command: CommandBarCommand in [.duplicateTab, .renameCurrentItem, .clearCookiesAndRefresh, .moveToToday] {
+            XCTAssertFalse(command.isAvailable(in: none), "\(command) without a tab")
+        }
+        _ = try await selectFirstTab(model)
+        for command: CommandBarCommand in [.duplicateTab, .renameCurrentItem, .clearCookiesAndRefresh] {
+            XCTAssertTrue(command.isAvailable(in: model.commandBarCommandState), "\(command)")
+        }
+        let blank = try XCTUnwrap(model.sidebar.newTab(url: nil))
+        try await model.activate(tabID: blank)
+        XCTAssertFalse(CommandBarCommand.clearCookiesAndRefresh.isAvailable(in: model.commandBarCommandState), "no site")
+        try await split(model)
+        XCTAssertFalse(CommandBarCommand.renameCurrentItem.isAvailable(in: model.commandBarCommandState), "split members share one row")
+    }
+
+    /// Rename Current Item reveals the row: a hidden sidebar comes back and the pinned tab's
+    /// collapsed folder opens. inferred.
+    func testRenameCurrentItemRevealsTheRow() async throws {
+        let model = makeModel()
+        defer { model.stop() }
+        let id = try await selectPinnedTab(model)
+        model.sidebar.setAllFoldersExpanded(false)
+        model.toggleSidebar()
+        model.perform(.runCommand(.renameCurrentItem))
+        XCTAssertTrue(model.isSidebarVisible)
+        XCTAssertTrue(model.workspace.folders.values.allSatisfy(\.isExpanded))
+        XCTAssertEqual(model.sidebar.renamingItemID, id)
     }
 }

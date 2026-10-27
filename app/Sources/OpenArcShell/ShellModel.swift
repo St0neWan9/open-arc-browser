@@ -412,6 +412,13 @@ public final class ShellModel: ObservableObject {
         case .toggleSidebar: toggleSidebar()
         case .reload: sidebar.reloadOrStop()
         case .addSplitView: addSplitView()
+        case .addTopSplit: addSplit(.top)
+        case .addLeftSplit: addSplit(.left)
+        case .addRightSplit: addSplit(.right)
+        case .addBottomSplit: addSplit(.bottom)
+        case .convertToVerticalSplit: convertActiveSplit(to: .vertical)
+        case .convertToHorizontalSplit: convertActiveSplit(to: .horizontal)
+        case .clearCookiesAndRefresh: clearCookiesAndRefresh()
         case .closeSplitPane: closeSplitPane()
         case .separateFromSplit: separatePageFromSplitView()
         case .expandSplit: toggleExpandCurrentSplit()
@@ -427,6 +434,11 @@ public final class ShellModel: ObservableObject {
         case .togglePin: if let id = selectedTabID { sidebar.togglePin(id) }
         case .favoriteTab: if let id = selectedTabID { sidebar.addFavorite(id) }
         case .newFolder: sidebar.requestNewFolder()
+        case .moveToToday: moveSelectedTabToToday()
+        case .replacePinWithCurrentPage: if let id = selectedTabID { sidebar.replacePinnedURLWithCurrent(id) }
+        case .resetTabToOriginalURL: if let id = selectedTabID { sidebar.resetTabToPinnedURL(id) }
+        case .duplicateTab: if let id = selectedTabID { sidebar.duplicateTab(id) }
+        case .renameCurrentItem: renameCurrentItem()
         case .nextTab: sidebar.stepTab(by: 1)
         case .previousTab: sidebar.stepTab(by: -1)
         case .clearToday: sidebar.clearToday()
