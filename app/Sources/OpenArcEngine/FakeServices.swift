@@ -286,6 +286,7 @@ public final class FakeAdBlocking: EngineAdBlocking, @unchecked Sendable {
     private var allowList: Set<SiteKey> = []
     private var counts: [EngineTabID: Int] = [:]
     private var changeLog: [String] = []
+    private let versionChanges = AsyncBroadcaster<String>()
 
     public init(rulesetVersion: String? = "fake-ruleset") {
         version = rulesetVersion
@@ -294,9 +295,18 @@ public final class FakeAdBlocking: EngineAdBlocking, @unchecked Sendable {
     /// "global:on", "site:<host>:off" … in call order. For tests.
     public var changes: [String] { lock.withLock { changeLog } }
 
-    /// Sets the version `rulesetVersion()` reports (nil: no ruleset).
+    /// Sets the version `rulesetVersion()` reports (nil: no ruleset). A new non-nil version is
+    /// also delivered to `rulesetVersionChanges()`, like a live update (plan C19).
     public func simulateRuleset(_ rulesetVersion: String?) {
-        lock.withLock { version = rulesetVersion }
+        let changed: Bool = lock.withLock {
+            defer { version = rulesetVersion }
+            return rulesetVersion != nil && rulesetVersion != version
+        }
+        if changed, let rulesetVersion { versionChanges.yield(rulesetVersion) }
+    }
+
+    public func rulesetVersionChanges() -> AsyncStream<String> {
+        versionChanges.subscribe()
     }
 
     /// Sets a tab's blocked count as if its page loaded ads.

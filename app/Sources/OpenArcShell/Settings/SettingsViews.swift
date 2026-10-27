@@ -626,6 +626,8 @@ struct AdvancedPane: View {
         }
         .formStyle(.grouped)
         .task { await model.loadAdBlocking() }
+        // Plan C19: a filter-list update shows its version without reopening Settings.
+        .task { await model.followAdBlockingRulesetVersion() }
     }
 }
 

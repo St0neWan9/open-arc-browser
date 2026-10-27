@@ -60,6 +60,7 @@ public final class ChromiumEngine: BrowserEngine {
 
     private let core: ChromiumEngineCore
     private let broadcaster: AsyncBroadcaster<EngineEvent>
+    private let chromiumAdBlocking: ChromiumAdBlocking
 
     /// - Parameters:
     ///   - userDataDirectory: Chromium's user data directory, `<app data dir>/Chromium`.
@@ -85,11 +86,15 @@ public final class ChromiumEngine: BrowserEngine {
         // Every loaded profile gets the extensions delegate at once, so a Web Store install from a
         // page finds someone to confirm it.
         core.onProfileLoaded = { [weak extensions] id, profile in extensions?.attach(to: id, extensions: profile.extensions) }
-        adBlocking = ChromiumAdBlocking(core: core)
+        let adBlocking = ChromiumAdBlocking(core: core, userDataDirectory: userDataDirectory)
+        self.adBlocking = adBlocking
+        chromiumAdBlocking = adBlocking
         importer = ChromiumImporter(core: core)
         translation = ChromiumTranslation(core: core)
         autocomplete = ChromiumAutocomplete(core: core)
         core.startAtLaunch()
+        // Filter-list updates from our static host (plan C19); off while the host is a placeholder.
+        adBlocking.startUpdates()
     }
 
     /// Makes the process's `NSApplication` an `OACBrowserApplication`, which Chromium's event
@@ -125,6 +130,7 @@ public final class ChromiumEngine: BrowserEngine {
     }
 
     public func shutdown() async {
+        await chromiumAdBlocking.stopUpdates()
         await core.shutdown()
     }
 

@@ -202,6 +202,10 @@ public protocol EngineAdBlocking: AnyObject, Sendable {
     /// Version of the filter ruleset in use; nil when the engine has none (the blocker then
     /// matches nothing and the shell hides its controls).
     func rulesetVersion() async -> String?
+    /// Each new ruleset version the engine switched to while running (plan C19: a verified update
+    /// from our static host, applied without a restart). Does not repeat the current version; read
+    /// `rulesetVersion()` first. Engines without updates return a stream that ends at once.
+    func rulesetVersionChanges() -> AsyncStream<String>
     /// The global switch (Settings). Default on.
     func isEnabled() async -> Bool
     func setEnabled(_ enabled: Bool) async
@@ -212,6 +216,13 @@ public protocol EngineAdBlocking: AnyObject, Sendable {
     /// Loads the blocker kept from loading on the tab's current page (0 after each new page, and
     /// for unknown tabs).
     func blockedCount(tabID: EngineTabID) async -> Int
+}
+
+public extension EngineAdBlocking {
+    /// No live updates: a stream that ends at once.
+    func rulesetVersionChanges() -> AsyncStream<String> {
+        AsyncStream { $0.finish() }
+    }
 }
 
 /// An engine without an ad blocker: no ruleset, switches do nothing. The default for engines that
