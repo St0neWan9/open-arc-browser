@@ -1,4 +1,5 @@
 import Foundation
+import OpenArcModel
 
 // Value types of the command bar. No UI framework types here, so everything is unit-testable.
 //
@@ -60,9 +61,24 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     case toggleSidebar
     case reload
     case addSplitView
+    /// "Add Top / Left / Right / Bottom Split": a new empty pane on that side of the current tab.
+    /// [06 §16.2] observed rows (no default key); the four placements are the web toolbar's split
+    /// menu [06 §17.3] observed (B78).
+    case addTopSplit
+    case addLeftSplit
+    case addRightSplit
+    case addBottomSplit
     case closeSplitPane
     case separateFromSplit
     case expandSplit
+    /// "Convert to Vertical Split View" while the split is side by side, "Convert to Horizontal
+    /// Split View" while it is stacked; listed only with a split. [06 §16.2] observed the vertical
+    /// row after a split; the horizontal one is inferred from the split row menu [06 §21.5] (B78).
+    case convertToVerticalSplit
+    case convertToHorizontalSplit
+    /// "Clear Cookies and Refresh": clears the current site's cookies and site data, then reloads.
+    /// [02 §page] observed name (no default key); the effect is inferred from the name (B78).
+    case clearCookiesAndRefresh
     // Spaces
     case newSpace
     case editTheme
@@ -76,6 +92,22 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     /// "Favorite Tab": the current Today tab goes to the end of the favorites. [06 §21.4] observed (B55).
     case favoriteTab
     case newFolder
+    /// "Move to Today in <Space>": a pinned tab or favorite goes to the top of that Space's Today.
+    /// [06 §16.2] observed row title; the effect is inferred (B78).
+    case moveToToday
+    /// "Replace Pin with Current Page": the pinned tab's or favorite's current page becomes its
+    /// pinned URL. [06 §16.2] observed row title; the effect is the menu's "Replace Pinned URL
+    /// with Current" [06 §21.5] (B78).
+    case replacePinWithCurrentPage
+    /// "Reset Tab to Original URL": the pinned tab or favorite goes back to its pinned URL.
+    /// [02 §tabs] observed name (no default key) (B78).
+    case resetTabToOriginalURL
+    /// "Duplicate": a copy of the current tab opens at the top of Today. [02 §tabs] observed name
+    /// (no default key); the menu item's effect [05 §context menus] (B78).
+    case duplicateTab
+    /// "Rename Current Item": the current tab's sidebar row turns into its rename field.
+    /// [02 §tabs] observed name (no default key); the menu's "Rename…" effect (B78).
+    case renameCurrentItem
     case nextTab
     case previousTab
     case clearToday
@@ -112,6 +144,18 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .toggleSidebar: return "Hide Sidebar"
         case .reload: return "Refresh the Page"
         case .addSplitView: return "Add Split View"
+        case .addTopSplit: return "Add Top Split"
+        case .addLeftSplit: return "Add Left Split"
+        case .addRightSplit: return "Add Right Split"
+        case .addBottomSplit: return "Add Bottom Split"
+        case .convertToVerticalSplit: return "Convert to Vertical Split View"
+        case .convertToHorizontalSplit: return "Convert to Horizontal Split View"
+        case .clearCookiesAndRefresh: return "Clear Cookies and Refresh"
+        case .moveToToday: return "Move to Today"
+        case .replacePinWithCurrentPage: return "Replace Pin with Current Page"
+        case .resetTabToOriginalURL: return "Reset Tab to Original URL"
+        case .duplicateTab: return "Duplicate"
+        case .renameCurrentItem: return "Rename Current Item"
         case .closeSplitPane: return "Close this Split Pane"
         case .separateFromSplit: return "Separate Page from Split View"
         case .expandSplit: return "Expand Current Split"
@@ -151,6 +195,8 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         // [06 §16.2] observed: "Unpin Tab" (⌘D) while the selected tab is pinned; "Pin Tab" for a
         // Today tab is inferred by symmetry.
         if self == .togglePin, let pinned = state.isSelectedTabPinned { return pinned ? "Unpin Tab" : "Pin Tab" }
+        // [06 §16.2] observed: "Move to Today in <Space name>".
+        if self == .moveToToday, let name = state.todaySpaceName { return "Move to Today in \(name)" }
         return title
     }
 
@@ -166,6 +212,18 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .toggleSidebar: return ["sidebar", "show sidebar"]
         case .reload: return ["reload", "refresh"]
         case .addSplitView: return ["split", "side by side"]
+        case .addTopSplit: return ["split", "top", "above"]
+        case .addLeftSplit: return ["split", "left"]
+        case .addRightSplit: return ["split", "right"]
+        case .addBottomSplit: return ["split", "bottom", "below"]
+        case .convertToVerticalSplit: return ["split", "vertical", "stack"]
+        case .convertToHorizontalSplit: return ["split", "horizontal", "side by side"]
+        case .clearCookiesAndRefresh: return ["cookies", "site data", "reload", "refresh"]
+        case .moveToToday: return ["today", "unpin", "move"]
+        case .replacePinWithCurrentPage: return ["pin", "pinned url", "replace", "update pin"]
+        case .resetTabToOriginalURL: return ["reset", "original url", "pinned url"]
+        case .duplicateTab: return ["duplicate", "copy tab", "clone"]
+        case .renameCurrentItem: return ["rename", "title", "tab name"]
         case .closeSplitPane: return ["split", "close pane"]
         case .separateFromSplit: return ["split", "separate"]
         case .expandSplit: return ["split", "expand"]
@@ -223,6 +281,12 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .goForward: return "⌘]"
         case .openLibrary: return "⇧⌘L"
         case .openSettings: return "⌘,"
+        // [02] lists no default key for these (B78): no hint. [06 §16.2] observed "Add Left Split"
+        // without one.
+        case .addTopSplit, .addLeftSplit, .addRightSplit, .addBottomSplit, .convertToVerticalSplit,
+             .convertToHorizontalSplit, .clearCookiesAndRefresh, .moveToToday, .replacePinWithCurrentPage,
+             .resetTabToOriginalURL, .duplicateTab, .renameCurrentItem:
+            return nil
         case .favoriteTab, .separateFromSplit, .expandSplit, .newSpace, .editTheme, .renameSpace,
              .manageSpaces, .newFolder, .collapseAllFolders, .expandAllFolders, .viewArchive,
              .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .contactTheTeam, .airTrafficControl:
@@ -237,8 +301,22 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     public func isAvailable(in state: CommandBarCommandState) -> Bool {
         if state.isIncognito, Self.unavailableInIncognito.contains(self) { return false }
         switch self {
-        case .archiveTab, .togglePin, .copyURL, .reload, .addSplitView:
+        case .archiveTab, .togglePin, .copyURL, .reload, .addSplitView, .duplicateTab,
+             .addTopSplit, .addLeftSplit, .addRightSplit, .addBottomSplit:
             return state.hasSelectedTab
+        case .convertToVerticalSplit:
+            return state.hasActiveSplit && state.activeSplitAxis != .vertical
+        case .convertToHorizontalSplit:
+            // An unknown direction (`everything`) offers both rows.
+            return state.hasActiveSplit && state.activeSplitAxis != .horizontal
+        case .clearCookiesAndRefresh:
+            return state.hasSelectedTab && state.canClearSelectedSiteCookies
+        case .moveToToday:
+            return state.hasSelectedTab && state.canMoveSelectedTabToToday
+        case .replacePinWithCurrentPage, .resetTabToOriginalURL:
+            return state.hasSelectedTab && state.hasLeftPinnedURL
+        case .renameCurrentItem:
+            return state.hasSelectedTab && state.canRenameSelectedItem
         case .restoreLastClosedTab:
             return state.canRestoreLastClosedTab
         case .favoriteTab:
@@ -263,10 +341,12 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
 
     /// Commands an incognito window's bar leaves out. Its Spaces menu is disabled as a whole and
     /// its tab menu has no Pin ([06 §20.2] observed), so the Space commands and Pin are not
-    /// offered (plan B61); folders need the pinned area it does not have (inferred).
+    /// offered (plan B61); folders and the pinned-page commands need the pinned area it does not
+    /// have (inferred, B78).
     static let unavailableInIncognito: Set<CommandBarCommand> = [
         .newSpace, .editTheme, .renameSpace, .nextSpace, .previousSpace, .manageSpaces,
         .togglePin, .favoriteTab, .newFolder, .collapseAllFolders, .expandAllFolders,
+        .moveToToday, .replacePinWithCurrentPage, .resetTabToOriginalURL,
     ]
 
     /// The help rows an incognito window's bar lists for an empty query, in the observed order.
@@ -297,6 +377,21 @@ public struct CommandBarCommandState: Hashable, Sendable {
     public var canFavoriteSelectedTab: Bool = true
     /// An incognito window: no Space commands, no Space rows (`unavailableInIncognito`). B61.
     public var isIncognito: Bool = false
+    /// Top-level direction of the selected tab's split; nil without a split (or unknown, which
+    /// offers both "Convert to …" rows). B78.
+    public var activeSplitAxis: SplitAxis?
+    /// The selected tab is a pinned tab or favorite that can move to a Today. B78.
+    public var canMoveSelectedTabToToday: Bool = true
+    /// Name of the Space whose Today "Move to Today in <Space>" moves to (title only). B78.
+    public var todaySpaceName: String?
+    /// The selected tab is a pinned tab or favorite whose page is no longer its pinned URL: "Replace
+    /// Pin with Current Page" and "Reset Tab to Original URL" have something to do. inferred from
+    /// the menu's disabled state [06 §21.5] observed (B78).
+    public var hasLeftPinnedURL: Bool = true
+    /// The selected tab has a row with a rename field (a Today or pinned tab outside a split). B78.
+    public var canRenameSelectedItem: Bool = true
+    /// The selected tab shows a web site (http or https) whose cookies can be cleared. B78.
+    public var canClearSelectedSiteCookies: Bool = true
 
     public init(
         hasSelectedTab: Bool = true,

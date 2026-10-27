@@ -15,7 +15,111 @@ extension ShellModel {
             if case .today = tab.location { return true } else { return false }
         } == true
         state.isIncognito = isIncognito
+        applyTabCommandState(to: &state)
         return state
+    }
+
+    /// The B78 rows' state: split direction, pinned-page and rename / cookie availability.
+    private func applyTabCommandState(to state: inout CommandBarCommandState) {
+        state.activeSplitAxis = activeSplitLayout.flatMap { layout in
+            if case .split(let axis, _) = layout.root { return axis } else { return nil }
+        }
+        let tab = selectedTabID.flatMap { workspace.tabs[$0] }.flatMap { $0.meta.isTombstone ? nil : $0 }
+        let target = tab.flatMap(todayTargetSpaceID(for:))
+        state.canMoveSelectedTabToToday = target != nil
+        state.todaySpaceName = target.flatMap { workspace.spaces[$0]?.name }
+        state.hasLeftPinnedURL = tab.map { tab in
+            if case .today = tab.location { return false }
+            return sidebar.canReplacePinnedURL(tab.id)
+        } ?? false
+        state.canRenameSelectedItem = tab.map { tab in
+            // Favorites are tiles and split members share one group row: neither has a rename field.
+            if case .favorite = tab.location { return false }
+            return !sidebar.isInSplit(tab.id)
+        } ?? false
+        state.canClearSelectedSiteCookies = selectedSiteForCookies != nil
+    }
+
+    /// The Space whose Today "Move to Today in <Space>" moves `tab` to: a pinned tab's own Space,
+    /// the window's Space for a favorite; nil for a Today tab (it already is in Today). inferred
+    /// ([06 §16.2] observed only the row title).
+    func todayTargetSpaceID(for tab: TabNode) -> UUID? {
+        switch tab.location {
+        case .today: return nil
+        case .pinned(let spaceID, _): return spaceID
+        case .favorite: return isIncognito ? nil : selectedSpaceID
+        }
+    }
+
+    /// The web site of the selected tab whose cookies "Clear Cookies and Refresh" clears: http(s)
+    /// pages only (internal pages have no cookies). inferred.
+    var selectedSiteForCookies: SiteOrigin? {
+        guard let id = selectedTabID, let url = sidebar.linkURL(for: id),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+        return SiteOrigin(url: url)
+    }
+
+    // MARK: B78 commands
+
+    /// "Move to Today in <Space>": the pinned tab or favorite goes to the top of that Today and
+    /// stays selected. Position follows Unpin (top of Today, inferred). [06 §16.2] observed title.
+    func moveSelectedTabToToday() {
+        guard let id = selectedTabID, let tab = workspace.tabs[id], !tab.meta.isTombstone,
+              let spaceID = todayTargetSpaceID(for: tab) else { return }
+        let now = controller.now()
+        try? controller.mutate(origin: sidebar) {
+            try TreeOps.moveTab($0, id: id, to: .today(spaceID: spaceID), position: .first, now: now)
+        }
+    }
+
+    /// "Rename Current Item": the selected tab's row shows its rename field. A hidden sidebar is
+    /// shown and collapsed folders above a pinned tab open, so the field is on screen. inferred.
+    func renameCurrentItem() {
+        guard let id = selectedTabID, let tab = workspace.tabs[id] else { return }
+        if case .pinned(_, let folderID) = tab.location {
+            let collapsed = ancestorFolders(of: folderID).filter { workspace.folders[$0]?.isExpanded == false }
+            if !collapsed.isEmpty {
+                let now = controller.now()
+                try? controller.mutate(origin: sidebar) { state in
+                    try collapsed.reduce(state) { try TreeOps.setFolderExpanded($0, id: $1, isExpanded: true, now: now) }
+                }
+            }
+        }
+        if !isSidebarVisible { toggleSidebar() }
+        sidebar.beginRename(id)
+    }
+
+    /// `folderID` and every folder above it.
+    private func ancestorFolders(of folderID: UUID?) -> [UUID] {
+        var ids: [UUID] = []
+        var current = folderID
+        while let id = current, !ids.contains(id), let folder = workspace.folders[id] {
+            ids.append(id)
+            current = folder.parentFolderID
+        }
+        return ids
+    }
+
+    /// "Clear Cookies and Refresh": the site's cookies and site data go (the Site Control Center's
+    /// Clear Cookies path, C12), then the page reloads. [02 §page] observed name; inferred effect.
+    func clearCookiesAndRefresh() {
+        guard let id = selectedTabID, let site = selectedSiteForCookies else { return }
+        let profileID = workspace.tabs[id].flatMap { controller.engineProfileID(forTab: $0) } ?? sidebar.currentProfileID
+        let provider = siteControls.provider
+        let live = sidebar.liveTab(for: id)
+        controller.enqueueEngineWork {
+            await provider.apply(.clearSiteData, for: site, profileID: profileID)
+            try? await live?.reload()
+        }
+    }
+
+    /// "Convert to Vertical / Horizontal Split View": the selected tab's split changes direction.
+    func convertActiveSplit(to axis: SplitAxis) {
+        guard let layout = activeSplitLayout else { return }
+        let now = controller.now()
+        try? controller.mutate(origin: sidebar) {
+            try TreeOps.setSplitAxis($0, layoutID: layout.id, axis: axis, now: now)
+        }
     }
 
     private var baseCommandBarCommandState: CommandBarCommandState {
