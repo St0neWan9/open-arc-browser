@@ -375,6 +375,11 @@ final class ChromiumEngineCore {
         if types.contains(.cache) { bridgeTypes.insert(.cache) }
         if types.contains(.siteStorage) { bridgeTypes.insert(.siteStorage) }
         if types.contains(.downloads) { bridgeTypes.insert(.downloadsList) }
+        // B83 (Clear Browsing Data sheet): passwords, autofill and site settings, which the bridge
+        // has supported since C11 (patch 0016).
+        if types.contains(.passwords) { bridgeTypes.insert(.passwords) }
+        if types.contains(.autofill) { bridgeTypes.insert(.autofill) }
+        if types.contains(.siteSettings) { bridgeTypes.insert(.siteSettings) }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             profile.clearBrowsingData(of: bridgeTypes, since: since) { continuation.resume() }
         }

@@ -162,6 +162,13 @@ public final class SettingsModel: ObservableObject {
     @Published public var profilePendingDeletion: UUID?
     /// Text typed into the Shortcuts pane search field.
     @Published public var shortcutQuery = ""
+    /// Profile whose "Clear Browsing Data" sheet is showing; nil when none. B83.
+    @Published public var profileClearingData: UUID?
+    /// The engine is clearing data for the sheet. B83.
+    @Published public internal(set) var isClearingBrowsingData = false
+    /// Download folders as the engine reported (or was told) them, per profile; a missing entry
+    /// shows the user's Downloads folder. B83.
+    @Published var loadedDownloadDirectories: [UUID: URL] = [:]
     /// The Links pane's Air Traffic Control sheet is showing (B52; opened from the command bar, B61).
     @Published public var isAirTrafficControlShown = false
     private var airTrafficControlRequests: AnyCancellable?
@@ -170,6 +177,10 @@ public final class SettingsModel: ObservableObject {
     var revealInFinder: (URL) -> Void = { url in
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
+
+    /// Asks for a folder ("Download location" ▸ Other…), starting in the given one. Injectable so
+    /// tests do not show an open panel.
+    var pickFolder: (URL) -> URL? = { SettingsModel.runFolderPanel($0) }
 
     public init(shell: ShellModel) {
         self.shell = shell

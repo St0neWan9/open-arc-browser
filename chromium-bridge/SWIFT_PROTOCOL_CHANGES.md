@@ -123,6 +123,8 @@ Each gets a `TabEvent` case (`securityChanged`, `zoomChanged`, `captureStateChan
 
 **Status: applied as a skeleton (C7b).** `EngineDownloads` (`items`, `events`, pause/resume/cancel/confirm/remove, `download(_:profileID:)`, `setDefaultDirectory`), reached as `BrowserEngine.downloads`; `FakeDownloads`. Library wiring deferred to C12.
 
+**B83 (applied).** The download folder is per Profile ([03 §Profiles] observed: "Download location" sits in each Profile's settings): `setDefaultDirectory(_:profileID:)` replaces `setDefaultDirectory(_:)`, and `defaultDirectory(profileID:) async -> URL?` reads it back for the Settings dropdown. Chromium side unchanged: `OACDownloads.defaultDirectory` is the profile's `download.default_directory` pref (patch 0017), so the choice is per device and survives restarts. `BrowsingDataTypes` gains `.passwords`, `.autofill`, `.siteSettings` (the bridge's `OACBrowsingDataTypes` has had them since C11) for the Clear Browsing Data sheet.
+
 **Gap.** Library has a Downloads section ([06 §8] observed: "Search Downloads…", "Filter", empty state) and Window ▸ View Downloads… ([01 §Window] observed), but the engine has no downloads API.
 
 **Proposal.** A per-profile protocol:

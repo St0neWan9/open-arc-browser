@@ -141,6 +141,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // D3b: history and passwords imported from made-up Chrome, CSV and Safari sources.
         try await checkImport(engine, profileID: UUID())
 
+        // B83: per-profile download folder, the engine's settings pages, clearing more kinds.
+        try await checkProfileSettings(engine, dataDirectory: dataDirectory)
+
         // Closing ends the tab's stream; shutdown makes new tabs fail.
         await engine.closeTab(tab.id)
         let closedLookup = await engine.tab(for: tab.id)

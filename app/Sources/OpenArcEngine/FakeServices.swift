@@ -11,7 +11,7 @@ public final class FakeDownloads: EngineDownloads, @unchecked Sendable {
     private var all: [DownloadItem] = []
     private var broadcasters: [Profile.ID: AsyncBroadcaster<DownloadEvent>] = [:]
     private var commandLog: [String] = []
-    private var directory: URL?
+    private var directories: [Profile.ID: URL] = [:]
 
     public init() {}
 
@@ -21,7 +21,8 @@ public final class FakeDownloads: EngineDownloads, @unchecked Sendable {
     public func subscriberCount(profileID: Profile.ID) -> Int {
         lock.withLock { broadcasters[profileID]?.subscriberCount ?? 0 }
     }
-    public var defaultDirectory: URL? { lock.withLock { directory } }
+    /// Download folders set through `setDefaultDirectory(_:profileID:)`. For tests.
+    public var defaultDirectories: [Profile.ID: URL] { lock.withLock { directories } }
 
     public func items(profileID: Profile.ID) async -> [DownloadItem] {
         lock.withLock { all.filter { $0.profileID == profileID }.sorted { $0.startDate > $1.startDate } }
@@ -58,8 +59,13 @@ public final class FakeDownloads: EngineDownloads, @unchecked Sendable {
         simulateDownload(item)
     }
 
-    public func setDefaultDirectory(_ url: URL) async {
-        lock.withLock { directory = url }
+    public func setDefaultDirectory(_ url: URL, profileID: Profile.ID) async {
+        lock.withLock { directories[profileID] = url }
+    }
+
+    /// nil until set: the caller falls back to the user's Downloads folder.
+    public func defaultDirectory(profileID: Profile.ID) async -> URL? {
+        lock.withLock { directories[profileID] }
     }
 
     /// Adds a download as if a page started it.
