@@ -120,6 +120,11 @@ public final class ChromiumTab: BrowserTab, @unchecked Sendable {
         await core.selectedText()
     }
 
+    /// Plan B71 (`OACJavaScript.h`); see ChromiumJavaScript.swift for the capability check.
+    public func evaluateJavaScript(_ source: String) async throws -> String {
+        try await core.evaluateJavaScript(source)
+    }
+
     public func perform(_ command: EditCommand) async {
         // The bridge's command names are `EditCommand`'s raw values (OACTab.h).
         await core.perform { $0.performEditCommand(command.rawValue) }

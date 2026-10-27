@@ -24,7 +24,8 @@ chromium-bridge/
     ├── OACDownloads.h             a profile's downloads (C12, Library ▸ Downloads)
     ├── OACExtensions.h            a profile's extensions, action popups, install confirmation (C14)
     ├── OACTranslation.h           page translation state and commands, translation settings reset (B47)
-    └── OACCapture.h               visible-rectangle and full-page capture (B51)
+    ├── OACCapture.h               visible-rectangle and full-page capture (B51)
+    └── OACJavaScript.h            run a script in the page for AppleScript `execute` (B71)
 ```
 
 The design is our own. It uses only Chromium's public embedder concepts (the content API and the `//chrome` layer's services); it does not follow any other browser's bridge.
@@ -160,6 +161,7 @@ What we replace:
 | B45 page top color (toolbar) | `OACTabState.pageTopColorKind` / `pageTopColor`, `tabDidSamplePageTopColor:` (sampled after each load, patch 0022) | `BrowserTabState.pageTopColor` (`PageTopColor`), `TabEvent.pageTopColorChanged` | done (B45) |
 | B47 page translation | `OACTranslation.h`: `OACTab.translationState` (`OACTranslationState`), `translateToLanguage:`, `revertTranslation`, `neverTranslateSite`, `tabDidChangeTranslationState:`; `-[OACProfile resetTranslationSettings]`; `OACApplication.translationTargetLanguages` | `BrowserTabState.translation` (`PageTranslation`), `TabEvent.translationChanged`, `BrowserTab.translate(to:) / revertTranslation() / neverTranslateSite()`, `BrowserEngine.translation` (`EngineTranslation`) | done (B47, patches 0027–0028; §Translation) |
 | B51 page capture | `OACCapture.h`: `-[OACTab captureVisibleRect:completionHandler:]`, `-[OACTab captureFullPageWithMaximumAspectRatio:completionHandler:]` (PNG at the screen's density) | `BrowserTab.capture(_:)` with `PageCaptureArea` (`EngineSnapshot`) | done (B51, patch 0030) |
+| B71 AppleScript `execute` | `OACJavaScript.h`: `-[OACTab evaluateJavaScript:completionHandler:]` (result as JSON text, `OACErrorJavaScriptException`) | `BrowserTab.evaluateJavaScript(_:)`, `JavaScriptResultText`, `EngineError.javaScriptException` | header and Swift done; native source staged in `pending/`, not yet in a patch (§JavaScript evaluation) |
 | C17 window tint from the page | `OACTabState.themeColor`, `tab:didChangeThemeColor:hasThemeColor:` (theme-color meta only) | `themeColor` | not needed: `06 §17.4` (E18) observed that the window and sidebar never follow the page |
 | C18 system codecs | nothing in the API: decoder routing is inside the GPU / media code | none | — |
 | Site Control Center (B13) | `OACSiteSettings` | `SiteSettingsProvider` | 1:1, see `OACSiteSettings.h` header comment; §5 for permission kinds |
@@ -255,6 +257,19 @@ Chrome's translate component runs unchanged on every tab (`TabHelpers` attaches 
 - **Language detection.** The TFLite model comes from the optimization guide's downloads, which this build never gets. Patch 0027 puts it behind a feature that the main delegate disables in every process, so the renderer uses CLD3 (pages without a `lang` attribute are detected too).
 - **Reset.** Settings ▸ Advanced "Reset Translated-site Prompts" (`03 §Advanced`) calls `-[OACProfile resetTranslationSettings]` for every profile: `TranslatePrefs::ResetToDefaults` (never-translate sites and languages back to the defaults, always-translate pairs, accept / decline counts).
 - **Not done.** Partial (selection) translation, PDF translation (Chrome's needs its Read Anything side panel), auto-translate toasts, "Always translate <language>" (Arc's menu has none, `06 §19.3`), off-the-record tabs (Chrome does not offer translation there: `ChromeTranslateClient` skips detection for off-the-record profiles).
+
+## JavaScript evaluation (B71)
+
+The AppleScript `execute` command (`06 §29.3`, gated by View ▸ Developer ▸ Allow JavaScript from Apple Events, `06 §29.4`) runs a script in the tab's page and returns its value as text. The header (`OACJavaScript.h`), the error code `OACErrorJavaScriptException = 11` (`OACDefines.h`) and the Swift side (`app/Sources/OpenArcChromium/ChromiumJavaScript.swift`) are in place. The implementation is `pending/oac_javascript.mm`: like the full-page capture (patch 0030) it attaches its own DevTools protocol client to the tab's page target and sends one `Runtime.evaluate` (`returnByValue`, `awaitPromise`, 30 s timeout, no user gesture), then detaches. That runs in the main world of the main frame (page globals visible, CSP does not block it), awaits promises, and keeps exceptions apart from values. `RenderFrameHost::ExecuteJavaScript` is not usable here (WebUI pages only), and the isolated-world variant hides the page's globals and cannot report exceptions.
+
+Until a framework with the method is built, the Swift wrapper finds no `evaluateJavaScript:completionHandler:` selector on `OACTab` and throws `EngineError.unsupported("evaluateJavaScript")`; the shell reports "This version of Open Arc cannot run JavaScript in a page." to the script.
+
+**Main-session steps (not done by the B71 task):**
+1. In `~/chromium/src` on `openarc/156`: copy `chromium-bridge/pending/oac_javascript.mm` to `openarc/bridge/oac_javascript.mm` and `chromium-bridge/include/OpenArcCore/{OACJavaScript.h,OACDefines.h,OpenArcCore.h}` to `openarc/bridge/public/OpenArcCore/`.
+2. `openarc/BUILD.gn`: add `"bridge/public/OpenArcCore/OACJavaScript.h"` to `openarc_public_headers` and `"bridge/oac_javascript.mm"` to the `bridge` source set (next to `oac_capture.mm`; the deps `//content/public/browser` and `//base` are already there).
+3. Commit as a new patch, subject `openarc: embedder: run a script in the page for AppleScript execute`, then `chromium-patches/export.sh` (writes `0033-…patch`) and delete `chromium-bridge/pending/`.
+4. `chromium-bridge/build-framework.sh` (ninja `openarc_framework`, header sync check, xcframework into `app/Vendor/`).
+5. Check: `OPENARC_ENGINE_TESTS=1 swift test --filter ChromiumEngineConformanceTests` (its B71 block then exercises strings, numbers, objects, promises, undefined/null and a thrown ReferenceError instead of accepting `.unsupported`), and the B70 `osascript` / self-test `execute` with the gate on. Optionally replace the run-time selector lookup in `ChromiumJavaScript.swift` by the direct call once every framework in use has the header.
 
 ## Open points for review
 

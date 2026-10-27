@@ -67,6 +67,10 @@ typedef NS_ERROR_ENUM(OACErrorDomain, OACErrorCode) {
     OACErrorInvalidArgument = 9,
     /// The request was already answered, or it was cancelled by the engine.
     OACErrorRequestFinished = 10,
+    /// A script run with `-[OACTab evaluateJavaScript:completionHandler:]` threw, its promise was
+    /// rejected, its value could not be serialized, or it timed out (plan B71).
+    /// `EngineError.javaScriptException`.
+    OACErrorJavaScriptException = 11,
 };
 
 /// Main-frame security level of the visible navigation entry, derived from Chromium's security

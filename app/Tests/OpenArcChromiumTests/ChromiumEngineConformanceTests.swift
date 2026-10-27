@@ -45,6 +45,32 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         let state = await tab.currentState()
         XCTAssertEqual(state.committedURL, first)
 
+        // Plan B71: evaluate JavaScript in the page ([06 §29.3]). A framework built before B71
+        // reports `.unsupported`; with it, strings come back as is, other values as JSON,
+        // undefined / null as empty text, and a throw as `.javaScriptException`.
+        do {
+            let title = try await tab.evaluateJavaScript("document.title")
+            XCTAssertEqual(title, "First")
+            let sum = try await tab.evaluateJavaScript("1 + 1")
+            XCTAssertEqual(sum, "2")
+            let object = try await tab.evaluateJavaScript("({a: [1, true]})")
+            XCTAssertEqual(object, #"{"a":[1,true]}"#)
+            let awaited = try await tab.evaluateJavaScript("Promise.resolve('later')")
+            XCTAssertEqual(awaited, "later")
+            let undefined = try await tab.evaluateJavaScript("void 0")
+            XCTAssertEqual(undefined, "")
+            let null = try await tab.evaluateJavaScript("null")
+            XCTAssertEqual(null, "")
+            do {
+                _ = try await tab.evaluateJavaScript("notDefinedAnywhere")
+                XCTFail("expected a JavaScript exception")
+            } catch EngineError.javaScriptException(let message) {
+                XCTAssertTrue(message.contains("notDefinedAnywhere"), message)
+            }
+        } catch EngineError.unsupported(let command) {
+            XCTAssertEqual(command, "evaluateJavaScript")
+        }
+
         // Navigation and back.
         let second = try XCTUnwrap(URL(string: "data:text/html,<title>Second</title>second"))
         try await tab.load(second)

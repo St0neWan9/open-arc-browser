@@ -406,16 +406,89 @@ final class ScriptingTests: XCTestCase {
         }
     }
 
-    /// Without an engine call to evaluate JavaScript the default runner reports that clearly.
-    func testDefaultEvaluatorIsUnavailable() async throws {
+    // MARK: execute through the engine (plan B71, [06 §29.3] observed command, result as text)
+
+    /// The page's live FakeTab, made live by a first `execute` (a tab without a page gets one).
+    private func liveFakeTab(_ windowID: UUID) async throws -> FakeTab {
+        _ = try await host.execute("void 0", onTab: f.today1, inWindow: windowID)
+        return try XCTUnwrap(controller.liveTab(for: f.today1) as? FakeTab)
+    }
+
+    /// The default runner is the engine's `evaluateJavaScript`; its text goes back unchanged.
+    func testExecuteReturnsTheEngineResult() async throws {
         let (_, windowID) = window()
         preferences.allowsJavaScriptFromAppleEvents = true
+        let tab = try await liveFakeTab(windowID)
+        tab.simulateJavaScriptOutcome(.value(json: #""Example Domain""#))
+        let title = try await host.execute("document.title", onTab: f.today1, inWindow: windowID)
+        XCTAssertEqual(title, "Example Domain", "strings come back without quotes")
+        tab.simulateJavaScriptOutcome(.value(json: "2"))
+        let sum = try await host.execute("1+1", onTab: f.today1, inWindow: windowID)
+        XCTAssertEqual(sum, "2")
+        tab.simulateJavaScriptOutcome(.value(json: #"{"a":[1,true]}"#))
+        let object = try await host.execute("({a:[1,true]})", onTab: f.today1, inWindow: windowID)
+        XCTAssertEqual(object, #"{"a":[1,true]}"#)
+        tab.simulateJavaScriptOutcome(.value(json: "null"))
+        let null = try await host.execute("null", onTab: f.today1, inWindow: windowID)
+        XCTAssertEqual(null, "")
+        let evaluated = tab.commands.filter { if case .evaluateJavaScript = $0 { true } else { false } }
+        XCTAssertEqual(evaluated.last, .evaluateJavaScript("null"))
+        XCTAssertEqual(evaluated.count, 5)
+    }
+
+    /// Gate off ([06 §29.4] inferred): the engine is never asked, even with a live page.
+    func testExecuteGateOffNeverReachesTheEngine() async throws {
+        let (_, windowID) = window()
+        preferences.allowsJavaScriptFromAppleEvents = true
+        let tab = try await liveFakeTab(windowID)
+        preferences.allowsJavaScriptFromAppleEvents = false
+        let before = tab.commands
+        do {
+            _ = try await host.execute("1+1", onTab: f.today1, inWindow: windowID)
+            XCTFail("execute ran with the gate off")
+        } catch {
+            XCTAssertEqual(error as? ScriptingFailure, .javaScriptNotAllowed)
+        }
+        XCTAssertEqual(tab.commands, before)
+    }
+
+    /// A script that throws reaches the script as an error carrying the page's exception text.
+    func testExecuteReportsThePageException() async throws {
+        let (_, windowID) = window()
+        preferences.allowsJavaScriptFromAppleEvents = true
+        let tab = try await liveFakeTab(windowID)
+        tab.simulateJavaScriptOutcome(.failure(.javaScriptException("ReferenceError: x is not defined")))
+        do {
+            _ = try await host.execute("x", onTab: f.today1, inWindow: windowID)
+            XCTFail("expected the exception")
+        } catch {
+            let failure = try XCTUnwrap(error as? ScriptingFailure)
+            XCTAssertEqual(failure, .javaScriptException("ReferenceError: x is not defined"))
+            XCTAssertEqual(failure.number, -10000)
+            XCTAssertTrue(failure.message.contains("ReferenceError: x is not defined"))
+        }
+    }
+
+    /// An engine build without the bridge call (a Chromium framework from before B71) says so.
+    func testExecuteOnAnEngineWithoutJavaScript() async throws {
+        let (_, windowID) = window()
+        preferences.allowsJavaScriptFromAppleEvents = true
+        let tab = try await liveFakeTab(windowID)
+        tab.simulateJavaScriptOutcome(.failure(.unsupported("evaluateJavaScript")))
         do {
             _ = try await host.execute("1+1", onTab: f.today1, inWindow: windowID)
             XCTFail("expected unavailable")
         } catch {
             XCTAssertEqual(error as? ScriptingFailure, .javaScriptUnavailable)
         }
+    }
+
+    func testEngineErrorMapping() {
+        XCTAssertEqual(ScriptingFailure.javaScript(EngineError.javaScriptException("boom")), .javaScriptException("boom"))
+        XCTAssertEqual(ScriptingFailure.javaScript(EngineError.unsupported("evaluateJavaScript")), .javaScriptUnavailable)
+        XCTAssertEqual(ScriptingFailure.javaScript(EngineError.tabClosed(EngineTabID(UUID()))).number, -1728)
+        XCTAssertEqual(ScriptingFailure.javaScript(ScriptingFailure.javaScriptNotAllowed), .javaScriptNotAllowed)
+        XCTAssertEqual(ScriptingFailure.javaScript(EngineError.invalidArgument).number, -10000)
     }
 
     /// The development-build self test runs only outside the release build and only when asked.
