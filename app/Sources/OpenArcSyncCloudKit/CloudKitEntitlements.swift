@@ -9,6 +9,8 @@ import Security
 public enum CloudKitEntitlements {
     static let containersKey = "com.apple.developer.icloud-container-identifiers"
     static let servicesKey = "com.apple.developer.icloud-services"
+    /// macOS name of the push entitlement (iOS uses `aps-environment`).
+    static let pushKey = "com.apple.developer.aps-environment"
 
     /// True when the process is signed with CloudKit enabled for `containerIdentifier`.
     public static func allowsContainer(_ containerIdentifier: String) -> Bool {
@@ -16,6 +18,19 @@ public enum CloudKitEntitlements {
         let containers = SecTaskCopyValueForEntitlement(task, containersKey as CFString, nil) as? [String]
         let services = SecTaskCopyValueForEntitlement(task, servicesKey as CFString, nil) as? [String]
         return allows(containerIdentifier, containers: containers, services: services)
+    }
+
+    /// True when the process may receive APNs pushes (B65), so CloudKit's silent notifications for
+    /// CKSyncEngine's database subscription reach the running app. Registering without it only
+    /// fails, so the app skips registration then.
+    public static func allowsPush() -> Bool {
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        return allowsPush(environment: SecTaskCopyValueForEntitlement(task, pushKey as CFString, nil) as? String)
+    }
+
+    /// The push decision on an already-read value: "production" or "development".
+    static func allowsPush(environment: String?) -> Bool {
+        environment == "production" || environment == "development"
     }
 
     /// The decision on already-read entitlement values (testable without a signed process).

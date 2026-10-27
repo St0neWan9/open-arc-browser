@@ -53,6 +53,12 @@
 #                    signing certificate, expiry, every added entitlement allowed). Without the
 #                    option the app has no iCloud entitlement and sync reports "not configured";
 #                    the ad-hoc build never gets it.
+#                    Push (plan B65): when the profile also allows com.apple.developer.aps-environment
+#                    (the App ID has Push Notifications), the app is signed with it, using the
+#                    profile's value (production for Developer ID), so CloudKit's silent pushes
+#                    reach the running app and CKSyncEngine fetches remote changes within seconds.
+#                    Without it the script warns and the app still builds: remote changes then
+#                    arrive at launch, on app activation (rate-limited) and on Sync Now.
 #
 # Steps: release build of the OpenArcApp product, assemble build/Open Arc.app
 # (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns,
@@ -85,6 +91,7 @@ sign_identity=""
 keychain=""
 keychain_password_file=""
 provisioning_profile=""
+aps_environment=""            # from the provisioning profile, when it allows push (plan B65)
 icloud_container="iCloud.org.openarc.browser"   # CloudKitSyncStore.Configuration default
 
 while [[ $# -gt 0 ]]; do
@@ -164,6 +171,16 @@ if [[ -n "$provisioning_profile" ]]; then
     # A single string or an array, depending on the profile type.
     profile_value :Entitlements:com.apple.developer.icloud-container-environment | grep -Eq '(^|[[:space:]])Production$' \
         || profile_fail "does not allow the Production CloudKit environment"
+    # plan B65: push is optional. macOS uses com.apple.developer.aps-environment (iOS: aps-environment).
+    aps_environment="$(profile_value :Entitlements:com.apple.developer.aps-environment)"
+    if [[ -n "$aps_environment" && "$aps_environment" != "production" && "$aps_environment" != "development" ]]; then
+        profile_fail "unexpected com.apple.developer.aps-environment value $aps_environment"
+    fi
+    if [[ -z "$aps_environment" ]]; then
+        echo "warning: provisioning profile has no com.apple.developer.aps-environment: no CloudKit pushes;" \
+             "remote changes arrive at launch, on activation and on Sync Now (enable Push Notifications" \
+             "on the App ID and regenerate the profile)" >&2
+    fi
     echo "provisioning profile: $(profile_value :Name) ($(profile_value :UUID)), expires $(plutil -extract ExpirationDate raw "$profile_plist")" >&2
     rm -f "$profile_plist"
 fi
@@ -388,6 +405,10 @@ if [[ -n "$provisioning_profile" ]]; then
     pb "Add :com.apple.developer.icloud-services:0 string CloudKit"
     # Developer ID apps may only use the Production CloudKit environment.
     pb "Add :com.apple.developer.icloud-container-environment string Production"
+    # plan B65: CloudKit's silent pushes (CKSyncEngine's database subscription) need APNs.
+    if [[ -n "$aps_environment" ]]; then
+        pb "Add :com.apple.developer.aps-environment string $aps_environment"
+    fi
 fi
 sign --entitlements "$app_entitlements" "$app"
 
@@ -430,6 +451,13 @@ if [[ -n "$sign_identity" ]]; then
         done
         cmp -s "$provisioning_profile" "$app/Contents/embedded.provisionprofile" \
             || { echo "embedded.provisionprofile differs from $provisioning_profile" >&2; exit 1; }
+        if [[ -n "$aps_environment" ]]; then
+            grep -q "<key>com.apple.developer.aps-environment</key>" <<<"$signed_entitlements" \
+                || { echo "missing entitlement com.apple.developer.aps-environment in $app" >&2; exit 1; }
+            echo "push: aps-environment $aps_environment" >&2
+        else
+            echo "push: none (profile has no aps-environment)" >&2
+        fi
         echo "iCloud: container $icloud_container (CloudKit, Production), profile embedded" >&2
     fi
 fi

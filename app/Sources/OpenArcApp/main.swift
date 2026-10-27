@@ -10,7 +10,9 @@ import OpenArcChromium
 // Executable entry point. Runs the shell with Chromium when the build has the OpenArcCore
 // xcframework (the default; `OPENARC_ENGINE=fake` selects FakeEngine for development), and keeps the workspace on disk (`WorkspaceStore`, overridable with `OPENARC_DATA_DIR`). Sync is
 // disabled unless `OPENARC_SYNC=cloudkit` is set (D5); without the iCloud entitlement (D4) the
-// CloudKit store then reports itself as not configured instead of starting. Updates use Sparkle
+// CloudKit store then reports itself as not configured instead of starting. With the push
+// entitlement (B65) the app registers for CloudKit's silent pushes once sync has started, and the
+// app delegate forwards them to the sync controller. Updates use Sparkle
 // (D7, `SparkleUpdateChecker`) once the Info.plist carries a real EdDSA public key. Crash reports
 // stay local (D8, decision Q8): Chromium's Crashpad writes them to `<app data dir>/Crash Reports`.
 
@@ -29,6 +31,11 @@ struct OpenArcApp: App {
             makeCloudKitStore: { CloudKitSyncStore() },
             makeChromiumEngine: OpenArcApp.chromiumEngineFactory
         )
+        // CloudKit pushes (B65): only a build signed with the push entitlement registers; the
+        // sync controller does it once the CloudKit store has started.
+        if CloudKitEntitlements.allowsPush() {
+            dependencies.registerForRemoteNotifications = { NSApplication.shared.registerForRemoteNotifications() }
+        }
         // Sparkle updates (D7) when the bundle is configured for them; see docs/release.md.
         dependencies.updateChecker = makeUpdateChecker()
         self.dependencies = dependencies

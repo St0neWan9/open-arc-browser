@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import OpenArcSyncAPI
 
 /// Runs the sync store for the app (plan D5): starts it at launch when "Sync Sidebar" is on,
@@ -14,6 +15,12 @@ import OpenArcSyncAPI
 /// for a full upload (persisted in `AppPreferences`), and the next successful start announces
 /// every record once. The backend merges each record under `ConflictPolicy`, so records the
 /// server already has cost an upload but change nothing.
+///
+/// Live updates (B65): while the store runs, a CloudKit push (forwarded by the app delegate as
+/// `remoteChangeNotification`) and the app becoming active (at most once per
+/// `SyncFetchThrottle.activationInterval`) fetch remote changes, so another device's edits show
+/// without a relaunch or Sync Now. The first successful start registers the app for remote
+/// notifications (`registerForRemoteNotifications`). Our own design; inferred.
 @MainActor
 public final class SidebarSyncController: ObservableObject {
     /// Latest status from `SyncStore.statusUpdates()`.
@@ -33,25 +40,52 @@ public final class SidebarSyncController: ObservableObject {
     public private(set) var isRunning = false
     /// Tail of the serial chain of store calls.
     private var tail: Task<Void, Never>?
+    /// Spaces out the fetches the app's activation asks for (B65).
+    private(set) var fetchThrottle: SyncFetchThrottle
+    /// The trigger of the automatic fetch waiting in the chain. Later requests join it; a push
+    /// upgrades a waiting activation fetch so the throttle cannot skip it.
+    private var queuedFetchTrigger: SyncFetchThrottle.Trigger?
+    /// Registers the app for remote notifications (CloudKit pushes). nil: never (tests, builds
+    /// without the push entitlement).
+    private let registerForRemoteNotifications: (@MainActor @Sendable () -> Void)?
+    private var didRegisterForRemoteNotifications = false
+    private var observers: SyncNotificationObservers?
 
     /// - Parameters:
     ///   - database: the on-disk workspace store. nil (tests, previews, a read-only store) never
     ///     starts the sync store.
     ///   - allRecordIDs: every record id of the workspace (`WorkspaceState.allRecordIDs`).
-    ///   - now: clock for the relative "Last synced" time.
+    ///   - now: clock for the relative "Last synced" time and the activation fetch spacing.
+    ///   - notificationCenter: where `NSApplication.didBecomeActiveNotification` and
+    ///     `remoteChangeNotification` are observed (tests pass their own).
+    ///   - registerForRemoteNotifications: called once, after the first successful start.
+    ///   - activationFetchInterval: minimum time between fetches on activation.
     public init(
         store: any SyncStore,
         database: (any SyncLocalDatabase)?,
         preferences: AppPreferences,
         allRecordIDs: @escaping @MainActor () -> [SyncRecordID],
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        notificationCenter: NotificationCenter = .default,
+        registerForRemoteNotifications: (@MainActor @Sendable () -> Void)? = nil,
+        activationFetchInterval: TimeInterval = SyncFetchThrottle.activationInterval
     ) {
         self.store = store
         self.database = database
         self.preferences = preferences
         self.allRecordIDs = allRecordIDs
         self.now = now
+        self.registerForRemoteNotifications = registerForRemoteNotifications
+        fetchThrottle = SyncFetchThrottle(minimumInterval: activationFetchInterval)
         status = .disabled
+        // Only a store that can run listens; `DisabledSyncStore` (incognito, no backend) never does.
+        if isBackendAvailable {
+            observers = SyncNotificationObservers(
+                center: notificationCenter,
+                onActivation: { [weak self] in self?.appDidBecomeActive() },
+                onRemoteChange: { [weak self] in self?.remoteChangeReceived() }
+            )
+        }
     }
 
     /// False with `DisabledSyncStore`: this build has no sync backend.
@@ -117,6 +151,7 @@ public final class SidebarSyncController: ObservableObject {
     public func syncNow() {
         perform {
             self.actionError = nil
+            self.fetchThrottle.noteFetch(at: self.now())
             do {
                 try await self.store.syncNow()
             } catch {
@@ -133,6 +168,50 @@ public final class SidebarSyncController: ObservableObject {
             self.actionError = nil
             await self.store.resetLocalSyncState()
             await self.store.enqueue(self.allRecordIDs().map(PendingChange.save))
+        }
+    }
+
+    // MARK: Live updates (B65)
+
+    /// Posted by the app delegate when a remote notification arrives. The app has no push source
+    /// of its own, so every remote notification is a CloudKit one (the database subscription
+    /// CKSyncEngine keeps).
+    public nonisolated static let remoteChangeNotification = Notification.Name("org.openarc.sync.remoteChange")
+
+    /// The app became active: fetch, unless the last fetch is younger than the throttle interval.
+    /// A pushed change can be delayed or dropped by APNs; this catches up when the user comes back.
+    public func appDidBecomeActive() {
+        requestAutomaticFetch(.activation)
+    }
+
+    /// A CloudKit push arrived: fetch now. CKSyncEngine also schedules its own fetch for the push;
+    /// a manual one runs at once instead of waiting for the engine's scheduler.
+    public func remoteChangeReceived() {
+        requestAutomaticFetch(.remoteNotification)
+    }
+
+    /// Queues one fetch (`SyncStore.syncNow`) on the store chain. Skipped while the store is not
+    /// running or has no usable account. Its errors are not shown as `actionError`: the store
+    /// reports them through its status and retries on its own.
+    private func requestAutomaticFetch(_ trigger: SyncFetchThrottle.Trigger) {
+        guard isEnabled else { return }
+        if let queued = queuedFetchTrigger {
+            if queued == .activation, trigger == .remoteNotification { queuedFetchTrigger = trigger }
+            return
+        }
+        queuedFetchTrigger = trigger
+        perform {
+            let trigger = self.queuedFetchTrigger ?? trigger
+            self.queuedFetchTrigger = nil
+            guard self.isRunning else { return }
+            let reference = self.now()
+            guard self.fetchThrottle.allows(trigger, at: reference) else { return }
+            switch await self.store.currentStatus().phase {
+            case .disabled, .unavailable: return
+            case .idle, .syncing, .failed: break
+            }
+            self.fetchThrottle.noteFetch(at: reference)
+            try? await self.store.syncNow()
         }
     }
 
@@ -166,6 +245,12 @@ public final class SidebarSyncController: ObservableObject {
             return
         }
         isRunning = true
+        // The engine fetches on its own when it starts: activation right after launch adds nothing.
+        fetchThrottle.noteFetch(at: now())
+        if !didRegisterForRemoteNotifications, let registerForRemoteNotifications {
+            didRegisterForRemoteNotifications = true
+            registerForRemoteNotifications()
+        }
         if preferences.needsFullSyncUpload {
             await store.enqueue(allRecordIDs().map(PendingChange.save))
             preferences.needsFullSyncUpload = false
@@ -183,6 +268,68 @@ public final class SidebarSyncController: ObservableObject {
     private static func describe(_ error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? String(describing: error)
     }
+}
+
+/// When an automatic fetch may run (B65). A push always fetches; the app's activation fetches only
+/// when the last fetch (start, push, activation or Sync Now) is at least `minimumInterval` old.
+/// Our own values; inferred.
+public struct SyncFetchThrottle: Hashable, Sendable {
+    public enum Trigger: Hashable, Sendable {
+        case activation
+        case remoteNotification
+    }
+
+    /// Default spacing of activation fetches. Our own value: often enough that switching back to
+    /// the app shows another device's edits, rare enough that ⌘-Tab does not hit CloudKit each time.
+    public static let activationInterval: TimeInterval = 60
+
+    public let minimumInterval: TimeInterval
+    public private(set) var lastFetch: Date?
+
+    public init(minimumInterval: TimeInterval = SyncFetchThrottle.activationInterval) {
+        self.minimumInterval = minimumInterval
+    }
+
+    public func allows(_ trigger: Trigger, at now: Date) -> Bool {
+        switch trigger {
+        case .remoteNotification:
+            return true
+        case .activation:
+            guard let lastFetch else { return true }
+            // A clock set back (now before the last fetch) must not block fetches for that long.
+            return now < lastFetch || now.timeIntervalSince(lastFetch) >= minimumInterval
+        }
+    }
+
+    public mutating func noteFetch(at now: Date) {
+        lastFetch = now
+    }
+}
+
+/// Observes app activation and forwarded remote notifications; removes the observers when released.
+private final class SyncNotificationObservers {
+    private let center: NotificationCenter
+    private let tokens: [NSObjectProtocol]
+
+    init(
+        center: NotificationCenter,
+        onActivation: @escaping @MainActor @Sendable () -> Void,
+        onRemoteChange: @escaping @MainActor @Sendable () -> Void
+    ) {
+        self.center = center
+        // AppKit posts didBecomeActive on the main thread; the app delegate posts the remote
+        // change from its main-thread callback.
+        tokens = [
+            center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in
+                MainActor.assumeIsolated { onActivation() }
+            },
+            center.addObserver(forName: SidebarSyncController.remoteChangeNotification, object: nil, queue: nil) { _ in
+                MainActor.assumeIsolated { onRemoteChange() }
+            },
+        ]
+    }
+
+    deinit { tokens.forEach(center.removeObserver) }
 }
 
 /// "Last synced: <time>" as a relative time. [03 §账号卡] observed the line; the time format was

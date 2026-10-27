@@ -38,3 +38,19 @@ final class CloudKitEntitlementTests: XCTestCase {
         XCTAssertEqual(stopped.phase, .disabled)
     }
 }
+
+/// B65: the app registers for CloudKit pushes only when signed with the push entitlement.
+final class PushEntitlementTests: XCTestCase {
+    func testPushDecision() {
+        XCTAssertTrue(CloudKitEntitlements.allowsPush(environment: "production"))
+        XCTAssertTrue(CloudKitEntitlements.allowsPush(environment: "development"))
+        XCTAssertFalse(CloudKitEntitlements.allowsPush(environment: nil))
+        XCTAssertFalse(CloudKitEntitlements.allowsPush(environment: "staging"))
+        XCTAssertEqual(CloudKitEntitlements.pushKey, "com.apple.developer.aps-environment")
+    }
+
+    /// The test runner has no push entitlement.
+    func testTestProcessHasNoPush() {
+        XCTAssertFalse(CloudKitEntitlements.allowsPush())
+    }
+}

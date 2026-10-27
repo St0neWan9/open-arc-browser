@@ -43,6 +43,11 @@ public struct AppDependencies: Sendable {
     /// Folders Library ▸ Media lists (B57). The default lists none, so tests and previews never
     /// look at the user's files; the app passes `LibraryMediaFolders.live()`.
     public var mediaFolders: LibraryMediaFolders
+    /// Registers the app for remote notifications, so CloudKit's silent pushes reach the running
+    /// app and the sync store fetches another device's changes at once (B65). Called once, after
+    /// the sync store first starts. nil (the default) never registers, so tests and previews never
+    /// talk to APNs; the app passes `NSApplication.registerForRemoteNotifications`.
+    public var registerForRemoteNotifications: (@MainActor @Sendable () -> Void)?
 
     public init(
         engine: any BrowserEngine,
