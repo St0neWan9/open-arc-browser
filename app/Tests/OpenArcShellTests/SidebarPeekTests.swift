@@ -7,7 +7,7 @@ import OpenArcDesign
 
 /// B34: hidden-sidebar peek. docs/arc-spec/06-flows.md §14, observed with real mouse events:
 /// hidden = no sidebar, no traffic lights, web panel with a ≈ 5 pt border; the pointer at the
-/// window's left edge (x 0–2) floats the sidebar out over the page (inset ≈ 5 pt, rounded,
+/// window's left edge (x = 0, 06 §26.2) floats the sidebar out over the page (inset ≈ 5 pt, rounded,
 /// shadowed, deeper fill, traffic lights back) without resizing the page; "Hide sidebar" reads
 /// "Lock sidebar" there and pins the sidebar back; leaving collapses it within ≈ 0.2 s.
 @MainActor
@@ -107,7 +107,7 @@ final class SidebarPeekTests: XCTestCase {
             isPinned: false, timing: SidebarPeekTiming(openDelay: 0.05, closeDelay: 0.1),
             now: { clock }, schedule: { pending.append(($0, $1)) }
         )
-        c.pointerMoved(to: CGPoint(x: 1, y: 500), windowSize: reference)
+        c.pointerMoved(to: CGPoint(x: 0, y: 500), windowSize: reference)
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending[0].0, 0.05, accuracy: 0.0001)
         clock = clock.addingTimeInterval(0.05)
@@ -177,7 +177,7 @@ final class SidebarPeekTests: XCTestCase {
         var clock = t0
         var pending: [(TimeInterval, @MainActor () -> Void)] = []
         let c = SidebarPeekController(isPinned: false, now: { clock }, schedule: { pending.append(($0, $1)) })
-        c.pointerMoved(to: CGPoint(x: 1, y: 500), windowSize: reference)
+        c.pointerMoved(to: CGPoint(x: 0, y: 500), windowSize: reference)
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending[0].0, 0.11, accuracy: 0.0001)
         clock = clock.addingTimeInterval(0.11)
@@ -193,18 +193,21 @@ final class SidebarPeekTests: XCTestCase {
     func testOverlayFrameAt1920x985() {
         let layout = SidebarPeekLayout(windowSize: reference)
         // [06 §14] observed: ≈ 5 pt from the top, bottom and left; width inferred.
-        XCTAssertEqual(layout.panelFrame, CGRect(x: 5, y: 5, width: 271, height: 975))
+        XCTAssertEqual(layout.panelFrame, CGRect(x: 5, y: 5, width: 276, height: 975))
         XCTAssertEqual(layout.panelFrame.minX, SidebarPeekTokens.panelInset)
         XCTAssertEqual(reference.height - layout.panelFrame.maxY, SidebarPeekTokens.panelInset)
-        // The sidebar inside keeps its window position, so the top bar stays on the traffic lights.
-        XCTAssertEqual(layout.sidebarSize, CGSize(width: 276, height: 980))
-        // Hot zone x 0–2. [06 §14] observed.
+        // The sidebar moves with the panel (06 §26.2): it fills the panel.
+        XCTAssertEqual(layout.sidebarSize, CGSize(width: 276, height: 975))
+        // Hot zone: x = 0 only. 06 §26.2 observed (x = 1–5 never opens).
         XCTAssertEqual(layout.region(of: CGPoint(x: 0, y: 500), presentation: .hidden), .edge)
-        XCTAssertEqual(layout.region(of: CGPoint(x: 2, y: 500), presentation: .hidden), .edge)
-        XCTAssertEqual(layout.region(of: CGPoint(x: 3, y: 500), presentation: .hidden), .outside)
+        XCTAssertEqual(layout.region(of: CGPoint(x: 0.5, y: 500), presentation: .hidden), .edge)
+        for x in [1.0, 2, 3, 5] {
+            XCTAssertEqual(layout.region(of: CGPoint(x: x, y: 500), presentation: .hidden), .outside, "x \(x)")
+        }
         XCTAssertEqual(layout.region(of: CGPoint(x: 200, y: 500), presentation: .hidden), .outside)
         XCTAssertEqual(layout.region(of: CGPoint(x: 200, y: 500), presentation: .peeking), .overlay)
-        XCTAssertEqual(layout.region(of: CGPoint(x: 280, y: 500), presentation: .peeking), .outside)
+        XCTAssertEqual(layout.region(of: CGPoint(x: 280, y: 500), presentation: .peeking), .overlay)
+        XCTAssertEqual(layout.region(of: CGPoint(x: 282, y: 500), presentation: .peeking), .outside)
     }
 
     func testPanelFillIsDeeperAndMoreSaturated() {
@@ -223,7 +226,7 @@ final class SidebarPeekTests: XCTestCase {
         let hidden = model.windowLayout(size: reference).webPanelFrame
         XCTAssertEqual(hidden, CGRect(x: 10, y: 10, width: 1900, height: 965))
         runTimersImmediately(model.sidebarPeek)
-        model.sidebarPeek.pointerMoved(to: CGPoint(x: 1, y: 500), windowSize: reference)
+        model.sidebarPeek.pointerMoved(to: CGPoint(x: 0, y: 500), windowSize: reference)
         XCTAssertEqual(model.sidebarPresentation, .peeking)
         XCTAssertTrue(model.showsSidebarPeek)
         XCTAssertEqual(model.windowLayout(size: reference).webPanelFrame, hidden)

@@ -20,14 +20,13 @@ struct SidebarPeekOverlay: View {
         let fill = SidebarPeekTokens.panelFill(for: sidebar.palette.windowBackground)
         let shape = RoundedRectangle(cornerRadius: SidebarPeekTokens.panelCornerRadius, style: .continuous)
         ZStack(alignment: .topLeading) {
-            // The sidebar keeps its window position (top bar next to the traffic lights); the
-            // panel clips its outer 5 pt.
+            // The sidebar moves with the panel by (5, 5), like the traffic lights the window
+            // chrome puts at `WindowButtonPlacement.peek`. [06 §26.2] observed. B54.
             SidebarView(viewModel: sidebar)
                 .environment(\.siteControlsModel, siteControls)
                 .environment(\.sidebarPresentation, .peeking)
                 .environment(\.sidebarFillOverride, fill)
                 .frame(width: layout.sidebarSize.width, height: layout.sidebarSize.height)
-                .offset(x: -panel.minX, y: -panel.minY)
         }
         .frame(width: panel.width, height: panel.height, alignment: .topLeading)
         .clipShape(shape)
@@ -42,11 +41,12 @@ struct SidebarPeekOverlay: View {
         .offset(x: panel.minX, y: panel.minY)
     }
 
-    /// Slides in from beyond the window's left edge (shadow included) and back out. Curve and
-    /// duration: `ShellMotion.sidebarPeekSlide` ([07 §11] unknown).
+    /// Slides in from beyond the window's left edge and back out, by the observed travel
+    /// (`collapsedOffset`, [07 §11] observed x −291 → 0), the same distance the traffic lights
+    /// move, so both stay together. Curve and duration: `ShellMotion.sidebarPeekSlide`
+    /// ([07 §11] unknown). B54.
     static func transition(windowSize: CGSize) -> AnyTransition {
-        let panel = SidebarPeekLayout(windowSize: windowSize).panelFrame
-        return .offset(x: -(panel.maxX + SidebarPeekTokens.shadowRadius * 2))
+        .offset(x: -SidebarPeekTokens.collapsedOffset)
     }
 }
 

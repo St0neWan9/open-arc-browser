@@ -7,8 +7,15 @@ import OpenArcDesign
 // spec does not pin down are labeled unknown / inferred.
 
 enum SidebarPeekTokens {
-    /// Width of the invisible hot zone along the window's left edge. [06 §14] observed (x ≈ 0–2 pt).
-    static let edgeHotZoneWidth: CGFloat = 2
+    /// Width of the invisible hot zone along the window's left edge: only the first column of
+    /// points (x = 0). [06 §26.2] observed with a real pointer: x = 0 opens, x = 1–5 never does
+    /// (6 runs); supersedes the earlier "x ≈ 0–2" reading of [06 §14]. B54.
+    static let edgeHotZoneWidth: CGFloat = 1
+
+    /// Distance the floating panel travels between its collapsed and open positions: the panel
+    /// view's x goes −291 → 0 [07 §11] observed, and the traffic lights inside it sit 291 left of
+    /// their open spot while collapsed (close x −274 vs 17) [06 §26.1, §26.2] observed. B54.
+    static let collapsedOffset: CGFloat = 291
 
     /// Inset of the floating panel from the window's top, bottom and left edges.
     /// [06 §14] observed (≈ 5 pt).
@@ -61,23 +68,24 @@ enum SidebarPeekTokens {
 struct SidebarPeekLayout: Equatable, Sendable {
     var windowSize: CGSize
 
-    /// The rounded panel: 5 pt from the top, bottom and left edges [06 §14] observed. Its right
-    /// edge is 5 pt inside the pinned sidebar's edge, so the 8 pt content insets leave 3 pt on
-    /// both sides of the URL box (inferred: the width was not measured).
+    /// The rounded panel: 5 pt from the top, bottom and left edges [06 §14] observed. The whole
+    /// sidebar moves with it by (5, 5): the traffic lights and the "Lock sidebar" button keep
+    /// their pinned positions relative to the panel (close (17, 21), sidebar button x 82)
+    /// [06 §26.2] observed, so the panel is the pinned sidebar's width (inferred: its right edge
+    /// was not measured). B54.
     var panelFrame: CGRect {
         let inset = SidebarPeekTokens.panelInset
-        let width = min(CGFloat(Metrics.Sidebar.width), windowSize.width) - inset
-        return CGRect(x: inset, y: inset, width: max(0, width), height: max(0, windowSize.height - 2 * inset))
+        let width = min(CGFloat(Metrics.Sidebar.width), max(0, windowSize.width - inset))
+        return CGRect(x: inset, y: inset, width: width, height: max(0, windowSize.height - 2 * inset))
     }
 
-    /// Size of the sidebar drawn inside the panel. Its origin stays at the window's top left, so
-    /// the top bar lines up with the traffic lights at their measured spot [07 §2] observed; the
-    /// panel clips the outer 5 pt. Its bottom follows the panel's (the dock ends at H − 5).
+    /// Size of the sidebar drawn inside the panel: the panel's own size, laid out from the
+    /// panel's top left like the pinned sidebar from the window's. [06 §26.2] observed. B54.
     var sidebarSize: CGSize {
-        CGSize(width: CGFloat(Metrics.Sidebar.width), height: max(0, windowSize.height - SidebarPeekTokens.panelInset))
+        CGSize(width: CGFloat(Metrics.Sidebar.width), height: panelFrame.height)
     }
 
-    /// The left-edge hot zone. [06 §14] observed (x 0–2 pt).
+    /// The left-edge hot zone: the x = 0 column. [06 §26.2] observed.
     var edgeZone: CGRect {
         CGRect(x: 0, y: 0, width: SidebarPeekTokens.edgeHotZoneWidth, height: windowSize.height)
     }
@@ -90,8 +98,8 @@ struct SidebarPeekLayout: Equatable, Sendable {
 
     /// The pointer region of a point in window coordinates (top-left origin).
     func region(of point: CGPoint, presentation: SidebarPresentation) -> SidebarPeekPointerRegion {
-        // Inclusive on the right: x 0–2 pt both count. [06 §14] observed.
-        if point.x >= edgeZone.minX, point.x <= edgeZone.maxX, point.y >= 0, point.y <= windowSize.height { return .edge }
+        // Exclusive on the right: x = 0 counts, x = 1 does not. [06 §26.2] observed.
+        if point.x >= edgeZone.minX, point.x < edgeZone.maxX, point.y >= 0, point.y <= windowSize.height { return .edge }
         if presentation == .peeking, keepOpenZone.contains(point) { return .overlay }
         return .outside
     }
