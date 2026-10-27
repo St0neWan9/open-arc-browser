@@ -6,7 +6,8 @@ import OpenArcDesign
 
 // Shell side of engine dialog requests (plan C7b / C12 / C13; chromium-bridge/SWIFT_PROTOCOL_CHANGES.md
 // §3). The engine raises JavaScript dialogs, HTTP auth, permission prompts, file choosers,
-// external-protocol prompts, password save prompts and autofill dropdowns per tab (`BrowserTab.dialogRequests()`); this queue holds them per
+// external-protocol prompts, password save prompts, autofill dropdowns and unresponsive-page
+// prompts (C22) per tab (`BrowserTab.dialogRequests()`); this queue holds them per
 // tab and the views draw the head of each queue (TabDialogViews.swift).
 //
 // Decisions without evidence (the spec records none of these dialogs; all inferred):
@@ -30,6 +31,7 @@ public enum DialogAnswer: Hashable, Sendable {
     case passwordSave(PasswordSaveReply)
     case autofillPopup(AutofillPopupReply)
     case extensionInstall(ExtensionInstallReply)
+    case unresponsivePage(UnresponsivePageReply)
 }
 
 /// Dialog requests of every live tab of one workspace controller, queued per engine tab.
@@ -108,6 +110,7 @@ public final class DialogCenter: ObservableObject {
         case (.passwordSave(let r), .passwordSave(let a)): sent = r.reply.send(a)
         case (.autofillPopup(let r), .autofillPopup(let a)): sent = r.reply.send(a)
         case (.extensionInstall(let r), .extensionInstall(let a)): sent = r.reply.send(a)
+        case (.unresponsivePage(let r), .unresponsivePage(let a)): sent = r.reply.send(a)
         default: return false
         }
         remove(requestID)
@@ -254,6 +257,16 @@ public struct DialogPresentation: Equatable, Sendable {
             fields = []
             checkbox = nil
             buttons = ["Cancel", "Add Extension"]
+        case .unresponsivePage:
+            // [00 §A] inferred (analysis): a "page unresponsive" dialog with wait or leave. Look and
+            // wording are ours (unknown). Tab-modal like the other sheets; Return waits, the
+            // destructive choice is never the default.
+            style = .sheet
+            title = "This page isn’t responding"
+            message = "\(site) has stopped responding. You can wait for it, or leave the page."
+            fields = []
+            checkbox = nil
+            buttons = ["Leave Page", "Wait"]
         case .autofillPopup:
             style = .dropdown
             title = ""
@@ -304,6 +317,8 @@ public struct DialogPresentation: Equatable, Sendable {
             return .autofillPopup(.dismiss)
         case .extensionInstall:
             return .extensionInstall(isDefaultButton ? .add : .cancel)
+        case .unresponsivePage:
+            return .unresponsivePage(isDefaultButton ? .wait : .leave)
         }
     }
 }

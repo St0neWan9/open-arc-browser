@@ -310,6 +310,7 @@ public enum FakeDialogAnswer: Hashable, Sendable {
     case passwordSave(PasswordSaveReply)
     case autofillPopup(AutofillPopupReply)
     case extensionInstall(ExtensionInstallReply)
+    case unresponsivePage(UnresponsivePageReply)
 }
 
 /// Per-site zoom levels, shared by every tab of one FakeEngine. Keyed by profile, off-the-record
@@ -361,6 +362,8 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private var capturePage = (width: 800, height: 600)
     private var answers: [UUID: FakeDialogAnswer] = [:]
     private var autofillCommandLog: [AutofillPopupCommand] = []
+    /// The open unresponsive-page prompt (C22), withdrawn by `simulatePageResponsive`.
+    private var unresponsivePromptID: UUID?
     /// Withdraws an outstanding dialog request (captures the reply weakly).
     private var outstandingDialogs: [UUID: @Sendable () -> Void] = [:]
     private var hasBeforeUnloadHandler = false
@@ -1091,6 +1094,37 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
 
     /// Commands the shell sent to autofill dropdowns, oldest first. For tests.
     public var autofillCommands: [AutofillPopupCommand] { lock.withLock { autofillCommandLog } }
+
+    /// The page stops responding (plan C22). Answering `.wait` leaves the page as it is (a later
+    /// `simulateUnresponsivePage` asks again, as the engine's restarted hang timer would);
+    /// `.leave` crashes the page's renderer (`.renderProcessGone`) and then goes back when the
+    /// history allows, like the Chromium engine. `simulatePageResponsive` withdraws the prompt.
+    @discardableResult
+    public func simulateUnresponsivePage() -> UUID {
+        let requestID = UUID()
+        let record = answerHandler(requestID) { FakeDialogAnswer.unresponsivePage($0) }
+        let handler: DialogReply<UnresponsivePageReply>.Handler = { [weak self] answer in
+            record(answer)
+            guard answer == .leave, let self else { return }
+            self.simulateCrash()
+            let canGoBack = self.lock.withLock { self.historyIndex > 0 }
+            if canGoBack { Task { try? await self.goBack() } }
+        }
+        let reply = DialogReply<UnresponsivePageReply>(default: .wait, handler: handler)
+        let request = UnresponsivePagePrompt(id: requestID, origin: currentOrigin(), reply: reply)
+        lock.withLock { unresponsivePromptID = requestID }
+        deliver(.unresponsivePage(request), withdraw: { [weak reply] in reply?.withdraw() })
+        return requestID
+    }
+
+    /// The stuck page answers again: the engine withdraws its unresponsive-page prompt (C22).
+    public func simulatePageResponsive() {
+        let pending: UUID? = lock.withLock {
+            defer { unresponsivePromptID = nil }
+            return unresponsivePromptID
+        }
+        if let pending { simulateDialogCancel(pending) }
+    }
 
     /// The engine withdraws an unanswered request (`TabEvent.dialogCancelled`).
     public func simulateDialogCancel(_ requestID: UUID) {

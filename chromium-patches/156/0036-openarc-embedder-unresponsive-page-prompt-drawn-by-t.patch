@@ -1,0 +1,358 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 27 Oct 2026 12:54:26 -0700
+Subject: [PATCH] openarc: embedder: unresponsive-page prompt drawn by the
+ shell
+
+Plan C22. Chrome shows its hung-page dialog from
+BrowserWebContentsDelegate::RendererUnresponsive, a Views dialog of a
+Browser window; Open Arc's tabs have none, so a page stuck in an endless
+script only froze. The tab's WebContentsDelegate now turns
+RendererUnresponsive into an OACUnresponsivePageRequest for the tab's
+dialog delegate (OACDialogDelegate.h):
+
+- -wait restarts content's hang timer (the default answer); if the page is
+  still stuck after another delay, a new request comes.
+- -leavePage stops the renderer process (RESULT_CODE_HUNG, as Chrome's
+  "Exit page" does) and, once the process is gone, goes back in a new
+  process when the history allows; otherwise the tab stays crashed.
+- RendererResponsive, a new main-frame document and the renderer going away
+  withdraw the request (-tab:didCancelDialogRequest:).
+- Hung <select> popups are ignored, as in Chrome.
+
+Without a dialog delegate the request waits, which is the old behavior.
+---
+ openarc/bridge/oac_dialog_requests.mm         | 73 +++++++++++++++-
+ openarc/bridge/oac_dialog_requests_internal.h | 11 +++
+ openarc/bridge/oac_tab.mm                     | 85 +++++++++++++++++++
+ .../public/OpenArcCore/OACDialogDelegate.h    | 29 ++++++-
+ 4 files changed, 196 insertions(+), 2 deletions(-)
+
+diff --git a/openarc/bridge/oac_dialog_requests.mm b/openarc/bridge/oac_dialog_requests.mm
+index a2cbaa7d8f17..9f777d16b61e 100644
+--- a/openarc/bridge/oac_dialog_requests.mm
++++ b/openarc/bridge/oac_dialog_requests.mm
+@@ -4,7 +4,7 @@
+ 
+ // The shell-drawn prompts of OACDialogDelegate.h other than JavaScript dialogs
+ // (plan C12): permission prompts, HTTP authentication, file choosers and
+-// external protocols. //chrome's controllers decide when to ask and what to
++// external protocols; the unresponsive-page prompt (plan C22). //chrome's controllers decide when to ask and what to
+ // remember; the classes here are their views, and each turns its prompt into
+ // an OACDialogRequest for the tab's dialog delegate.
+ 
+@@ -329,6 +329,59 @@ - (void)cancel {
+ 
+ @end
+ 
++@implementation OACUnresponsivePageRequest {
++  base::OnceClosure _wait;
++  base::OnceClosure _leave;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                       wait:(base::OnceClosure)wait
++                      leave:(base::OnceClosure)leave {
++  if ((self = [super initWithTab:tab origin:origin isFromSubframe:NO])) {
++    _wait = std::move(wait);
++    _leave = std::move(leave);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (void)wait {
++  if (![self markFinished]) {
++    return;
++  }
++  _leave.Reset();
++  if (_wait) {
++    std::move(_wait).Run();
++  }
++}
++
++- (void)leavePage {
++  if (![self markFinished]) {
++    return;
++  }
++  _wait.Reset();
++  if (_leave) {
++    std::move(_leave).Run();
++  }
++}
++
++- (void)cancel {
++  [self wait];
++}
++
++- (void)withdrawByEngine {
++  // The page answers again (or went away): nothing to run.
++  _wait.Reset();
++  _leave.Reset();
++  [super withdrawByEngine];
++}
++
++@end
++
+ // MARK: - Chromium views
+ 
+ namespace openarc {
+@@ -761,6 +814,24 @@ void InstallBridgeDialogHost() {
+   ExternalProtocolHandler::SetEmbedderDialogRunner(&RunExternalProtocolDialog);
+ }
+ 
++OACUnresponsivePageRequest* PresentUnresponsivePagePrompt(
++    OACTab* tab,
++    OACOrigin* origin,
++    base::OnceClosure wait,
++    base::OnceClosure leave) {
++  OACUnresponsivePageRequest* request =
++      [[OACUnresponsivePageRequest alloc] initWithTab:tab
++                                               origin:origin
++                                                 wait:std::move(wait)
++                                                leave:std::move(leave)];
++  OACPresentDialogRequest(
++      tab, request, @selector(tab:pageBecameUnresponsive:),
++      ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++        return [delegate tab:owner pageBecameUnresponsive:request];
++      });
++  return request;
++}
++
+ void RunShellFileChooser(OACTab* tab,
+                          content::RenderFrameHost* render_frame_host,
+                          scoped_refptr<content::FileSelectListener> listener,
+diff --git a/openarc/bridge/oac_dialog_requests_internal.h b/openarc/bridge/oac_dialog_requests_internal.h
+index 4f2316c6393a..c3fe2fbeb403 100644
+--- a/openarc/bridge/oac_dialog_requests_internal.h
++++ b/openarc/bridge/oac_dialog_requests_internal.h
+@@ -7,6 +7,7 @@
+ 
+ #import <OpenArcCore/OACDialogDelegate.h>
+ 
++#include "base/functional/callback.h"
+ #include "base/memory/scoped_refptr.h"
+ 
+ namespace blink::mojom {
+@@ -39,6 +40,16 @@ void RunShellFileChooser(OACTab* tab,
+                          scoped_refptr<content::FileSelectListener> listener,
+                          const blink::mojom::FileChooserParams& params);
+ 
++// Plan C22: an OACUnresponsivePageRequest for |tab|'s page, handed to the
++// tab's dialog delegate. |wait| runs when the user waits (also the default
++// answer), |leave| when they leave the page. Returns the request so the
++// caller can withdraw it (-withdrawByEngine) when the page answers again.
++OACUnresponsivePageRequest* PresentUnresponsivePagePrompt(
++    OACTab* tab,
++    OACOrigin* origin,
++    base::OnceClosure wait,
++    base::OnceClosure leave);
++
+ }  // namespace openarc
+ 
+ #endif  // OPENARC_BRIDGE_OAC_DIALOG_REQUESTS_INTERNAL_H_
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 207bfca34700..f9a75957d5e1 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -13,6 +13,7 @@
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/time/time.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -23,7 +24,10 @@
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/host_zoom_map.h"
+ #include "content/public/browser/keyboard_event_processing_result.h"
++#include "content/public/browser/render_process_host.h"
++#include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
++#include "content/public/common/result_codes.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/navigation_handle.h"
+@@ -184,6 +188,7 @@ - (void)webContentsDidRequestNewTab:(OACNewTabRequest*)request;
+   TabWebContentsBridge(const TabWebContentsBridge&) = delete;
+   TabWebContentsBridge& operator=(const TabWebContentsBridge&) = delete;
+   ~TabWebContentsBridge() override {
++    WithdrawUnresponsivePrompt();
+     if (favicon_driver_) {
+       favicon_driver_->RemoveObserver(this);
+     }
+@@ -215,6 +220,11 @@ void TitleWasSet(content::NavigationEntry* entry) override {
+     [tab_ webContentsDidChangeState];
+   }
+   void DidFinishNavigation(content::NavigationHandle* handle) override {
++    if (handle->IsInPrimaryMainFrame() && handle->HasCommitted() &&
++        !handle->IsSameDocument()) {
++      // A new page replaced the stuck one.
++      WithdrawUnresponsivePrompt();
++    }
+     [tab_ webContentsDidFinishNavigation:handle];
+   }
+   void OnAudioStateChanged(bool audible) override {
+@@ -222,7 +232,23 @@ void OnAudioStateChanged(bool audible) override {
+   }
+   void PrimaryMainFrameRenderProcessGone(
+       base::TerminationStatus status) override {
++    WithdrawUnresponsivePrompt();
+     [tab_ webContentsRenderProcessGone:status];
++    if (go_back_after_process_gone_) {
++      // Plan C22: the user left a stuck page. Its process is gone now, so the
++      // previous page loads in a new one (going back earlier could have
++      // reused the stuck process for a same-site entry).
++      go_back_after_process_gone_ = false;
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(
++                         [](base::WeakPtr<content::WebContents> contents) {
++                           if (contents &&
++                               contents->GetController().CanGoBack()) {
++                             contents->GetController().GoBack();
++                           }
++                         },
++                         web_contents()->GetWeakPtr()));
++    }
+   }
+   void DidChangeThemeColor() override { [tab_ webContentsDidChangeThemeColor]; }
+   void DidToggleFullscreenModeForTab(bool entered_fullscreen,
+@@ -283,6 +309,54 @@ void FindReply(content::WebContents* web_contents,
+     return [tab_ javaScriptDialogManager];
+   }
+ 
++  // Plan C22: the page stopped answering input. Chrome shows its hung-page
++  // dialog here (BrowserWebContentsDelegate); content only reports hangs of
++  // visible tabs. Waiting restarts the hang timer; leaving stops the renderer
++  // (as Chrome's "Exit page" does) and then goes back.
++  void RendererUnresponsive(
++      content::WebContents* source,
++      content::RenderWidgetHost* render_widget_host,
++      base::RepeatingClosure hang_monitor_restarter) override {
++    content::RenderWidgetHostView* view = render_widget_host->GetView();
++    // A hung <select> popup would lose focus to the prompt and close.
++    if (!view || view->IsHTMLFormPopup()) {
++      return;
++    }
++    OACTab* tab = tab_;
++    if (!tab || tab.isClosed) {
++      return;
++    }
++    OACUnresponsivePageRequest* pending = unresponsive_request_;
++    if (pending && !pending.isFinished) {
++      return;  // Already asking.
++    }
++    base::WeakPtr<TabWebContentsBridge> weak_this = weak_factory_.GetWeakPtr();
++    unresponsive_request_ = openarc::PresentUnresponsivePagePrompt(
++        tab,
++        OACOriginFromURLOrigin(
++            source->GetPrimaryMainFrame()->GetLastCommittedOrigin()),
++        base::BindOnce(hang_monitor_restarter),
++        base::BindOnce(
++            [](base::WeakPtr<TabWebContentsBridge> self,
++               content::ChildProcessId process_id) {
++              content::RenderProcessHost* process =
++                  content::RenderProcessHost::FromID(process_id);
++              if (!process) {
++                return;
++              }
++              if (self) {
++                self->go_back_after_process_gone_ = true;
++              }
++              process->Shutdown(content::RESULT_CODE_HUNG);
++            },
++            weak_this, render_widget_host->GetProcess()->GetID()));
++  }
++  void RendererResponsive(
++      content::WebContents* source,
++      content::RenderWidgetHost* render_widget_host) override {
++    WithdrawUnresponsivePrompt();
++  }
++
+   // <input type=file> (plan C12): an OACFileChooserRequest. Chrome's
+   // FileSelectHelper would show its own panel anchored to a Browser window.
+   void RunFileChooser(content::RenderFrameHost* render_frame_host,
+@@ -421,6 +495,17 @@ bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
+   __weak OACTab* tab_;
+   raw_ptr<favicon::ContentFaviconDriver> favicon_driver_ = nullptr;
+   std::unique_ptr<ExternalProtocolObserver> external_protocol_observer_;
++
++  // Plan C22.
++  void WithdrawUnresponsivePrompt() {
++    OACUnresponsivePageRequest* pending = unresponsive_request_;
++    unresponsive_request_ = nil;
++    [pending withdrawByEngine];
++  }
++  // The open unresponsive-page prompt; the shell's reference keeps it alive.
++  __weak OACUnresponsivePageRequest* unresponsive_request_ = nil;
++  bool go_back_after_process_gone_ = false;
++  base::WeakPtrFactory<TabWebContentsBridge> weak_factory_{this};
+ };
+ 
+ }  // namespace openarc
+diff --git a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+index 80d5b131d277..0f6854b34b78 100644
+--- a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+@@ -22,7 +22,8 @@
+ //   `isFinished` turns YES; the shell removes its view.
+ // - Dropping the last reference to an unanswered request answers it with its default (alert:
+ //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
+-//   file chooser: cancel, external protocol: block), so a page never hangs.
++//   file chooser: cancel, external protocol: block, unresponsive page: wait), so a page never
++//   hangs.
+ // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
+ //   right away.
+ //
+@@ -35,6 +36,9 @@
+ // `WebContentsDelegate::RunFileChooser` (`<input type=file>`; the File System Access pickers keep
+ // Chromium's native macOS panel); external protocols from `ExternalProtocolHandler` after its
+ // policy decided to ask.
++//
++// Added in F1 step 2: the unresponsive-page prompt (plan C22) from the tab's
++// `WebContentsDelegate::RendererUnresponsive`.
+ 
+ #import <OpenArcCore/OACDefines.h>
+ #import <OpenArcCore/OACTab.h>
+@@ -202,6 +206,26 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ - (void)openRememberingForOrigin:(BOOL)rememberForOrigin NS_SWIFT_NAME(open(rememberingForOrigin:));
+ @end
+ 
++// MARK: - Unresponsive page (plan C22)
++
++/// The page's renderer stopped answering input (an endless script, for example) for the engine's
++/// hang delay (Chromium: 15 s), while the tab was visible. The shell offers to wait or to leave the
++/// page. The engine withdraws the request when the page answers again, navigates, or its renderer
++/// goes away. Waiting restarts the engine's hang timer: if the page is still stuck after another
++/// delay, a new request comes.
++///
++/// Default answer (dropped or cancelled): wait.
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACUnresponsivePageRequest : OACDialogRequest
++/// Keep waiting for the page.
++- (void)wait;
++/// Leaves the page: stops its renderer process, then goes back to the previous page of the tab's
++/// history in a new process if there is one. Every tab that shared that process gets
++/// `-tab:renderProcessDidTerminate:` (`OACRenderProcessTerminationKilled`); a tab with nothing
++/// to go back to stays crashed until it is reloaded.
++- (void)leavePage;
++@end
++
+ // MARK: - Delegate
+ 
+ @class OACPasswordSavePrompt;
+@@ -226,6 +250,9 @@ NS_SWIFT_UI_ACTOR
+ /// The dropdown's rows or highlighted row changed (the user typed, or pressed ↑ / ↓).
+ - (void)tab:(OACTab *)tab didUpdateAutofillPopup:(OACAutofillPopup *)popup
+     NS_SWIFT_NAME(tab(_:didUpdateAutofillPopup:));
++/// The page stopped responding (plan C22).
++- (BOOL)tab:(OACTab *)tab pageBecameUnresponsive:(OACUnresponsivePageRequest *)request
++    NS_SWIFT_NAME(tab(_:pageBecameUnresponsive:));
+ 
+ /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
+ - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;

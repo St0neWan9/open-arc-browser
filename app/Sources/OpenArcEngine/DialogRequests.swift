@@ -15,7 +15,9 @@ import os
 //   `TabEvent.dialogCancelled(id)` and the reply ignores answers from then on.
 // The look of every dialog is not in docs/arc-spec (unknown); the shell designs them.
 // Plan C13 adds the password manager's save prompt and the autofill dropdown ([00 §A] observed:
-// "inherited from the engine; prompts drawn by the shell, style not captured").
+// "inherited from the engine; prompts drawn by the shell, style not captured"). F1 step 2 adds the
+// unresponsive-page prompt (C22, [00 §A] inferred (analysis): "Page unresponsive" dialog for a hung
+// page, wait or leave).
 
 /// Single-shot answer channel of one dialog request. Thread-safe; equal by identity.
 public final class DialogReply<Answer: Sendable>: Sendable, Hashable {
@@ -530,6 +532,33 @@ public enum ExtensionInstallReply: Hashable, Sendable {
     case cancel
 }
 
+// MARK: - Unresponsive page (plan C22)
+
+/// The page stopped answering input (an endless script) for the engine's hang delay while it was
+/// shown. [00 §A] inferred (analysis): the shell draws it and offers to wait or to leave the page.
+/// The engine withdraws it when the page answers again, navigates or its renderer goes away.
+/// Bridge: `OACUnresponsivePageRequest`.
+public struct UnresponsivePagePrompt: Identifiable, Hashable, Sendable {
+    public let id: UUID
+    public let origin: SiteOrigin?
+    public let reply: DialogReply<UnresponsivePageReply>
+
+    public init(id: UUID, origin: SiteOrigin?, reply: DialogReply<UnresponsivePageReply>) {
+        self.id = id
+        self.origin = origin
+        self.reply = reply
+    }
+}
+
+/// Answer to an unresponsive-page prompt. Default: `.wait`.
+public enum UnresponsivePageReply: Hashable, Sendable {
+    /// Keep waiting; the engine asks again if the page is still stuck after another delay.
+    case wait
+    /// Stop the page's renderer and go back to the previous page (a tab with no previous page
+    /// shows the crashed-page view; other tabs that shared the renderer crash too).
+    case leave
+}
+
 // MARK: - Request
 
 /// One dialog request of a tab (`BrowserTab.dialogRequests()`).
@@ -545,6 +574,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
     case autofillPopup(AutofillPopup)
     /// Extension install confirmation (plan C14).
     case extensionInstall(ExtensionInstallPrompt)
+    /// The page stopped responding (plan C22).
+    case unresponsivePage(UnresponsivePagePrompt)
 
     public var id: UUID {
         switch self {
@@ -556,6 +587,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .passwordSave(let r): r.id
         case .autofillPopup(let r): r.id
         case .extensionInstall(let r): r.id
+        case .unresponsivePage(let r): r.id
         }
     }
 
@@ -569,6 +601,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .passwordSave(let r): r.origin
         case .autofillPopup(let r): r.origin
         case .extensionInstall(let r): r.origin
+        case .unresponsivePage(let r): r.origin
         }
     }
 
@@ -583,6 +616,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .passwordSave(let r): r.reply.isFinished
         case .autofillPopup(let r): r.reply.isFinished
         case .extensionInstall(let r): r.reply.isFinished
+        case .unresponsivePage(let r): r.reply.isFinished
         }
     }
 
@@ -598,6 +632,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .passwordSave(let r): r.reply.sendDefault()
         case .autofillPopup(let r): r.reply.sendDefault()
         case .extensionInstall(let r): r.reply.sendDefault()
+        case .unresponsivePage(let r): r.reply.sendDefault()
         }
     }
 
@@ -612,6 +647,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .passwordSave(let r): r.reply.withdraw()
         case .autofillPopup(let r): r.reply.withdraw()
         case .extensionInstall(let r): r.reply.withdraw()
+        case .unresponsivePage(let r): r.reply.withdraw()
         }
     }
 }
