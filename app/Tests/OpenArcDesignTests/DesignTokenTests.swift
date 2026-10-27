@@ -34,6 +34,23 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(Metrics.WebPanel.cornerRadius, 6, "[07 §10] corrected from 7")
     }
 
+    /// [07 §4, §7] observed: ≈ 1 pt soft shadow under the selected row, pressed shade ≈ 1 % darker;
+    /// [07 §12] observed: favorites hover card 240 × 64, radius 11, ≈ #F9F9FB, 0.5 pt line, its left
+    /// edge at x 264 for a block ending at 268 (plan B89).
+    func testSidebarSurfaceTokens_07_4_7_12() {
+        let s = Metrics.Sidebar.self
+        XCTAssertLessThanOrEqual(s.selectedRowShadow.radius + s.selectedRowShadow.offsetY, 2)
+        XCTAssertEqual(s.pressedRowShade, 0.99)
+        let t = Metrics.FavoritesTooltip.self
+        XCTAssertEqual(t.size, Size2D(width: 240, height: 64))
+        XCTAssertEqual(t.cornerRadius, 11)
+        XCTAssertEqual(t.fillRGB, 0xF9F9FB)
+        XCTAssertEqual(t.hairlineWidth, 0.5)
+        XCTAssertEqual(268 + t.leadingFromBlockTrailing, 264)
+        // [04 §sidebar] observed "thin": the knob stays a few points wide (size unknown).
+        XCTAssertLessThanOrEqual(Metrics.SidebarScroller.knobWidth, 6)
+    }
+
     /// [07 §2] observed: traffic light centers (20, 24), (43, 24), (66, 24); toolbar buttons are
     /// 32 × 32 hit areas at x 77 / 170 / 204 / 238, center y 23.5 (y 7.5–39.5).
     func testWindowChromeMatchesE11() {

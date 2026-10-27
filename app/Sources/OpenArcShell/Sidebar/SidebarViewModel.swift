@@ -88,6 +88,11 @@ public final class SidebarViewModel: ObservableObject {
     @Published public internal(set) var isClearArchiveConfirmationPresented = false
     /// Tab whose hover card is showing.
     @Published private(set) var hoverCardTabID: UUID?
+    /// Selected tab or split-group row (layout id) the mouse is holding down: its fill shows ≈ 1 %
+    /// darker until the button goes up or a drag starts. [07 §7] observed.
+    @Published private(set) var pressedItemID: UUID?
+    /// Favorite whose hover card shows (right of its block). [07 §12] observed.
+    @Published private(set) var favoriteTooltipTabID: UUID?
     @Published private(set) var draggingItem: SidebarDragItem?
     /// A link from another app is being dragged over the sidebar.
     @Published private(set) var isDraggingExternalURL = false
@@ -169,6 +174,10 @@ public final class SidebarViewModel: ObservableObject {
     private var now: () -> Date { controller.now }
     private var makeID: () -> UUID { controller.makeID }
     private(set) var hoverTask: Task<Void, Never>?
+    private var favoriteTooltipTask: Task<Void, Never>?
+    private var hoveredFavoriteID: UUID?
+    /// Seconds before the favorites hover card shows. inferred (`Metrics.FavoritesTooltip.delay`).
+    var favoriteTooltipDelay: Double = Metrics.FavoritesTooltip.delay
     private var hoveredTabID: UUID?
     /// Last selected tab per space, restored when switching back. inferred.
     private var lastSelectedTab: [UUID: UUID] = [:]
@@ -243,6 +252,7 @@ public final class SidebarViewModel: ObservableObject {
     /// the scheduler).
     public func stop() {
         hoverTask?.cancel()
+        favoriteTooltipTask?.cancel()
         quickListTask?.cancel()
         endDrag()
         controllerChanges = nil
@@ -1059,6 +1069,28 @@ public final class SidebarViewModel: ObservableObject {
         hoverCardTabID = nil
     }
 
+    /// The pointer entered a favorite block: its hover card shows after the delay, unless a drag
+    /// or a rename is under way. [07 §12] observed card; [06 §12] observed that hovering shows it.
+    func favoriteHoverBegan(_ id: UUID) {
+        favoriteTooltipTask?.cancel()
+        hoveredFavoriteID = id
+        favoriteTooltipTabID = nil
+        guard draggingItem == nil, renamingItemID == nil, workspace.tabs[id] != nil else { return }
+        let delay = favoriteTooltipDelay
+        favoriteTooltipTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.hoveredFavoriteID == id, self.draggingItem == nil else { return }
+            self.favoriteTooltipTabID = id
+        }
+    }
+
+    func favoriteHoverEnded(_ id: UUID) {
+        guard hoveredFavoriteID == id else { return }
+        hoveredFavoriteID = nil
+        favoriteTooltipTask?.cancel()
+        favoriteTooltipTabID = nil
+    }
+
     // MARK: - Drag and drop
 
     /// Starts an in-app drag. The AppKit drag source (`SidebarDragSourceView`) reports the end of
@@ -1073,6 +1105,9 @@ public final class SidebarViewModel: ObservableObject {
         draggingItem = item
         hoverTask?.cancel()
         hoverCardTabID = nil
+        favoriteTooltipTask?.cancel()
+        favoriteTooltipTabID = nil
+        pressedItemID = nil
         guard let isSessionActive else { return }
         let interval = dragWatchInterval
         dragWatchTask = Task { [weak self] in
@@ -1107,6 +1142,23 @@ public final class SidebarViewModel: ObservableObject {
         case .folder:
             break
         }
+    }
+
+    /// The mouse went down on `item`. Only a row that was already selected shows the pressed
+    /// shade ([07 §7] observed: "已选中行按住时"); a press on another row just selects it.
+    func pressBegan(_ item: SidebarDragItem) {
+        let wasSelected: Bool
+        switch item {
+        case .tab(let id): wasSelected = selectedTabID == id
+        case .splitGroup(let id): wasSelected = snapshot.splitGroup(layoutID: id).map(isGroupSelected) ?? false
+        case .folder: wasSelected = false
+        }
+        pressedItemID = wasSelected ? item.id : nil
+    }
+
+    /// The mouse button went up, or the press became a drag.
+    func pressEnded() {
+        if pressedItemID != nil { pressedItemID = nil }
     }
 
     /// Whether a press on `item` may turn into a drag (not while it is being renamed: the press

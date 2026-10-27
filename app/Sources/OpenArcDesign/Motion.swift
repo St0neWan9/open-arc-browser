@@ -105,6 +105,10 @@ public enum Motion {
     /// no frame animation.
     public static let hoverCard = MotionToken(.instant, .unknown)
 
+    /// The sidebar list's thin scroller fading in / out as the pointer enters / leaves the
+    /// sidebar. [04 §sidebar] observed "visible on hover"; the fade is unknown (B89).
+    public static let sidebarScrollerFade = MotionToken(.easeInOut(duration: 0.2), .unknown)
+
     /// Selection highlight moving between rows. [07 §11] unknown (layer-drawn); no animation.
     public static let selectionHighlight = MotionToken(.instant, .unknown)
 

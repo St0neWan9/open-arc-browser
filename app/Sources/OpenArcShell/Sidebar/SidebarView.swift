@@ -208,10 +208,10 @@ public struct SidebarView: View {
             } label: {
                 Image(systemName: direction == .down ? "arrow.down" : "arrow.up")
                     .font(.system(size: SidebarSelectionJump.glyphSize, weight: .semibold))
-                    .foregroundStyle(Color.black.opacity(0.7))
+                    .foregroundStyle(Color.black.opacity(SidebarLocalTokens.jumpButtonInkOpacity))
                     .frame(width: size, height: size)
                     .background(Circle().fill(Color.white))
-                    .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+                    .panelShadow(SidebarLocalTokens.jumpButtonShadow)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -268,17 +268,40 @@ struct SidebarListView: View {
     let isSidebarHovered: Bool
     let layout: SidebarLayout
     @State private var edges = SidebarScrollEdges()
+    @State private var contentFrame: CGRect = .zero
     @Environment(\.windowSurface) private var surface
 
     var body: some View {
         GeometryReader { viewport in
             list
                 .onPreferenceChange(SidebarListContentFrameKey.self) { frame in
+                    contentFrame = frame
                     edges = SidebarScrollEdges(contentFrame: frame, viewportHeight: viewport.size.height)
                 }
                 .overlay(alignment: .top) { edgeLine(visible: edges.top) }
                 .overlay(alignment: .bottom) { edgeLine(visible: edges.bottom) }
+                .overlay(alignment: .topLeading) { scroller(viewport: viewport.size) }
         }
+    }
+
+    /// Thin overlay knob at the list's right edge, shown while the pointer is over the sidebar
+    /// and the list overflows. [04 §sidebar] observed ("thin, visible on hover"); the knob's size,
+    /// ink and fade are placeholders (`Metrics.SidebarScroller`, `Motion.sidebarScrollerFade`, unknown). It only indicates the
+    /// position: scrolling stays with the wheel / trackpad.
+    @ViewBuilder
+    private func scroller(viewport: CGSize) -> some View {
+        let knob = SidebarScrollerGeometry.knobFrame(contentFrame: contentFrame, viewport: viewport)
+        let palette = viewModel.palette
+        let ink: Color = palette.isDark || palette.usesLightInk ? .white : .black
+        let visible = isSidebarHovered && knob != nil
+        Capsule(style: .continuous)
+            .fill(ink.opacity(Metrics.SidebarScroller.knobOpacity))
+            .frame(width: knob?.width ?? 0, height: knob?.height ?? 0)
+            .offset(x: knob?.minX ?? 0, y: knob?.minY ?? 0)
+            .opacity(visible ? 1 : 0)
+            .animation(ShellMotion.sidebarScrollerFade, value: visible)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     /// Full-width 1 pt line at the list's top or bottom edge while rows are scrolled under it.
@@ -320,6 +343,9 @@ struct SidebarListView: View {
             // Gives the view model a handle on the backing scroll view for drag auto-scroll (B20).
             .background(SidebarListScrollProbe(viewModel: viewModel))
         }
+        // The system scroller is replaced by the thin hover-revealed knob drawn in `scroller`
+        // ([04 §sidebar] observed); AppKit's overlay scroller follows the system setting and
+        // shows while scrolling, not while hovering.
         .scrollIndicators(.never)
         .coordinateSpace(name: SidebarListContentFrameKey.viewportSpace)
         .sidebarDropRegion(.list)
@@ -347,6 +373,26 @@ struct SidebarListContentFrameKey: PreferenceKey {
     static let viewportSpace = "openarc.sidebar.listViewport"
     static let defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+/// Pure geometry of the list's overlay scroller. [04 §sidebar] observed (thin, on hover); the
+/// sizes come from `Metrics.SidebarScroller` (unknown placeholders).
+enum SidebarScrollerGeometry {
+    /// The knob in the viewport's space, or nil while the content fits (nothing to scroll).
+    /// `contentFrame` is the content in the viewport's space (its minY is minus the offset).
+    static func knobFrame(contentFrame: CGRect, viewport: CGSize) -> CGRect? {
+        let m = Metrics.SidebarScroller.self
+        let contentHeight = contentFrame.height, viewportHeight = viewport.height
+        guard viewportHeight > 0, contentHeight > viewportHeight + 0.5 else { return nil }
+        let inset = CGFloat(m.trackInset)
+        let track = max(0, viewportHeight - 2 * inset)
+        let length = min(track, max(CGFloat(m.minKnobLength), track * viewportHeight / contentHeight))
+        let maxOffset = contentHeight - viewportHeight
+        let progress = min(max(-contentFrame.minY / maxOffset, 0), 1)
+        let width = CGFloat(m.knobWidth)
+        return CGRect(x: viewport.width - CGFloat(m.trailingInset) - width,
+                      y: inset + (track - length) * progress, width: width, height: length)
+    }
 }
 
 /// Which scroll-edge lines show: top while the content is scrolled up under the list's top,
@@ -436,10 +482,10 @@ final class SidebarNSScrollHook: SidebarListScrolling {
 enum SidebarSelectionJump {
     enum Direction: Equatable { case up, down }
 
-    static let buttonSize: CGFloat = 28
-    static let glyphSize: CGFloat = 12
+    static var buttonSize: CGFloat { SidebarLocalTokens.jumpButtonSize }
+    static var glyphSize: CGFloat { SidebarLocalTokens.jumpButtonGlyphSize }
     /// Gap between the button and the list edge.
-    static let edgeInset: CGFloat = 8
+    static var edgeInset: CGFloat { SidebarLocalTokens.jumpButtonEdgeInset }
 
     /// Which way the selected row lies, or nil while any of its fill is visible (or there is no
     /// row, or no list). `rowFrame` is the 41 pt row and `viewport` the visible list, both in the

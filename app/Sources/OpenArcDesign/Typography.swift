@@ -64,6 +64,15 @@ public enum Typography {
     /// on the 13 pt chrome scale.
     public static let hoverCardTitle = TextStyle(size: 13, weight: .medium)
     public static let hoverCardHint = TextStyle(size: 11, weight: .regular, opacity: 0.5)
+    /// Favorites empty-state card: bold title, two secondary lines, the ✕ glyph. [06 §21.2]
+    /// observed text; sizes and opacities inferred.
+    public static let favoritesEmptyTitle = TextStyle(size: 13, weight: .bold)
+    public static let favoritesEmptyDetail = TextStyle(size: 11, weight: .regular, opacity: 0.55)
+    public static let favoritesEmptyDismiss = TextStyle(size: 9, weight: .semibold, opacity: 0.5)
+    /// Favorites hover card ([07 §12] observed card): the title, then the unread tip when the
+    /// badge is on ([06 §12] observed text). Sizes reuse the hover card's (inferred).
+    public static let favoritesTooltipTitle = TextStyle(size: 13, weight: .medium)
+    public static let favoritesTooltipDetail = TextStyle(size: 11, weight: .regular, opacity: 0.6)
 
     // MARK: Command bar
 

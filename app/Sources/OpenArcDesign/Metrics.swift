@@ -172,6 +172,12 @@ public enum Metrics {
         public static let selectedRowVerticalInset: Double = 2
         /// Selected background corner radius. [07 §4] inferred (≈ 11).
         public static let selectedRowCornerRadius: Double = 11
+        /// Soft shadow under the selected row's fill. [07 §4, §7] observed: "about 1 pt, the edge
+        /// slightly blurred"; the SwiftUI values are our fit to that extent (inferred).
+        public static let selectedRowShadow = PanelShadow(opacity: 0.12, radius: 1, offsetY: 0.5)
+        /// A held (pressed) selected row: its fill only ≈ 1 % darker (#F0EDF0 → #EEECED), no
+        /// scale. [07 §7] observed (PX). Multiplier for the fill's channels.
+        public static let pressedRowShade: Double = 0.99
         /// Row icon left edge (window x). [07 §4] observed (x 17–35).
         public static let rowIconLeading: Double = 17
         /// Row icon (favicon) edge. [07 §4, §9] observed (18 × 18).
@@ -233,6 +239,26 @@ public enum Metrics {
         public static let usesSystemFont = true
         /// Row title font size. [07 §3, §10] observed (14). Same as `Typography.tabRowTitle`.
         public static var rowTitleFontSize: Double { Typography.tabRowTitle.size }
+    }
+
+    // MARK: Sidebar scroller
+
+    /// The list's scroller: thin, and clearly visible only while the pointer is over the sidebar.
+    /// [04 §sidebar] observed ("细滚动条,悬停才明显"); its size, ink and fade are not measured.
+    /// The track spans the list (y 181 to the dock top), as in the reference's knob readout
+    /// (B33: knob y 482–842 of the 181–934 track, observed).
+    public enum SidebarScroller {
+        /// Knob width. unknown (thin overlay knob; 5 pt placeholder).
+        public static let knobWidth: Double = 5
+        /// Gap between the knob and the sidebar's right edge. unknown.
+        public static let trailingInset: Double = 2
+        /// Gap between the knob and the list's top / bottom edges. unknown.
+        public static let trackInset: Double = 2
+        /// Shortest knob. unknown.
+        public static let minKnobLength: Double = 24
+        /// Knob ink (black, or white on a light-ink theme) at this opacity. unknown.
+        /// Its fade: `Motion.sidebarScrollerFade`.
+        public static let knobOpacity: Double = 0.3
     }
 
     // MARK: Web panel
@@ -500,6 +526,32 @@ public enum Metrics {
         /// Inner padding. [07 §12] inferred (card 141.5 × 42.5 around a 13 pt and an 11 pt line).
         public static let horizontalPadding: Double = 10
         public static let verticalPadding: Double = 6
+    }
+
+    /// The card shown while a favorite block is hovered (replaces a system tooltip). [07 §12]
+    /// observed: right of the block and vertically centered on it, past the sidebar over the web
+    /// page (AX frame x 264–504, y 133–197), opaque near white, a thin dark outer line, a shadow
+    /// darker below than above, no arrow.
+    public enum FavoritesTooltip {
+        /// Card size. [07 §12] observed (240 × 64).
+        public static let size = Size2D(width: 240, height: 64)
+        /// Corner radius. [07 §12] observed (fit r = 22 px at 2×).
+        public static let cornerRadius: Double = 11
+        /// Card left edge relative to the hovered block's right edge: the card starts 4 pt inside
+        /// it (x 264 against the block's edge at 268). [07 §12] observed.
+        public static let leadingFromBlockTrailing: Double = -4
+        /// Fill, opaque. [07 §12] observed (≈ #F9F9FB).
+        public static let fillRGB: UInt32 = 0xF9F9FB
+        /// Outer hairline: 0.5 pt dark gray. [07 §12] observed width; black 25 % inferred.
+        public static let hairlineWidth: Double = 0.5
+        public static let hairlineOpacity: Double = 0.25
+        /// Shadow, darker below than above. [07 §12] observed direction; SwiftUI values inferred.
+        public static let shadow = PanelShadow(opacity: 0.16, radius: 6, offsetY: 2)
+        /// Text inset from the card's left / right edges. inferred.
+        public static let horizontalPadding: Double = 12
+        /// Delay before the card shows. [06 §12] observed that it appears on hover; the delay is
+        /// not measured, the tab hover card's 0.5 s is reused (inferred).
+        public static let delay: Double = 0.5
     }
 
     public enum ContextMenu {

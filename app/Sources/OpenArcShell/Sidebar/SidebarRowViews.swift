@@ -12,6 +12,8 @@ import OpenArcDesign
 /// x 43. [07 §1, §4] observed.
 struct SidebarRowFrame<Content: View>: View {
     let fill: Color
+    /// Soft shadow under the fill: set on the selected row only. [07 §4, §7] observed.
+    var shadow: Metrics.PanelShadow? = nil
     var depth: Int = 0
     /// Split preview while a tab is dragged over the row's middle band: a gray-violet block on the
     /// pointer's side, the row content moved to the other side. [06 §15.2] observed.
@@ -29,6 +31,7 @@ struct SidebarRowFrame<Content: View>: View {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(fill)
                 .frame(width: fillFrame.width, height: fillFrame.height)
+                .panelShadow(shadow)
                 .offset(x: fillFrame.minX, y: fillFrame.minY)
             if let splitPreview {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -48,6 +51,24 @@ struct SidebarRowFrame<Content: View>: View {
         .contentShape(Rectangle())
     }
 
+    /// Fill of a selected row: the theme's selected-row fill, ≈ 1 % darker while the mouse holds
+    /// it (no scale). [07 §7] observed (#F0EDF0 → #EEECED).
+    static func selectedFill(_ base: RGBAColor, isPressed: Bool) -> RGBAColor {
+        isPressed ? ThemeDerivation.shade(base, by: Metrics.Sidebar.pressedRowShade) : base
+    }
+}
+
+extension View {
+    /// A black drop shadow from a `Metrics.PanelShadow` token; nil draws none.
+    @ViewBuilder
+    func panelShadow(_ shadow: Metrics.PanelShadow?) -> some View {
+        if let shadow {
+            self.shadow(color: .black.opacity(shadow.opacity), radius: CGFloat(shadow.radius),
+                        x: CGFloat(shadow.offsetX), y: CGFloat(shadow.offsetY))
+        } else {
+            self
+        }
+    }
 }
 
 /// A tab row in the pinned area or in Today. States: normal, hover (darker fill + ✕ / —),
@@ -73,7 +94,8 @@ struct SidebarTabRowView: View {
         let iconSize = SidebarLocalTokens.rowIconSize
         let style = Typography.tabRowTitle
 
-        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth, splitPreview: viewModel.splitPreviewSide(for: tab.id), splitPreviewFill: palette.splitPreviewFill.swiftUI) {
+        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), shadow: isSelected ? Metrics.Sidebar.selectedRowShadow : nil,
+                        depth: depth, splitPreview: viewModel.splitPreviewSide(for: tab.id), splitPreviewFill: palette.splitPreviewFill.swiftUI) {
             Group {
                 if viewModel.isEaselRow(tab.id) {
                     // An Easel row has the Easel icon. [06 §4] observed. B56.
@@ -161,7 +183,10 @@ struct SidebarTabRowView: View {
     }
 
     private func fill(isSelected: Bool, palette: ThemePalette) -> Color {
-        if isSelected { return palette.windowFills(on: surface).selectedRowFill.swiftUI }
+        if isSelected {
+            return SidebarRowFrame<EmptyView>.selectedFill(palette.windowFills(on: surface).selectedRowFill,
+                                                           isPressed: viewModel.pressedItemID == tab.id).swiftUI
+        }
         if isHovering { return Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) }
         return .clear
     }
@@ -183,8 +208,8 @@ struct SidebarTabRowView: View {
                 if area == .pinned { viewModel.unloadPinnedTab(tab.id) } else { viewModel.closeTab(tab.id) }
             } label: {
                 Image(systemName: area == .pinned ? "minus" : "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(textColor.opacity(0.7))
+                    .font(.system(size: SidebarLocalTokens.rowAccessoryGlyphSize, weight: SidebarLocalTokens.rowAccessoryGlyphWeight))
+                    .foregroundStyle(textColor.opacity(SidebarLocalTokens.rowAccessoryInkOpacity))
                     .frame(width: SidebarLocalTokens.rowAccessoryButtonSize, height: SidebarLocalTokens.rowAccessoryButtonSize)
                     .contentShape(Rectangle())
             }
@@ -193,8 +218,8 @@ struct SidebarTabRowView: View {
             .accessibilityIdentifier("openarc.sidebar.row.accessory")
         } else if live?.isAudible == true {
             Image(systemName: "speaker.wave.2.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(textColor.opacity(0.7))
+                .font(.system(size: SidebarLocalTokens.rowAccessoryGlyphSize))
+                .foregroundStyle(textColor.opacity(SidebarLocalTokens.rowAccessoryInkOpacity))
                 .frame(width: SidebarLocalTokens.rowAccessoryButtonSize, height: SidebarLocalTokens.rowAccessoryButtonSize)
                 .accessibilityLabel("Playing audio")
         }
@@ -223,7 +248,7 @@ struct SidebarSplitGroupRowView: View {
         let textColor = isSelected ? palette.selectedTabText.swiftUI : palette.rowTitleText.swiftUI
         let layout = viewModel.splitLayout(group.layoutID)
 
-        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), depth: depth) {
+        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), shadow: isSelected ? Metrics.Sidebar.selectedRowShadow : nil, depth: depth) {
             if viewModel.renamingItemID == group.layoutID {
                 // Split row ▸ Rename…: inline, like a tab row. [06 §21.5] observed item (B77).
                 renameField(layout: layout, textColor: textColor)
@@ -322,7 +347,10 @@ struct SidebarSplitGroupRowView: View {
     }
 
     private func fill(isSelected: Bool, palette: ThemePalette) -> Color {
-        if isSelected { return palette.windowFills(on: surface).selectedRowFill.swiftUI }
+        if isSelected {
+            return SidebarRowFrame<EmptyView>.selectedFill(palette.windowFills(on: surface).selectedRowFill,
+                                                           isPressed: viewModel.pressedItemID == group.layoutID).swiftUI
+        }
         if isHovering { return Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) }
         return .clear
     }
@@ -334,8 +362,8 @@ struct SidebarSplitGroupRowView: View {
                 if area == .pinned { viewModel.unloadPinnedSplitGroup(group.layoutID) } else { viewModel.closeSplitGroup(group.layoutID) }
             } label: {
                 Image(systemName: area == .pinned ? "minus" : "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(textColor.opacity(0.7))
+                    .font(.system(size: SidebarLocalTokens.rowAccessoryGlyphSize, weight: SidebarLocalTokens.rowAccessoryGlyphWeight))
+                    .foregroundStyle(textColor.opacity(SidebarLocalTokens.rowAccessoryInkOpacity))
                     .frame(width: SidebarLocalTokens.rowAccessoryButtonSize, height: SidebarLocalTokens.rowAccessoryButtonSize)
                     .contentShape(Rectangle())
             }

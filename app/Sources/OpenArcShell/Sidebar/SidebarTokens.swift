@@ -50,6 +50,23 @@ enum SidebarLocalTokens {
     /// Trailing padding of the row accessory inside the selected fill. unknown.
     static let rowAccessoryTrailingPadding: CGFloat = 6
 
+    /// Glyph point size of the row accessories (✕ / —, the speaker) and the ink opacity they draw
+    /// in, on top of the row text color. [06 §12] observed that they exist; size and ink unknown.
+    static let rowAccessoryGlyphSize: CGFloat = 11
+    static let rowAccessoryGlyphWeight: Font.Weight = .semibold
+    static let rowAccessoryInkOpacity: Double = 0.7
+
+    // MARK: Selected-row jump button
+
+    /// The round ↓ / ↑ button shown while the selected row is scrolled away. [06 §15.8] observed
+    /// a white round button with an arrow; size, ink and shadow are our own design (unknown).
+    static let jumpButtonSize: CGFloat = 28
+    static let jumpButtonGlyphSize: CGFloat = 12
+    static let jumpButtonInkOpacity: Double = 0.7
+    static let jumpButtonShadow = Metrics.PanelShadow(opacity: 0.18, radius: 3, offsetY: 1)
+    /// Gap between the button and the list edge. unknown.
+    static let jumpButtonEdgeInset: CGFloat = 8
+
     /// Hover backdrop of a toolbar button: inset into the 32 pt hit area, rounded. unknown.
     static let toolbarHoverInset: CGFloat = 2
     static let toolbarHoverCornerRadius: CGFloat = 7

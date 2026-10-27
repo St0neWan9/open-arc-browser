@@ -32,6 +32,13 @@ extension Metrics {
         public static let emptyStateCornerRadius: Double = 12
         public static let emptyStateDash: [Double] = [4, 3]
         public static let emptyStateBorderWidth: Double = 1
+        /// Card ink opacities: dashed border, star badge. inferred (the capture shows a light tint).
+        public static let emptyStateBorderOpacity: Double = 0.25
+        public static let emptyStateStarOpacity: Double = 0.8
+        /// Vertical gap between the star, the title and the detail lines. inferred.
+        public static let emptyStateLineSpacing: Double = 4
+        /// Side padding of the two-line detail text inside the card. inferred.
+        public static let emptyStateDetailPadding: Double = 24
 
         /// Selected tile fill in the dark appearance: the window color with ≈ 47 % white
         /// (#2C283E → #8F9099, default dark purple theme). [06 §21.3] observed color, the white
