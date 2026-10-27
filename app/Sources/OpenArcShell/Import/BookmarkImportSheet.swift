@@ -4,7 +4,7 @@ import AppKit
 import UniformTypeIdentifiers
 import OpenArcImport
 
-// The import sheet and its menu item (plan D3). [01 §Arc] observed: "Import from Another Browser…".
+// The import sheet and its menu item (plans D3, D3b). [01 §Arc] observed: "Import from Another Browser…".
 // The sheet's contents and layout are inferred; there is no reference screenshot.
 
 /// Open Arc ▸ Import from Another Browser…, after Set as Default Browser. [01 §Arc] observed order.
@@ -43,14 +43,15 @@ enum BookmarkImportPresenter {
         }
     }
 
-    /// "Choose File…": an open panel for bookmark exports. Chrome's `Bookmarks` file has no
-    /// extension, so plain data files are allowed too; the content decides the format.
+    /// "Choose File…": an open panel for bookmark, history and password exports. Chrome's
+    /// `Bookmarks` file has no extension, so plain data files are allowed too; the content decides
+    /// the format.
     static func chooseFile(_ completion: @escaping @MainActor (URL) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.html, .propertyList, .json, .data]
+        panel.allowedContentTypes = [.html, .propertyList, .json, .commaSeparatedText, .zip, .data]
         panel.message = BookmarkImportLocalTokens.fileHint
         panel.prompt = BookmarkImportLocalTokens.importButton
         panel.begin { response in
@@ -60,7 +61,8 @@ enum BookmarkImportPresenter {
     }
 }
 
-/// The sheet: a source list (detected Chromium-family profiles), Choose File…, then a summary.
+/// The sheet: a source list (detected Chromium-family profiles and Safari), a checkbox per data
+/// kind (D3b), Choose File…, then a summary.
 struct BookmarkImportSheet: View {
     @ObservedObject var model: BookmarkImportModel
     typealias T = BookmarkImportLocalTokens
@@ -70,8 +72,13 @@ struct BookmarkImportSheet: View {
             Text(T.title).font(Typography.dialogTitle.font)
             switch model.phase {
             case .choosing: chooser
-            case .done(let summary): result(BookmarkImportModel.summaryText(summary), isError: false)
-            case .failed(let message): result(message, isError: true)
+            case .importing:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(T.importing).font(Typography.settingsBody.font)
+                }
+            case .done(let lines): result(lines)
+            case .failed(let message): result([ImportSummaryLine(text: message, isError: true)])
             }
         }
         .padding(20)
@@ -81,18 +88,18 @@ struct BookmarkImportSheet: View {
     @ViewBuilder
     private var chooser: some View {
         Text(T.message).font(Typography.settingsBody.font).foregroundStyle(.secondary)
-        if model.profiles.isEmpty {
+        if model.sources.isEmpty {
             Text(T.noProfiles).font(Typography.settingsBody.font).foregroundStyle(.secondary)
         } else {
-            Picker("Source", selection: $model.selectedProfileID) {
-                ForEach(model.profiles) { profile in
-                    Text(model.label(for: profile)).tag(Optional(profile.id))
+            Picker("Source", selection: $model.selectedSourceID) {
+                ForEach(model.sources) { source in
+                    Text(model.label(for: source)).tag(Optional(source.id))
                 }
             }
             .pickerStyle(.radioGroup)
             .labelsHidden()
+            kinds
         }
-        Text(T.laterKinds).font(Typography.settingsCaption.font).foregroundStyle(.tertiary)
         HStack {
             Button(T.chooseFile) {
                 BookmarkImportPresenter.chooseFile { [model] url in model.importFile(url) }
@@ -100,19 +107,51 @@ struct BookmarkImportSheet: View {
             Spacer()
             Button(T.cancel) { model.close() }
                 .keyboardShortcut(.cancelAction)
-            Button(T.importButton) { model.importSelectedProfile() }
+            Button(T.importButton) { Task { await model.importSelected() } }
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.selectedProfileID == nil)
+                .disabled(!model.canImport)
+        }
+    }
+
+    /// One checkbox per kind the selected source offers.
+    @ViewBuilder
+    private var kinds: some View {
+        let available = model.availableKinds(for: model.selectedSource)
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(available, id: \.self) { kind in
+                Toggle(T.label(for: kind), isOn: Binding(
+                    get: { model.selectedKinds.contains(kind) },
+                    set: { on in
+                        if on { model.selectedKinds.insert(kind) } else { model.selectedKinds.remove(kind) }
+                    }
+                ))
+                .toggleStyle(.checkbox)
+            }
+        }
+        if case .safari? = model.selectedSource {
+            Text(T.safariHint).font(Typography.settingsCaption.font).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if model.selectedKinds.contains(.passwords) {
+            Text(T.keychainHint).font(Typography.settingsCaption.font).foregroundStyle(.secondary)
+        }
+        if !model.engineSupports(.history) {
+            Text(T.noEngineKinds).font(Typography.settingsCaption.font).foregroundStyle(.tertiary)
         }
     }
 
     @ViewBuilder
-    private func result(_ text: String, isError: Bool) -> some View {
-        Text(text)
-            .font(Typography.settingsBody.font)
-            .foregroundStyle(isError ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
-            .fixedSize(horizontal: false, vertical: true)
+    private func result(_ lines: [ImportSummaryLine]) -> some View {
+        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+            Text(line.text)
+                .font(Typography.settingsBody.font)
+                .foregroundStyle(line.isError ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
+                .fixedSize(horizontal: false, vertical: true)
+        }
         HStack {
+            if lines.contains(where: \.needsFullDiskAccess) {
+                // Opens the pane only; Open Arc never asks for the permission itself.
+                Button(T.openPrivacySettings) { NSWorkspace.shared.open(T.fullDiskAccessURL) }
+            }
             Spacer()
             Button(T.done) { model.close() }
                 .keyboardShortcut(.defaultAction)

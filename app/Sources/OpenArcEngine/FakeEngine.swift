@@ -42,6 +42,7 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     private let fakeExtensions = FakeExtensions()
     private let fakeAdBlocking = FakeAdBlocking()
     private let fakeTranslation = FakeTranslation()
+    private let fakeImporterService = FakeImporter()
 
     public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle,
                 pageTopColorProvider: PageTopColorProvider? = nil) {
@@ -63,6 +64,9 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     public var fakeTranslationService: FakeTranslation { fakeTranslation }
     /// Typed access for tests (plan C16).
     public var fakeAdBlockingService: FakeAdBlocking { fakeAdBlocking }
+    public var importer: any EngineImporter { fakeImporterService }
+    /// Typed access for tests (plan D3b).
+    public var fakeImporter: FakeImporter { fakeImporterService }
 
     /// Ids of all live tabs (for tests and debug UI).
     public var tabIDs: Set<EngineTabID> {

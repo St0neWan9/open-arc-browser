@@ -64,17 +64,19 @@ public struct BookmarkTree: Hashable, Sendable {
 
 /// Kinds of data an import can bring over.
 ///
-/// Only bookmarks are read by the shell (D3). History and passwords need the Chromium importer
-/// (Chromium's own readers for the other browsers' databases and keychain items), so they come with
-/// the engine in phase C (plan row D3b): that work adds a provider for these kinds next to
-/// `BookmarkFileReader` and lists them in `availableInShell`'s replacement. inferred.
+/// Bookmarks are read by the shell (D3) and become sidebar items. History and passwords go into the
+/// profile's engine data through the engine's importer (plan D3b, `EngineImporter`), which reads the
+/// other browsers' databases and keychain items; the import sheet shows a checkbox per kind and
+/// disables the engine kinds when the engine has no importer. inferred.
 public enum ImportDataKind: String, CaseIterable, Hashable, Sendable {
     case bookmarks
     case history
     case passwords
 
-    /// The kinds this build can import.
-    public static let availableInShell: Set<ImportDataKind> = [.bookmarks]
+    /// The kinds the import sheet offers.
+    public static let availableInShell: Set<ImportDataKind> = [.bookmarks, .history, .passwords]
+    /// The kinds the engine imports (the rest the shell reads itself).
+    public static let engineKinds: Set<ImportDataKind> = [.history, .passwords]
 }
 
 /// Why a bookmarks file could not be read.

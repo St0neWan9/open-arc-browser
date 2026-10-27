@@ -49,6 +49,8 @@ public final class ChromiumEngine: BrowserEngine {
     public let extensions: any EngineExtensions
     /// Chromium's subresource filter with the bundled EasyList + EasyPrivacy ruleset (plan C16).
     public let adBlocking: any EngineAdBlocking
+    /// History and password import from other browsers (plan D3b).
+    public let importer: any EngineImporter
     /// Chromium's translate component with shell-drawn surfaces (plan B47).
     public let translation: any EngineTranslation
 
@@ -80,6 +82,7 @@ public final class ChromiumEngine: BrowserEngine {
         // page finds someone to confirm it.
         core.onProfileLoaded = { [weak extensions] id, profile in extensions?.attach(to: id, extensions: profile.extensions) }
         adBlocking = ChromiumAdBlocking(core: core)
+        importer = ChromiumImporter(core: core)
         translation = ChromiumTranslation(core: core)
         core.startAtLaunch()
     }

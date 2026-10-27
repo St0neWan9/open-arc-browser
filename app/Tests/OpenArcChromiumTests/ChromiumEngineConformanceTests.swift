@@ -112,6 +112,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // C11: two profiles and incognito keep their data apart; clearing and deleting a profile.
         try await checkProfileIsolation(engine, dataDirectory: dataDirectory, defaultProfile: profile)
 
+        // D3b: history and passwords imported from made-up Chrome, CSV and Safari sources.
+        try await checkImport(engine, profileID: UUID())
+
         // Closing ends the tab's stream; shutdown makes new tabs fail.
         await engine.closeTab(tab.id)
         let closedLookup = await engine.tab(for: tab.id)
