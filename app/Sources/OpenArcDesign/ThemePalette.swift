@@ -353,6 +353,17 @@ public enum ThemeDerivation {
     /// Command bar background in dark. [07 §5, §10] observed (#181818), for every theme.
     public static let darkCommandBarBackground = RGBAColor(hex: 0x181818)
 
+    /// The gray veil over the whole browser window while a modal card (New Folder, Rename Space,
+    /// Delete Space, …) is up. [07 §12] observed that the window is dimmed by a gray veil; its
+    /// color and strength were not measured: unknown (black 25 %, placeholder).
+    public static let windowModalDim = RGBAColor(hex: 0x000000, alpha: 0.25)
+
+    /// Settings window fill: a dark purple that does not follow the system light / dark setting
+    /// or the Space theme. [07 §6] observed (≈ #241F29).
+    public static let settingsWindowBackground = RGBAColor(hex: 0x241F29)
+    /// The Settings window is always dark. [07 §6] observed.
+    public static let settingsAppearance = ResolvedAppearance.dark
+
     /// Source-over blend of `amount` white on top of `color` (sRGB, non-linear).
     public static func overlayWhite(_ color: RGBAColor, amount: Double) -> RGBAColor {
         mix(color, RGBAColor(red: 1, green: 1, blue: 1), amount: amount)

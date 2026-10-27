@@ -20,6 +20,15 @@ enum ProfileFlowTokens {
     static let spacesStepHeight: Double = 360
     static let confirmStepHeight: Double = 250
     static let changeSheetHeight: Double = 280
+
+    /// Card height of a New Profile step.
+    static func height(of step: ProfileFlowModel.Step) -> Double {
+        switch step {
+        case .name: return nameStepHeight
+        case .spaces: return spacesStepHeight
+        case .confirm: return confirmStepHeight
+        }
+    }
     /// The icon button left of the name field (same as the Create Space form, inferred).
     static let iconButtonSize: CGFloat = 37.5
     static let iconPickerSize = CGSize(width: 320, height: 300)
@@ -195,21 +204,22 @@ public final class ProfileFlowModel: ObservableObject {
 
 // MARK: - Views
 
-/// Presents the profile sheets on the window content.
+/// Presents the profile cards centered in the window over the dimmed window, like the other
+/// sheets ([07 §12] observed for New Folder / Rename / Delete Space; inferred here). B91.
 struct ProfileFlowSheets: ViewModifier {
     @ObservedObject var flow: ProfileFlowModel
     let palette: ThemePalette
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: Binding(
-                get: { flow.newProfileStep != nil },
-                set: { if !$0 { flow.cancelNewProfile() } }
-            )) { NewProfileSheet(flow: flow, palette: palette) }
-            .sheet(isPresented: Binding(
-                get: { flow.changingSpaceID != nil },
-                set: { if !$0 { flow.cancelChangeProfile() } }
-            )) { ChangeProfileSheet(flow: flow, palette: palette) }
+            .windowModal(id: "newProfile", isPresented: flow.newProfileStep != nil,
+                         size: Size2D(width: ProfileFlowTokens.sheetWidth, height: ProfileFlowTokens.height(of: flow.newProfileStep ?? .name))) {
+                NewProfileSheet(flow: flow, palette: palette)
+            }
+            .windowModal(id: "changeProfile", isPresented: flow.changingSpaceID != nil,
+                         size: Size2D(width: ProfileFlowTokens.sheetWidth, height: ProfileFlowTokens.changeSheetHeight)) {
+                ChangeProfileSheet(flow: flow, palette: palette)
+            }
     }
 }
 

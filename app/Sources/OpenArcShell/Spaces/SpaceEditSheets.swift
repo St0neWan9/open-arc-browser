@@ -81,27 +81,54 @@ struct RenameSpaceSheet: View {
     }
 }
 
-/// "Change Space Icon…" sheet.
+/// "Change Space Icon…" card.
 struct ChangeSpaceIconSheet: View {
     @ObservedObject var flow: SpaceFlowModel
     let currentIcon: String?
+    let palette: ThemePalette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Change Space Icon").textStyle(Typography.dialogTitle).padding(.horizontal, 14).padding(.top, 14)
-            SpaceIconGrid(showsReset: currentIcon != nil) { flow.chooseIcon($0) }
-            Spacer(minLength: 0)
-            HStack {
-                Spacer()
-                Button("Cancel") { flow.cancelChangeIcon() }.keyboardShortcut(.cancelAction)
-            }
-            .padding(14)
-        }
-        .frame(width: SpaceFlowLocalTokens.iconSheetSize.width, height: SpaceFlowLocalTokens.iconSheetSize.height)
+        IconPickerCard(title: "Change Space Icon", showsReset: currentIcon != nil, palette: palette,
+                       onChoose: { flow.chooseIcon($0) }, onCancel: { flow.cancelChangeIcon() })
     }
 }
 
-/// Presents the rename and icon sheets on the window content.
+/// The icon picker as a modal card: title, the icon grid and Cancel [ESC], on the sheet colors
+/// ([07 §6] observed) with the sheet radius ([07 §12] observed). The spec does not show this
+/// surface; its layout is ours (inferred).
+struct IconPickerCard: View {
+    let title: String
+    let showsReset: Bool
+    let palette: ThemePalette
+    let onChoose: (String?) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        let size = SpaceFlowLocalTokens.iconSheetSize
+        ZStack(alignment: .bottomTrailing) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .textStyle(Typography.dialogTitle, ink: palette.dialogInk)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 18)
+                SpaceIconGrid(showsReset: showsReset, onChoose: onChoose)
+                    .foregroundStyle(palette.dialogInk.swiftUI)
+            }
+            .frame(width: CGFloat(size.width), height: CGFloat(size.height), alignment: .topLeading)
+            ModalCardButton(title: "Cancel", keyCap: "ESC", role: .cancel, palette: palette, action: onCancel)
+                .keyboardShortcut(.cancelAction)
+                .padding(.trailing, 14)
+                .padding(.bottom, 14)
+        }
+        .frame(width: CGFloat(size.width), height: CGFloat(size.height))
+        .background(palette.dialogBackground.swiftUI)
+        .clipShape(RoundedRectangle(cornerRadius: CGFloat(Metrics.Dialog.cornerRadius), style: .continuous))
+        .environment(\.colorScheme, palette.isDark ? .dark : .light)
+    }
+}
+
+/// Presents the rename and icon cards centered in the window over the dimmed window.
+/// [07 §12] observed (Rename Space; the icon picker follows it, inferred). B91.
 struct SpaceFlowSheets: ViewModifier {
     @ObservedObject var flow: SpaceFlowModel
     let workspace: WorkspaceState
@@ -109,15 +136,12 @@ struct SpaceFlowSheets: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: Binding(
-                get: { flow.renamingSpaceID != nil },
-                set: { if !$0 { flow.cancelRename() } }
-            )) { RenameSpaceSheet(flow: flow, palette: palette) }
-            .sheet(isPresented: Binding(
-                get: { flow.iconPickerSpaceID != nil },
-                set: { if !$0 { flow.cancelChangeIcon() } }
-            )) {
-                ChangeSpaceIconSheet(flow: flow, currentIcon: flow.iconPickerSpaceID.flatMap { workspace.spaces[$0]?.icon })
+            .windowModal(id: "renameSpace", isPresented: flow.renamingSpaceID != nil, size: Metrics.Dialog.newFolderSize) {
+                RenameSpaceSheet(flow: flow, palette: palette)
+            }
+            .windowModal(id: "changeSpaceIcon", isPresented: flow.iconPickerSpaceID != nil, size: SpaceFlowLocalTokens.iconSheetSize) {
+                ChangeSpaceIconSheet(flow: flow, currentIcon: flow.iconPickerSpaceID.flatMap { workspace.spaces[$0]?.icon },
+                                     palette: palette)
             }
     }
 }

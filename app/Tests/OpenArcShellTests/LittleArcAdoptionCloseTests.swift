@@ -16,7 +16,7 @@ import OpenArcDesign
 ///
 /// The window was the same one: adoption closed the model (`phase = .closed`), and the window was
 /// left to SwiftUI's `dismiss`, which does not reliably close it. A `.closed` model was drawn like
-/// a compact one, so the configurator shrank the window back to the empty 490×330 command bar.
+/// a compact one, so the configurator shrank the window back to the empty 490×329 command bar.
 /// This hosts the real view in a plain `NSWindow`, where `dismiss` does nothing, so only the
 /// window's own close path can remove it.
 @MainActor
@@ -132,7 +132,7 @@ final class LittleArcWindowIDTests: XCTestCase {
     }
 
     /// A closed model keeps the size of the phase it closed in: a closing expanded window never
-    /// shrinks back to the empty compact command bar. [06 §7] observed compact ≈ 490×330.
+    /// shrinks back to the empty compact command bar. [06 §7] observed compact 490×329 ([07 §11, §12] observed).
     func testClosedModelKeepsItsLastSize() async throws {
         let f = SidebarFixture()
         let controller = WorkspaceController(

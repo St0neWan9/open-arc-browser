@@ -34,15 +34,7 @@ struct LibraryView: View {
             }
         }
         .frame(width: windowSize.width, height: windowSize.height, alignment: .topLeading)
-        // The sidebar, which normally hosts this confirmation, is not on screen. Same texts as
-        // there. [06 §11] observed.
-        .sheet(isPresented: deleteBinding) {
-            DeleteSpaceSheet(spaceName: deleteSpaceName, palette: palette) {
-                sidebar.cancelDeleteSpace()
-            } onDelete: {
-                sidebar.confirmDeleteSpace()
-            }
-        }
+        // Delete Space from the Spaces board shows the window card (`SidebarWindowModals`, B91).
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library")
     }
@@ -61,16 +53,6 @@ struct LibraryView: View {
         }
     }
 
-    private var deleteSpaceName: String {
-        sidebar.pendingSpaceDeletionID.flatMap { sidebar.workspace.spaces[$0]?.name } ?? ""
-    }
-
-    private var deleteBinding: Binding<Bool> {
-        Binding(
-            get: { library.section == .spaces && sidebar.pendingSpaceDeletionID != nil },
-            set: { if !$0 { sidebar.cancelDeleteSpace() } }
-        )
-    }
 }
 
 // MARK: - Rail

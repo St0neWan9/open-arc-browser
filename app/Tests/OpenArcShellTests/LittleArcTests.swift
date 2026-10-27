@@ -5,7 +5,7 @@ import OpenArcDesign
 import OpenArcSyncAPI
 @testable import OpenArcShell
 
-/// Little Arc window flow. [06 §7] observed: command-bar-only window of ≈ 490×330, ✕ in the field,
+/// Little Arc window flow. [06 §7] observed: command-bar-only window of 490×329 ([07 §11, §12] observed), ✕ in the field,
 /// Escape closes, opening a page expands it to a browsing window. [02] observed: ⌥⌘N.
 /// Inferred (no evidence in the spec): the page stays out of the workspace until "Open in Open Arc",
 /// which opens it as a Today tab in the current space; closing the window closes the engine tab.
@@ -30,11 +30,11 @@ final class LittleArcTests: XCTestCase {
         await model.settleEngineWork()
     }
 
-    /// [06 §7] observed: the window starts command-bar-only at ≈ 490×330 with the Little Arc bar.
+    /// [06 §7] observed: the window starts command-bar-only at 490×329 ([07 §11, §12] observed) with the Little Arc bar.
     func testCompactWindowIsCommandBarSized() {
         let model = LittleArcModel(shell: makeShell())
         XCTAssertEqual(model.phase, .compact)
-        XCTAssertEqual(model.windowSize, CGSize(width: 490, height: 330))
+        XCTAssertEqual(model.windowSize, CGSize(width: 490, height: 329))
         XCTAssertEqual(model.commandBar.presentation, .littleArc)
         let layout = CommandBarLayout(presentation: .littleArc, resultCount: 5)
         XCTAssertEqual(layout.panelSize, model.windowSize)

@@ -196,16 +196,8 @@ final class FloatingBubbleTests: XCTestCase {
         XCTAssertNil(layer.animation(forKey: FloatingBubbleMotion.scaleKey), "reset for the next open")
     }
 
-    /// B42: the sheet card is clipped to its radius 26 corners and its window is made clear.
-    func testModalCardWindowIsClear() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
-        ClearSheetWindow.makeClear(window)
-        XCTAssertFalse(window.isOpaque)
-        XCTAssertEqual(window.backgroundColor, .clear)
-        XCTAssertTrue(window.hasShadow)
-        XCTAssertEqual(Metrics.Dialog.cornerRadius, 26)
-    }
-
+    /// B42: the modal card is clipped to its radius 26 corners. [07 §12] observed. (Since B91 the
+    /// card is drawn in the window, not in a system sheet window.)
     func testModalCardCornersAreTransparent() throws {
         let palette = ThemeDerivation.palette(for: nil)
         let card = ModalCard(size: Metrics.Dialog.newFolderSize, palette: palette) { Text("New Folder…") } buttons: { AnyView(EmptyView()) }

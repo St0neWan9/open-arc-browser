@@ -3,11 +3,12 @@ import AppKit
 import OpenArcModel
 import OpenArcDesign
 
-// Sheets in the Arc style: New Folder, Delete Space and Rename Space. [07 §6] observed:
+// Modal cards in the Arc style: New Folder, Delete Space and Rename Space. [07 §6] observed:
 // a 450 pt wide card (radius ≈ 24), content from x 38, a Bold 17 title, Regular 14 body and field
 // text, a 375.5 × 37.5 field (radius ≈ 6, white with a light gray outline), and at the lower right
 // "Cancel [ESC]" (110 × 40) and the primary button (100 × 38.5), 28 pt from the right and 26.5 pt
-// from the bottom. Sheets follow the Space's light / dark: #FAFBFF light, #171C30 dark.
+// from the bottom. Cards follow the Space's light / dark: #FAFBFF light, #171C30 dark. They show
+// centered in the window over a dimmed window (`windowModal`, [07 §12] observed), not as system sheets.
 
 /// A sheet button with its key cap ("ESC", "↵"). [07 §6] observed (gray rounded key caps).
 struct ModalCardButton: View {
@@ -78,70 +79,9 @@ struct ModalCard<Content: View>: View {
         }
         .frame(width: CGFloat(size.width), height: CGFloat(size.height))
         .background(palette.dialogBackground.swiftUI)
-        .background(ClearSheetWindow())
-        // Rounded card on a clear sheet window: nothing of the window shows at the corners.
-        // [07 §12] observed (radius 26). B42.
+        // Fully rounded card, nothing square behind its corners. [07 §12] observed (radius 26). B42.
         .clipShape(RoundedRectangle(cornerRadius: CGFloat(d.cornerRadius), style: .continuous))
-        .presentationBackground(.clear)
         .environment(\.colorScheme, palette.isDark ? .dark : .light)
-    }
-}
-
-/// Makes the sheet window that hosts a `ModalCard` transparent, so only the rounded card shows.
-/// The window's shadow follows the card's alpha. B42.
-struct ClearSheetWindow: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { ProbeView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
-
-    final class ProbeView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let window else { return }
-            ClearSheetWindow.makeClear(window)
-            // AppKit finishes setting up the sheet after this view joins it: clear again once.
-            DispatchQueue.main.async { [weak window] in
-                MainActor.assumeIsolated { if let window { ClearSheetWindow.makeClear(window) } }
-            }
-        }
-        // AppKit may restore the sheet's chrome when it presents or re-lays out the sheet.
-        override func layout() {
-            super.layout()
-            if let window { ClearSheetWindow.makeClear(window) }
-        }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    }
-
-    /// Clear, non-opaque, shadowed. Exposed for tests.
-    @MainActor static func makeClear(_ window: NSWindow) {
-        var changed = false
-        if window.isOpaque { window.isOpaque = false; changed = true }
-        if window.backgroundColor != .clear { window.backgroundColor = .clear; changed = true }
-        if !window.hasShadow { window.hasShadow = true; changed = true }
-        // A sheet's frame view draws its own material with a small corner radius behind the
-        // content: hide it so only the card's radius 26 shows.
-        if let frameView = window.contentView?.superview {
-            for case let effect as NSVisualEffectView in frameView.subviews where !effect.isHidden {
-                effect.isHidden = true
-                changed = true
-            }
-            // The frame view draws the window frame (a light fill with the sheet's small system
-            // corner radius) in a sublayer of its own: hide it. Matched by layer type name, as
-            // AppKit gives it no public API; nothing happens when it is absent.
-            for sub in frameView.layer?.sublayers ?? [] where !sub.isHidden && String(describing: type(of: sub)).contains("WindowFrameLayer") {
-                sub.isHidden = true
-                changed = true
-            }
-            // The window's root layer clips everything to its corner radius: give it the card's.
-            var root = frameView.layer
-            while let parent = root?.superlayer { root = parent }
-            if let root, root.cornerRadius != CGFloat(Metrics.Dialog.cornerRadius) {
-                root.cornerRadius = CGFloat(Metrics.Dialog.cornerRadius)
-                root.cornerCurve = .continuous
-                root.masksToBounds = true
-                changed = true
-            }
-        }
-        if changed { window.invalidateShadow() }
     }
 }
 
@@ -287,22 +227,42 @@ struct ClearArchiveSheet: View {
     }
 }
 
-/// Shows the Clear Archive confirmation of the window's sidebar model, whether the window shows
-/// the browser view or the Library.
-struct ClearArchiveConfirmation: ViewModifier {
+/// The cards of the window's sidebar model, centered in the window over the dimmed window
+/// whether the window shows the browser view, the hidden-sidebar peek or the Library. [07 §12]
+/// observed (New Folder, Delete Space; the others follow them, inferred). B91.
+struct SidebarWindowModals: ViewModifier {
     @ObservedObject var sidebar: SidebarViewModel
 
     func body(content: Content) -> some View {
-        content.sheet(isPresented: Binding(
-            get: { sidebar.isClearArchiveConfirmationPresented },
-            set: { if !$0 { sidebar.cancelClearArchive() } }
-        )) {
-            ClearArchiveSheet(palette: sidebar.palette) {
-                sidebar.cancelClearArchive()
-            } onClear: {
-                sidebar.confirmClearArchive()
+        let d = Metrics.Dialog.self
+        content
+            .windowModal(id: "newFolder", isPresented: sidebar.isNewFolderSheetPresented, size: d.newFolderSize) {
+                SidebarNewFolderSheet(viewModel: sidebar)
             }
-        }
+            .windowModal(id: "deleteSpace", isPresented: sidebar.pendingSpaceDeletionID != nil, size: d.deleteSpaceSize) {
+                DeleteSpaceSheet(spaceName: deleteSpaceName, palette: sidebar.palette) {
+                    sidebar.cancelDeleteSpace()
+                } onDelete: {
+                    sidebar.confirmDeleteSpace()
+                }
+            }
+            .windowModal(id: "changeItemIcon", isPresented: sidebar.iconPickerItemID != nil, size: SpaceFlowLocalTokens.iconSheetSize) {
+                SidebarChangeIconSheet(viewModel: sidebar)
+            }
+            .windowModal(id: "editPinnedPage", isPresented: sidebar.pinnedPageEditorTabID != nil, size: PinnedPageEditorTokens.size) {
+                PinnedPageEditorSheet(viewModel: sidebar)
+            }
+            .windowModal(id: "clearArchive", isPresented: sidebar.isClearArchiveConfirmationPresented, size: d.deleteSpaceSize) {
+                ClearArchiveSheet(palette: sidebar.palette) {
+                    sidebar.cancelClearArchive()
+                } onClear: {
+                    sidebar.confirmClearArchive()
+                }
+            }
+    }
+
+    private var deleteSpaceName: String {
+        sidebar.pendingSpaceDeletionID.flatMap { sidebar.workspace.spaces[$0]?.name } ?? ""
     }
 }
 
