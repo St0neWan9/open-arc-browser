@@ -1,5 +1,6 @@
 import Foundation
 import OpenArcModel
+import OpenArcDesign
 
 // Easel entry points of a window (plan B56): New Easel (⌃⇧E, File ▸ New Easel) and opening one
 // from Library ▸ Easels. [02] ⌃⇧E observed; [01 §File] New Easel observed; [06 §4] observed: the
@@ -38,6 +39,35 @@ extension ShellModel {
 }
 
 extension SidebarViewModel {
+    /// Top of an image placed on a new Easel: under the title. inferred (B81).
+    static let placedImageTop: Double = 120
+
+    /// New Easel with an image (the capture menu's + New Easel, B81): creates an "Untitled Easel"
+    /// with its pinned row in the current Space and the image on it, in one change, and selects
+    /// the row. The image is `size` points (scaled down to `Metrics.Easel.maxPlacedImageSide`),
+    /// centered across `viewportWidth`, under the title. Returns the Easel's id; nil in an
+    /// incognito window or without a Space. inferred: [06 §24.1] observed the item only.
+    @discardableResult
+    func newEasel(placing image: EaselImage, size: Size2D, viewportWidth: Double) -> UUID? {
+        guard !isIncognito, let spaceID = selectedSpaceID, image.fitsInlineLimit else { return nil }
+        let easelID = controller.makeID(), tabID = controller.makeID(), elementID = controller.makeID()
+        let now = controller.now()
+        let w = max(size.width, 1), h = max(size.height, 1)
+        let scale = min(1, Metrics.Easel.maxPlacedImageSide / max(w, h))
+        let frame = EaselRect(x: max(0, (viewportWidth - w * scale) / 2), y: Self.placedImageTop, width: w * scale, height: h * scale)
+        do {
+            try controller.mutate(origin: self) {
+                let created = try TreeOps.createEasel($0, id: easelID, tabID: tabID, spaceID: spaceID, now: now)
+                return try TreeOps.addEaselElement(created, id: elementID, easelID: easelID, frame: frame, content: .image(image),
+                                                   style: EaselTokens.defaultStyle(for: .image), now: now)
+            }
+        } catch {
+            return nil
+        }
+        selectTab(tabID)
+        return easelID
+    }
+
     /// The Easel the selected tab shows, if live: the web panel shows its canvas and the URL box
     /// shows the Share button. [06 §4, §9] observed.
     var selectedEaselID: UUID? {
