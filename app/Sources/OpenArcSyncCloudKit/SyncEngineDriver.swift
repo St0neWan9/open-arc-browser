@@ -88,7 +88,32 @@ enum SyncDriverEvent: Sendable {
     case didSendChanges(DriverSyncReason?)
 }
 
+/// What a manual fetch covers.
+enum DriverFetchScope: Hashable, Sendable {
+    /// Database level (`CKSyncEngine.FetchChangesOptions.Scope.all`): the engine reads the
+    /// private database's change feed from its saved token, then fetches every zone the feed
+    /// reports changed. This is what finds other devices' edits; the store always uses it (B86).
+    case allZones
+    /// Only these zones. Not used by the store: a zone-restricted fetch only fetches zones the
+    /// engine already knows to be changed (D4 log: "no zone IDs needing to be fetched").
+    case zones([CKRecordZone.ID])
+}
+
+/// Marks the task of a CKSyncEngine delegate callback (`handleEvent`,
+/// `nextRecordZoneChangeBatch`). CKSyncEngine traps when such a task awaits a call into the
+/// engine ("Cannot await a call into CKSyncEngine from within a delegate callback", D4). A plain
+/// `Task {}` started inside a callback inherits the callback's task-local context, so work the
+/// store starts from a callback runs detached (`TaskRetryScheduler`). The fake driver in the
+/// tests sets this marker the same way and records any engine call made while it is set. (B86)
+enum EngineCallbackContext {
+    @TaskLocal static var isActive = false
+}
+
 /// Receives engine callbacks. Implemented by the store.
+///
+/// Both methods run inside an engine callback (`EngineCallbackContext.isActive`): they must not
+/// await `fetchChanges`, `sendChanges` or `cancel` on the driver, neither directly nor in a task
+/// that inherits the callback's context. Synchronous state calls (`addPending`, ...) are fine.
 protocol SyncEngineDriverDelegate: AnyObject, Sendable {
     func driverHandle(_ event: SyncDriverEvent) async
     /// Builds the next upload batch out of `pending` (already filtered to the send scope).
@@ -103,7 +128,7 @@ protocol SyncEngineDriver: AnyObject, Sendable {
     func removePending(_ changes: [DriverRecordChange])
     var pendingChanges: [DriverRecordChange] { get }
     func addPendingZoneSave(_ zone: CKRecordZone)
-    func fetchChanges() async throws
+    func fetchChanges(_ scope: DriverFetchScope) async throws
     func sendChanges() async throws
     /// Cancels in-flight work; the driver is not used afterwards.
     func cancel() async
@@ -169,16 +194,31 @@ final class CKSyncEngineDriver: SyncEngineDriver, CKSyncEngineDelegate, @uncheck
         engine.state.add(pendingDatabaseChanges: [.saveZone(zone)])
     }
 
-    func fetchChanges() async throws {
-        try await engine.fetchChanges()
+    // The asserts name the mistake in debug builds; CKSyncEngine itself traps with a vaguer message.
+
+    func fetchChanges(_ scope: DriverFetchScope) async throws {
+        assert(!EngineCallbackContext.isActive, "fetchChanges awaited inside a CKSyncEngine delegate callback")
+        try await engine.fetchChanges(Self.fetchOptions(for: scope))
     }
 
     func sendChanges() async throws {
+        assert(!EngineCallbackContext.isActive, "sendChanges awaited inside a CKSyncEngine delegate callback")
         try await engine.sendChanges()
     }
 
     func cancel() async {
+        assert(!EngineCallbackContext.isActive, "cancel awaited inside a CKSyncEngine delegate callback")
         await engine.cancelOperations()
+    }
+
+    /// Engine options for a fetch. `.allZones` is the engine's default scope `.all`, a
+    /// database-level fetch: zones changed elsewhere are found through the database change feed
+    /// even when no push marked them changed.
+    static func fetchOptions(for scope: DriverFetchScope) -> CKSyncEngine.FetchChangesOptions {
+        switch scope {
+        case .allZones: return CKSyncEngine.FetchChangesOptions(scope: .all)
+        case .zones(let ids): return CKSyncEngine.FetchChangesOptions(scope: .zoneIDs(ids))
+        }
     }
 
     private static func engineChange(_ change: DriverRecordChange) -> CKSyncEngine.PendingRecordZoneChange {
@@ -203,16 +243,20 @@ final class CKSyncEngineDriver: SyncEngineDriver, CKSyncEngineDelegate, @uncheck
 
     func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
         guard let delegate, let translated = Self.translate(event) else { return }
-        await delegate.driverHandle(translated)
+        await EngineCallbackContext.$isActive.withValue(true) {
+            await delegate.driverHandle(translated)
+        }
     }
 
     func nextRecordZoneChangeBatch(_ context: CKSyncEngine.SendChangesContext, syncEngine: CKSyncEngine) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let pending = syncEngine.state.pendingRecordZoneChanges
             .filter { context.options.scope.contains($0) }
             .map(Self.driverChange)
-        guard !pending.isEmpty, let delegate,
-              let batch = await delegate.driverNextBatch(pending: pending)
-        else { return nil }
+        guard !pending.isEmpty, let delegate else { return nil }
+        let batch = await EngineCallbackContext.$isActive.withValue(true) {
+            await delegate.driverNextBatch(pending: pending)
+        }
+        guard let batch else { return nil }
         return CKSyncEngine.RecordZoneChangeBatch(recordsToSave: batch.recordsToSave, recordIDsToDelete: batch.recordIDsToDelete)
     }
 

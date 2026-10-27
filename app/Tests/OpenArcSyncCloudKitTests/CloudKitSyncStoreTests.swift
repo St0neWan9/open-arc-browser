@@ -120,6 +120,10 @@ final class CloudKitSyncStoreTests: XCTestCase {
         let first = try h.driver
         await first.emit(.accountChange(.switchAccounts))
 
+        // B86: the old engine is cancelled outside the delegate callback, not awaited inside it.
+        XCTAssertEqual(first.callsInsideCallback, [])
+        XCTAssertFalse(first.isCancelled)
+        await h.scheduler.runNext()
         XCTAssertTrue(first.isCancelled)
         let paused = await h.store.currentStatus()
         XCTAssertEqual(paused.phase, .unavailable(.accountChanged))
