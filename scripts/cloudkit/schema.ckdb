@@ -1,0 +1,189 @@
+// OpenArc CloudKit schema (plan D4) for container iCloud.org.openarc.browser.
+//
+// Source of truth for field keys: app/Sources/OpenArcSyncCloudKit/RecordSchema.swift (field keys,
+// encrypted or plain) and RecordMapper.swift (value types). Record type names are the persisted
+// `SyncRecordType` raw values. Every name here is PERSISTED: never rename or remove a record
+// type or field once deployed to Production (CloudKit rejects removals), and never flip a field
+// between plain and ENCRYPTED. Add new fields here in the same change that adds them to
+// RecordSchema.swift; CloudKitSchemaFileTests fails if this file falls behind the code.
+//
+// Import into Development and deploy to Production with scripts/cloudkit/deploy-schema.sh.
+//
+// Value types written by RecordMapper:
+//   ids, sort keys, enum raw values, URLs  -> STRING   (UUIDs as uuidString)
+//   Double                                 -> DOUBLE
+//   Bool flags, version                    -> INT64    (0/1)
+//   Date                                   -> TIMESTAMP
+//   JSON-encoded values                    -> BYTES
+// User content lives in CKRecord.encryptedValues -> ENCRYPTED <type>.
+//
+// Every record type also carries sync metadata: meta_createdAt, meta_modifiedAt, meta_version,
+// meta_isTombstone, meta_deletedAt, plus one groupTime_<group> TIMESTAMP per field group.
+//
+// Indexes: CKSyncEngine fetches by zone change token and needs no query index. The only index
+// is "___recordID" QUERYABLE, which the CloudKit Console needs to list records.
+//
+// Permissions: no GRANT clauses. GRANTs only apply to the PUBLIC database; OpenArc writes only
+// to a custom zone in the private database, where records are readable by their owner alone.
+// Without grants the types are unusable in the public database, which is what we want.
+
+DEFINE SCHEMA
+
+    // System type that every container has; listed so an import never tries to drop it.
+    RECORD TYPE Users (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        roles           LIST<INT64>,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE Profile (
+        "___recordID"           REFERENCE QUERYABLE,
+        naming_name             ENCRYPTED STRING,
+        settings_searchEngine   STRING,
+        settings_todayLifetime  DOUBLE,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_naming        TIMESTAMP,
+        groupTime_settings      TIMESTAMP
+    );
+
+    RECORD TYPE Theme (
+        "___recordID"           REFERENCE QUERYABLE,
+        style_appearance        STRING,
+        style_colors            BYTES,
+        style_grain             DOUBLE,
+        style_brightness        DOUBLE,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_style         TIMESTAMP
+    );
+
+    RECORD TYPE Space (
+        "___recordID"           REFERENCE QUERYABLE,
+        naming_name             ENCRYPTED STRING,
+        naming_icon             ENCRYPTED STRING,
+        theme_themeID           STRING,
+        profile_profileID       STRING,
+        placement_dockSortKey   STRING,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_naming        TIMESTAMP,
+        groupTime_theme         TIMESTAMP,
+        groupTime_profile       TIMESTAMP,
+        groupTime_placement     TIMESTAMP
+    );
+
+    RECORD TYPE Folder (
+        "___recordID"             REFERENCE QUERYABLE,
+        placement_spaceID         STRING,
+        placement_parentFolderID  STRING,
+        placement_sortKey         STRING,
+        naming_title              ENCRYPTED STRING,
+        display_isExpanded        INT64,
+        meta_createdAt            TIMESTAMP,
+        meta_modifiedAt           TIMESTAMP,
+        meta_version              INT64,
+        meta_isTombstone          INT64,
+        meta_deletedAt            TIMESTAMP,
+        groupTime_placement       TIMESTAMP,
+        groupTime_naming          TIMESTAMP,
+        groupTime_display         TIMESTAMP
+    );
+
+    RECORD TYPE Tab (
+        "___recordID"           REFERENCE QUERYABLE,
+        placement_kind          STRING,
+        placement_profileID     STRING,
+        placement_spaceID       STRING,
+        placement_folderID      STRING,
+        placement_sortKey       STRING,
+        content_url             ENCRYPTED STRING,
+        content_title           ENCRYPTED STRING,
+        content_faviconURL      ENCRYPTED STRING,
+        naming_customTitle      ENCRYPTED STRING,
+        pin_url                 ENCRYPTED STRING,
+        activity_lastActiveAt   TIMESTAMP,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_placement     TIMESTAMP,
+        groupTime_content       TIMESTAMP,
+        groupTime_naming        TIMESTAMP,
+        groupTime_pin           TIMESTAMP,
+        groupTime_activity      TIMESTAMP
+    );
+
+    RECORD TYPE ArchiveItem (
+        "___recordID"           REFERENCE QUERYABLE,
+        content_url             ENCRYPTED STRING,
+        content_title           ENCRYPTED STRING,
+        content_faviconURL      ENCRYPTED STRING,
+        content_folderPath      LIST<ENCRYPTED STRING>,
+        content_spaceID         STRING,
+        content_reason          STRING,
+        content_archivedAt      TIMESTAMP,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_content       TIMESTAMP
+    );
+
+    RECORD TYPE SplitLayout (
+        "___recordID"           REFERENCE QUERYABLE,
+        layout_spaceID          STRING,
+        layout_root             BYTES,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_layout        TIMESTAMP
+    );
+
+    RECORD TYPE Easel (
+        "___recordID"           REFERENCE QUERYABLE,
+        naming_title            ENCRYPTED STRING,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_naming        TIMESTAMP
+    );
+
+    RECORD TYPE EaselElement (
+        "___recordID"           REFERENCE QUERYABLE,
+        placement_easelID       STRING,
+        placement_zKey          STRING,
+        geometry_frame          BYTES,
+        content_payload         ENCRYPTED BYTES,
+        style_style             BYTES,
+        meta_createdAt          TIMESTAMP,
+        meta_modifiedAt         TIMESTAMP,
+        meta_version            INT64,
+        meta_isTombstone        INT64,
+        meta_deletedAt          TIMESTAMP,
+        groupTime_placement     TIMESTAMP,
+        groupTime_geometry      TIMESTAMP,
+        groupTime_content       TIMESTAMP,
+        groupTime_style         TIMESTAMP
+    );
