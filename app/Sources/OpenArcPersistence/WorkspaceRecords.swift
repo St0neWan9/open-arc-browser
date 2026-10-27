@@ -16,6 +16,8 @@ extension WorkspaceState {
         case .tab: return tabs[id.uuid].map(SyncRecord.tab)
         case .archiveItem: return archive[id.uuid].map(SyncRecord.archiveItem)
         case .splitLayout: return splits[id.uuid].map(SyncRecord.splitLayout)
+        case .easel: return easels[id.uuid].map(SyncRecord.easel)
+        case .easelElement: return easelElements[id.uuid].map(SyncRecord.easelElement)
         }
     }
 
@@ -29,6 +31,8 @@ extension WorkspaceState {
         case .tab(let v): tabs[v.id] = v
         case .archiveItem(let v): archive[v.id] = v
         case .splitLayout(let v): splits[v.id] = v
+        case .easel(let v): easels[v.id] = v
+        case .easelElement(let v): easelElements[v.id] = v
         }
     }
 
@@ -42,6 +46,8 @@ extension WorkspaceState {
         case .tab: tabs[id.uuid] = nil
         case .archiveItem: archive[id.uuid] = nil
         case .splitLayout: splits[id.uuid] = nil
+        case .easel: easels[id.uuid] = nil
+        case .easelElement: easelElements[id.uuid] = nil
         }
     }
 
@@ -55,6 +61,8 @@ extension WorkspaceState {
         ids += tabs.keys.map { SyncRecordID(type: .tab, uuid: $0) }
         ids += archive.keys.map { SyncRecordID(type: .archiveItem, uuid: $0) }
         ids += splits.keys.map { SyncRecordID(type: .splitLayout, uuid: $0) }
+        ids += easels.keys.map { SyncRecordID(type: .easel, uuid: $0) }
+        ids += easelElements.keys.map { SyncRecordID(type: .easelElement, uuid: $0) }
         return ids.sorted { $0.recordName < $1.recordName }
     }
 }
@@ -101,6 +109,8 @@ public enum WorkspaceDiff {
         compare(old.tabs, new.tabs, .tab, &result)
         compare(old.archive, new.archive, .archiveItem, &result)
         compare(old.splits, new.splits, .splitLayout, &result)
+        compare(old.easels, new.easels, .easel, &result)
+        compare(old.easelElements, new.easelElements, .easelElement, &result)
         result.saved.sort { $0.recordName < $1.recordName }
         result.removed.sort { $0.recordName < $1.recordName }
         return result

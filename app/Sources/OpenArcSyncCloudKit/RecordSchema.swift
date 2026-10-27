@@ -145,6 +145,27 @@ enum SplitLayoutFields {
     static let all = [spaceID, root]
 }
 
+enum EaselFields {
+    typealias G = Easel.FieldGroup
+    static let title = FieldSpec("naming_title", G.naming, encrypted: true)
+    static let all = [title]
+}
+
+enum EaselElementFields {
+    typealias G = EaselElement.FieldGroup
+    static let easelID = FieldSpec("placement_easelID", G.placement)
+    static let zKey = FieldSpec("placement_zKey", G.placement)
+    /// JSON-encoded `EaselRect`.
+    static let frame = FieldSpec("geometry_frame", G.geometry)
+    /// JSON-encoded `EaselElementContent` (text, inline image bytes, arrow ends, stroke points).
+    /// Encrypted: it is what the user drew or wrote. Inline images are capped at
+    /// `EaselImage.maxEncodedBytes`, which keeps the record under CloudKit's 1 MB limit.
+    static let content = FieldSpec("content_payload", G.content, encrypted: true)
+    /// JSON-encoded `EaselStyle` (colors and sizes, no user content).
+    static let style = FieldSpec("style_style", G.style)
+    static let all = [easelID, zKey, frame, content, style]
+}
+
 enum RecordSchema {
     /// Raw values of the field groups of a record type.
     static func groups(of type: SyncRecordType) -> [String] {
@@ -156,6 +177,8 @@ enum RecordSchema {
         case .tab: return TabNode.FieldGroup.allCases.map(\.rawValue)
         case .archiveItem: return ArchiveItem.FieldGroup.allCases.map(\.rawValue)
         case .splitLayout: return SplitLayout.FieldGroup.allCases.map(\.rawValue)
+        case .easel: return Easel.FieldGroup.allCases.map(\.rawValue)
+        case .easelElement: return EaselElement.FieldGroup.allCases.map(\.rawValue)
         }
     }
 
@@ -169,6 +192,8 @@ enum RecordSchema {
         case .tab: return TabFields.all
         case .archiveItem: return ArchiveItemFields.all
         case .splitLayout: return SplitLayoutFields.all
+        case .easel: return EaselFields.all
+        case .easelElement: return EaselElementFields.all
         }
     }
 

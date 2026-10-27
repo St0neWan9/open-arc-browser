@@ -58,6 +58,8 @@ public enum RecordMerge {
         case (.tab(let l), .tab(let s)): return entity(l, s, copyTab, SyncRecord.tab)
         case (.archiveItem(let l), .archiveItem(let s)): return entity(l, s, copyArchiveItem, SyncRecord.archiveItem)
         case (.splitLayout(let l), .splitLayout(let s)): return entity(l, s, copySplitLayout, SyncRecord.splitLayout)
+        case (.easel(let l), .easel(let s)): return entity(l, s, copyEasel, SyncRecord.easel)
+        case (.easelElement(let l), .easelElement(let s)): return entity(l, s, copyEaselElement, SyncRecord.easelElement)
         default: return nil
         }
     }
@@ -165,6 +167,23 @@ public enum RecordMerge {
         case .layout:
             m.spaceID = l.spaceID
             m.root = l.root
+        }
+    }
+
+    static func copyEasel(_ m: inout Easel, _ l: Easel, _ g: Easel.FieldGroup) {
+        switch g {
+        case .naming: m.title = l.title
+        }
+    }
+
+    static func copyEaselElement(_ m: inout EaselElement, _ l: EaselElement, _ g: EaselElement.FieldGroup) {
+        switch g {
+        case .placement:
+            m.easelID = l.easelID
+            m.zKey = l.zKey
+        case .geometry: m.frame = l.frame
+        case .content: m.content = l.content
+        case .style: m.style = l.style
         }
     }
 }

@@ -13,6 +13,10 @@ public struct WorkspaceState: Codable, Hashable, Sendable {
     public var tabs: [UUID: TabNode]
     public var archive: [UUID: ArchiveItem]
     public var splits: [UUID: SplitLayout]
+    /// Easels and their elements (B56, Easel.swift). Data written before they existed decodes
+    /// with none.
+    public var easels: [UUID: Easel]
+    public var easelElements: [UUID: EaselElement]
 
     public init(
         profiles: [UUID: Profile] = [:],
@@ -21,7 +25,9 @@ public struct WorkspaceState: Codable, Hashable, Sendable {
         folders: [UUID: Folder] = [:],
         tabs: [UUID: TabNode] = [:],
         archive: [UUID: ArchiveItem] = [:],
-        splits: [UUID: SplitLayout] = [:]
+        splits: [UUID: SplitLayout] = [:],
+        easels: [UUID: Easel] = [:],
+        easelElements: [UUID: EaselElement] = [:]
     ) {
         self.profiles = profiles
         self.themes = themes
@@ -30,6 +36,26 @@ public struct WorkspaceState: Codable, Hashable, Sendable {
         self.tabs = tabs
         self.archive = archive
         self.splits = splits
+        self.easels = easels
+        self.easelElements = easelElements
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profiles, themes, spaces, folders, tabs, archive, splits, easels, easelElements
+    }
+
+    /// Decodes a workspace; tables added after the first format (Easels) may be missing.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        profiles = try c.decode([UUID: Profile].self, forKey: .profiles)
+        themes = try c.decode([UUID: Theme].self, forKey: .themes)
+        spaces = try c.decode([UUID: Space].self, forKey: .spaces)
+        folders = try c.decode([UUID: Folder].self, forKey: .folders)
+        tabs = try c.decode([UUID: TabNode].self, forKey: .tabs)
+        archive = try c.decode([UUID: ArchiveItem].self, forKey: .archive)
+        splits = try c.decode([UUID: SplitLayout].self, forKey: .splits)
+        easels = try c.decodeIfPresent([UUID: Easel].self, forKey: .easels) ?? [:]
+        easelElements = try c.decodeIfPresent([UUID: EaselElement].self, forKey: .easelElements) ?? [:]
     }
 }
 

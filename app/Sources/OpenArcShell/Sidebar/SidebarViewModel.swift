@@ -778,7 +778,10 @@ public final class SidebarViewModel: ObservableObject {
     public func commitRename(_ id: UUID, text: String) {
         defer { renamingItemID = nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if workspace.tabs[id] != nil {
+        if let easelID = workspace.easelID(ofTab: id), workspace.liveEasel(easelID) != nil {
+            // Renaming an Easel's row renames the Easel (canvas title and every row). B56, inferred.
+            mutate { try TreeOps.renameEasel($0, id: easelID, title: trimmed, now: now()) }
+        } else if workspace.tabs[id] != nil {
             mutate { try TreeOps.renameTab($0, id: id, customTitle: trimmed.isEmpty ? nil : trimmed, now: now()) }
         } else if workspace.folders[id] != nil, !trimmed.isEmpty {
             mutate { try TreeOps.renameFolder($0, id: id, title: trimmed, now: now()) }

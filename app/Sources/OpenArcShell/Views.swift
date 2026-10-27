@@ -168,8 +168,7 @@ struct MainWindowContent: View {
     /// (the panel's rounded corners and shadow wrap both). [06 §17.2] observed. B43.
     @ViewBuilder
     private func singlePanel(layout: MainWindowLayout, palette: ThemePalette) -> some View {
-        let page = WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground,
-                            crashed: model.crashedPageState(for: sidebar.selectedTabID))
+        let page = EaselOrWebPanel(model: model, sidebar: sidebar, size: layout.webPanelFrame.size, palette: palette)
         if layout.isWebToolbarShown {
             WebPanelWithToolbar(model: model, sidebar: sidebar, size: layout.webPanelFrame.size) { page }
         } else {

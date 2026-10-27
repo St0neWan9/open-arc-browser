@@ -53,8 +53,7 @@ struct LibraryView: View {
             SplitWebArea(model: model, sidebar: sidebar, layout: splitLayout, size: frame.size, palette: palette)
                 .offset(x: frame.minX, y: frame.minY)
         } else {
-            WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground,
-                     crashed: model.crashedPageState(for: sidebar.selectedTabID))
+            EaselOrWebPanel(model: model, sidebar: sidebar, size: frame.size, palette: palette)
                 .frame(width: frame.width, height: frame.height)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
                 .webPanelEdgeShadow(palette.appearance)
@@ -205,7 +204,10 @@ struct LibraryListColumn: View {
             }
         case .downloads:
             LibraryDownloadsList(library: library, downloads: library.downloads, palette: palette)
-        case .easels, .boosts:
+        case .easels:
+            // B56: the Easels list (empty state included).
+            LibraryEaselsList(library: library, palette: palette)
+        case .boosts:
             if let empty = section.emptyState {
                 LibraryEmptyStateView(state: empty, isBoosts: section == .boosts, palette: palette)
             }

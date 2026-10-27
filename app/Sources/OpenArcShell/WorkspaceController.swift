@@ -442,6 +442,8 @@ public final class WorkspaceController: ObservableObject {
     /// Space's profile (or the favorite's profile), else `fallbackProfileID`.
     func ensureLive(_ id: UUID, fallbackProfileID: UUID?) async throws {
         guard liveTabs[id] == nil, !pageRequests.adopting.contains(id), let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
+        // An Easel's row shows the canvas, never an engine page (B56).
+        guard workspace.easelID(ofTab: id) == nil else { return }
         guard let profileID = engineProfileID(forTab: tab) ?? fallbackProfileID else { return }
         let engine = dependencies.engine
         let scheme = webColorScheme(forTab: id)

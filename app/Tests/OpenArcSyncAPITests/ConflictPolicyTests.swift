@@ -131,6 +131,8 @@ final class SyncRecordTests: XCTestCase {
         XCTAssertEqual(SyncRecordType.tab.rawValue, TabNode.recordTypeName)
         XCTAssertEqual(SyncRecordType.archiveItem.rawValue, ArchiveItem.recordTypeName)
         XCTAssertEqual(SyncRecordType.splitLayout.rawValue, SplitLayout.recordTypeName)
+        XCTAssertEqual(SyncRecordType.easel.rawValue, Easel.recordTypeName)
+        XCTAssertEqual(SyncRecordType.easelElement.rawValue, EaselElement.recordTypeName)
     }
 
     /// Every encrypted group name must be a real field group of that record type.
@@ -144,6 +146,8 @@ final class SyncRecordTests: XCTestCase {
             .tab: names(TabNode.FieldGroup.self),
             .archiveItem: names(ArchiveItem.FieldGroup.self),
             .splitLayout: names(SplitLayout.FieldGroup.self),
+            .easel: names(Easel.FieldGroup.self),
+            .easelElement: names(EaselElement.FieldGroup.self),
         ]
         for type in SyncRecordType.allCases {
             XCTAssertTrue(type.encryptedFieldGroups.isSubset(of: groups[type] ?? []), "\(type)")
