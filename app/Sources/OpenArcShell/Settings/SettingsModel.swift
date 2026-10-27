@@ -451,6 +451,19 @@ public final class SettingsModel: ObservableObject {
         isAdBlockingOn = on
     }
 
+    /// Keeps `adBlockingRulesetVersion` current while the caller's task runs: a filter-list update
+    /// from our static host (plan C19) replaces the ruleset without a restart, and Settings shows
+    /// the new version at once. Subscribes before re-reading, so an update in between is not lost.
+    /// Ends when the task is cancelled (the view's `.task`) or the engine's stream ends.
+    public func followAdBlockingRulesetVersion() async {
+        let blocker = shell.controller.dependencies.engine.adBlocking
+        let changes = blocker.rulesetVersionChanges()
+        adBlockingRulesetVersion = await blocker.rulesetVersion()
+        for await version in changes {
+            adBlockingRulesetVersion = version
+        }
+    }
+
     /// Sets the global switch. Open tabs follow at their next page load.
     public func setAdBlocking(_ isOn: Bool) async {
         isAdBlockingOn = isOn

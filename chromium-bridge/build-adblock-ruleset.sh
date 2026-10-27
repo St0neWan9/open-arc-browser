@@ -5,7 +5,8 @@
 #   CHROMIUM_SRC  Chromium's src/ directory (default: ~/chromium/src)
 #   OUT_DIR       GN output directory relative to CHROMIUM_SRC (default: out/Release); its
 #                 ruleset_converter is built if missing
-#   FRAMEWORK     framework to install into (default: OUT_DIR/OpenArcCore.framework)
+#   FRAMEWORK     framework to install into (default: OUT_DIR/OpenArcCore.framework); "-" only
+#                 stages the files in app/.build/adblock/ruleset/ (scripts/publish-adblock-ruleset.sh)
 #
 # Steps:
 #   1. Download EasyList and EasyPrivacy (public filter lists, https://easylist.to) into
@@ -24,7 +25,9 @@
 # framework's Resources from its own inputs. Network: two HTTPS downloads (~2 MB). When the
 # download fails, the last lists in app/.build/adblock/lists/ are used if present.
 #
-# Updates between app releases come later from our static host (TODO in openarc_ad_blocker.h).
+# Updates between app releases (plan C19): scripts/publish-adblock-ruleset.sh runs this script with
+# FRAMEWORK "-", signs the staged ruleset and writes the manifest for our static host; the app
+# fetches and verifies it (chromium-bridge/README.md §Ad blocking).
 
 set -eu
 
@@ -101,6 +104,11 @@ GNU General Public License, version 3 or later
 CC BY-SA 3.0. The converted ruleset is a derivative of the lists and is
 distributed under the same license.
 EOF
+
+if [ "$FRAMEWORK" = "-" ]; then
+    echo "ad block ruleset $(cat "$STAGE/ruleset.version"): $(wc -c < "$STAGE/ruleset.pb" | tr -d ' ') bytes, staged in $STAGE" >&2
+    exit 0
+fi
 
 echo "==> installing into $FRAMEWORK" >&2
 [ -d "$FRAMEWORK/Versions/A/Resources" ] ||

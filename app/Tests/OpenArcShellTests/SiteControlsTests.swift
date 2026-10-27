@@ -378,4 +378,22 @@ final class SiteControlsAdBlockingTests: XCTestCase {
         XCTAssertFalse(global)
         XCTAssertEqual(SettingsCatalog.control("advanced.adBlocking").kind, .toggle(defaultValue: true))
     }
+
+    /// Plan C19: a filter-list update applied without a restart shows its version in Settings at
+    /// once ([00 §已定的服务策略] observed: the project hosts the merged rules; display inferred).
+    func testSettingsShowsALiveRulesetUpdate() async throws {
+        let settings = SettingsModel(shell: model)
+        let follow = Task { await settings.followAdBlockingRulesetVersion() }
+        defer { follow.cancel() }
+        try await waitFor { settings.adBlockingRulesetVersion == "fake-ruleset" }
+        engine.fakeAdBlockingService.simulateRuleset("20261028-0123456789ab")
+        try await waitFor { settings.adBlockingRulesetVersion == "20261028-0123456789ab" }
+    }
+
+    private func waitFor(_ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<200 where !condition() {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(condition(), file: file, line: line)
+    }
 }

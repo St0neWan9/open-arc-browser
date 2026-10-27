@@ -1,0 +1,384 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 27 Oct 2026 08:49:09 -0700
+Subject: [PATCH] openarc: embedder: ad-block filter-list updates without a
+ restart
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+DRAFT, NOT APPLIED. Written against openarc/156 as exported in
+chromium-patches/156 (0018 and later) but neither compiled nor run; the
+main session applies, builds and tests it (chromium-bridge/README.md
+§Ad blocking, "Applying the C19 draft").
+
+Plan C19. The ad blocker (0018) shipped its EasyList + EasyPrivacy ruleset
+only inside the framework, so new filter lists needed an app release.
+The shell now downloads newer rulesets from our static host and verifies
+them (Ed25519-signed manifest, size and SHA-256 per file; Swift, in
+app/Sources/OpenArcEngine/AdBlockRulesetUpdates.swift) and stores them in
+<user data dir>/Open Arc Ad Block/rulesets/<version>/ with an atomically
+swapped "Current" link. This change lets the engine use them:
+
+- -[OACApplication loadAdBlockingRulesetFromDirectory:completionHandler:]
+  hands a verified directory to AdBlocker::LoadRuleset, which gives it to
+  Chrome's RulesetService: a new content version is indexed on the
+  service's background sequence and published to every renderer, so page
+  loads after that use it without a restart. The handler reports the
+  version once it has been handed over.
+- AdBlocker::LoadRuleset takes an optional completion callback.
+- At startup, LoadBundledRuleset compares the bundled ruleset with the
+  downloaded one (Current, resolved and kept inside the store) and loads
+  the downloaded one unless the bundled one was built on a later day. Both
+  must be compared: RulesetService re-indexes whenever the supplied
+  version differs from the last indexed one, so loading the older bundled
+  ruleset would undo the download at every start.
+- kRulesetUpdateManifestURL goes away: the URL, the schedule and the trust
+  decision live in the shell, which unit-tests them.
+
+Without this change the shell's updater stays off (it checks for the
+bridge method at run time).
+---
+ openarc/bridge/oac_application.mm             |  38 ++++++
+ .../public/OpenArcCore/OACApplication.h       |  16 +++
+ openarc/browser/openarc_ad_blocker.h          |  62 ++++++---
+ openarc/browser/openarc_ad_blocker.mm         | 118 +++++++++++++++---
+ 4 files changed, 199 insertions(+), 35 deletions(-)
+
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 2c7169e6687c..e0a97e86462e 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -629,6 +629,44 @@ - (NSString*)adBlockingRulesetVersion {
+   return version.empty() ? nil : base::SysUTF8ToNSString(version);
+ }
+ 
++- (void)loadAdBlockingRulesetFromDirectory:(NSURL*)directory
++                         completionHandler:
++                             (void (^)(NSString* _Nullable version,
++                                       NSError* _Nullable error))completionHandler {
++  CHECK(NSThread.isMainThread);
++  completionHandler = [completionHandler copy];
++  auto fail = ^(OACErrorCode code, NSString* description) {
++    NSError* error = OACMakeError(code, description);
++    OACPostToMainThread(^{
++      completionHandler(nil, error);
++    });
++  };
++  if (_state != OACApplicationStateRunning) {
++    fail(OACErrorNotStarted, @"The engine is not running.");
++    return;
++  }
++  if (!directory.isFileURL) {
++    fail(OACErrorInvalidArgument, @"The ruleset directory must be a file URL.");
++    return;
++  }
++  const bool started = openarc::AdBlocker::Get().LoadRuleset(
++      base::apple::NSURLToFilePath(directory),
++      base::BindOnce(^(const std::string& version) {
++        // Runs on the UI thread from a posted task (LoadRuleset's reply), so
++        // the handler is never called re-entrantly.
++        if (version.empty()) {
++          completionHandler(
++              nil, OACMakeError(OACErrorInvalidArgument,
++                                @"The directory holds no ad blocking ruleset."));
++        } else {
++          completionHandler(base::SysUTF8ToNSString(version), nil);
++        }
++      }));
++  if (!started) {
++    fail(OACErrorNotStarted, @"The ad blocker's ruleset service is not running.");
++  }
++}
++
+ // MARK: Tabs
+ 
+ - (void)registerTab:(OACTab*)tab {
+diff --git a/openarc/bridge/public/OpenArcCore/OACApplication.h b/openarc/bridge/public/OpenArcCore/OACApplication.h
+index 69dd4d97fe25..9a730ab993e5 100644
+--- a/openarc/bridge/public/OpenArcCore/OACApplication.h
++++ b/openarc/bridge/public/OpenArcCore/OACApplication.h
+@@ -138,6 +138,22 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ /// blocker then matches nothing.
+ @property (nonatomic, readonly, copy, nullable) NSString *adBlockingRulesetVersion;
+ 
++/// Loads a newer filter ruleset without a restart (plan C19). `directory` holds `ruleset.pb`,
++/// `ruleset.version` and `ATTRIBUTION` (the shell has already verified the download's signature
++/// and hashes; this call trusts the directory). Chromium indexes a version it has not indexed
++/// before in the background and then publishes it to every renderer: page loads after that use
++/// it, pages already on screen keep their filter until reloaded. `adBlockingRulesetVersion`
++/// reports the new version from the moment the handler runs. The handler gets the loaded version,
++/// or nil and an error when the directory holds no ruleset or the engine is not running.
++///
++/// The engine also picks the download up at the next start: it loads
++/// `<userDataDirectory>/Open Arc Ad Block/Current` when that ruleset was built on the same day as
++/// the bundled one or later.
++- (void)loadAdBlockingRulesetFromDirectory:(NSURL *)directory
++                         completionHandler:(void (^)(NSString *_Nullable version,
++                                                     NSError *_Nullable error))completionHandler
++    NS_SWIFT_NAME(loadAdBlockingRuleset(from:completionHandler:));
++
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;
+ @end
+diff --git a/openarc/browser/openarc_ad_blocker.h b/openarc/browser/openarc_ad_blocker.h
+index d58dec17e57d..e04d434b2402 100644
+--- a/openarc/browser/openarc_ad_blocker.h
++++ b/openarc/browser/openarc_ad_blocker.h
+@@ -7,6 +7,8 @@
+ 
+ #include <string>
+ 
++#include "base/functional/callback.h"
++
+ #include "base/files/file_path.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
+@@ -48,22 +50,28 @@ namespace openarc {
+ //   for every profile of the app and survives restarts; Settings reads and
+ //   writes it through OACApplication.adBlockingEnabled.
+ //
+-// TODO(C16 updater): fetch newer rulesets from our static host instead of
+-// waiting for an app update. Design: a daily BEST_EFFORT task reads a small
+-// manifest (version, SHA-256, size) from kRulesetUpdateManifestURL (empty
+-// until the host exists, which keeps the updater off), downloads the
+-// unindexed ruleset over HTTPS into <user data dir>/Open Arc Ad Block/<version>/
+-// when the version differs, checks the hash, and calls LoadRuleset() with it.
+-// RulesetService then indexes and publishes it without a restart. The bundled
+-// ruleset stays the fallback. A Settings switch ("Update filter lists
+-// automatically") comes with it. Until then, --openarc-ad-block-ruleset=<dir>
+-// (a directory with ruleset.pb and ruleset.version) loads a ruleset from disk,
+-// the same entry point the updater will use.
++// - Updates (plan C19). The shell (OpenArcChromium) fetches newer rulesets
++//   from our static host: a signed manifest (Ed25519, key built into the
++//   app), size and SHA-256 checks, then it writes the files into
++//   <user data dir>/Open Arc Ad Block/rulesets/<version>/ and swaps the link
++//   <user data dir>/Open Arc Ad Block/Current to it. It then calls
++//   LoadRuleset() through -[OACApplication
++//   loadAdBlockingRulesetFromDirectory:completionHandler:]; RulesetService
++//   indexes and publishes the new ruleset without a restart, and every page
++//   load after that uses it. Download and verification live in Swift
++//   (OpenArcEngine/AdBlockRulesetUpdates.swift), where they are unit-tested;
++//   this side only loads directories. At startup LoadBundledRuleset() picks
++//   the downloaded ruleset over the bundled one unless the bundled one was
++//   built on a later day (an app update brought newer lists).
++//   --openarc-ad-block-ruleset=<dir> (a directory with ruleset.pb and
++//   ruleset.version) still overrides both for development.
+ class AdBlocker {
+  public:
+-  // Where the updater will read its manifest; empty keeps it off. See the
+-  // TODO above.
+-  static constexpr char kRulesetUpdateManifestURL[] = "";
++  // The shell's update store inside the user data directory, and the link in
++  // it that names the ruleset to load at startup. Keep in sync with
++  // AdBlockRulesetStore (app/Sources/OpenArcEngine/AdBlockRulesetUpdates.swift).
++  static constexpr char kDownloadedRulesetDirectory[] = "Open Arc Ad Block";
++  static constexpr char kCurrentRulesetLink[] = "Current";
+   // Local State pref holding the global switch.
+   static constexpr char kEnabledPref[] = "openarc.ad_blocking.enabled";
+   // Development switch: load the ruleset from this directory instead of the
+@@ -81,14 +89,30 @@ class AdBlocker {
+   void Initialize(PrefService* local_state);
+   // Called before Local State goes away (PostMainMessageLoopRun).
+   void Shutdown();
+-  // Hands the bundled ruleset (or --openarc-ad-block-ruleset) to Chrome's
+-  // RulesetService. Called after the service exists (PostBrowserStart).
++  // Hands --openarc-ad-block-ruleset, else the newer of the bundled and the
++  // downloaded ruleset (ChooseStartupRuleset), to Chrome's RulesetService.
++  // Called after the service exists (PostBrowserStart).
+   void LoadBundledRuleset();
++  // Called with the version handed to the RulesetService, or "" when
++  // |directory| holds no ruleset or the service is gone.
++  using LoadCallback = base::OnceCallback<void(const std::string& version)>;
+   // Hands the unindexed ruleset in |directory| (ruleset.pb, ruleset.version,
+   // ATTRIBUTION) to the RulesetService, after reading its version in the
+-  // background. A version it already indexed is not indexed again. Returns
+-  // false when there is no RulesetService.
+-  bool LoadRuleset(const base::FilePath& directory);
++  // background. A version it already indexed is not indexed again; a new one
++  // is indexed on the service's background sequence and then published to
++  // every renderer, replacing the previous ruleset without a restart. Returns
++  // false (and drops |callback|) when there is no RulesetService.
++  bool LoadRuleset(const base::FilePath& directory,
++                   LoadCallback callback = LoadCallback());
++  // <user data dir>/Open Arc Ad Block, empty when the user data directory is
++  // unknown.
++  static base::FilePath DownloadedRulesetStore();
++  // The startup rule, also used by the shell before it installs a download
++  // (AdBlockRulesetVersion.mayReplace): versions are
++  // "<yyyymmdd>-<hash prefix>"; |downloaded| wins unless it is malformed or
++  // |bundled| is well formed and built on a later day.
++  static bool PrefersDownloaded(const std::string& bundled,
++                                const std::string& downloaded);
+   // A ruleset was supplied or an indexed one is on disk.
+   bool IsAvailable() const;
+   // The content version of the newest ruleset ("" when none).
+diff --git a/openarc/browser/openarc_ad_blocker.mm b/openarc/browser/openarc_ad_blocker.mm
+index 6bb70c425efe..03111c6c49ef 100644
+--- a/openarc/browser/openarc_ad_blocker.mm
++++ b/openarc/browser/openarc_ad_blocker.mm
+@@ -12,10 +12,12 @@
+ #include "base/files/file_util.h"
+ #include "base/logging.h"
+ #include "base/no_destructor.h"
++#include "base/path_service.h"
+ #include "base/strings/string_util.h"
+ #include "base/functional/bind.h"
+ #include "base/task/thread_pool.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/common/chrome_paths.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "components/prefs/pref_registry_simple.h"
+@@ -86,17 +88,6 @@
+   local_state_ = nullptr;
+ }
+ 
+-void AdBlocker::LoadBundledRuleset() {
+-  const base::CommandLine& command_line =
+-      *base::CommandLine::ForCurrentProcess();
+-  // A framework built without the lists (build-adblock-ruleset.sh not run)
+-  // has no Resources/AdBlock: the filter then has nothing to match, unless an
+-  // earlier ruleset is still indexed in the user data directory.
+-  LoadRuleset(command_line.HasSwitch(kRulesetDirectorySwitch)
+-                  ? command_line.GetSwitchValuePath(kRulesetDirectorySwitch)
+-                  : BundledRulesetDirectory());
+-}
+-
+ namespace {
+ 
+ // Reads a ruleset directory's version on a thread that may block; "" when the
+@@ -110,9 +101,98 @@
+   return std::string(base::TrimWhitespaceASCII(version, base::TRIM_ALL));
+ }
+ 
++// "<yyyymmdd>-<6..64 lowercase hex digits>", as build-adblock-ruleset.sh
++// writes it (AdBlockRulesetVersion.isValid on the Swift side).
++bool IsWellFormedVersion(const std::string& version) {
++  if (version.size() < 15 || version.size() > 73 || version[8] != '-') {
++    return false;
++  }
++  for (size_t i = 0; i < version.size(); ++i) {
++    const char c = version[i];
++    if (i < 8 && !base::IsAsciiDigit(c)) {
++      return false;
++    }
++    if (i > 8 && !base::IsAsciiDigit(c) && !(c >= 'a' && c <= 'f')) {
++      return false;
++    }
++  }
++  return true;
++}
++
++// The ruleset to load at startup (blocking): the downloaded one that the
++// store's Current link names, when it is complete, lies inside the store and
++// PrefersDownloaded() picks it; else the bundled one.
++base::FilePath ChooseStartupRuleset(const base::FilePath& bundled,
++                                    const base::FilePath& store) {
++  if (store.empty()) {
++    return bundled;
++  }
++  // realpath(3): empty when the link or its target is missing.
++  const base::FilePath downloaded = base::MakeAbsoluteFilePath(
++      store.Append(AdBlocker::kCurrentRulesetLink));
++  const base::FilePath real_store = base::MakeAbsoluteFilePath(store);
++  if (downloaded.empty() || real_store.empty() ||
++      !real_store.IsParent(downloaded)) {
++    return bundled;
++  }
++  const std::string downloaded_version = ReadRulesetVersion(downloaded);
++  if (downloaded_version.empty() ||
++      !AdBlocker::PrefersDownloaded(ReadRulesetVersion(bundled),
++                                    downloaded_version)) {
++    return bundled;
++  }
++  return downloaded;
++}
++
+ }  // namespace
+ 
+-bool AdBlocker::LoadRuleset(const base::FilePath& directory) {
++void AdBlocker::LoadBundledRuleset() {
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  if (command_line.HasSwitch(kRulesetDirectorySwitch)) {
++    LoadRuleset(command_line.GetSwitchValuePath(kRulesetDirectorySwitch));
++    return;
++  }
++  // Both rulesets must be compared at every start: the RulesetService indexes
++  // any version that differs from the last one it indexed, so loading the
++  // older bundled ruleset would undo a download. A framework built without
++  // the lists (build-adblock-ruleset.sh not run) has no Resources/AdBlock: the
++  // filter then uses a downloaded ruleset, or an earlier one still indexed in
++  // the user data directory, or matches nothing.
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&ChooseStartupRuleset, BundledRulesetDirectory(),
++                     DownloadedRulesetStore()),
++      base::BindOnce([](const base::FilePath& directory) {
++        AdBlocker::Get().LoadRuleset(directory);
++      }));
++}
++
++// static
++base::FilePath AdBlocker::DownloadedRulesetStore() {
++  base::FilePath user_data;
++  if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data)) {
++    return base::FilePath();
++  }
++  return user_data.Append(kDownloadedRulesetDirectory);
++}
++
++// static
++bool AdBlocker::PrefersDownloaded(const std::string& bundled,
++                                  const std::string& downloaded) {
++  if (!IsWellFormedVersion(downloaded)) {
++    return false;
++  }
++  if (!IsWellFormedVersion(bundled)) {
++    return true;
++  }
++  // The first 8 characters are the build day; their string order is the date
++  // order.
++  return downloaded.compare(0, 8, bundled, 0, 8) >= 0;
++}
++
++bool AdBlocker::LoadRuleset(const base::FilePath& directory,
++                            LoadCallback callback) {
+   if (!RulesetService()) {
+     return false;
+   }
+@@ -123,14 +203,17 @@
+       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+       base::BindOnce(&ReadRulesetVersion, directory),
+       base::BindOnce(
+-          [](const base::FilePath& directory, const std::string& version) {
++          [](const base::FilePath& directory, LoadCallback callback,
++             const std::string& version) {
+             subresource_filter::RulesetService* service = RulesetService();
+             if (version.empty()) {
+               LOG(WARNING) << "OpenArc: no ad blocking ruleset in "
+                            << directory;
+-              return;
+             }
+-            if (!service) {
++            if (version.empty() || !service) {
++              if (callback) {
++                std::move(callback).Run(std::string());
++              }
+               return;
+             }
+             subresource_filter::UnindexedRulesetInfo info;
+@@ -141,8 +224,11 @@
+             info.license_path = directory.Append(kAttributionFile);
+             service->IndexAndStoreAndPublishRulesetIfNeeded(info);
+             AdBlocker::Get().supplied_version_ = version;
++            if (callback) {
++              std::move(callback).Run(version);
++            }
+           },
+-          directory));
++          directory, std::move(callback)));
+   return true;
+ }
+ 
