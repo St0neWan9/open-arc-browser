@@ -3,8 +3,8 @@
 OpenArc is a clean-room macOS browser. Its interaction and look match Arc one to one; icons and animations may differ. The shell is Swift and SwiftUI and lives in `app/`. The web engine will be a Chromium fork reached through an ObjC++ bridge. Sync uses CloudKit only (CKSyncEngine, private database). AI features are out of scope for v1. The bundle id is the placeholder `org.openarc.browser`, and the minimum OS is macOS 14.
 
 ## Clean-room rules
-- The only source for behavior and looks is `docs/arc-spec/`.
-- **Never read `docs/arc-analysis/`** (it is decompilation background), and do not cite it.
+- The acceptance source for behavior and looks is `docs/arc-spec/`.
+- `docs/arc-analysis/` (decompilation background) may be read as a reference to understand behavior, values and edge cases. Never copy from it: no code, pseudocode structure, strings, class or method names, identifiers or file formats. Restate what you learn in your own words and our own names; when a value from it is used, add it to `docs/arc-spec/` labelled `inferred (analysis)`.
 - Never copy Arc internals: no class names, accessibility identifiers or ranking-model names, even where `docs/arc-spec` mentions them. Use our own names.
 - Never launch, drive or modify Arc.app. Do not touch `~/chromium` unless your task is the Chromium build.
 - Do not install software or kill processes without the user's approval.
@@ -67,9 +67,10 @@ Cite the spec section with the label, for example `docs/arc-spec/04-visual-metri
 3. Interfaces come before parallel work.
    - Only Opus may change protocols and the model.
    - If a Sonnet task needs a protocol change, it stops and reports instead of making the change.
-4. Every Sonnet task must include the matching `docs/arc-spec/` entries as its acceptance criteria. Nobody may read `docs/arc-analysis/` to write an implementation (clean-room).
+4. Every Sonnet task must include the matching `docs/arc-spec/` entries as its acceptance criteria. `docs/arc-analysis/` may be consulted as a reference, never copied (see Clean-room rules).
 5. Subagent reports are at most 25 lines: what changed, test results, and the points that need a decision.
 6. Before a merge, `swift build` and `swift test` must pass, and Opus must review the change.
+7. Before v1 is called done, a final review compares the implementation with `docs/arc-analysis/` and records every behavior difference as a plan task (plan F1).
 
 ## Plan
 - Work follows `docs/implementation-plan.md`, task by task. When a task is finished, set its status to `done` in the same change.
