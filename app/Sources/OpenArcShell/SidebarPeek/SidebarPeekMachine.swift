@@ -29,7 +29,7 @@ public enum SidebarPresentation: Equatable, Sendable {
 
 /// Where the pointer is, as far as the peek cares.
 enum SidebarPeekPointerRegion: Equatable, Sendable {
-    /// The thin hot zone at the window's left edge. [06 §14] observed (x ≈ 0–2 pt).
+    /// The hot zone at the window's left edge: the x = 0 column. [06 §26.2] observed.
     case edge
     /// Over the floating overlay (or a window it opened, e.g. a folder's quick list).
     case overlay

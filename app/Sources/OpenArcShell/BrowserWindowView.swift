@@ -30,7 +30,7 @@ struct BrowserWindowRoot: View {
             .installsSettingsOpener(model)
             .focusedSceneObject(model)
             .background(BrowserWindowObserver(model: model))
-            .background(MainWindowChromeConfigurator(inLibrary: model.library.isActive, showsButtons: model.showsWindowButtons))
+            .background(MainWindowChromeConfigurator(placement: model.windowButtonPlacement))
             .frame(minWidth: 800, minHeight: 500)
             .onAppear(perform: appeared)
     }

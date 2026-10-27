@@ -43,6 +43,20 @@ extension ShellModel {
         sidebarPresentation.showsWindowButtons || spaceFlow.isCreating || library.isActive
     }
 
+    /// Where the traffic lights go. [06 §26] observed: out of the window to the left with the
+    /// hidden sidebar (never over the web panel), inside the floating sidebar while it is out,
+    /// and also out of the window with the web toolbar on, whose first button is then "show
+    /// sidebar" ([06 §17.2] observed). Library and Create Space as in `showsWindowButtons`. B54.
+    var windowButtonPlacement: WindowButtonPlacement {
+        if library.isActive { return .library }
+        if spaceFlow.isCreating { return .pinned }
+        switch sidebarPresentation {
+        case .pinned: return .pinned
+        case .peeking: return .peek
+        case .hidden: return .hidden
+        }
+    }
+
     /// Frames of the window. The floating sidebar does not take part: the web panel keeps its
     /// hidden-state frame while it is out. [06 §14] observed.
     /// The web toolbar takes part while View ▸ Show Toolbar is on ([06 §17], B43); the Library
