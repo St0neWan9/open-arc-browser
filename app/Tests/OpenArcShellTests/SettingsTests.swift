@@ -434,6 +434,8 @@ final class SettingsTests: XCTestCase {
             "advanced.resetTranslatePrompts",
             // B49: the two Peek switches (06 §22.1, 03 §Links).
             "links.peekShiftClick", "links.peekOtherSites",
+            // B82: ⌥⌘N in any app, ⌥⌘-click, Archive Little Arcs after (03 §Links).
+            "links.littleArcHotKey", "links.littleArcModifierClick", "links.archiveLittleArcsAfter",
             // B68: 03 §General Warn before quitting, 03 §Advanced reorder haptics.
             "general.warnBeforeQuitting", "advanced.reorderHaptics",
             // B84: Previews Settings…, sounds, haptics, window dragging, Export Data.

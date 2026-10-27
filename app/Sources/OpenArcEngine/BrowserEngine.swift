@@ -255,6 +255,12 @@ public enum NewTabDisposition: String, Hashable, Sendable {
     case backgroundTab
     case newWindow
     case popup
+    /// A ⌥⌘-click on a link (plan B82). [03 §Links] observed: "Open Little Arc when you ⌥⌘-click a
+    /// link". The shell opens the link in a Little Arc window when that setting is on, else it
+    /// treats the request as `.backgroundTab` (what ⌘-click does, [06 §22.1] observed). Engines
+    /// that cannot tell ⌥⌘ from ⌘ report `.backgroundTab`. Bridge: not in `OACNewTabDisposition`
+    /// yet (SWIFT_PROTOCOL_CHANGES.md §14); `ChromiumEngine` derives it from the modifier state.
+    case littleArc
 }
 
 /// A tab the engine already created for a script-opened window (`window.open`, target=_blank

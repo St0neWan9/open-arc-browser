@@ -420,13 +420,24 @@ struct LinksPane: View {
             Section {
                 Text("Little Arc is a smaller, simpler Open Arc window for quick lookups.")
                     .foregroundStyle(.secondary)
-                PendingToggle(id: "links.littleArcHotKey")
-                PendingToggle(id: "links.littleArcModifierClick")
+                Toggle(
+                    SettingsCatalog.control("links.littleArcHotKey").label,
+                    isOn: Binding(get: { model.opensLittleArcWithGlobalHotKey }, set: { model.opensLittleArcWithGlobalHotKey = $0 })
+                )
+                Toggle(
+                    SettingsCatalog.control("links.littleArcModifierClick").label,
+                    isOn: Binding(get: { model.opensLittleArcOnOptionCommandClick }, set: { model.opensLittleArcOnOptionCommandClick = $0 })
+                )
                 Toggle(
                     SettingsCatalog.control("links.littleArcExternal").label,
                     isOn: Binding(get: { model.opensExternalLinksInLittleArc }, set: { model.opensExternalLinksInLittleArc = $0 })
                 )
-                PendingPicker(id: "links.archiveLittleArcsAfter")
+                Picker(SettingsCatalog.control("links.archiveLittleArcsAfter").label, selection: Binding(
+                    get: { model.littleArcArchiveLifetime }, set: { model.littleArcArchiveLifetime = $0 }
+                )) {
+                    ForEach(LittleArcArchiveLifetime.allCases) { Text($0.displayName).tag($0) }
+                }
+                .help("Little Arc windows left alone this long close, and their pages go to the archive.")
             } header: { Text("Little Arc") }
             Section {
                 Text("Peek lets you preview a link without opening a new tab.")

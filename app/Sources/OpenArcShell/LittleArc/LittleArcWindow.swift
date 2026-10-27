@@ -50,7 +50,8 @@ struct LittleArcWindowView: View {
             .scaleEffect(isPresented && model.phase != .closed ? 1 : Motion.littleArcScale)
             .background(LittleArcWindowConfigurator(
                 phase: model.phase, size: size, closeMotion: Self.closeMotion(model.closeStyle),
-                onClose: { model.windowDidClose() }
+                onClose: { model.windowDidClose() },
+                onKeyChange: { model.windowKeyStateChanged(isKey: $0) }
             ))
             .ignoresSafeArea()
             // Open: no fade, 98 % → 100 % in ≈ 80 ms. [07 §11] observed. B40.
@@ -359,6 +360,9 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
     /// Fade of the window once the model closed. [07 §11] observed.
     var closeMotion: MotionToken = Motion.littleArcClose
     let onClose: () -> Void
+    /// The window became (true) or stopped being (false) the key window. B82: the idle time of
+    /// "Archive Little Arcs after" counts from the moment it stopped.
+    var onKeyChange: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -368,11 +372,13 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
         coordinator.view = view
         // The view is usually not in its window yet: ask again once it is.
         view.onMoveToWindow = { [weak coordinator] in coordinator?.requestAgain() }
+        coordinator.onKeyChange = onKeyChange
         coordinator.request(phase: phase, size: size, closeMotion: closeMotion, onClose: onClose)
         return view
     }
 
     func updateNSView(_ nsView: WindowProbeView, context: Context) {
+        context.coordinator.onKeyChange = onKeyChange
         context.coordinator.request(phase: phase, size: size, closeMotion: closeMotion, onClose: onClose)
     }
 
@@ -386,6 +392,7 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
         private var isPassScheduled = false
         private var didCloseWindow = false
         private var onClose: (() -> Void)?
+        var onKeyChange: (Bool) -> Void = { _ in }
         private weak var window: NSWindow?
 
         /// Records the wanted state and schedules one pass for the next run-loop turn. Calls made
@@ -488,7 +495,20 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
                 self, selector: #selector(windowWillClose(_:)),
                 name: NSWindow.willCloseNotification, object: window
             )
+            // Key state for "Archive Little Arcs after" (B82).
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowDidBecomeKey(_:)),
+                name: NSWindow.didBecomeKeyNotification, object: window
+            )
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowDidResignKey(_:)),
+                name: NSWindow.didResignKeyNotification, object: window
+            )
+            if window.isKeyWindow { onKeyChange(true) }
         }
+
+        @objc private func windowDidBecomeKey(_ notification: Notification) { onKeyChange(true) }
+        @objc private func windowDidResignKey(_ notification: Notification) { onKeyChange(false) }
 
         /// Writes what differs. Returns whether anything was written.
         private func apply(phase: LittleArcModel.Phase, size: CGSize, to window: NSWindow) -> Bool {

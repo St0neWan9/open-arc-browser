@@ -114,6 +114,8 @@ public final class WorkspaceController: ObservableObject {
     let pageRequests = PageRequestState()
     /// Link preview triggers sent to live tabs (B49, LinkPeek/WorkspaceController+LinkPeek.swift).
     let linkPeekRouting = LinkPeekRouting()
+    /// Open Little Arc windows and their idle-archive timer (B82, LittleArc/LittleArcArchive.swift).
+    let littleArcArchive = LittleArcArchiveState()
     private var engineWork: [Task<Void, Never>] = []
     /// Last queued command per engine tab: the next one waits for it, so commands reach each
     /// engine tab in the order they were issued (`enqueueTabCommand`).
@@ -147,7 +149,7 @@ public final class WorkspaceController: ObservableObject {
     /// The first-run onboarding flow (D9).
     public private(set) lazy var onboarding = OnboardingModel(controller: self)
 
-    private let autoArchiveTicker: any AutoArchiveTicker
+    let autoArchiveTicker: any AutoArchiveTicker
     private var autoArchiveScheduler: AutoArchiveScheduler?
     /// Forwards store changes to the sync store and merges applied remote changes back in.
     private var syncForwarding: Task<Void, Never>?
@@ -167,7 +169,7 @@ public final class WorkspaceController: ObservableObject {
     /// Flushes the store and the UI state and shuts the engine down on
     /// `NSApplication.willTerminateNotification`.
     private var terminationObserver: TerminationObserver?
-    private var isStopped = false
+    private(set) var isStopped = false
     /// Set once the termination flush ran; later UI state saves are skipped.
     private var isTerminating = false
     /// The quit sequence (`prepareForTermination` or the `willTerminate` fallback) is running or
@@ -235,6 +237,8 @@ public final class WorkspaceController: ObservableObject {
         observeSystemAppearance()
         // The app icon chosen in Settings ▸ Icon shows in the Dock again after a relaunch (B84).
         appIcon.applyStored()
+        // ⌥⌘N in any app, while the app runs (B82, [03 §Links] observed switch).
+        syncLittleArcHotKey()
     }
 
     /// An incognito window's controller: one off-the-record Space (dark theme, no favorites) in
@@ -306,6 +310,8 @@ public final class WorkspaceController: ObservableObject {
         isStopped = true
         autoArchiveScheduler?.stop()
         autoArchiveScheduler = nil
+        littleArcArchive.stop()
+        if !isOffTheRecord { dependencies.globalHotKeys.unregisterLittleArcHotKey() }
         syncForwarding?.cancel()
         syncForwarding = nil
         terminationObserver?.invalidate()

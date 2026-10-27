@@ -198,3 +198,11 @@ Found while wiring engine events end to end in the shell (plan C9). The Swift si
 3. **Crash reason (§7, still P3).** `renderProcessGone` carries no reason; the shell's crash page could say "out of memory" vs "crashed" with `OACRenderProcessTermination` passed through (`TabEvent.renderProcessGone(RenderProcessGoneReason)`, a protocol change for Opus).
 4. **Crash recovery event (P3).** `BrowserTabState.isCrashed` goes back to false on reload, but no event says so; the shell clears its flag when a load starts. A `crashRecovered` / `isCrashed` field event would make that explicit.
 5. **Audio:** no request. `OnAudioStateChanged` / `IsCurrentlyAudible` / `IsAudioMuted` / `SetAudioMuted` are wired and verified in the app (speaker icon on the row, Mute in the context menu).
+
+## §14 Little Arc disposition for ⌥⌘-click — P3, B82
+
+**Status: Swift side applied (B82); bridge pending.** `NewTabDisposition.littleArc` reports a ⌥⌘-click on a link ([03 §Links] observed: "⌥⌘-click a link opens Little Arc"). The shell opens the link in a Little Arc window when that setting is on, else it treats the request as `.backgroundTab`.
+
+**Gap.** Chromium's `ui::DispositionFromClick` folds ⌥⌘-click into `NEW_BACKGROUND_TAB` (⌘ wins over ⌥), and `OACNewTabDisposition` has no Little Arc case. **Workaround in place:** `ChromiumEngine.newTabRequested` reads `CGEventSource.flagsState(.combinedSessionState)` and maps a user-gesture URL request for a background tab with ⌥⌘ (no ⇧) still held to `.littleArc`.
+
+**Proposal.** `OACNewTabDispositionLittleArc = 4`, set by the embedder's `OpenURLFromTab` / `AddNewContents` when the triggering mouse event had both the meta and alt modifiers (from `NavigationHandle`/`OpenURLParams` user-gesture input). Then remove the workaround.

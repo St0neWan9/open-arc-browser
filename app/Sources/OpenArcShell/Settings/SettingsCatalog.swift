@@ -164,15 +164,17 @@ public enum SettingsCatalog {
     // was recorded only as a paraphrase, so these labels are inferred.
 
     static let links: [SettingsControl] = [
-        // A system-wide hot key; the app bundle exists (D1) but no plan task builds the hot key yet.
-        SettingsControl("links.littleArcHotKey", "Press ⌥⌘N in any app to open Little Arc", .toggle(defaultValue: true), .pending(task: "unplanned (global hot key)")),
-        // Modifier-clicks on page links come from the engine.
-        SettingsControl("links.littleArcModifierClick", "Open Little Arc when you ⌥⌘-click a link", .toggle(defaultValue: true), .pending(task: "C9")),
+        // Live (B82): a system-wide hot key while the app runs (`LittleArcHotKey.swift`). The spec
+        // records no default; on is inferred.
+        SettingsControl("links.littleArcHotKey", "Press ⌥⌘N in any app to open Little Arc", .toggle(defaultValue: true), .live),
+        // Live (B82): the engine reports ⌥⌘-clicks as `NewTabDisposition.littleArc`. Default on, inferred.
+        SettingsControl("links.littleArcModifierClick", "Open Little Arc when you ⌥⌘-click a link", .toggle(defaultValue: true), .live),
         // Live (B24): web links from other apps open in a new expanded Little Arc window. The spec
         // records no default for this toggle; off is inferred (`AppPreferences.opensExternalLinksInLittleArc`).
         SettingsControl("links.littleArcExternal", "Open links from other apps in Little Arc", .toggle(defaultValue: false), .live),
-        // Observed default 6 hours; Little Arc windows are not archived yet (B10 closes them).
-        SettingsControl("links.archiveLittleArcsAfter", "Archive Little Arcs after", .picker(defaultValue: "6 hours"), .pending(task: "B10 follow-up")),
+        // Live (B82): observed default 6 hours; idle Little Arc windows close and their pages are
+        // archived (`LittleArcArchive.swift`).
+        SettingsControl("links.archiveLittleArcsAfter", "Archive Little Arcs after", .picker(defaultValue: LittleArcArchiveLifetime.default.displayName), .live),
         // Live (B49): `AppPreferences.opensPeekOnShiftClick` / `opensPeekForOtherSites`. Defaults
         // inferred (the spec records none). [06 §22.1] observed behavior.
         SettingsControl("links.peekShiftClick", "Shift-click a link to open it in Peek", .toggle(defaultValue: true), .live),

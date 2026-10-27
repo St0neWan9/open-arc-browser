@@ -55,7 +55,7 @@ struct LinkPeekOverlay: View {
             }
         }
         .frame(width: layout.windowSize.width, height: layout.windowSize.height, alignment: .topLeading)
-        .background(LinkPeekEscapeMonitor(isActive: handlesEscape) { peek.close() })
+        .background(LinkPeekEscapeMonitor(isActive: handlesEscape, onEscape: { peek.close() }, onOpenInSpace: { peek.openInSpace(nil) }))
         .onAppear {
             withAnimation(ShellMotion.peekOpen) { isSettled = true }
         }
@@ -138,12 +138,14 @@ private struct LinkPeekButton: View {
     }
 }
 
-/// Esc closes Peek. [06 §22.3] observed. The page has keyboard focus and the engine keeps keys it
-/// does not handle from SwiftUI's shortcuts, so a local key monitor of this window catches Esc
-/// before dispatch.
+/// Esc closes Peek ([06 §22.3] observed); ⌘O opens the Peek page in the current Space ([02 §tabs]
+/// observed "Open Little Arc or Peek in…", B82). The page has keyboard focus and the engine keeps
+/// keys it does not handle from SwiftUI's shortcuts, so a local key monitor of this window catches
+/// both before dispatch.
 private struct LinkPeekEscapeMonitor: NSViewRepresentable {
     var isActive: Bool
     let onEscape: () -> Void
+    var onOpenInSpace: () -> Void = {}
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -154,6 +156,7 @@ private struct LinkPeekEscapeMonitor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.isActive = isActive
         context.coordinator.onEscape = onEscape
+        context.coordinator.onOpenInSpace = onOpenInSpace
         context.coordinator.install()
     }
 
@@ -168,29 +171,40 @@ private struct LinkPeekEscapeMonitor: NSViewRepresentable {
         weak var view: NSView?
         var isActive = true
         var onEscape: () -> Void = {}
+        var onOpenInSpace: () -> Void = {}
         private var monitor: Any?
 
         /// Esc's virtual key code.
         private static let escapeKeyCode: UInt16 = 53
+        /// The O key's virtual key code (ANSI layout position; ⌘O is matched by character too).
+        private static let oKeyCode: UInt16 = 31
 
         func install() {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 let keyCode = event.keyCode, number = event.windowNumber
+                let characters = event.charactersIgnoringModifiers?.lowercased()
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
                 let handled = MainActor.assumeIsolated {
-                    self?.handle(keyCode: keyCode, flags: flags, windowNumber: number) ?? false
+                    self?.handle(keyCode: keyCode, characters: characters, flags: flags, windowNumber: number) ?? false
                 }
                 return handled ? nil : event
             }
         }
 
-        /// A plain Esc in this window closes Peek; returns whether it was consumed.
-        private func handle(keyCode: UInt16, flags: NSEvent.ModifierFlags, windowNumber: Int) -> Bool {
-            guard isActive, keyCode == Self.escapeKeyCode, flags.isEmpty,
-                  let window = view?.window, window.windowNumber == windowNumber else { return false }
-            onEscape()
-            return true
+        /// A plain Esc in this window closes Peek, ⌘O opens it in the Space; returns whether the
+        /// key was consumed.
+        private func handle(keyCode: UInt16, characters: String?, flags: NSEvent.ModifierFlags, windowNumber: Int) -> Bool {
+            guard isActive, let window = view?.window, window.windowNumber == windowNumber else { return false }
+            if keyCode == Self.escapeKeyCode, flags.isEmpty {
+                onEscape()
+                return true
+            }
+            if flags == .command, characters == "o" || (characters == nil && keyCode == Self.oKeyCode) {
+                onOpenInSpace()
+                return true
+            }
+            return false
         }
 
         func remove() {

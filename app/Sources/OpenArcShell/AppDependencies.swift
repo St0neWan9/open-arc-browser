@@ -61,6 +61,9 @@ public struct AppDependencies: Sendable {
     /// default records the requests, so tests and previews never open Mail or Finder; the app
     /// passes `SystemDesktopServices`.
     public var desktop: any DesktopServices
+    /// System-wide hot keys: ⌥⌘N in any app (B82). The default only records, so tests and previews
+    /// never take a key combination from other apps; the app passes `CarbonGlobalHotKeyService`.
+    public var globalHotKeys: any GlobalHotKeyService
 
     public init(
         engine: any BrowserEngine,
@@ -74,7 +77,8 @@ public struct AppDependencies: Sendable {
         feedbackOutput: (any FeedbackOutput)? = nil,
         appIconDisplay: (any AppIconDisplay)? = nil,
         exportPicker: (any ExportDestinationPicker)? = nil,
-        desktop: (any DesktopServices)? = nil
+        desktop: (any DesktopServices)? = nil,
+        globalHotKeys: (any GlobalHotKeyService)? = nil
     ) {
         self.engine = engine
         self.sync = sync
@@ -88,6 +92,7 @@ public struct AppDependencies: Sendable {
         self.appIconDisplay = appIconDisplay ?? RecordingAppIconDisplay()
         self.exportPicker = exportPicker ?? CancelledExportPicker()
         self.desktop = desktop ?? RecordingDesktopServices()
+        self.globalHotKeys = globalHotKeys ?? RecordingGlobalHotKeyService()
     }
 
     /// FakeEngine + sync disabled + no persistence (never touches the disk). Used for UI

@@ -90,7 +90,8 @@ extension AppDependencies {
             feedbackOutput: SystemFeedbackOutput(),
             appIconDisplay: SystemAppIconDisplay(),
             exportPicker: SavePanelExportPicker(),
-            desktop: SystemDesktopServices()
+            desktop: SystemDesktopServices(),
+            globalHotKeys: CarbonGlobalHotKeyService()
         )
     }
 
