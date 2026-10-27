@@ -89,7 +89,17 @@ public struct SidebarView: View {
 
             dropIndicator(layout: layout)
 
+            selectionJumpButton(layout: layout)
+
             hoverCard(layout: layout)
+
+            folderQuickList(layout: layout)
+
+            // Two-finger horizontal swipes page between Spaces. [05 §window hierarchy] observed.
+            // Transparent to clicks and scrolls (it only watches them). B76.
+            SidebarSwipeMonitor(onSwipe: { viewModel.swipeSpace(by: $0) })
+                .frame(width: layout.width, height: layout.windowSize.height)
+                .allowsHitTesting(false)
 
             // Starts drags past the per-axis threshold and selects on press. [06 §15.1] observed.
             // Transparent to clicks (it only watches the mouse events).
@@ -177,6 +187,51 @@ public struct SidebarView: View {
            geometry.list.isNull || (line.y >= geometry.list.minY - 1 && line.y <= geometry.list.maxY + 1) {
             SidebarDropIndicatorView(line: line, color: viewModel.palette.dropIndicatorColor.swiftUI)
         }
+    }
+
+    /// The round ↓ / ↑ button at the bottom / top middle of the list while the selected row is
+    /// scrolled out of view; a click scrolls back to it. [06 §15.8] observed (white round button,
+    /// arrow toward the selection); size, inset and the click behavior are inferred. B76.
+    @ViewBuilder
+    private func selectionJumpButton(layout: SidebarLayout) -> some View {
+        let viewport = regions[.list] ?? .null
+        let rowID = viewModel.selectedListRowID
+        let rowFrame = rowID.flatMap { rowFrames[$0] }
+        if viewModel.draggingItem == nil,
+           let direction = SidebarSelectionJump.direction(rowFrame: rowFrame, viewport: viewport, fill: layout.rowFillFrame),
+           let rowFrame {
+            let size = SidebarSelectionJump.buttonSize
+            Button {
+                viewModel.revealSelectedRow(rowFrame: rowFrame, viewport: viewport)
+            } label: {
+                Image(systemName: direction == .down ? "arrow.down" : "arrow.up")
+                    .font(.system(size: SidebarSelectionJump.glyphSize, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.7))
+                    .frame(width: size, height: size)
+                    .background(Circle().fill(Color.white))
+                    .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .position(SidebarSelectionJump.buttonCenter(direction: direction, viewport: viewport))
+            .accessibilityLabel(direction == .down ? "Scroll down to the selected tab" : "Scroll up to the selected tab")
+            .accessibilityIdentifier("openarc.sidebar.selectionJump")
+        }
+    }
+
+    /// The hovered folder's quick list, in a bubble right of its row. [06 §14] observed. B76.
+    private func folderQuickList(layout: SidebarLayout) -> some View {
+        let id = viewModel.quickListFolderID
+        let fill = layout.rowFillFrame
+        let anchor = id.flatMap { rowFrames[$0] }.map {
+            CGRect(x: fill.minX, y: $0.minY + fill.minY, width: fill.width, height: fill.height)
+        }
+        let palette = viewModel.palette
+        return FolderQuickListPresenter(viewModel: viewModel, folderID: id, anchor: anchor,
+                                        rowCount: id.map { viewModel.quickListRows(folderID: $0).count } ?? 0,
+                                        tint: palette.floatingPanelBackground, isDark: palette.isDark)
+            .frame(width: layout.width, height: layout.windowSize.height)
+            .allowsHitTesting(false)
     }
 
     /// The hover card: its own floating panel at the pointer. [07 §12] observed.
@@ -368,4 +423,153 @@ final class SidebarNSScrollHook: SidebarListScrolling {
         clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
         scrollView.reflectScrolledClipView(clip)
     }
+}
+
+// MARK: - Selected row jump button (B76)
+
+/// Pure geometry of the ↓ / ↑ button. [06 §15.8] observed: when the selected tab is scrolled out
+/// of the visible list, a white round button with an arrow toward it shows at the middle of the
+/// list's bottom (or top). Size, inset and "out of view" = the row's fill is entirely outside the
+/// list are inferred.
+enum SidebarSelectionJump {
+    enum Direction: Equatable { case up, down }
+
+    static let buttonSize: CGFloat = 28
+    static let glyphSize: CGFloat = 12
+    /// Gap between the button and the list edge.
+    static let edgeInset: CGFloat = 8
+
+    /// Which way the selected row lies, or nil while any of its fill is visible (or there is no
+    /// row, or no list). `rowFrame` is the 41 pt row and `viewport` the visible list, both in the
+    /// sidebar root space; `fill` is the row's fill inside the row (`SidebarLayout.rowFillFrame`).
+    static func direction(rowFrame: CGRect?, viewport: CGRect, fill: CGRect) -> Direction? {
+        guard let rowFrame, !rowFrame.isNull, !viewport.isNull, viewport.height > 0 else { return nil }
+        let top = rowFrame.minY + fill.minY, bottom = rowFrame.minY + fill.maxY
+        if bottom <= viewport.minY { return .up }
+        if top >= viewport.maxY { return .down }
+        return nil
+    }
+
+    /// Center of the button: horizontally centered on the list, `edgeInset` inside its bottom
+    /// (↓) or top (↑) edge.
+    static func buttonCenter(direction: Direction, viewport: CGRect) -> CGPoint {
+        let half = buttonSize / 2
+        let y = direction == .down ? viewport.maxY - edgeInset - half : viewport.minY + edgeInset + half
+        return CGPoint(x: viewport.midX, y: y)
+    }
+
+    /// Scroll offset that puts the selected row in the middle of the list, clamped to the content.
+    static func revealOffset(rowFrame: CGRect, viewport: CGRect, metrics: SidebarScrollMetrics) -> CGFloat {
+        let target = metrics.offset + (rowFrame.midY - viewport.midY)
+        return min(max(target, 0), metrics.maxOffset)
+    }
+}
+
+// MARK: - Trackpad swipe between Spaces (B76)
+
+/// Turns the scroll events of one trackpad gesture into at most one Space step. [05 §window
+/// hierarchy] observed: Spaces are horizontal pages switched by a swipe or the dock. Threshold
+/// and the "mostly horizontal" rule are inferred. Pure, for tests.
+struct SidebarSwipeRecognizer {
+    /// Horizontal travel (points) before the gesture pages.
+    static let threshold: CGFloat = 50
+    /// The gesture must be this many times more horizontal than vertical (keeps list scrolling
+    /// from switching Spaces).
+    static let dominance: CGFloat = 1.5
+
+    enum Phase { case began, changed, ended, other }
+
+    private var dx: CGFloat = 0
+    private var dy: CGFloat = 0
+    private var fired = false
+    private var tracking = false
+
+    /// Feeds one event of the gesture (`deltaX`/`deltaY` as AppKit's `scrollingDelta`, content
+    /// direction). Returns +1 (next Space) or -1 (previous Space) the moment the gesture qualifies;
+    /// nil otherwise. Content moving left (fingers to the left with natural scrolling) reveals
+    /// the next page on the right, as a horizontal page view does.
+    mutating func feed(phase: Phase, deltaX: CGFloat, deltaY: CGFloat) -> Int? {
+        switch phase {
+        case .began:
+            dx = 0; dy = 0; fired = false; tracking = true
+        case .ended, .other:
+            tracking = false
+            return nil
+        case .changed:
+            guard tracking else { return nil }
+        }
+        dx += deltaX
+        dy += deltaY
+        guard !fired, abs(dx) >= Self.threshold, abs(dx) >= Self.dominance * abs(dy) else { return nil }
+        fired = true
+        return dx < 0 ? 1 : -1
+    }
+}
+
+/// Watches two-finger trackpad swipes over the sidebar (window-local event monitor) and reports
+/// one Space step per gesture. Never consumes the events, so vertical list scrolling and pages
+/// behind are untouched. Momentum events and mouse wheels (no gesture phase) are ignored.
+struct SidebarSwipeMonitor: NSViewRepresentable {
+    let onSwipe: @MainActor (Int) -> Void
+
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.onSwipe = onSwipe
+        return view
+    }
+
+    func updateNSView(_ nsView: MonitorView, context: Context) {
+        nsView.onSwipe = onSwipe
+    }
+
+    final class MonitorView: NSView {
+        var onSwipe: (@MainActor (Int) -> Void)?
+        private var recognizer = SidebarSwipeRecognizer()
+        private var token: SwipeMonitorToken?
+
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            token = nil
+            guard window != nil else { return }
+            let monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                let phase = event.phase, momentum = event.momentumPhase, precise = event.hasPreciseScrollingDeltas
+                let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
+                let location = event.locationInWindow, number = event.windowNumber
+                MainActor.assumeIsolated {
+                    self?.handle(phase: phase, momentum: momentum, precise: precise, dx: dx, dy: dy,
+                                 location: location, windowNumber: number)
+                }
+                return event
+            }
+            token = monitor.map(SwipeMonitorToken.init)
+        }
+
+        private func handle(phase: NSEvent.Phase, momentum: NSEvent.Phase, precise: Bool, dx: CGFloat, dy: CGFloat,
+                            location: NSPoint, windowNumber: Int) {
+            guard let window, windowNumber == window.windowNumber, precise, momentum.isEmpty, !phase.isEmpty else { return }
+            let mapped: SidebarSwipeRecognizer.Phase
+            if phase.contains(.began) {
+                // A gesture counts only when it starts over the sidebar.
+                guard bounds.contains(convert(location, from: nil)) else { return }
+                mapped = .began
+            } else if phase.contains(.changed) {
+                mapped = .changed
+            } else if phase.contains(.ended) || phase.contains(.cancelled) {
+                mapped = .ended
+            } else {
+                mapped = .other
+            }
+            if let step = recognizer.feed(phase: mapped, deltaX: dx, deltaY: dy) { onSwipe?(step) }
+        }
+    }
+}
+
+/// Removes an `NSEvent` monitor when released.
+private final class SwipeMonitorToken {
+    private let monitor: Any
+    init(_ monitor: Any) { self.monitor = monitor }
+    deinit { NSEvent.removeMonitor(monitor) }
 }

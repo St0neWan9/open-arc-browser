@@ -107,15 +107,28 @@ struct SidebarTabRowView: View {
                     }
                     .accessibilityIdentifier("openarc.sidebar.row.renameField")
             } else {
-                Text(tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle)
-                    .font(style.font)
-                    .foregroundStyle(textColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    // Ink 1 pt inside the 43 pt text frame ([07 §4] ink at 45, B33).
-                    .padding(.leading, SidebarLocalTokens.textInkInset)
-                    .frame(height: CGFloat(style.lineHeight))
-                    .accessibilityBox(label: tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle, identifier: "openarc.sidebar.row.title")
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle)
+                        .font(style.font)
+                        .foregroundStyle(textColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        // Ink 1 pt inside the 43 pt text frame ([07 §4] ink at 45, B33).
+                        .padding(.leading, SidebarLocalTokens.textInkInset)
+                        .frame(height: CGFloat(style.lineHeight))
+                        .accessibilityBox(label: tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle, identifier: "openarc.sidebar.row.title")
+                    if viewModel.showsPinRenameHint(tab.id) {
+                        // The first pin's faint hint under the title. [06 §4] observed; the hover
+                        // card's hint style (11 pt, 50 %) is reused, inferred. B76.
+                        Text(SidebarLocalTokens.hoverCardHint)
+                            .font(Typography.hoverCardHint.font)
+                            .foregroundStyle(textColor.opacity(Typography.hoverCardHint.opacity))
+                            .lineLimit(1)
+                            .padding(.leading, SidebarLocalTokens.textInkInset)
+                            .frame(height: CGFloat(Typography.hoverCardHint.lineHeight))
+                            .accessibilityIdentifier("openarc.sidebar.row.renameHint")
+                    }
+                }
             }
 
             Spacer(minLength: 4)
@@ -323,7 +336,11 @@ struct SidebarFolderRowView: View {
             }
             Spacer(minLength: 4)
         }
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            isHovering = hovering
+            // Hovering a folder opens its quick list. [06 §14] observed. B76.
+            if hovering { viewModel.folderHoverBegan(folder.id) } else { viewModel.folderHoverEnded(folder.id) }
+        }
         .simultaneousGesture(TapGesture(count: 2).onEnded { viewModel.beginRename(folder.id) })
         .onTapGesture { viewModel.toggleFolder(folder.id) }
         .contextMenu { SidebarFolderMenu(viewModel: viewModel, folder: folder) }
