@@ -27,6 +27,8 @@ public final class ShellModel: ObservableObject {
     public let siteControls: SiteControlsModel
     /// Find in page for the selected tab (the focused pane in a split). B25.
     public let findBar: FindBarModel
+    /// Page translation surfaces (B47, [06 §19]).
+    public let translation: TranslationModel
     /// The Easel canvas shown when the selected tab is an Easel's row. [06 §9] observed. B56.
     public let easelCanvas: EaselCanvasModel
     /// Hidden-sidebar peek: pinned / hidden / floating. Follows `isSidebarVisible`. [06 §14] B34.
@@ -118,6 +120,7 @@ public final class ShellModel: ObservableObject {
         )
         siteControls.engineExtensions = engine.extensions
         self.findBar = FindBarModel(sidebar: sidebar)
+        self.translation = TranslationModel(sidebar: sidebar, engine: engine.translation)
         self.easelCanvas = EaselCanvasModel(sidebar: sidebar)
         self.sidebarPeek = SidebarPeekController(isPinned: window.isSidebarVisible)
         sidebar.requestHandler = { [weak self] request in self?.handle(request) }
@@ -141,6 +144,7 @@ public final class ShellModel: ObservableObject {
         let preferences = controller.dependencies.preferences
         autoPictureInPicture = AutoPictureInPicture(sidebar: sidebar) { preferences.entersPictureInPictureOnLeavingVideoTab }
         installExtensionHandlers()
+        translation.openURL = { [weak sidebar] url in _ = sidebar?.newTab(url: url, title: url.host ?? "Settings") }
         if isBrowserWindow {
             launchNotice = controller.takeLaunchNotice()
             // Starts auto-archive with the first window, after its selection is restored. [B3]
@@ -525,6 +529,7 @@ public final class ShellModel: ObservableObject {
         libraryFlagChanges = nil
         autoPictureInPicture?.stop()
         siteControls.stop()
+        translation.stop()
         sidebar.stop()
         if ownsController { controller.stop() }
     }

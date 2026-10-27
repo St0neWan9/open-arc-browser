@@ -207,7 +207,7 @@ public enum SettingsCatalog {
         SettingsControl("advanced.boosts", "Enable Boosts on websites you visit", .toggle(defaultValue: true), .pending(task: "E1")),
         // Chromium's own settings pages.
         SettingsControl("advanced.moreSettings", "More Settings…", .button, .pending(task: "C12")),
-        SettingsControl("advanced.resetTranslatePrompts", "Reset Translated-site Prompts", .button, .pending(task: "C12")),
+        SettingsControl("advanced.resetTranslatePrompts", "Reset Translated-site Prompts", .button, .live),
         SettingsControl("advanced.exportData", "Export Data", .button, .pending(task: "D3")),
         // Plan C16: the engine's built-in ad blocker (EasyList + EasyPrivacy). [00 §A] records an ad
         // blocking switch in Arc's settings but 03 does not record its label or pane: "Block ads and

@@ -1,0 +1,1065 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Mon, 26 Oct 2026 19:32:06 -0700
+Subject: [PATCH] openarc: embedder: page translation drawn by the shell
+
+Plan B47. Chrome's translate component (ChromeTranslateClient,
+TranslateManager, TranslateAgent with Google's Translate Element) runs
+on every bridge tab unchanged; only its Views bubble is replaced.
+
+- TranslateBubbleFactory::SetFactory() (Chrome's hook, used whenever no
+  Browser holds the tab) routes every translate step to a per-tab
+  openarc::TranslateTabHelper, which folds the steps and Chrome's
+  LanguageState into one state (available, translating, translated,
+  failed, with source and target language) for the shell.
+- Commands run as Chrome's bubble does (TranslateUIDelegate): translate
+  into the offered or a chosen language, revert, never translate this
+  site; OACProfile resets the profile's TranslatePrefs.
+- TranslateManager offers translation only with Google API keys. The
+  Translate Element library Google serves to websites carries its own
+  key, so the gate is lifted (SetIgnoreMissingKeyForTesting); verified
+  against translate.googleapis.com without keys of our own.
+- TFLite language detection is disabled in every process (the model is
+  never downloaded here); CLD3 detects pages without a lang attribute.
+- Public API: OACTranslation.h (OACTranslationState,
+  OACTranslationLanguage, OACTab / OACProfile / OACApplication
+  categories) and -[OACTabDelegate tabDidChangeTranslationState:].
+---
+ openarc/BUILD.gn                              |  11 +
+ openarc/app/openarc_main_delegate.mm          |  13 +-
+ openarc/bridge/oac_application.mm             |   4 +
+ openarc/bridge/oac_tab.mm                     |   4 +
+ openarc/bridge/oac_translation.mm             | 270 ++++++++++++++++
+ openarc/bridge/oac_translation_internal.h     |  15 +
+ .../public/OpenArcCore/OACTabDelegate.h       |   2 +
+ .../public/OpenArcCore/OACTranslation.h       | 126 ++++++++
+ .../bridge/public/OpenArcCore/OpenArcCore.h   |   1 +
+ openarc/browser/openarc_translate.cc          | 297 ++++++++++++++++++
+ openarc/browser/openarc_translate.h           | 139 ++++++++
+ 11 files changed, 879 insertions(+), 3 deletions(-)
+ create mode 100644 openarc/bridge/oac_translation.mm
+ create mode 100644 openarc/bridge/oac_translation_internal.h
+ create mode 100644 openarc/bridge/public/OpenArcCore/OACTranslation.h
+ create mode 100644 openarc/browser/openarc_translate.cc
+ create mode 100644 openarc/browser/openarc_translate.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 812e84218be4..d082f9014d00 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -45,6 +45,7 @@ openarc_public_headers = [
+   "bridge/public/OpenArcCore/OACSiteSettings.h",
+   "bridge/public/OpenArcCore/OACTab.h",
+   "bridge/public/OpenArcCore/OACTabDelegate.h",
++  "bridge/public/OpenArcCore/OACTranslation.h",
+   "bridge/public/OpenArcCore/OpenArcCore.h",
+ ]
+ 
+@@ -86,6 +87,8 @@ source_set("embedder") {
+     "browser/openarc_tab_helpers.mm",
+     "browser/openarc_tab_preferences.h",
+     "browser/openarc_tab_preferences.mm",
++    "browser/openarc_translate.cc",
++    "browser/openarc_translate.h",
+     "common/openarc_paths.h",
+     "common/openarc_paths.mm",
+   ]
+@@ -124,8 +127,12 @@ source_set("embedder") {
+     "//chrome/browser/ui:tab_helpers",
+     "//chrome/browser/ui:tab_helpers_impl",
+     "//chrome/browser/ui/login",
++    "//chrome/browser/ui:browser_window_header",
++    "//chrome/browser/translate",
++    "//chrome/browser/ui/translate",
+     "//components/content_settings/core/browser",
+     "//components/content_settings/core/common",
++    "//components/language_detection/core",
+     "//components/os_crypt/common:keychain_password_mac",
+     "//components/permissions",
+     "//components/prefs",
+@@ -200,6 +207,8 @@ source_set("bridge") {
+               "bridge/oac_site_settings_internal.h",
+               "bridge/oac_tab.mm",
+               "bridge/oac_tab_internal.h",
++              "bridge/oac_translation.mm",
++              "bridge/oac_translation_internal.h",
+               "bridge/oac_values.mm",
+               "browser/openarc_page_top_color.h",
+               "browser/openarc_page_top_color.mm",
+@@ -212,6 +221,8 @@ source_set("bridge") {
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/extensions",
+     "//chrome/browser/picture_in_picture",
++    "//chrome/browser/translate",
++    "//components/translate/core/browser",
+     "//extensions/browser",
+     "//extensions/common",
+     "//components/content_settings/core/browser",
+diff --git a/openarc/app/openarc_main_delegate.mm b/openarc/app/openarc_main_delegate.mm
+index 9ac165f9bd54..d2c6719e919f 100644
+--- a/openarc/app/openarc_main_delegate.mm
++++ b/openarc/app/openarc_main_delegate.mm
+@@ -75,10 +75,17 @@ void KeepCrashReportsLocal() {
+   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+   std::string disabled =
+       command_line->GetSwitchValueASCII(switches::kDisableFeatures);
+-  if (disabled.find("EnableHangWatcher") == std::string::npos) {
+-    disabled += disabled.empty() ? "EnableHangWatcher" : ",EnableHangWatcher";
+-    command_line->AppendSwitchASCII(switches::kDisableFeatures, disabled);
++  // Plan B47: the TFLite language detection model comes from the
++  // optimization guide's downloads, which this build never gets (no Google API
++  // keys, no component updater). Without it, pages without a lang attribute
++  // would never be offered translation; CLD3 detects them instead.
++  for (const char* feature : {"EnableHangWatcher", "TFLiteLanguageDetection"}) {
++    if (disabled.find(feature) == std::string::npos) {
++      disabled += disabled.empty() ? "" : ",";
++      disabled += feature;
++    }
+   }
++  command_line->AppendSwitchASCII(switches::kDisableFeatures, disabled);
+ 
+   std::optional<int> exit_code = ChromeMainDelegate::BasicStartupComplete();
+   // Chrome keeps freed Objective-C objects as zombies to diagnose crashes.
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 7dfd52887df4..2c7169e6687c 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -42,6 +42,7 @@
+ #include "chrome/browser/extensions/extension_tab_util.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
++#include "openarc/browser/openarc_translate.h"
+ #include "openarc/common/openarc_paths.h"
+ 
+ #import <OpenArcCore/OACBrowserApplication.h>
+@@ -286,6 +287,9 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   openarc::InstallBridgeDialogHost();
+   // Password bubble and autofill dropdown (plan C13).
+   openarc::InstallBridgeAutofillHost();
++  // Page translation (plan B47): Chrome's translate bubble steps go to the
++  // tab's translate helper; no Google API key gate.
++  openarc::InstallTranslateHooks();
+   g_engine->main_runner = content::ContentMainRunner::Create();
+   content::ContentMainParams params(g_engine->main_delegate.get());
+   params.argc = static_cast<int>(g_engine->argv.size());
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 336fd0b3f999..7be891eb42ee 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -80,6 +80,7 @@
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
++#import "openarc/bridge/oac_translation_internal.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_page_tools.h"
+ #include "openarc/browser/openarc_page_top_color.h"
+@@ -622,6 +623,9 @@ - (void)setUpWithWebContents:(std::unique_ptr<content::WebContents>)contents
+   // settings, permissions, history, password manager and autofill drivers,
+   // extensions tab helper. Before the bridge, so it can observe them.
+   openarc::TabHelpersAccess::AttachTabHelpers(_webContents.get());
++  // Page translation (plan B47): Chrome's translate client, attached above,
++  // reports to the shell through the tab delegate.
++  OACAttachTranslation(self);
+   _dialogManager = std::make_unique<openarc::TabJavaScriptDialogManager>(self);
+   _bridge =
+       std::make_unique<openarc::TabWebContentsBridge>(self, _webContents.get());
+diff --git a/openarc/bridge/oac_translation.mm b/openarc/bridge/oac_translation.mm
+new file mode 100644
+index 000000000000..293500064342
+--- /dev/null
++++ b/openarc/bridge/oac_translation.mm
+@@ -0,0 +1,270 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Page translation (plan B47, OACTranslation.h): the bridge side of
++// openarc/browser/openarc_translate.h. The tab's TranslateTabHelper keeps the
++// state; this file turns it into OACTranslationState snapshots, tells the tab
++// delegate about changes and runs the shell's commands.
++
++#import <OpenArcCore/OACTranslation.h>
++
++#import "openarc/bridge/oac_translation_internal.h"
++
++#include <string>
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/strings/sys_string_conversions.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/web_contents.h"
++
++#import <OpenArcCore/OACTabDelegate.h>
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++#include "openarc/browser/openarc_translate.h"
++
++// MARK: - Values
++
++@implementation OACTranslationLanguage {
++  NSString* _code;
++  NSString* _name;
++}
++
++- (instancetype)initWithCode:(NSString*)code name:(NSString*)name {
++  if ((self = [super init])) {
++    _code = [code copy];
++    _name = [name copy];
++  }
++  return self;
++}
++
++- (id)copyWithZone:(NSZone*)zone {
++  return self;  // Immutable.
++}
++
++- (NSString*)code {
++  return _code;
++}
++
++- (NSString*)name {
++  return _name;
++}
++
++- (BOOL)isEqual:(id)other {
++  if (![other isKindOfClass:[OACTranslationLanguage class]]) {
++    return NO;
++  }
++  OACTranslationLanguage* language = other;
++  return [_code isEqualToString:language.code];
++}
++
++- (NSUInteger)hash {
++  return _code.hash;
++}
++
++@end
++
++namespace {
++
++OACTranslationLanguage* MakeLanguage(const std::string& code) {
++  if (code.empty()) {
++    return nil;
++  }
++  return [[OACTranslationLanguage alloc]
++      initWithCode:base::SysUTF8ToNSString(code)
++              name:base::SysUTF16ToNSString(
++                       openarc::TranslationLanguageName(code))];
++}
++
++OACTranslationStatus ToStatus(openarc::TranslationStatus status) {
++  switch (status) {
++    case openarc::TranslationStatus::kNone:
++      return OACTranslationStatusNone;
++    case openarc::TranslationStatus::kAvailable:
++      return OACTranslationStatusAvailable;
++    case openarc::TranslationStatus::kTranslating:
++      return OACTranslationStatusTranslating;
++    case openarc::TranslationStatus::kTranslated:
++      return OACTranslationStatusTranslated;
++    case openarc::TranslationStatus::kFailed:
++      return OACTranslationStatusFailed;
++  }
++  return OACTranslationStatusNone;
++}
++
++OACTranslationError ToError(translate::TranslateErrors error) {
++  switch (error) {
++    case translate::TranslateErrors::NONE:
++      return OACTranslationErrorNone;
++    case translate::TranslateErrors::NETWORK:
++    case translate::TranslateErrors::SCRIPT_LOAD_ERROR:
++      return OACTranslationErrorNetwork;
++    case translate::TranslateErrors::INITIALIZATION_ERROR:
++    case translate::TranslateErrors::BAD_ORIGIN:
++      return OACTranslationErrorInitialization;
++    case translate::TranslateErrors::UNKNOWN_LANGUAGE:
++      return OACTranslationErrorUnknownLanguage;
++    case translate::TranslateErrors::UNSUPPORTED_LANGUAGE:
++      return OACTranslationErrorUnsupportedLanguage;
++    case translate::TranslateErrors::IDENTICAL_LANGUAGES:
++      return OACTranslationErrorIdenticalLanguages;
++    case translate::TranslateErrors::TRANSLATION_ERROR:
++      return OACTranslationErrorTranslation;
++    case translate::TranslateErrors::TRANSLATION_TIMEOUT:
++      return OACTranslationErrorTimeout;
++    default:
++      return OACTranslationErrorScript;
++  }
++}
++
++openarc::TranslateTabHelper* HelperOf(OACTab* tab) {
++  content::WebContents* contents = tab.isClosed ? nullptr : tab.webContents;
++  return contents ? openarc::TranslateTabHelper::FromWebContents(contents)
++                  : nullptr;
++}
++
++}  // namespace
++
++@implementation OACTranslationState {
++  OACTranslationStatus _status;
++  OACTranslationError _error;
++  OACTranslationLanguage* _sourceLanguage;
++  OACTranslationLanguage* _targetLanguage;
++}
++
++- (instancetype)initWithStatus:(OACTranslationStatus)status
++                         error:(OACTranslationError)error
++                sourceLanguage:(OACTranslationLanguage*)sourceLanguage
++                targetLanguage:(OACTranslationLanguage*)targetLanguage {
++  if ((self = [super init])) {
++    _status = status;
++    _error = error;
++    _sourceLanguage = sourceLanguage;
++    _targetLanguage = targetLanguage;
++  }
++  return self;
++}
++
+++ (OACTranslationState*)none {
++  return [[OACTranslationState alloc] initWithStatus:OACTranslationStatusNone
++                                               error:OACTranslationErrorNone
++                                      sourceLanguage:nil
++                                      targetLanguage:nil];
++}
++
++- (id)copyWithZone:(NSZone*)zone {
++  return self;  // Immutable.
++}
++
++- (OACTranslationStatus)status {
++  return _status;
++}
++
++- (OACTranslationError)error {
++  return _error;
++}
++
++- (OACTranslationLanguage*)sourceLanguage {
++  return _sourceLanguage;
++}
++
++- (OACTranslationLanguage*)targetLanguage {
++  return _targetLanguage;
++}
++
++@end
++
++// MARK: - Tab
++
++void OACAttachTranslation(OACTab* tab) {
++  content::WebContents* contents = tab.webContents;
++  if (!contents) {
++    return;
++  }
++  openarc::TranslateTabHelper::CreateForWebContents(contents);
++  __weak OACTab* weak_tab = tab;
++  openarc::TranslateTabHelper::FromWebContents(contents)->SetChangeCallback(
++      base::BindRepeating(^{
++        // Posted like every delegate call (OACDefines.h threading contract);
++        // the delegate reads the new value from `translationState`.
++        OACPostToMainThread(^{
++          OACTab* strong_tab = weak_tab;
++          id<OACTabDelegate> delegate = strong_tab.delegate;
++          if (strong_tab && !strong_tab.isClosed &&
++              [delegate
++                  respondsToSelector:@selector(tabDidChangeTranslationState:)]) {
++            [delegate tabDidChangeTranslationState:strong_tab];
++          }
++        });
++      }));
++}
++
++@implementation OACTab (OACTranslation)
++
++- (OACTranslationState*)translationState {
++  openarc::TranslateTabHelper* helper = HelperOf(self);
++  if (!helper) {
++    return [OACTranslationState none];
++  }
++  const openarc::TranslationSnapshot& snapshot = helper->snapshot();
++  return [[OACTranslationState alloc]
++      initWithStatus:ToStatus(snapshot.status)
++               error:ToError(snapshot.error)
++      sourceLanguage:MakeLanguage(snapshot.source_language)
++      targetLanguage:MakeLanguage(snapshot.target_language)];
++}
++
++- (void)translateToLanguage:(NSString*)languageCode {
++  if (openarc::TranslateTabHelper* helper = HelperOf(self)) {
++    helper->Translate(languageCode.length ? base::SysNSStringToUTF8(languageCode)
++                                          : std::string());
++  }
++}
++
++- (void)revertTranslation {
++  if (openarc::TranslateTabHelper* helper = HelperOf(self)) {
++    helper->Revert();
++  }
++}
++
++- (void)neverTranslateSite {
++  if (openarc::TranslateTabHelper* helper = HelperOf(self)) {
++    helper->NeverTranslateSite();
++  }
++}
++
++@end
++
++// MARK: - Profile and application
++
++@implementation OACProfile (OACTranslation)
++
++- (void)resetTranslationSettings {
++  CHECK(NSThread.isMainThread);
++  if (Profile* profile = self.chromeProfile) {
++    openarc::ResetTranslationSettings(profile);
++  }
++}
++
++@end
++
++@implementation OACApplication (OACTranslation)
++
++- (NSArray<OACTranslationLanguage*>*)translationTargetLanguages {
++  CHECK(NSThread.isMainThread);
++  if (self.state != OACApplicationStateRunning) {
++    return @[];
++  }
++  NSMutableArray<OACTranslationLanguage*>* languages = [NSMutableArray array];
++  for (const auto& [code, name] : openarc::TranslationTargetLanguages()) {
++    [languages addObject:[[OACTranslationLanguage alloc]
++                             initWithCode:base::SysUTF8ToNSString(code)
++                                     name:base::SysUTF16ToNSString(name)]];
++  }
++  return languages;
++}
++
++@end
+diff --git a/openarc/bridge/oac_translation_internal.h b/openarc/bridge/oac_translation_internal.h
+new file mode 100644
+index 000000000000..3a944b07ad41
+--- /dev/null
++++ b/openarc/bridge/oac_translation_internal.h
+@@ -0,0 +1,15 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_TRANSLATION_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_TRANSLATION_INTERNAL_H_
++
++#import <OpenArcCore/OACTab.h>
++
++// Gives |tab| its translate helper (plan B47) and routes its changes to the
++// tab delegate's -tabDidChangeTranslationState:. Called once per tab after
++// //chrome's tab helpers are attached.
++void OACAttachTranslation(OACTab* tab);
++
++#endif  // OPENARC_BRIDGE_OAC_TRANSLATION_INTERNAL_H_
+diff --git a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+index c3474cc8977c..3dc4edcfe99d 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+@@ -146,6 +146,8 @@ NS_SWIFT_UI_ACTOR
+ /// screen (inferred; the spec records no page-fullscreen behavior).
+ - (void)tab:(OACTab *)tab didChangeFullscreen:(BOOL)isFullscreen;
+ - (void)tab:(OACTab *)tab didFinishNavigation:(OACNavigation *)navigation;
++/// `tab.translationState` changed (plan B47, OACTranslation.h).
++- (void)tabDidChangeTranslationState:(OACTab *)tab;
+ 
+ // MARK: Requests (C9)
+ 
+diff --git a/openarc/bridge/public/OpenArcCore/OACTranslation.h b/openarc/bridge/public/OpenArcCore/OACTranslation.h
+new file mode 100644
+index 000000000000..196e93f36725
+--- /dev/null
++++ b/openarc/bridge/public/OpenArcCore/OACTranslation.h
+@@ -0,0 +1,126 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Page translation (plan B47): Chromium's translate component on the bridge's tabs, drawn by the
++// shell.
++//
++// Maps to: `BrowserTabState.translation` (`PageTranslation`), `TabEvent.translationChanged`, the
++// translation commands of `BrowserTab` and `BrowserEngine.resetTranslationDecisions`
++// (app/Sources/OpenArcEngine/BrowserEngine.swift).
++//
++// Why shell-drawn (README §Keeping //chrome without its UI): Chrome keeps deciding WHEN a page can
++// be translated (`TranslateManager`: the page language from the renderer, the target language from
++// the user's languages, the never-translate lists) and does the translating (`TranslateAgent`
++// runs Google's Translate Element script in an isolated world). It draws its offer, progress and
++// "translated" bubble with Views anchored to a Browser window. The bridge replaces only that view
++// (Chrome's `TranslateBubbleFactory` hook, which Chrome uses whenever no Browser holds the tab) and
++// reports a state per tab; the shell draws Arc's surfaces ([06 §19] observed: a second line in the
++// URL box, an offer bubble, an Options menu, no progress UI, no Site Control Center entry).
++//
++// Service: Chrome offers translation only with Google API keys (none in this build). The bridge
++// lifts that gate; the translation itself runs through the Translate Element library Google serves
++// to websites (translate.googleapis.com), which works without a key of ours (README §Translation).
++// A failure (offline, the service refusing) reaches the shell as `OACTranslationStatusFailed`.
++
++#import <OpenArcCore/OACDefines.h>
++#import <OpenArcCore/OACApplication.h>
++#import <OpenArcCore/OACProfile.h>
++#import <OpenArcCore/OACTab.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++/// Where a tab stands with respect to translation. Maps to `PageTranslation.Status`.
++typedef NS_ENUM(NSInteger, OACTranslationStatus) {
++    /// Nothing to offer: the page is in one of the user's languages, its language is unknown, the
++    /// site or language is on a never-translate list, or the page cannot be translated (internal
++    /// pages, off-the-record detection gaps).
++    OACTranslationStatusNone = 0,
++    /// The page can be translated ("Translation Available", [06 §19.1] observed).
++    OACTranslationStatusAvailable = 1,
++    /// A translation was requested and has not finished (script download, then the page).
++    OACTranslationStatusTranslating = 2,
++    /// The page shows the translation ("Translated", [06 §19.4] observed).
++    OACTranslationStatusTranslated = 3,
++    /// The last translation failed (`error`).
++    OACTranslationStatusFailed = 4,
++};
++
++/// Why a translation failed (Chromium's `translate::TranslateErrors`).
++typedef NS_ENUM(NSInteger, OACTranslationError) {
++    OACTranslationErrorNone = 0,
++    /// No connection, or the translate script could not be downloaded.
++    OACTranslationErrorNetwork = 1,
++    /// The translate library did not start (the service refused it, a page policy blocked it).
++    OACTranslationErrorInitialization = 2,
++    /// The page's language could not be detected.
++    OACTranslationErrorUnknownLanguage = 3,
++    /// The service does not support the page's language.
++    OACTranslationErrorUnsupportedLanguage = 4,
++    /// The page is already in the target language.
++    OACTranslationErrorIdenticalLanguages = 5,
++    /// The service reported an error while translating.
++    OACTranslationErrorTranslation = 6,
++    /// The library did not finish in time.
++    OACTranslationErrorTimeout = 7,
++    /// Any other script failure.
++    OACTranslationErrorScript = 8,
++};
++
++/// A language the translate service knows: a BCP 47 code ("de", "zh-CN") and its name in the
++/// engine's UI language ("German", "Chinese (Simplified)").
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACTranslationLanguage : NSObject <NSCopying>
++@property (nonatomic, readonly, copy) NSString *code;
++@property (nonatomic, readonly, copy) NSString *name;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// Immutable snapshot of a tab's translation state.
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACTranslationState : NSObject <NSCopying>
++@property (nonatomic, readonly) OACTranslationStatus status;
++/// For `OACTranslationStatusFailed`; `OACTranslationErrorNone` otherwise.
++@property (nonatomic, readonly) OACTranslationError error;
++/// The page's original language; nil while unknown.
++@property (nonatomic, readonly, copy, nullable) OACTranslationLanguage *sourceLanguage;
++/// The language the page is (or would be) translated into: the current translation's language
++/// once translated, else Chrome's target language for the user (the UI language or one of the
++/// user's languages). nil while unknown.
++@property (nonatomic, readonly, copy, nullable) OACTranslationLanguage *targetLanguage;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// Translation of one tab. Changes reach `-[OACTabDelegate tabDidChangeTranslationState:]`.
++@interface OACTab (OACTranslation)
++/// Current state; a new object after every change.
++@property (nonatomic, readonly, copy) OACTranslationState *translationState;
++/// Translates the page into `languageCode` (nil: the state's `targetLanguage`), as Chrome's
++/// bubble "Translate" button does (it also counts the acceptance for Chrome's heuristics). Does
++/// nothing while the page language is unknown or the tab is closed. Also retries after a failure.
++- (void)translateToLanguage:(nullable NSString *)languageCode NS_SWIFT_NAME(translate(toLanguage:));
++/// Shows the original page again. Does nothing when the page is not translated.
++- (void)revertTranslation;
++/// Puts the page's site on the profile's never-translate list ([06 §19.3] observed "Never
++/// Translate This Site"), reverts a translated page and withdraws the offer: the state turns
++/// `OACTranslationStatusNone` until the list is reset (`-[OACProfile resetTranslationSettings]`).
++- (void)neverTranslateSite;
++@end
++
++@interface OACProfile (OACTranslation)
++/// Forgets every translation decision of the profile: never-translate sites and languages (back
++/// to Chrome's default: the UI language), always-translate languages and the accept / decline
++/// counts (Chrome's `TranslatePrefs::ResetToDefaults`). Settings ▸ Advanced "Reset Translated-site
++/// Prompts" ([03 §Advanced] observed button). Pages loaded afterwards are offered again.
++- (void)resetTranslationSettings;
++@end
++
++@interface OACApplication (OACTranslation)
++/// Every language the service can translate into, sorted by name ([06 §19.3] observed "Choose
++/// Another Language ▸": alphabetical, Afrikaans to Zulu). Empty before the engine started.
++@property (nonatomic, readonly, copy) NSArray<OACTranslationLanguage *> *translationTargetLanguages;
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/openarc/bridge/public/OpenArcCore/OpenArcCore.h b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+index 6c4188ce4003..927fe7c9a00d 100644
+--- a/openarc/bridge/public/OpenArcCore/OpenArcCore.h
++++ b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+@@ -19,3 +19,4 @@
+ #import <OpenArcCore/OACSiteSettings.h>
+ #import <OpenArcCore/OACDownloads.h>
+ #import <OpenArcCore/OACExtensions.h>
++#import <OpenArcCore/OACTranslation.h>
+diff --git a/openarc/browser/openarc_translate.cc b/openarc/browser/openarc_translate.cc
+new file mode 100644
+index 000000000000..429d5377d642
+--- /dev/null
++++ b/openarc/browser/openarc_translate.cc
+@@ -0,0 +1,297 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_translate.h"
++
++#include <memory>
++#include <utility>
++
++#include "base/check.h"
++#include "base/no_destructor.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/translate/chrome_translate_client.h"
++#include "chrome/browser/ui/browser_window.h"
++#include "chrome/browser/ui/translate/translate_bubble_factory.h"
++#include "components/language_detection/core/constants.h"
++#include "components/translate/core/browser/language_state.h"
++#include "components/translate/core/browser/translate_download_manager.h"
++#include "components/translate/core/browser/translate_manager.h"
++#include "components/translate/core/browser/translate_prefs.h"
++#include "components/translate/core/browser/translate_ui_delegate.h"
++#include "components/translate/core/browser/translate_ui_languages_manager.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/l10n/l10n_util.h"
++
++namespace openarc {
++
++namespace {
++
++// Chrome's translate bubble, replaced: every step goes to the tab's helper.
++// Chrome uses the factory whenever no Browser window holds the tab
++// (ChromeTranslateClient::ShowBubble), which is always the case for the
++// bridge's tabs.
++class ShellTranslateBubbleFactory : public TranslateBubbleFactory {
++ protected:
++  ShowTranslateBubbleResult ShowImplementation(
++      BrowserWindow* window,
++      content::WebContents* web_contents,
++      translate::TranslateStep step,
++      const std::string& source_language,
++      const std::string& target_language,
++      translate::TranslateErrors error_type) override {
++    if (auto* helper = TranslateTabHelper::FromWebContents(web_contents)) {
++      helper->OnTranslateStep(step, error_type);
++    }
++    return ShowTranslateBubbleResult::kSuccess;
++  }
++};
++
++translate::TranslateManager* ManagerFor(content::WebContents* web_contents) {
++  return web_contents
++             ? ChromeTranslateClient::GetManagerFromWebContents(web_contents)
++             : nullptr;
++}
++
++// A detected language as a translate code; empty when unknown.
++std::string KnownLanguage(const std::string& language) {
++  if (language.empty() || language == language_detection::kUnknownLanguageCode) {
++    return std::string();
++  }
++  return translate::TranslateDownloadManager::GetLanguageCode(language);
++}
++
++}  // namespace
++
++void InstallTranslateHooks() {
++  static base::NoDestructor<ShellTranslateBubbleFactory> factory;
++  TranslateBubbleFactory::SetFactory(factory.get());
++  // TranslateManager offers translation only with Google API keys. The
++  // translation runs through the Translate Element library Google serves to
++  // websites, which carries its own key; nothing here needs one of ours
++  // (verified in plan B47). The setter is named for tests; it is the only
++  // switch.
++  translate::TranslateManager::SetIgnoreMissingKeyForTesting(true);
++}
++
++std::vector<std::pair<std::string, std::u16string>>
++TranslationTargetLanguages() {
++  std::vector<std::string> codes;
++  translate::TranslateDownloadManager::GetSupportedLanguages(
++      /*translate_allowed=*/true, &codes);
++  // Chrome's language list model: names in the UI language, sorted with the
++  // UI locale's collation, "Detected language" at index 0 (skipped).
++  translate::TranslateUILanguagesManager manager(
++      codes, language_detection::kUnknownLanguageCode, std::string());
++  std::vector<std::pair<std::string, std::u16string>> languages;
++  for (size_t i = 1; i < manager.GetNumberOfLanguages(); ++i) {
++    languages.emplace_back(manager.GetLanguageCodeAt(i),
++                           manager.GetLanguageNameAt(i));
++  }
++  return languages;
++}
++
++std::u16string TranslationLanguageName(std::string_view code) {
++  return l10n_util::GetDisplayNameForLocale(
++      code, g_browser_process->GetApplicationLocale(), /*is_for_ui=*/true);
++}
++
++void ResetTranslationSettings(content::BrowserContext* context) {
++  Profile* profile = Profile::FromBrowserContext(context);
++  if (!profile) {
++    return;
++  }
++  ChromeTranslateClient::CreateTranslatePrefs(profile->GetPrefs())
++      ->ResetToDefaults();
++}
++
++// MARK: - TranslateTabHelper
++
++TranslateTabHelper::TranslateTabHelper(content::WebContents* web_contents)
++    : content::WebContentsObserver(web_contents),
++      content::WebContentsUserData<TranslateTabHelper>(*web_contents) {
++  if (auto* client = ChromeTranslateClient::FromWebContents(web_contents)) {
++    driver_observation_.Observe(client->translate_driver());
++  }
++}
++
++TranslateTabHelper::~TranslateTabHelper() = default;
++
++void TranslateTabHelper::SetChangeCallback(base::RepeatingClosure callback) {
++  callback_ = std::move(callback);
++}
++
++void TranslateTabHelper::Translate(const std::string& target_language) {
++  translate::TranslateManager* manager = ManagerFor(web_contents());
++  auto* client = ChromeTranslateClient::FromWebContents(web_contents());
++  if (!manager || !client) {
++    return;
++  }
++  std::string source;
++  std::string target;
++  client->GetTranslateLanguages(web_contents(), &source, &target,
++                                /*for_display=*/false);
++  if (KnownLanguage(manager->GetLanguageState()->source_language()).empty()) {
++    return;  // Detection has not finished.
++  }
++  if (!target_language.empty()) {
++    target = target_language;
++  }
++  // As Chrome's manual translation does: the same language on both sides
++  // lets the service detect the source itself.
++  if (source == target) {
++    source = language_detection::kUnknownLanguageCode;
++  }
++  error_ = translate::TranslateErrors::NONE;
++  suppressed_ = false;
++  requested_ = true;
++  // Chrome's bubble path: counts the acceptance (the always-translate
++  // shortcut heuristics), remembers the target, then TranslatePage().
++  translate::TranslateUIDelegate delegate(manager->GetWeakPtr(), source,
++                                          target);
++  delegate.UpdateAndRecordTargetLanguage(target);
++  delegate.Translate();
++  Update();
++}
++
++void TranslateTabHelper::Revert() {
++  translate::TranslateManager* manager = ManagerFor(web_contents());
++  if (!manager) {
++    return;
++  }
++  requested_ = false;
++  error_ = translate::TranslateErrors::NONE;
++  manager->RevertTranslation();
++  Update();
++}
++
++void TranslateTabHelper::NeverTranslateSite() {
++  translate::TranslateManager* manager = ManagerFor(web_contents());
++  if (!manager) {
++    return;
++  }
++  const translate::LanguageState* state = manager->GetLanguageState();
++  translate::TranslateUIDelegate delegate(
++      manager->GetWeakPtr(), KnownLanguage(state->source_language()),
++      KnownLanguage(state->current_language()));
++  if (delegate.CanAddSiteToNeverPromptList()) {
++    delegate.SetNeverPromptSite(true);
++  }
++  if (state->IsPageTranslated()) {
++    manager->RevertTranslation();
++  }
++  requested_ = false;
++  error_ = translate::TranslateErrors::NONE;
++  suppressed_ = true;
++  Update();
++}
++
++void TranslateTabHelper::OnTranslateStep(translate::TranslateStep step,
++                                         translate::TranslateErrors error) {
++  switch (step) {
++    case translate::TRANSLATE_STEP_TRANSLATING:
++      // Also automatic translations (always-translate languages, links from
++      // a translated page), which the shell did not request.
++      requested_ = true;
++      error_ = translate::TranslateErrors::NONE;
++      break;
++    case translate::TRANSLATE_STEP_AFTER_TRANSLATE:
++      requested_ = false;
++      error_ = error;
++      break;
++    case translate::TRANSLATE_STEP_TRANSLATE_ERROR:
++      requested_ = false;
++      error_ = error == translate::TranslateErrors::NONE
++                   ? translate::TranslateErrors::TRANSLATION_ERROR
++                   : error;
++      break;
++    default:
++      break;
++  }
++  Update();
++}
++
++void TranslateTabHelper::DidFinishNavigation(
++    content::NavigationHandle* handle) {
++  if (!handle->IsInPrimaryMainFrame() || !handle->HasCommitted() ||
++      handle->IsSameDocument()) {
++    return;
++  }
++  requested_ = false;
++  error_ = translate::TranslateErrors::NONE;
++  suppressed_ = false;
++  Update();
++}
++
++void TranslateTabHelper::WebContentsDestroyed() {
++  driver_observation_.Reset();
++  callback_.Reset();
++}
++
++void TranslateTabHelper::OnIsPageTranslatedChanged(
++    content::WebContents* source) {
++  Update();
++}
++
++void TranslateTabHelper::OnTranslateEnabledChanged(
++    content::WebContents* source) {
++  Update();
++}
++
++void TranslateTabHelper::OnPageTranslated(
++    std::string_view source_lang,
++    std::string_view translated_lang,
++    translate::TranslateErrors error_type) {
++  requested_ = false;
++  error_ = error_type;
++  Update();
++}
++
++void TranslateTabHelper::Update() {
++  TranslationSnapshot next;
++  translate::TranslateManager* manager = ManagerFor(web_contents());
++  auto* client = web_contents()
++                     ? ChromeTranslateClient::FromWebContents(web_contents())
++                     : nullptr;
++  if (manager && client) {
++    const translate::LanguageState* state = manager->GetLanguageState();
++    next.source_language = KnownLanguage(state->source_language());
++    if (state->translation_pending() ||
++        (requested_ && error_ == translate::TranslateErrors::NONE)) {
++      next.status = TranslationStatus::kTranslating;
++    } else if (state->IsPageTranslated()) {
++      next.status = TranslationStatus::kTranslated;
++      next.target_language = KnownLanguage(state->current_language());
++    } else if (error_ != translate::TranslateErrors::NONE) {
++      next.status = TranslationStatus::kFailed;
++      next.error = error_;
++    } else if (state->translate_enabled() && !suppressed_ &&
++               !next.source_language.empty()) {
++      // TranslateManager found translation possible for this page (Chrome
++      // shows its omnibox icon then): the page language is not one the user
++      // reads, and no never-translate list holds the site or the language.
++      next.status = TranslationStatus::kAvailable;
++    }
++    if (next.status != TranslationStatus::kNone &&
++        next.target_language.empty()) {
++      std::string source;
++      client->GetTranslateLanguages(web_contents(), &source,
++                                    &next.target_language,
++                                    /*for_display=*/true);
++      next.target_language = KnownLanguage(next.target_language);
++    }
++  }
++  if (next == snapshot_) {
++    return;
++  }
++  snapshot_ = std::move(next);
++  if (callback_) {
++    callback_.Run();
++  }
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(TranslateTabHelper);
++
++}  // namespace openarc
+diff --git a/openarc/browser/openarc_translate.h b/openarc/browser/openarc_translate.h
+new file mode 100644
+index 000000000000..b2269b187859
+--- /dev/null
++++ b/openarc/browser/openarc_translate.h
+@@ -0,0 +1,139 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_TRANSLATE_H_
++#define OPENARC_BROWSER_OPENARC_TRANSLATE_H_
++
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include "base/functional/callback.h"
++#include "base/scoped_observation.h"
++#include "components/translate/content/browser/content_translate_driver.h"
++#include "components/translate/core/browser/translate_step.h"
++#include "components/translate/core/common/translate_errors.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++
++namespace content {
++class BrowserContext;
++}
++
++namespace openarc {
++
++// Page translation for the bridge's tabs (plan B47).
++//
++// //chrome's translate component runs unchanged on every tab (TabHelpers
++// attaches ChromeTranslateClient): the renderer detects the page language,
++// TranslateManager decides whether translation can be offered and translates
++// with Google's Translate Element script. Chrome draws its offer / progress /
++// "translated" bubble with Views; without a Browser it hands every step to
++// TranslateBubbleFactory, which the embedder sets here, so the steps reach
++// this helper instead of a bubble. The helper folds them and Chrome's
++// LanguageState into one TranslationSnapshot per tab for the shell, and runs
++// the shell's commands the way Chrome's bubble does.
++//
++// Keys: TranslateManager offers translation only when Google API keys are
++// configured. The Translate Element library Google serves to websites works
++// without a key of ours (it carries its own), so InstallTranslateHooks() lifts
++// the gate (chromium-bridge/README.md §Translation).
++
++// What the shell shows for a tab. Mirrors OACTranslationStatus.
++enum class TranslationStatus {
++  kNone,
++  kAvailable,
++  kTranslating,
++  kTranslated,
++  kFailed,
++};
++
++struct TranslationSnapshot {
++  TranslationStatus status = TranslationStatus::kNone;
++  translate::TranslateErrors error = translate::TranslateErrors::NONE;
++  // Translate language codes ("de", "zh-CN"); empty while unknown.
++  std::string source_language;
++  std::string target_language;
++
++  bool operator==(const TranslationSnapshot&) const = default;
++};
++
++// Installs the bubble factory and lifts the API key gate. Idempotent; call on
++// the UI thread before tabs exist.
++void InstallTranslateHooks();
++
++// Every language the service translates into: (code, name in the UI
++// language), sorted by name.
++std::vector<std::pair<std::string, std::u16string>> TranslationTargetLanguages();
++
++// The display name of a translate language code in the UI language.
++std::u16string TranslationLanguageName(std::string_view code);
++
++// Forgets the profile's translate decisions (never-translate sites and
++// languages, always-translate pairs, accept / decline counts).
++void ResetTranslationSettings(content::BrowserContext* context);
++
++class TranslateTabHelper
++    : public content::WebContentsObserver,
++      public translate::ContentTranslateDriver::TranslationObserver,
++      public content::WebContentsUserData<TranslateTabHelper> {
++ public:
++  TranslateTabHelper(const TranslateTabHelper&) = delete;
++  TranslateTabHelper& operator=(const TranslateTabHelper&) = delete;
++  ~TranslateTabHelper() override;
++
++  // Called (synchronously, on the UI thread) whenever snapshot() changed.
++  void SetChangeCallback(base::RepeatingClosure callback);
++
++  const TranslationSnapshot& snapshot() const { return snapshot_; }
++
++  // The shell's commands.
++  // Translates into |target_language| (empty: Chrome's target language).
++  void Translate(const std::string& target_language);
++  void Revert();
++  void NeverTranslateSite();
++
++  // A step of Chrome's translate UI (from the bubble factory).
++  void OnTranslateStep(translate::TranslateStep step,
++                       translate::TranslateErrors error);
++
++  // content::WebContentsObserver:
++  void DidFinishNavigation(content::NavigationHandle* handle) override;
++  void WebContentsDestroyed() override;
++
++  // translate::ContentTranslateDriver::TranslationObserver:
++  void OnIsPageTranslatedChanged(content::WebContents* source) override;
++  void OnTranslateEnabledChanged(content::WebContents* source) override;
++  void OnPageTranslated(std::string_view source_lang,
++                        std::string_view translated_lang,
++                        translate::TranslateErrors error_type) override;
++
++ private:
++  friend class content::WebContentsUserData<TranslateTabHelper>;
++  explicit TranslateTabHelper(content::WebContents* web_contents);
++
++  // Recomputes the snapshot and runs the callback when it changed.
++  void Update();
++
++  base::RepeatingClosure callback_;
++  TranslationSnapshot snapshot_;
++  // A translation was requested and its result has not arrived.
++  bool requested_ = false;
++  // The last translation's error (Chrome's LanguageState does not keep script
++  // download failures).
++  translate::TranslateErrors error_ = translate::TranslateErrors::NONE;
++  // "Never translate this site" on the current page: no offer until the next
++  // navigation (Chrome's own trigger then sees the list).
++  bool suppressed_ = false;
++  base::ScopedObservation<translate::ContentTranslateDriver,
++                          translate::ContentTranslateDriver::TranslationObserver>
++      driver_observation_{this};
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_TRANSLATE_H_

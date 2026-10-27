@@ -429,7 +429,9 @@ struct AdvancedPane: View {
             }
             Section {
                 CatalogButton(id: "advanced.moreSettings")
-                CatalogButton(id: "advanced.resetTranslatePrompts")
+                // [03 §Advanced] observed button. Live since B47: forgets every profile's
+                // translation decisions (never-translate sites and languages).
+                CatalogButton(id: "advanced.resetTranslatePrompts") { Task { await model.resetTranslatedSitePrompts() } }
                 CatalogButton(id: "advanced.exportData")
             }
             // Plan C16: the engine's ad blocker; hidden when the engine has no filter ruleset.

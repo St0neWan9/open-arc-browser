@@ -368,6 +368,8 @@ final class SettingsTests: XCTestCase {
             "icon.grid", "advanced.showCrashReports", "advanced.restoreWindows", "account.makeDefault",
             "links.littleArcExternal", "advanced.adBlocking", "advanced.showFullURL",
             "advanced.pictureInPicture", "links.airTrafficControl",
+            // B47: forgets the engine's translation decisions.
+            "advanced.resetTranslatePrompts",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {

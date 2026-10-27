@@ -24,6 +24,9 @@ public enum WebToolbarItem: String, Hashable, Sendable, CaseIterable {
     case forward
     /// Reload; a stop ✕ while loading. [06 §17.2] observed.
     case reload
+    /// "Translation Options": only while the page can be (or is) translated, left of the site
+    /// controls (32 × 24, pitch 36). [06 §19.1] observed. B47.
+    case translate
     /// Opens the Site Control Center. [06 §17.3] observed.
     case siteControls
     /// Native menu: Add Right / Left / Top / Bottom Split. [06 §17.3] observed.
@@ -56,7 +59,11 @@ public struct WebToolbarItems: Equatable, Sendable {
     /// - `showsSidebarButton`: the sidebar is hidden and this bar is the one at the panel's top
     ///   left. [06 §17.2] observed for the single page; for split panes inferred (the pane that
     ///   takes the panel's top-left corner gets it).
-    public static func make(role: WebToolbarRole, isToolbarShown: Bool, showsSidebarButton: Bool) -> WebToolbarItems {
+    /// - `showsTranslate`: the bar's page offers translation; the bar then leads its right group
+    ///   with the translation button ([06 §19.1] observed for the single page; for the active split
+    ///   pane inferred, it carries the site controls too).
+    public static func make(role: WebToolbarRole, isToolbarShown: Bool, showsSidebarButton: Bool,
+                            showsTranslate: Bool = false) -> WebToolbarItems {
         guard isToolbarShown else {
             switch role {
             case .page: return WebToolbarItems(leading: [], trailing: [])
@@ -64,11 +71,12 @@ public struct WebToolbarItems: Equatable, Sendable {
             }
         }
         let sidebar: [WebToolbarItem] = showsSidebarButton ? [.showSidebar] : []
+        let translate: [WebToolbarItem] = showsTranslate ? [.translate] : []
         switch role {
         case .page:
-            return WebToolbarItems(leading: sidebar + [.back, .forward, .reload], trailing: [.siteControls, .splitMenu])
+            return WebToolbarItems(leading: sidebar + [.back, .forward, .reload], trailing: translate + [.siteControls, .splitMenu])
         case .pane(isActive: true):
-            return WebToolbarItems(leading: sidebar + [.back, .forward, .reload], trailing: [.siteControls, .splitMenu, .closePane])
+            return WebToolbarItems(leading: sidebar + [.back, .forward, .reload], trailing: translate + [.siteControls, .splitMenu, .closePane])
         case .pane(isActive: false):
             return WebToolbarItems(leading: sidebar + [.back, .forward], trailing: [.closePane])
         }

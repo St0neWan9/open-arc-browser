@@ -325,3 +325,26 @@ public final class FakeAdBlocking: EngineAdBlocking, @unchecked Sendable {
         lock.withLock { counts[tabID] ?? 0 }
     }
 }
+
+// MARK: - Translation (plan B47)
+
+/// In-memory `EngineTranslation`: a short language list and a log of resets.
+// @unchecked: `resets` is read and written only under `lock`.
+public final class FakeTranslation: EngineTranslation, @unchecked Sendable {
+    private let lock = NSLock()
+    private var resets: [Profile.ID] = []
+
+    public init() {}
+
+    /// Profiles whose decisions were reset, in call order. For tests.
+    public var resetProfileIDs: [Profile.ID] { lock.withLock { resets } }
+
+    public func targetLanguages() async -> [TranslationLanguage] {
+        ["de", "en", "es", "fr", "ja", "zh-CN"].map { TranslationLanguage(code: $0, name: FakeTab.languageName($0)) }
+            .sorted { $0.name < $1.name }
+    }
+
+    public func resetDecisions(profileID: Profile.ID) async {
+        lock.withLock { resets.append(profileID) }
+    }
+}

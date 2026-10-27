@@ -19,3 +19,4 @@
 #import <OpenArcCore/OACSiteSettings.h>
 #import <OpenArcCore/OACDownloads.h>
 #import <OpenArcCore/OACExtensions.h>
+#import <OpenArcCore/OACTranslation.h>
