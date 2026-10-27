@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import os
 import OpenArcModel
 
 // Links and files opened from other apps (plan D2): a link clicked in Mail, `open https://…`,
@@ -161,6 +162,28 @@ public final class OpenArcAppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { inbox.openWindowIfStillWaiting() }
         }
     }
+
+    // MARK: Remote notifications (B65)
+
+    /// A CloudKit push (the sync engine's database subscription): hand it to the sync controller,
+    /// which fetches. CKSyncEngine also reacts to the push by itself once the app is registered.
+    public func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        NotificationCenter.default.post(name: SidebarSyncController.remoteChangeNotification, object: nil)
+    }
+
+    /// The token itself is not needed: CloudKit tracks the device through the subscription.
+    public func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        RemoteNotificationLog.logger.info("registered for remote notifications")
+    }
+
+    /// Without pushes, sync still fetches at launch, on activation and on Sync Now.
+    public func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        RemoteNotificationLog.logger.error("remote notification registration failed: \(String(describing: error), privacy: .public)")
+    }
+}
+
+enum RemoteNotificationLog {
+    static let logger = Logger(subsystem: AppIdentity.bundleIdentifier, category: "sync")
 }
 
 enum ExternalOpenTiming {

@@ -144,8 +144,12 @@ public final class WorkspaceController: ObservableObject {
         database: dependencies.persistence.flatMap { $0.isReadOnly ? nil : $0 },
         preferences: dependencies.preferences,
         allRecordIDs: { [weak self] in self?.workspace.allRecordIDs ?? [] },
-        now: now
+        now: now,
+        notificationCenter: syncNotificationCenter,
+        registerForRemoteNotifications: dependencies.registerForRemoteNotifications
     )
+    /// Where `sidebarSync` observes app activation and forwarded pushes (B65).
+    private var syncNotificationCenter: NotificationCenter = .default
     /// Flushes the store and the UI state and shuts the engine down on
     /// `NSApplication.willTerminateNotification`.
     private var terminationObserver: TerminationObserver?
@@ -159,7 +163,8 @@ public final class WorkspaceController: ObservableObject {
 
     /// - Parameters:
     ///   - workspace: used when the persistence store has no usable file (first launch).
-    ///   - notificationCenter: where `willTerminate` is observed (tests pass their own).
+    ///   - notificationCenter: where `willTerminate`, app activation and forwarded remote
+    ///     notifications (sync, B65) are observed (tests pass their own).
     public init(
         dependencies: AppDependencies,
         workspace: WorkspaceState,
@@ -172,6 +177,7 @@ public final class WorkspaceController: ObservableObject {
         self.now = now
         self.makeID = makeID
         self.autoArchiveTicker = autoArchiveTicker
+        self.syncNotificationCenter = notificationCenter
         self.isOffTheRecord = false
         self.systemAppearance = dependencies.systemAppearance.current
         self.favicons = dependencies.persistence.map { FaviconCache(dataDirectory: $0.directory) } ?? FaviconCache(directory: nil)
