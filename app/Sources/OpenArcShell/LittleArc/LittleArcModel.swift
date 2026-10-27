@@ -14,31 +14,35 @@ import OpenArcDesign
 //            window with an address bar (expansion itself was not observed in detail).
 //   [02]     observed: ⌥⌘N opens a Little Arc window.
 //   [01 §File] observed: File ▸ New Little Arc Window.
+//   [06 §21.7] observed (E19): once a page is open the window is 1185×832, top-right anchored; its
+//            47 pt top bar holds the traffic lights, a Profile capsule, the centered domain, a copy
+//            link icon and "Open in <Space> ⌘O" with a dropdown of Spaces; choosing a Space (or ⌘O)
+//            closes Little Arc and makes the page the selected top Today tab of that Space, and the
+//            main window switches to it. See `LittleArcSpaceTarget.swift`.
 //
 // Decisions without evidence (inferred):
 //   - The page lives in an engine tab only. No model tab exists until the user adopts it with
-//     "Open in Open Arc", which opens a Today tab in the main window's current space.
+//     "Open in <Space>", which opens a Today tab in that Space (by default the main window's
+//     current one).
 //   - Closing the expanded window closes the engine tab; nothing is archived.
 //   - Rows that act on the main window (switch to tab, app commands, restore from archive) run
 //     there, and the Little Arc window closes.
 
-/// Sizes of the Little Arc window that the spec does not give. Evidence levels as in CLAUDE.md.
+/// Sizes of the Little Arc window. Evidence levels as in CLAUDE.md.
 enum LittleArcTokens {
-    /// Size of the expanded browsing window. unknown (expansion not observed); inferred 900×700
-    /// ("narrow" compared with the 1280-wide main window).
-    static let expandedSize = CGSize(width: 900, height: 700)
+    /// Size of the expanded browsing window. [06 §21.7] observed (1185×832, also [07 §11]).
+    static let expandedSize = CGSize(width: 1185, height: 832)
     /// Smallest size the expanded window may be resized to. unknown; inferred.
     static let expandedMinimumSize = CGSize(width: 480, height: 360)
-    /// Height of the slim top bar of the expanded window. unknown; inferred 38 pt.
-    static let topBarHeight: CGFloat = 38
-    /// Room left of the top bar for the traffic lights. inferred (standard buttons ≈ 70 pt).
-    static let trafficLightReserve: CGFloat = 72
+    /// Height of the top bar of the expanded window. [06 §21.7] observed (47).
+    static let topBarHeight: CGFloat = 47
+    /// Room left of the top bar for the traffic lights (zoom hit box ends at x 74, [07 §2]
+    /// observed) plus a gap before the Profile capsule. inferred.
+    static let trafficLightReserve: CGFloat = 86
     /// Gap between the page and the window edges. unknown; inferred like the main web panel.
     static let pageInset: CGFloat = 6
-    /// Size of the toolbar buttons in the top bar. unknown.
-    static let toolbarButtonSize: CGFloat = 26
-    /// Title of the "move to the main window" button. Arc's wording is not recorded in the spec;
-    /// this uses our product name.
+    /// Title of the "move to the main window" button when there is no Space to name (none live).
+    /// inferred fallback; with a Space it reads "Open in <Space>" ([06 §21.7] observed).
     static let adoptButtonTitle = "Open in \(AppIdentity.displayName)"
     /// Window title (hidden, used by Window menus and accessibility).
     static let windowTitle = "Little Arc"
@@ -81,7 +85,12 @@ public final class LittleArcModel: ObservableObject {
     /// configurator sees `.closed` (B30), so this is only a notification.
     var onClose: (() -> Void)?
 
-    private let shell: ShellModel
+    /// Spaces dropdown of the top bar. [06 §21.7] observed.
+    @Published var spacePicker = LittleArcSpacePickerState()
+    /// Profile the page was opened in (the Profile capsule names it). nil while compact.
+    @Published private(set) var pageProfileID: UUID?
+
+    let shell: ShellModel
     private let engine: any BrowserEngine
     /// URL the user chose; shown until the engine reports its own URL.
     private var requestedURL: URL?
@@ -191,6 +200,7 @@ public final class LittleArcModel: ObservableObject {
         }
         guard let profileID = shell.sidebar.currentProfileID else { return }
         phase = .expanded
+        pageProfileID = profileID
         commandBar.dismiss()
         engineWork.append(Task { [weak self] in await self?.makeLiveTab(profileID: profileID, url: url) })
     }
@@ -243,13 +253,15 @@ public final class LittleArcModel: ObservableObject {
 
     // MARK: Adoption and closing
 
-    /// "Open in Open Arc": opens the page as a Today tab in the main window's current space,
-    /// selects it and closes this window. Returns the new model tab id. inferred.
+    /// "Open in <Space>": opens the page as the selected top Today tab of `spaceID` (default: the
+    /// button's target, `targetSpaceID`), switches the main window to that Space and closes this
+    /// window. Returns the new model tab id. [06 §21.7] observed.
     @discardableResult
-    public func adopt() -> UUID? {
+    public func adopt(into spaceID: UUID? = nil) -> UUID? {
         guard phase == .expanded, let url = currentURL else { return nil }
         let title = page.title.isEmpty ? (url.host ?? url.absoluteString) : page.title
-        let id = shell.adoptLittleArcTab(url: url, title: title)
+        let id = shell.adoptLittleArcTab(url: url, title: title, spaceID: spaceID ?? targetSpaceID)
+        spacePicker = LittleArcSpacePickerState()
         closeStyle = .adopt
         close()
         return id

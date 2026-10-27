@@ -4,9 +4,9 @@ import OpenArcModel
 import OpenArcEngine
 import OpenArcDesign
 
-// The Little Arc window. Compact: the `.littleArc` command bar fills the window. Expanded: a slim
-// top bar (domain, back/forward/reload, "Open in Open Arc") above the page. [06 §7] observed for
-// the compact state; the expanded layout is not in the spec, so its sizes are `LittleArcTokens`.
+// The Little Arc window. Compact: the `.littleArc` command bar fills the window ([06 §7] observed).
+// Expanded: the 47 pt top bar (Profile capsule, domain, copy link, "Open in <Space> ⌘O" with a
+// Spaces dropdown) above the page ([06 §21.7] observed, B60).
 
 /// Scene id of the Little Arc window group.
 public enum LittleArcScene {
@@ -77,14 +77,17 @@ struct LittleArcWindowView: View {
     }
 }
 
-/// The expanded state: top bar and page.
+/// The expanded state: top bar and page, with the Spaces dropdown over them. [06 §21.7] observed.
 struct LittleArcBrowsingView: View {
     @ObservedObject var model: LittleArcModel
+    /// "Copied Current URL" after the copy link icon ([06 §17.3] observed in the main window; the
+    /// same notice here is inferred).
+    @StateObject private var copyToast = WebToolbarCopyToast()
 
     var body: some View {
         let palette = model.palette
         VStack(spacing: 0) {
-            LittleArcTopBar(model: model, palette: palette)
+            LittleArcTopBar(model: model, palette: palette, onCopy: { if model.copyLink() { copyToast.show() } })
                 .frame(height: LittleArcTokens.topBarHeight)
             WebPanel(tab: model.liveTab, background: palette.webPanelBackground,
                      crashed: model.page.isCrashed ? CrashedPageState(reload: { model.reloadOrStop() }) : nil)
@@ -93,43 +96,75 @@ struct LittleArcBrowsingView: View {
                 .webPanelEdgeShadow(palette.appearance)
                 .padding([.horizontal, .bottom], LittleArcTokens.pageInset)
         }
+        .overlay(alignment: .topTrailing) {
+            VStack(alignment: .trailing, spacing: 8) {
+                // Opens in place over the button, top-right aligned. [06 §21.7] observed.
+                if model.spacePicker.isOpen {
+                    LittleArcSpacePickerPanel(model: model)
+                        .padding(.top, LittleArcTopBarLayout.panelTopInset)
+                        .padding(.trailing, LittleArcTopBarLayout.trailingInset)
+                }
+                WebToolbarCopyToastView(toast: copyToast, palette: palette)
+                    .padding(.trailing, LittleArcTopBarLayout.trailingInset + LittleArcTokens.pageInset)
+                    .padding(.top, model.spacePicker.isOpen ? 0 : LittleArcTokens.topBarHeight + 8)
+                    .allowsHitTesting(false)
+            }
+        }
         .background(palette.windowBackground.swiftUI)
+        // Traffic lights centered on the 47 pt bar: the main window's measured spot (center y 24,
+        // [07 §2] observed) suits it; using it here is inferred.
+        .background(MainWindowChromeConfigurator(placement: .pinned))
     }
 }
 
-/// Slim bar above the page. Layout unknown (expansion not observed); the controls follow the
-/// task: domain, back/forward/reload and the adopt button.
+/// Sizes of the expanded top bar that the spec leaves open. inferred unless noted.
+enum LittleArcTopBarLayout {
+    static let trailingInset: CGFloat = 10
+    /// The panel covers the button: its top sits at the button's top. inferred.
+    static let panelTopInset: CGFloat = (LittleArcTokens.topBarHeight - CGFloat(LittleArcSpaceTargetTokens.buttonHeight)) / 2
+    /// Copy link icon. [06 §21.7] observed (16×16).
+    static let copyIconSize: CGFloat = 16
+    static let capsuleHeight: CGFloat = 24
+}
+
+/// The 47 pt bar: traffic lights · Profile capsule · centered domain · copy link · "Open in <Space>
+/// ⌘O" | dropdown arrow. [06 §21.7] observed.
 struct LittleArcTopBar: View {
     @ObservedObject var model: LittleArcModel
     let palette: ThemePalette
+    var onCopy: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: 4) {
-            Color.clear.frame(width: LittleArcTokens.trafficLightReserve)
-            toolbarButton("chevron.left", label: "Back", enabled: model.canGoBack) { model.goBack() }
-            toolbarButton("chevron.right", label: "Forward", enabled: model.canGoForward) { model.goForward() }
-            toolbarButton(model.reloadMode == .stop ? "xmark" : "arrow.clockwise",
-                          label: model.reloadMode == .stop ? "Stop" : "Reload",
-                          enabled: model.liveTab != nil) { model.reloadOrStop() }
-            Spacer(minLength: 8)
+        ZStack {
             address
-            Spacer(minLength: 8)
-            Button(LittleArcTokens.adoptButtonTitle) { model.adopt() }
-                .buttonStyle(.plain)
-                .font(Typography.dialogButton.font.weight(.medium))
-                .foregroundStyle(palette.primaryText.swiftUI)
-                .padding(.horizontal, 10)
-                .frame(height: LittleArcTokens.toolbarButtonSize)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(palette.controlFill.swiftUI)
-                )
-                .disabled(model.currentURL == nil)
-                .accessibilityIdentifier("openarc.littlearc.adopt")
+                .padding(.horizontal, 220)
+            HStack(spacing: 10) {
+                Color.clear.frame(width: LittleArcTokens.trafficLightReserve)
+                if let name = model.profileCapsuleName { profileCapsule(name) }
+                Spacer(minLength: 8)
+                copyButton
+                openInButton
+            }
+            .padding(.trailing, LittleArcTopBarLayout.trailingInset)
         }
-        .padding(.trailing, 8)
     }
 
+    /// Smiley icon + profile name. [06 §21.7] observed (non-Default profile).
+    private func profileCapsule(_ name: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "face.smiling").font(.system(size: 12, weight: .medium))
+            Text(name).lineLimit(1)
+        }
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(palette.primaryText.swiftUI)
+        .padding(.horizontal, 9)
+        .frame(height: LittleArcTopBarLayout.capsuleHeight)
+        .background(Capsule().fill(palette.controlFill.swiftUI))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("openarc.littlearc.profile")
+    }
+
+    /// Centered domain, ≈ 13 pt. [06 §21.7] observed.
     @ViewBuilder
     private var address: some View {
         switch model.addressContent {
@@ -144,20 +179,155 @@ struct LittleArcTopBar: View {
                 Text(host).lineLimit(1).truncationMode(.middle)
             }
             .textStyle(Typography.addressField, ink: palette.chromeInk)
+            .accessibilityIdentifier("openarc.littlearc.domain")
         }
     }
 
-    private func toolbarButton(_ symbol: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: LittleArcTokens.toolbarButtonSize, height: LittleArcTokens.toolbarButtonSize)
+    private var copyButton: some View {
+        Button(action: onCopy) {
+            Image(systemName: "link")
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: LittleArcTopBarLayout.copyIconSize, height: LittleArcTopBarLayout.copyIconSize)
+                .padding(5)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(palette.primaryText.swiftUI.opacity(enabled ? Metrics.IconOpacity.enabled : Metrics.IconOpacity.disabled))
-        .disabled(!enabled)
-        .accessibilityLabel(label)
+        .foregroundStyle(palette.primaryText.swiftUI.opacity(Metrics.IconOpacity.enabled))
+        .disabled(model.currentURL == nil)
+        .accessibilityLabel("Copy Link")
+        .accessibilityIdentifier("openarc.littlearc.copyLink")
+    }
+
+    /// Dark split button: "Open in **Space** ⌘O" · divider · dropdown arrow. [06 §21.7] observed.
+    private var openInButton: some View {
+        let ink = Color.white
+        let height = CGFloat(LittleArcSpaceTargetTokens.buttonHeight)
+        return HStack(spacing: 0) {
+            Button { model.adopt() } label: {
+                HStack(spacing: 6) {
+                    openInTitle
+                    Text(LittleArcSpaceTargetTokens.keyCap)
+                        .font(Typography.dialogKeyCap.font)
+                        .foregroundStyle(ink.opacity(0.7))
+                        .padding(.horizontal, 4)
+                        .frame(minHeight: 16)
+                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(ink.opacity(0.14)))
+                }
+                .padding(.leading, 10)
+                .padding(.trailing, 8)
+                .frame(height: height)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // ⌘O: open in the target Space. [06 §21.7], [02] observed.
+            .keyboardShortcut("o", modifiers: .command)
+            .accessibilityIdentifier("openarc.littlearc.adopt")
+            Rectangle().fill(ink.opacity(0.2)).frame(width: 1, height: height - 10)
+            Button { model.toggleSpacePicker() } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 26, height: height)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Choose Space")
+            .accessibilityIdentifier("openarc.littlearc.spaceMenu")
+        }
+        .foregroundStyle(ink)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(LittleArcSpaceTargetTokens.darkFill.swiftUI))
+        .disabled(model.currentURL == nil)
+    }
+
+    /// "Open in " + bold Space name. [06 §21.7] observed.
+    private var openInTitle: some View {
+        Group {
+            if let name = model.targetSpaceName {
+                Text(LittleArcSpaceTargetTokens.openInPrefix) + Text(name).fontWeight(.bold)
+            } else {
+                Text(LittleArcTokens.adoptButtonTitle)
+            }
+        }
+        .font(.system(size: 13, weight: .regular))
+        .lineLimit(1)
+    }
+}
+
+/// The dark Spaces panel: "Search Spaces…" + collapse arrow, then one row per Space (theme-colored
+/// square + name, ≈ 39 pt), the default target first and highlighted, scrollable. [06 §21.7] observed.
+struct LittleArcSpacePickerPanel: View {
+    @ObservedObject var model: LittleArcModel
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        let options = model.spaceOptions
+        let rowHeight = CGFloat(LittleArcSpaceTargetTokens.rowHeight)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                TextField(LittleArcSpaceTargetTokens.searchPlaceholder, text: Binding(
+                    get: { model.spacePicker.query },
+                    set: { model.setSpaceQuery($0) }
+                ))
+                .textFieldStyle(.plain)
+                // The dark panel: a dark field appearance, so the prompt and caret are light.
+                .environment(\.colorScheme, .dark)
+                .font(.system(size: 13))
+                .focused($fieldFocused)
+                .onSubmit { model.chooseHighlightedSpace() }
+                .onKeyPress(.downArrow) { model.moveSpaceHighlight(by: 1); return .handled }
+                .onKeyPress(.upArrow) { model.moveSpaceHighlight(by: -1); return .handled }
+                .onKeyPress(.escape) { model.closeSpacePicker(); return .handled }
+                .accessibilityIdentifier("openarc.littlearc.spaceSearch")
+                Button { model.closeSpacePicker() } label: {
+                    Image(systemName: "chevron.up").font(.system(size: 10, weight: .bold))
+                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Collapse")
+            }
+            .padding(.horizontal, 12)
+            .frame(height: CGFloat(LittleArcSpaceTargetTokens.buttonHeight) + 6)
+            Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                        row(option, highlighted: index == model.spacePicker.highlightedIndex)
+                            .frame(height: rowHeight)
+                    }
+                }
+                .padding(4)
+            }
+            .frame(height: rowHeight * CGFloat(min(max(options.count, 1), LittleArcSpaceTargetTokens.visibleRows)) + 8)
+        }
+        .foregroundStyle(Color.white)
+        .frame(width: CGFloat(LittleArcSpaceTargetTokens.panelWidth))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(LittleArcSpaceTargetTokens.darkFill.swiftUI))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .onAppear { fieldFocused = true }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("openarc.littlearc.spacePicker")
+    }
+
+    private func row(_ option: LittleArcSpaceOption, highlighted: Bool) -> some View {
+        Button { model.chooseSpace(option.id) } label: {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(option.swatch.swiftUI)
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                        if let icon = option.icon {
+                            SidebarSpaceIconView(icon: icon, size: 22, glyphSize: 12, tint: .black.opacity(0.6))
+                        }
+                    }
+                Text(option.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(highlighted ? 0.14 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("openarc.littlearc.space.\(option.name)")
     }
 }
 
