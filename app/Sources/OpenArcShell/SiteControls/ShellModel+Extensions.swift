@@ -43,7 +43,9 @@ extension ShellModel {
     }
 }
 
-/// The Extensions menu, between Archive and Window. [01] observed order and items; ⌘E [02] observed.
+/// The Extensions menu, between Archive and Window. [01 §Extensions] observed: Add Extension… ·
+/// Manage Extensions…, nothing else. Open Extensions (⌘E, [02] observed) is in no menu; its key
+/// lives in `KeyOnlyMenuItems`. B62.
 struct ExtensionCommands: Commands {
     @ObservedObject var model: ShellModel
     let hasWindow: Bool
@@ -51,10 +53,6 @@ struct ExtensionCommands: Commands {
     var body: some Commands {
         CommandMenu("Extensions") {
             Group {
-                Button("Open Extensions") { model.openExtensions() }
-                    .keyboardShortcut("e", modifiers: .command)
-                    .disabled(model.selectedTabID == nil)
-                Divider()
                 Button("Add Extension…") { model.openAddExtension() }
                 Button("Manage Extensions…") { model.openManageExtensions() }
             }

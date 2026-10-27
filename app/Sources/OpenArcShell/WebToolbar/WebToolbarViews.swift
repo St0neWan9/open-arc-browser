@@ -92,6 +92,9 @@ struct WebToolbarView: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .clipped()
+        // Same menu on the domain and on empty toolbar space. [06 §28] observed.
+        .contentShape(Rectangle())
+        .contextMenu { WebToolbarContextMenu(model: model, tabID: state.tabID, settings: settings) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.webToolbar")
     }
@@ -362,5 +365,52 @@ struct WebToolbarCopyToastView: View {
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("openarc.webToolbar.copiedToast")
         }
+    }
+}
+
+/// Right-click menu of the web toolbar, on the domain and on empty toolbar space alike. [06 §28]
+/// observed: Copy URL · Share ▸ · Capture… · Capture Full Page ‖ Manage Extensions… ‖ Show Full
+/// URL · Hide Toolbar · Disable Shared Quotes; no icons, no key hints. Disable Shared Quotes is
+/// left out (the feature is outside v1, [06 §28] unknown). Show Full URL is the toggle of Settings ▸
+/// Advanced "Show full URL when Toolbar is enabled" ([03 §Advanced] observed); its title reads
+/// "Hide Full URL" while on ([06 §28] inferred).
+struct WebToolbarContextMenu: View {
+    @ObservedObject var model: ShellModel
+    /// The bar's tab (a split pane's own tab).
+    let tabID: UUID?
+    @ObservedObject var settings: WebToolbarSettings
+
+    var body: some View {
+        let url = tabID.flatMap { model.sidebar.linkURL(for: $0) }
+        Button("Copy URL") { model.webToolbarCopyLink(tabID) }
+            .disabled(url == nil)
+        // The system share item (`ShareLink`). It always carries the system share icon, which
+        // indents this group; Arc's has none ([06 §28] observed). Listing the services ourselves
+        // needs the deprecated `NSSharingService.sharingServices(forItems:)`. B62 report.
+        SidebarShareMenu(url: url)
+        Button("Capture…") { model.webToolbarCapture(tabID, fullPage: false) }
+            .disabled(!model.canCapturePage)
+        Button("Capture Full Page") { model.webToolbarCapture(tabID, fullPage: true) }
+            .disabled(!model.canCapturePage)
+        Divider()
+        Button("Manage Extensions…") { model.openManageExtensions() }
+            .disabled(model.isIncognito)
+        Divider()
+        Button(settings.fullURLMenuTitle) { settings.showsFullURL.toggle() }
+        Button("Hide Toolbar") { settings.isShown = false }
+    }
+}
+
+extension WebToolbarSettings {
+    /// [06 §28] observed "Show Full URL"; "Hide Full URL" while on is inferred.
+    var fullURLMenuTitle: String { showsFullURL ? "Hide Full URL" : "Show Full URL" }
+}
+
+extension ShellModel {
+    /// Capture… / Capture Full Page from a toolbar's menu: the bar's pane first, then the capture.
+    /// [06 §28] observed items; the existing capture flows ([06 §24]).
+    func webToolbarCapture(_ tabID: UUID?, fullPage: Bool) {
+        if let tabID, hasActiveSplit { focusPane(tabID) }
+        if fullPage { captureFullPage() } else { beginRegionCapture() }
     }
 }

@@ -42,6 +42,14 @@ public struct SidebarView: View {
         return ZStack(alignment: .topLeading) {
             fillOverride.map(\.swiftUI) ?? palette.sidebarBackground(on: surface)
 
+            // Right-click anywhere on the sidebar top (traffic-light row, URL box) opens the current
+            // Space's menu, the same as the Space name's "⋯". [06 §28] observed.
+            Color.clear
+                .frame(width: layout.width, height: layout.urlBoxFrame.maxY)
+                .contentShape(Rectangle())
+                .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
+                .accessibilityHidden(true)
+
             SidebarTopBarView(viewModel: viewModel, layout: layout)
 
             ZStack(alignment: .topLeading) {

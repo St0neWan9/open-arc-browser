@@ -7,15 +7,14 @@ import OpenArcImport
 // The import sheet and its menu item (plans D3, D3b). [01 §Arc] observed: "Import from Another Browser…".
 // The sheet's contents and layout are inferred; there is no reference screenshot.
 
-/// Open Arc ▸ Import from Another Browser…, after Set as Default Browser. [01 §Arc] observed order.
-struct BookmarkImportCommands: Commands {
-    let controller: WorkspaceController
+/// Open Arc ▸ Import from Another Browser…, first of its group. [01 §Arc] observed order;
+/// placed by `AppMenuCommands`.
+struct BookmarkImportMenuItem: View {
+    @ObservedObject var controller: WorkspaceController
 
-    var body: some Commands {
-        CommandGroup(after: .appSettings) {
-            Button("Import from Another Browser…") { BookmarkImportPresenter.present(controller: controller) }
-                .disabled(controller.isOffTheRecord)
-        }
+    var body: some View {
+        Button("Import from Another Browser…") { BookmarkImportPresenter.present(controller: controller) }
+            .disabled(controller.isOffTheRecord)
     }
 }
 

@@ -84,17 +84,14 @@ extension AppPreferences {
 
 // MARK: - Menu
 
-/// Open Arc ▸ Check for Updates…. [01 §Arc] observed: after Import from Another Browser… and
-/// directly before Services, so it is placed before the system Services group.
-struct UpdateCommands: Commands {
+/// Open Arc ▸ Check for Updates…. [01 §Arc] observed: after Import from Another Browser…, in its
+/// group, directly before Services. Placed by `AppMenuCommands`.
+struct UpdateMenuItem: View {
     @ObservedObject var model: UpdatesModel
 
-    var body: some Commands {
-        CommandGroup(before: .systemServices) {
-            Button(UpdateStrings.checkForUpdates) { model.checkForUpdates() }
-                .disabled(!model.isCheckEnabled)
-            Divider()
-        }
+    var body: some View {
+        Button(UpdateStrings.checkForUpdates) { model.checkForUpdates() }
+            .disabled(!model.isCheckEnabled)
     }
 }
 

@@ -148,14 +148,13 @@ private final class ActivationObserver {
 // MARK: - Menu
 
 /// Open Arc ▸ Set as Default Browser. [01 §Arc] observed: after Settings… and Share Arc (Share Arc
-/// is not built). Disabled while we are the default or a request runs: inferred.
-struct DefaultBrowserCommands: Commands {
+/// is not built), in Settings…'s group ([01 §菜单项图标与缩进] observed). Placed by `AppMenuCommands`.
+/// Disabled while we are the default or a request runs: inferred.
+struct DefaultBrowserMenuItem: View {
     @ObservedObject var model: DefaultBrowserModel
 
-    var body: some Commands {
-        CommandGroup(after: .appSettings) {
-            Button("Set as Default Browser") { Task { await model.makeDefault() } }
-                .disabled(model.isDefault || model.isRequesting)
-        }
+    var body: some View {
+        Button("Set as Default Browser") { Task { await model.makeDefault() } }
+            .disabled(model.isDefault || model.isRequesting)
     }
 }

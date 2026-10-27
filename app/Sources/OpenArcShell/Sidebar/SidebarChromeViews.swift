@@ -207,6 +207,8 @@ struct SidebarURLBoxView: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .onTapGesture { viewModel.openCommandBar(.currentTab) }
+        // The current Space's menu, with or without a page. [06 §28] observed.
+        .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
         .accessibilityElement(children: .contain)
         .accessibilityAction { viewModel.openCommandBar(.currentTab) }
         .accessibilityIdentifier("openarc.sidebar.urlBox")

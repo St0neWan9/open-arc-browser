@@ -139,6 +139,8 @@ public final class OpenArcAppDelegate: NSObject, NSApplicationDelegate {
     /// Flushes the store and shuts the engine down before the app exits, without blocking the
     /// main thread. The scene attaches its controller.
     public let termination = AppTermination()
+    /// Menu-bar fix-ups SwiftUI cannot express (B62, `MenuBarAdjuster`).
+    public let menuBar = MenuBarAdjuster()
 
     override public init() {
         super.init()
@@ -154,6 +156,14 @@ public final class OpenArcAppDelegate: NSObject, NSApplicationDelegate {
     /// ⌘Q, logout, an update relaunch: answer later, once the quit sequence finished (B27).
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         termination.shouldTerminate(sender)
+    }
+
+    /// No automatic window tabbing: its View ▸ Show Tab Bar / Show All Tabs and Window ▸ tab items
+    /// are not in [01 §View] / [01 §Window] (observed). The menu-bar pass starts before SwiftUI
+    /// builds the menus. B62.
+    public func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+        menuBar.install()
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
