@@ -244,6 +244,8 @@ struct SidebarTabLiveState: Equatable {
     /// The page's top-right color from the last finished load; the web toolbar paints with it.
     /// [06 §17.4] observed. B45.
     var pageTopColor: PageTopColor?
+    /// Page translation (B47): drives the URL box's second line and the translate bubble. [06 §19].
+    var translation: PageTranslation = .unavailable
     /// Latest find-in-page result; nil when no search ran.
     var findResult: FindResult?
 
@@ -268,6 +270,7 @@ struct SidebarTabLiveState: Equatable {
         isFullscreen = snapshot.isFullscreen
         themeColor = snapshot.themeColor
         pageTopColor = snapshot.pageTopColor
+        translation = snapshot.translation
     }
 
     /// The favicon if it belongs to the site now shown (inferred: an icon of the previous site must
@@ -317,6 +320,8 @@ struct SidebarTabLiveState: Equatable {
             themeColor = color
         case .pageTopColorChanged(let color):
             pageTopColor = color
+        case .translationChanged(let value):
+            translation = value
         case .findResultChanged(let result):
             findResult = result
         case .renderProcessGone:

@@ -67,8 +67,11 @@ extension ShellModel {
     /// The buttons of a bar. With the sidebar hidden the bar at the panel's top-left corner leads
     /// with the show-sidebar button. [06 §17.2] observed for the single page.
     func webToolbarItems(role: WebToolbarRole, isTopLeading: Bool = true) -> WebToolbarItems {
-        WebToolbarItems.make(role: role, isToolbarShown: isWebToolbarShown,
-                             showsSidebarButton: isTopLeading && !isSidebarVisible && !spaceFlow.isCreating)
+        // B47: the translation button while the selected page offers translation. [06 §19.1].
+        let offersTranslation = translation.entryLabel(for: selectedTabID) != nil
+        return WebToolbarItems.make(role: role, isToolbarShown: isWebToolbarShown,
+                                    showsSidebarButton: isTopLeading && !isSidebarVisible && !spaceFlow.isCreating,
+                                    showsTranslate: offersTranslation)
     }
 
     /// Where the bar of `tabID` takes its background (plan B45, [06 §17.4] observed, E18): the

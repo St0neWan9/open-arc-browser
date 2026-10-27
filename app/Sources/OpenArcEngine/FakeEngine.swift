@@ -41,6 +41,7 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     private let fakeDownloads = FakeDownloads()
     private let fakeExtensions = FakeExtensions()
     private let fakeAdBlocking = FakeAdBlocking()
+    private let fakeTranslation = FakeTranslation()
 
     public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle,
                 pageTopColorProvider: PageTopColorProvider? = nil) {
@@ -57,6 +58,9 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     public var fakeDownloadService: FakeDownloads { fakeDownloads }
     public var fakeExtensionService: FakeExtensions { fakeExtensions }
     public var adBlocking: any EngineAdBlocking { fakeAdBlocking }
+    public var translation: any EngineTranslation { fakeTranslation }
+    /// Typed access for tests (plan B47).
+    public var fakeTranslationService: FakeTranslation { fakeTranslation }
     /// Typed access for tests (plan C16).
     public var fakeAdBlockingService: FakeAdBlocking { fakeAdBlocking }
 
@@ -258,6 +262,10 @@ public enum FakeTabCommand: Hashable, Sendable {
     case exitPictureInPicture
     case exitFullscreen
     case requestClose
+    /// Plan B47: `translate(to:)`, `revertTranslation()`, `neverTranslateSite()`.
+    case translate(String?)
+    case revertTranslation
+    case neverTranslateSite
 }
 
 /// The answer a fake dialog request got (or its default when it was dropped).
@@ -333,6 +341,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     /// The site's "Automatic Picture-In-Picture" setting ([06 §12] observed, default Allowed).
     private var allowsAutomaticPictureInPicture = true
     private var colorSchemeLog: [WebColorScheme] = []
+    private var pendingTranslationFailure: TranslationFailure?
     private let broadcaster = AsyncBroadcaster<TabEvent>()
     private let dialogBroadcaster = AsyncBroadcaster<EngineDialogRequest>()
     private let titleProvider: FakeEngine.TitleProvider
@@ -598,6 +607,73 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     public func exitFullscreen() async {
         guard record(.exitFullscreen) else { return }
         simulateFullscreen(false)
+    }
+
+    // MARK: Translation (plan B47)
+
+    /// Finishes at once: `.translating`, then `.translated` into the requested language (or the
+    /// offered one). Ignored without a known source language, as the engine does. A failure set
+    /// with `simulateTranslationFailure` is reported instead, once.
+    public func translate(to languageCode: String?) async {
+        lock.withLock {
+            guard !isClosed else { return }
+            commandLog.append(.translate(languageCode))
+            let current = state.translation
+            guard let source = current.sourceLanguage else { return }
+            var target = current.targetLanguage
+            if let languageCode { target = TranslationLanguage(code: languageCode, name: FakeTab.languageName(languageCode)) }
+            setTranslation(PageTranslation(status: .translating, sourceLanguage: source, targetLanguage: target))
+            if let failure = pendingTranslationFailure {
+                pendingTranslationFailure = nil
+                setTranslation(PageTranslation(status: .failed(failure), sourceLanguage: source, targetLanguage: target))
+            } else {
+                setTranslation(PageTranslation(status: .translated, sourceLanguage: source, targetLanguage: target))
+            }
+        }
+    }
+
+    public func revertTranslation() async {
+        lock.withLock {
+            guard !isClosed else { return }
+            commandLog.append(.revertTranslation)
+            guard state.translation.status == .translated else { return }
+            var next = state.translation
+            next.status = .available
+            setTranslation(next)
+        }
+    }
+
+    public func neverTranslateSite() async {
+        lock.withLock {
+            guard !isClosed else { return }
+            commandLog.append(.neverTranslateSite)
+            setTranslation(.unavailable)
+        }
+    }
+
+    /// Simulates the engine detecting a page language other than the user's: translation becomes
+    /// available, offering `target`. nil source: nothing to offer.
+    public func simulatePageLanguage(_ source: TranslationLanguage?, target: TranslationLanguage = TranslationLanguage(code: "en", name: "English")) {
+        lock.withLock {
+            guard !isClosed else { return }
+            setTranslation(source.map { PageTranslation(status: .available, sourceLanguage: $0, targetLanguage: target) } ?? .unavailable)
+        }
+    }
+
+    /// The next `translate(to:)` fails with `failure`.
+    public func simulateTranslationFailure(_ failure: TranslationFailure) {
+        lock.withLock { pendingTranslationFailure = failure }
+    }
+
+    /// Must hold `lock`.
+    private func setTranslation(_ translation: PageTranslation) {
+        guard state.translation != translation else { return }
+        state.translation = translation
+        broadcaster.yield(.translationChanged(translation))
+    }
+
+    static func languageName(_ code: String) -> String {
+        Locale(identifier: "en").localizedString(forIdentifier: code) ?? code
     }
 
     /// Logs a command; false when the tab is closed.
@@ -974,6 +1050,8 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
             broadcaster.yield(.urlChanged(url))
             state.committedURL = url
             broadcaster.yield(.committedURLChanged(url))
+            // A new document: the engine detects its language again (`simulatePageLanguage`).
+            setTranslation(.unavailable)
             state.security = url.scheme?.lowercased() == "https" ? .secure : .none
             broadcaster.yield(.securityChanged(state.security))
 

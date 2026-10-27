@@ -129,6 +129,8 @@ public struct BrowserTabState: Hashable, Sendable {
     /// The page's top-right color, sampled once per finished load (plan B45); nil until the first
     /// sample. The web toolbar paints itself with it. [06 §17.4] observed.
     public var pageTopColor: PageTopColor?
+    /// Page translation (plan B47). [06 §19] observed surfaces.
+    public var translation: PageTranslation
 
     public init(
         url: URL? = nil,
@@ -144,7 +146,8 @@ public struct BrowserTabState: Hashable, Sendable {
         capture: CaptureState = [],
         isFullscreen: Bool = false,
         themeColor: RGBAColor? = nil,
-        pageTopColor: PageTopColor? = nil
+        pageTopColor: PageTopColor? = nil,
+        translation: PageTranslation = .unavailable
     ) {
         self.url = url
         self.title = title
@@ -160,6 +163,7 @@ public struct BrowserTabState: Hashable, Sendable {
         self.isFullscreen = isFullscreen
         self.themeColor = themeColor
         self.pageTopColor = pageTopColor
+        self.translation = translation
     }
 }
 
@@ -221,6 +225,8 @@ public enum TabEvent: Hashable, Sendable {
     case themeColorChanged(RGBAColor?)
     /// A finished load was sampled (`BrowserTabState.pageTopColor`). Plan B45.
     case pageTopColorChanged(PageTopColor?)
+    /// `BrowserTabState.translation` changed (plan B47).
+    case translationChanged(PageTranslation)
     /// The pointer is over a link (nil: it left). Status bubble, inferred.
     case hoveredLinkChanged(URL?)
     /// Find-in-page results for the current search (`BrowserTab.find`).
@@ -376,10 +382,13 @@ public protocol BrowserEngine: AnyObject, Sendable {
     var extensions: any EngineExtensions { get }
     /// The built-in ad blocker (plan C16). Engines without one get `UnavailableAdBlocking`.
     var adBlocking: any EngineAdBlocking { get }
+    /// Page translation (plan B47). Engines without it get `UnavailableTranslation`.
+    var translation: any EngineTranslation { get }
 }
 
 extension BrowserEngine {
     public var adBlocking: any EngineAdBlocking { UnavailableAdBlocking.shared }
+    public var translation: any EngineTranslation { UnavailableTranslation.shared }
 }
 
 /// One live web contents.
@@ -461,6 +470,18 @@ public protocol BrowserTab: AnyObject, Sendable {
     /// [04 §dark mode] observed that a dark space's pages get the dark scheme, and that
     /// View ▸ Appearance decides what "websites, Easels, and Notes" use. Idempotent.
     func setPreferredColorScheme(_ scheme: WebColorScheme) async
+
+    // MARK: Translation (plan B47, [06 §19])
+
+    /// Translates the page into `languageCode` (nil: `translation.targetLanguage`). [06 §19.2]
+    /// observed "Translate"; [06 §19.3] "Choose Another Language ▸". Also retries after a failure.
+    /// Ignored while the page language is unknown.
+    func translate(to languageCode: String?) async
+    /// Shows the original page. [06 §19.4] observed "Use Original". No-op when not translated.
+    func revertTranslation() async
+    /// Never offer translation on this site again, and show the original. [06 §19.3] observed
+    /// "Never Translate This Site". Undone by `EngineTranslation.resetDecisions`.
+    func neverTranslateSite() async
 
     /// View hosting for this tab (one surface per tab; several can be on screen in split view).
     var surface: any TabSurface { get }

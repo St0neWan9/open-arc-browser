@@ -164,6 +164,9 @@ struct WebToolbarView: View {
             .siteControlsBubble(siteControls, isPresented: siteControls.isPresented && siteControls.tabID == state.tabID,
                                 palette: model.windowPalette)
             .extensionPopupBubble(siteControls, tabID: state.tabID, palette: model.windowPalette)
+        case .translate:
+            // [06 §19.1] observed: "Translation Options", the bubble below it. B47.
+            TranslationToolbarButton(model: model.translation, tabID: state.tabID, colors: colors, palette: model.windowPalette)
         case .splitMenu:
             WebToolbarSplitMenu(colors: colors) { placement in model.addSplit(placement, beside: state.tabID) }
         case .closePane:

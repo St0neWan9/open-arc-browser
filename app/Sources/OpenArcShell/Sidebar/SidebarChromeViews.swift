@@ -130,11 +130,15 @@ struct SidebarTopBarView: View {
 struct SidebarURLBoxView: View {
     @ObservedObject var viewModel: SidebarViewModel
     @Environment(\.siteControlsModel) private var siteControls
+    @Environment(\.translationModel) private var translation
     @State private var isHovering = false
 
     var body: some View {
         let palette = viewModel.palette
         let content = viewModel.urlBoxContent
+        // B47: "Translation Available" / "Translated" as a second line; the domain moves to the
+        // box's top half. [06 §19.1] observed.
+        let translationShift = translationLineShift(content)
         let s = Metrics.Sidebar.self
         let showsMagnifier = content == .placeholder
         let showsLock = viewModel.urlBoxShowsInsecureLock
@@ -174,6 +178,13 @@ struct SidebarURLBoxView: View {
                 // One accessibility element for the 18 pt text line (y 55–73), like the reference.
                 .accessibilityBox(label: urlText(content), identifier: "openarc.sidebar.urlBox.text")
                 .padding(.leading, textLeading)
+                .offset(y: -translationShift)
+            if translationShift > 0, let translation {
+                TranslationURLBoxLine(model: translation, tabID: viewModel.selectedTabID,
+                                      ink: palette.ink(\.addressText).swiftUI, palette: palette)
+                    .padding(.leading, textLeading + SidebarLocalTokens.textInkInset)
+                    .offset(y: TranslationLocalTokens.entryLineHeight - translationShift)
+            }
             if case .domain = content, let siteControls {
                 // Site Control Center anchor (B13, SiteControls/). [06 §12] observed.
                 SiteControlsURLBoxAccessories(model: siteControls, isHovering: isHovering, tint: palette.primaryText.swiftUI, chrome: palette) {
@@ -217,6 +228,15 @@ struct SidebarURLBoxView: View {
         .help("Not Secure")
         .accessibilityLabel("Not Secure")
         .accessibilityIdentifier("openarc.sidebar.urlBox.insecureLock")
+    }
+
+    /// How far the domain moves up for the translation line: the two 17 pt lines fill the 36 pt box
+    /// from its top ([06 §19.1] observed: domain row at the box top, the line 17 below). 0 without
+    /// the line.
+    private func translationLineShift(_ content: SidebarURLBoxContent) -> CGFloat {
+        guard translation != nil, case .domain = content,
+              let live = viewModel.selectedLiveState, TranslationEntryLabel.make(live.translation) != nil else { return 0 }
+        return CGFloat(Metrics.Sidebar.addressFieldHeight) / 2 - TranslationLocalTokens.entryLineHeight / 2
     }
 
     private func urlText(_ content: SidebarURLBoxContent) -> String {

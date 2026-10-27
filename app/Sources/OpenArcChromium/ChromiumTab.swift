@@ -21,7 +21,9 @@ public final class ChromiumTab: BrowserTab, @unchecked Sendable {
     @MainActor
     init(tab: OACTab, profileID: Profile.ID, colorScheme: WebColorScheme, engine: ChromiumEngineCore) {
         let id = EngineTabID(tab.identifier)
-        let channel = TabChannel(state: BrowserTabState(tab.state))
+        var initial = BrowserTabState(tab.state)
+        initial.translation = PageTranslation(tab.translationState)
+        let channel = TabChannel(state: initial)
         let core = ChromiumTabCore(tab: tab, id: id, channel: channel, engine: engine, colorScheme: colorScheme)
         self.id = id
         self.profileID = profileID
@@ -154,6 +156,20 @@ public final class ChromiumTab: BrowserTab, @unchecked Sendable {
     public func setPreferredColorScheme(_ scheme: WebColorScheme) async {
         await core.setPreferredColorScheme(scheme)
     }
+
+    // MARK: Translation (plan B47, OACTranslation.h)
+
+    public func translate(to languageCode: String?) async {
+        await core.perform { $0.translate(toLanguage: languageCode) }
+    }
+
+    public func revertTranslation() async {
+        await core.perform { $0.revertTranslation() }
+    }
+
+    public func neverTranslateSite() async {
+        await core.perform { $0.neverTranslateSite() }
+    }
 }
 
 // MARK: - Channel
@@ -224,6 +240,7 @@ final class TabChannel: @unchecked Sendable {
         if old.isFullscreen != new.isFullscreen { events.append(.fullscreenChanged(new.isFullscreen)) }
         if old.themeColor != new.themeColor { events.append(.themeColorChanged(new.themeColor)) }
         if old.pageTopColor != new.pageTopColor { events.append(.pageTopColorChanged(new.pageTopColor)) }
+        if old.translation != new.translation { events.append(.translationChanged(new.translation)) }
         if old.loadState != new.loadState { events.append(.loadStateChanged(new.loadState)) }
         return events
     }
@@ -360,7 +377,9 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     /// Copies the bridge's state into the cache, emitting one event per change.
     private func sync() {
         guard let tab, !tab.isClosed else { return }
-        channel.update(to: BrowserTabState(tab.state))
+        var state = BrowserTabState(tab.state)
+        state.translation = PageTranslation(tab.translationState)
+        channel.update(to: state)
     }
 
     /// Reads the bridge state again at `settleResyncDelays` after a load stopped or a navigation
@@ -414,6 +433,7 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     func tab(_ tab: OACTab, didChangeFullscreen isFullscreen: Bool) { sync() }
     func tab(_ tab: OACTab, didChangeThemeColor color: OACColor, hasThemeColor: Bool) { sync() }
     func tabDidSamplePageTopColor(_ tab: OACTab) { sync() }
+    func tabDidChangeTranslationState(_ tab: OACTab) { sync() }
     func tab(_ tab: OACTab, didFinish navigation: OACNavigation) {
         sync()
         scheduleSettleResync()
@@ -748,6 +768,43 @@ extension BrowserTabState {
                 ? RGBAColor(red: color.red, green: color.green, blue: color.blue, alpha: color.alpha) : nil,
             pageTopColor: PageTopColor(kind: state.pageTopColorKind, color: state.pageTopColor)
         )
+    }
+}
+
+extension PageTranslation {
+    /// The bridge's translation snapshot (plan B47).
+    init(_ state: OACTranslationState) {
+        let status: Status = switch state.status {
+        case .available: .available
+        case .translating: .translating
+        case .translated: .translated
+        case .failed: .failed(TranslationFailure(state.error))
+        default: .unavailable
+        }
+        self.init(
+            status: status,
+            sourceLanguage: state.sourceLanguage.map(TranslationLanguage.init),
+            targetLanguage: state.targetLanguage.map(TranslationLanguage.init)
+        )
+    }
+}
+
+extension TranslationLanguage {
+    init(_ language: OACTranslationLanguage) {
+        self.init(code: language.code, name: language.name)
+    }
+}
+
+extension TranslationFailure {
+    init(_ error: OACTranslationError) {
+        switch error {
+        case .network: self = .network
+        case .initialization: self = .serviceUnavailable
+        case .unknownLanguage: self = .unknownLanguage
+        case .unsupportedLanguage: self = .unsupportedLanguage
+        case .identicalLanguages: self = .identicalLanguages
+        default: self = .translationFailed
+        }
     }
 }
 

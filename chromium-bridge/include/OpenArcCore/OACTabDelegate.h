@@ -146,6 +146,8 @@ NS_SWIFT_UI_ACTOR
 /// screen (inferred; the spec records no page-fullscreen behavior).
 - (void)tab:(OACTab *)tab didChangeFullscreen:(BOOL)isFullscreen;
 - (void)tab:(OACTab *)tab didFinishNavigation:(OACNavigation *)navigation;
+/// `tab.translationState` changed (plan B47, OACTranslation.h).
+- (void)tabDidChangeTranslationState:(OACTab *)tab;
 
 // MARK: Requests (C9)
 

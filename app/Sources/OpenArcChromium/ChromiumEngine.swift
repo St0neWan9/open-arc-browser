@@ -49,6 +49,8 @@ public final class ChromiumEngine: BrowserEngine {
     public let extensions: any EngineExtensions
     /// Chromium's subresource filter with the bundled EasyList + EasyPrivacy ruleset (plan C16).
     public let adBlocking: any EngineAdBlocking
+    /// Chromium's translate component with shell-drawn surfaces (plan B47).
+    public let translation: any EngineTranslation
 
     private let core: ChromiumEngineCore
     private let broadcaster: AsyncBroadcaster<EngineEvent>
@@ -78,6 +80,7 @@ public final class ChromiumEngine: BrowserEngine {
         // page finds someone to confirm it.
         core.onProfileLoaded = { [weak extensions] id, profile in extensions?.attach(to: id, extensions: profile.extensions) }
         adBlocking = ChromiumAdBlocking(core: core)
+        translation = ChromiumTranslation(core: core)
         core.startAtLaunch()
     }
 
@@ -200,6 +203,12 @@ final class ChromiumEngineCore {
     func siteSettings(_ id: Profile.ID) async -> OACSiteSettings? {
         guard !isShutDown, let profile = try? await profile(id, offTheRecord: false) else { return nil }
         return profile.siteSettings
+    }
+
+    /// The on-disk profile (B47: its translate settings). nil when it cannot be loaded.
+    func onDiskProfile(_ id: Profile.ID) async -> OACProfile? {
+        guard !isShutDown else { return nil }
+        return try? await profile(id, offTheRecord: false)
     }
 
     /// The profile's extensions (C14). nil when the profile cannot be loaded.

@@ -79,6 +79,11 @@ struct MainWindowContent: View {
                 // First-run onboarding cards over the themed background (D9, own design).
                 OnboardingLayer(model: model, onboarding: model.controller.onboarding, palette: palette)
 
+                // "Translated back to …! Use ⌘Z to undo." at the web panel's top right. [06 §19.5] observed. B47.
+                TranslationRevertNoticeView(model: model.translation, palette: palette)
+                    .frame(width: max(0, layout.webPanelFrame.maxX - TranslationLocalTokens.noticeInset), alignment: .trailing)
+                    .offset(y: layout.pageFrame.minY + TranslationLocalTokens.noticeInset)
+
                 // Copy link notice at the panel's top right, under the toolbar. [06 §17.3] observed. B43.
                 if layout.isWebToolbarShown {
                     WebToolbarCopyToastView(toast: copyToast, palette: palette)
@@ -88,6 +93,7 @@ struct MainWindowContent: View {
                 }
             }
             .environment(\.dialogCenter, model.controller.dialogs)
+            .environment(\.translationModel, model.translation)
             .environment(\.isWebToolbarShown, layout.isWebToolbarShown)
             .environment(\.webToolbarCopyToast, copyToast)
             // The window command bar and onboarding cover the sidebar: presses go to them.

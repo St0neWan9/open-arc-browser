@@ -395,6 +395,18 @@ public final class SettingsModel: ObservableObject {
         isAdBlockingOn = await blocker.isEnabled()
     }
 
+    /// Settings ▸ Advanced "Reset Translated-site Prompts" ([03 §Advanced] observed button; its
+    /// effect is [06 §19.6] unknown). Advanced settings are app-wide, so every profile's translation
+    /// decisions are forgotten: never-translate sites and languages, always-translate languages
+    /// (inferred from the label and the engine's prompt memory). Plan B47.
+    public func resetTranslatedSitePrompts() async {
+        let translation = shell.controller.dependencies.engine.translation
+        let live = shell.controller.workspace.profiles.values.filter { !$0.meta.isTombstone }.map(\.id)
+        for profileID in live.sorted(by: { $0.uuidString < $1.uuidString }) {
+            await translation.resetDecisions(profileID: profileID)
+        }
+    }
+
     /// Creates the crash report folder if needed (so Finder has something to show) and reveals it.
     public func showCrashReports(base: URL = AppDataLocation.directory()) {
         let directory = CrashReportLocation.directory(in: base)
