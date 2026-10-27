@@ -167,8 +167,10 @@ public enum SettingsCatalog {
         SettingsControl("links.littleArcExternal", "Open links from other apps in Little Arc", .toggle(defaultValue: false), .live),
         // Observed default 6 hours; Little Arc windows are not archived yet (B10 closes them).
         SettingsControl("links.archiveLittleArcsAfter", "Archive Little Arcs after", .picker(defaultValue: "6 hours"), .pending(task: "B10 follow-up")),
-        SettingsControl("links.peekShiftClick", "Shift-click a link to open it in Peek", .toggle(defaultValue: true), .pending(task: "E2")),
-        SettingsControl("links.peekOtherSites", "Open links to other sites in Peek (Favorites and Pinned Tabs only)", .toggle(defaultValue: true), .pending(task: "E2")),
+        // Live (B49): `AppPreferences.opensPeekOnShiftClick` / `opensPeekForOtherSites`. Defaults
+        // inferred (the spec records none). [06 §22.1] observed behavior.
+        SettingsControl("links.peekShiftClick", "Shift-click a link to open it in Peek", .toggle(defaultValue: true), .live),
+        SettingsControl("links.peekOtherSites", "Open links to other sites in Peek (Favorites and Pinned Tabs only)", .toggle(defaultValue: true), .live),
         // Live (B52): opens the route sheet. [06 §25.1] observed.
         SettingsControl("links.airTrafficControl", "Air Traffic Control…", .button, .live),
     ]

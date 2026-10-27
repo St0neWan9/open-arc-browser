@@ -10,6 +10,10 @@ public struct MainWindowLayout: Equatable, Sendable {
     /// the top of the web panel. [06 §17] observed.
     public var isWebToolbarShown: Bool
 
+    /// While Peek is open the page behind shrinks by this much on every side. [06 §22.2] observed
+    /// (B49, `PeekMetrics.backgroundInset`); 0 otherwise.
+    public var peekBackgroundInset: Double = 0
+
     public init(windowSize: CGSize, isSidebarVisible: Bool = true, isWebToolbarShown: Bool = false) {
         self.windowSize = windowSize
         self.isSidebarVisible = isSidebarVisible
@@ -48,6 +52,12 @@ public struct MainWindowLayout: Equatable, Sendable {
     /// [07 §1] observed (276, 10, 1634 × 965 in a 1920 × 985 window).
     /// With the sidebar hidden, a ≈ 5 pt themed border on all four sides. [06 §14] observed.
     public var webPanelFrame: CGRect {
+        guard peekBackgroundInset > 0 else { return baseWebPanelFrame }
+        return baseWebPanelFrame.insetBy(dx: peekBackgroundInset, dy: peekBackgroundInset)
+    }
+
+    /// The web panel without the Peek inset.
+    public var baseWebPanelFrame: CGRect {
         guard isSidebarVisible else {
             let inset = SidebarPeekTokens.hiddenWebPanelInset
             return CGRect(x: inset, y: inset, width: max(0, windowSize.width - 2 * inset), height: max(0, windowSize.height - 2 * inset))

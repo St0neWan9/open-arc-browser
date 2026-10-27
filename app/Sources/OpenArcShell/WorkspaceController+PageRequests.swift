@@ -52,7 +52,10 @@ extension WorkspaceController {
         pageRequests.task = Task { [weak self] in
             for await event in stream {
                 guard let self else { return }
-                if case .newTabRequested(let request) = event { self.handleNewTabRequest(request) }
+                // A Peek page has no model tab: its source tab stands in (B49).
+                if case .newTabRequested(let request) = event, !self.handleLinkPeekNewTabRequest(request) {
+                    self.handleNewTabRequest(request)
+                }
             }
         }
     }

@@ -258,7 +258,8 @@ final class TabChannel: @unchecked Sendable {
 final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     private(set) var tab: OACTab?
     let id: EngineTabID
-    private let channel: TabChannel
+    /// Internal for the extensions in other files (ChromiumLinkPreview.swift).
+    let channel: TabChannel
     private weak var engine: ChromiumEngineCore?
     /// Withdraws an outstanding dialog request, by the bridge request's identity. Weak toward the
     /// reply, so a request the shell dropped still gets its default answer.

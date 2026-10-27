@@ -35,6 +35,8 @@ public final class ShellModel: ObservableObject {
     public let easelCanvas: EaselCanvasModel
     /// Hidden-sidebar peek: pinned / hidden / floating. Follows `isSidebarVisible`. [06 §14] B34.
     let sidebarPeek: SidebarPeekController
+    /// Link Peek, the floating preview of a link (B49, [06 §22]).
+    public let linkPeek: LinkPeekModel
     /// Picture in Picture when the user leaves a video tab (C15).
     private var autoPictureInPicture: AutoPictureInPicture?
     /// Asks where and how Save Page As writes (suggested file name → location and format; nil
@@ -84,6 +86,7 @@ public final class ShellModel: ObservableObject {
     private var libraryChanges: AnyCancellable?
     private var libraryFlagChanges: AnyCancellable?
     private var peekChanges: AnyCancellable?
+    private var linkPeekChanges: AnyCancellable?
 
     /// A window on `controller` that opens with `window`'s selection. A stale Space id falls back to
     /// the first Space, a stale or foreign tab id to no selection.
@@ -127,6 +130,7 @@ public final class ShellModel: ObservableObject {
         self.translation = TranslationModel(sidebar: sidebar, engine: engine.translation)
         self.easelCanvas = EaselCanvasModel(sidebar: sidebar)
         self.sidebarPeek = SidebarPeekController(isPinned: window.isSidebarVisible)
+        self.linkPeek = LinkPeekModel(sidebar: sidebar)
         sidebar.requestHandler = { [weak self] request in self?.handle(request) }
         sidebar.onFocusRequest = { [weak self] in self?.requestFocus() }
         installCommandBarSources()
@@ -142,6 +146,7 @@ public final class ShellModel: ObservableObject {
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         libraryChanges = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         peekChanges = sidebarPeek.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        linkPeekChanges = linkPeek.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         isSidebarVisible = window.isSidebarVisible
         if let tabID = window.selectedTabID { restoreSelectedTab(tabID) }
         connectLibraryFlags()
@@ -537,6 +542,7 @@ public final class ShellModel: ObservableObject {
         pageCapture.stop()
         translation.stop()
         sidebar.stop()
+        linkPeek.stop()
         if ownsController { controller.stop() }
     }
 }

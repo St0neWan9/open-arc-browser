@@ -370,6 +370,8 @@ final class SettingsTests: XCTestCase {
             "advanced.pictureInPicture", "links.airTrafficControl",
             // B47: forgets the engine's translation decisions.
             "advanced.resetTranslatePrompts",
+            // B49: the two Peek switches (06 §22.1, 03 §Links).
+            "links.peekShiftClick", "links.peekOtherSites",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {
