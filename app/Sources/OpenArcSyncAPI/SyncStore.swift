@@ -9,8 +9,9 @@ import OpenArcModel
 //   app edits model ──enqueue(.save(id))──▶ SyncStore ──(later)── asks SyncLocalDatabase.record(for:)
 //   server changes ──▶ SyncStore merges using ConflictPolicy ──▶ SyncLocalDatabase.apply(batch)
 //
-// Open question (needs a product decision): which records sync. The protocol does not decide it;
-// the app chooses what to enqueue. Two consequences hold whatever the answer is:
+// Which records sync: every `SyncRecordType` except the local-only ones (`isLocalOnly`: Profile,
+// plan Q13). Neither the app nor a backend may enqueue, upload or apply a local-only record.
+// Beyond that the app chooses what to enqueue. Two consequences hold whatever it chooses:
 // - If ArchiveItems do not sync, archiving a synced (pinned/favorite) tab on one device deletes it
 //   on the others with no archive entry there. Syncing ArchiveItems avoids that.
 // - A record that leaves the synced scope (e.g. a pinned tab moved to Today, if Today is local)

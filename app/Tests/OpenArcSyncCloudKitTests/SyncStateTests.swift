@@ -134,14 +134,19 @@ final class SyncStateTests: XCTestCase {
     // MARK: Scope
 
     /// Archive items sync by default (SyncScope.swift: pending product decision; see
-    /// OpenArcSyncAPI/SyncStore.swift open question).
+    /// OpenArcSyncAPI/SyncStore.swift open question). Profiles never do (plan Q13, B73;
+    /// [06 §16.3] observed "Profiles are not synced between computers."), not even when a custom
+    /// scope lists them.
     func testDefaultScopeIncludesEveryTypeIncludingArchiveItems() {
         let scope = SyncScope.default
         for type in SyncRecordType.allCases {
-            XCTAssertTrue(scope.includes(type), "\(type)")
+            XCTAssertEqual(scope.includes(type), type != .profile, "\(type)")
         }
         XCTAssertTrue(scope.includes(.archiveItem))
         XCTAssertTrue(scope.includes(SyncRecord.archiveItem(Fx.archiveItem())))
+        XCTAssertFalse(scope.includes(SyncRecord.profile(Fx.profile(variant: 0))))
+        XCTAssertFalse(SyncScope(syncedTypes: Set(SyncRecordType.allCases)).includes(.profile))
+        XCTAssertEqual(SyncRecordType.syncedCases, SyncRecordType.allCases.filter { $0 != .profile })
     }
 
     func testCustomScopeExcludesRemovedTypes() {

@@ -131,6 +131,10 @@ public actor CloudKitSyncStore: SyncStore {
         let storage = injectedStorage ?? LocalDatabaseSyncStateStorage(database: database)
         self.storage = storage
         state = PersistedSyncState.decode(try? await storage.loadState())
+        // A queue persisted by an older build may still hold local-only records (B73): drop them.
+        for entry in state.pending.entries where entry.id.type.isLocalOnly {
+            state.pending.remove(entry.id)
+        }
         if state.awaitingAccountReset {
             setPhase(.unavailable(.accountChanged))
             return
@@ -152,6 +156,10 @@ public actor CloudKitSyncStore: SyncStore {
         var driverChanges: [DriverRecordChange] = []
         for change in changes {
             switch change {
+            case .delete(let id) where id.type.isLocalOnly:
+                // Local-only records never touch the server, not even to delete a copy an older
+                // build uploaded (see `SyncScope`).
+                continue
             case .save(let id):
                 guard configuration.scope.includes(id.type) else { continue }
                 state.pending.add(id, .save)
@@ -413,6 +421,9 @@ public actor CloudKitSyncStore: SyncStore {
                 upserts.append(server)
             }
         }
+        // A server deletion of a local-only record (an older build purging its uploaded copy)
+        // must not remove this device's own record.
+        let deletions = deletions.filter { !$0.type.isLocalOnly }
         var driverRemovals: [DriverRecordChange] = []
         for id in deletions {
             // Delete wins: a pending local edit of a record deleted on the server is dropped.
@@ -458,7 +469,8 @@ public actor CloudKitSyncStore: SyncStore {
         await applyDeferredRemoteChanges()
         var serverRecords: [SyncRecord] = []
         for ck in modified {
-            guard let record = try? mapper.decode(ck) else { continue }
+            // Local-only records (Profile, B73) an older build uploaded are ignored.
+            guard let record = try? mapper.decode(ck), !record.id.type.isLocalOnly else { continue }
             state.systemFields[record.id.recordName] = record.meta.backendSystemFields
             serverRecords.append(record)
         }
@@ -707,6 +719,12 @@ extension CloudKitSyncStore: SyncEngineDriverDelegate {
                 continue
             }
             let generation = state.pending.entry(for: id)?.generation
+            if id.type.isLocalOnly {
+                // Never sent, in either direction (B73).
+                unsendable.append(change)
+                state.pending.remove(id)
+                continue
+            }
             switch change {
             case .delete(let ckID):
                 deletes.append(ckID)

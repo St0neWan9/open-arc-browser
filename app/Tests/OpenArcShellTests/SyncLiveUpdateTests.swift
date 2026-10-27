@@ -113,7 +113,7 @@ final class SyncLiveUpdateTests: XCTestCase {
         let store = CountingSyncStore()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("b65-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
-        var deps = AppDependencies(engine: FakeEngine(), sync: store, persistence: WorkspaceStore(directory: directory), preferences: .inMemory())
+        var deps = AppDependencies(engine: FakeEngine(), sync: store, persistence: WorkspaceStore(directory: directory), preferences: .syncOn())
         let registrations = self.registrations
         deps.registerForRemoteNotifications = { registrations.value += 1 }
         let now = clock.now

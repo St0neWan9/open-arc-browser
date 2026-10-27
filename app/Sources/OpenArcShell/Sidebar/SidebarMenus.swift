@@ -168,7 +168,7 @@ struct SidebarProfileMoveMenu: View {
     let tab: TabNode
 
     var body: some View {
-        let current: UUID? = if case .favorite(let p) = tab.location { p } else { nil }
+        let current: UUID? = if case .favorite(let p) = tab.location { viewModel.workspace.localProfileID(for: p) } else { nil }
         Menu("Profile") {
             ForEach(viewModel.menuProfiles, id: \.id) { profile in
                 Toggle(profile.name, isOn: Binding(
@@ -197,7 +197,7 @@ struct SidebarSpaceMenu: View {
             Menu("Set Profile") {
                 ForEach(viewModel.menuProfiles, id: \.id) { profile in
                     Toggle(profile.name, isOn: Binding(
-                        get: { profile.id == space.profileID },
+                        get: { profile.id == viewModel.currentProfileID },
                         set: { if $0 { viewModel.setSpaceProfile(space.id, profileID: profile.id) } }
                     ))
                 }

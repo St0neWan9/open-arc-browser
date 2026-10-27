@@ -209,14 +209,16 @@ public actor WorkspaceStore: SyncLocalDatabase {
     /// server wins entirely is stored as the server copy and announces nothing; only a merge the
     /// local copy contributed to (`RecordMerge.Outcome.needsUpload`) is announced for upload. On a write
     /// failure the in-memory workspace is left unchanged and the error is thrown, so the backend
-    /// can retry the same batch.
+    /// can retry the same batch. Local-only records (Profile, plan Q13) in the batch are ignored.
     public func apply(_ batch: RemoteChangeBatch) async throws {
         drainInbox()
         guard !isReadOnly else { throw PersistenceError.readOnly }
         let old = workspace
         var next = old
         var resend: [SyncRecordID] = []
-        for server in batch.upserts {
+        // Local-only records (Profile, plan Q13) are never taken from a remote batch, whatever
+        // the backend sends; this device's own copy stays as it is.
+        for server in batch.upserts where !server.id.type.isLocalOnly {
             if let local = next.record(for: server.id),
                let outcome = RecordMerge.merge(local: local, server: server) {
                 next.setRecord(outcome.merged)
@@ -225,7 +227,7 @@ public actor WorkspaceStore: SyncLocalDatabase {
                 next.setRecord(server)
             }
         }
-        for id in batch.deletions { next.removeRecord(id) }
+        for id in batch.deletions where !id.type.isLocalOnly { next.removeRecord(id) }
         guard next != old else { return }
 
         let wasUnsaved = hasUnsavedChanges

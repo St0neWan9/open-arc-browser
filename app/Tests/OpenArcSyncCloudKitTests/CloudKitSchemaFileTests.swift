@@ -26,14 +26,22 @@ final class CloudKitSchemaFileTests: XCTestCase {
     /// CloudKit system record type, declared so an import never tries to drop it.
     private static let systemRecordTypes: Set<String> = ["Users"]
 
+    /// Record types still declared (CloudKit cannot remove a deployed type, and older builds may
+    /// still write it) but no longer written by this build: the local-only types. Profile became
+    /// local-only in B73 (plan Q13).
+    private static let retiredRecordTypes: Set<String> = Set(SyncRecordType.allCases.filter(\.isLocalOnly).map(\.rawValue))
+
     // MARK: - Tests
 
     func testEveryRecordTypeIsDeclared() throws {
         let schema = try Self.parseSchema()
         let declared = Set(schema.keys).subtracting(Self.systemRecordTypes)
-        let written = Set(SyncRecordType.allCases.map(\.rawValue))
-        XCTAssertEqual(declared.subtracting(written), [], "schema.ckdb declares record types the code never writes")
+        let written = Set(SyncRecordType.syncedCases.map(\.rawValue))
+        XCTAssertEqual(declared.subtracting(written).subtracting(Self.retiredRecordTypes), [], "schema.ckdb declares record types the code never writes")
         XCTAssertEqual(written.subtracting(declared), [], "record types missing from schema.ckdb (plan D4)")
+        // A retired type keeps its declaration: removing it would fail the Production deploy.
+        XCTAssertEqual(Self.retiredRecordTypes.subtracting(declared), [], "a retired record type was removed from schema.ckdb")
+        XCTAssertEqual(Self.retiredRecordTypes, ["Profile"])
     }
 
     /// Every field key in `RecordSchema` is declared, no undeclared extras, and the encrypted flag

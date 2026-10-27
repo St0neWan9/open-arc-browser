@@ -82,10 +82,12 @@ public enum PinnedItem: Hashable, Sendable {
 // MARK: - Queries
 
 extension WorkspaceState {
-    /// Live (non-tombstoned) spaces of a profile, in dock order.
+    /// Live (non-tombstoned) spaces of a profile, in dock order. A space whose profile reference
+    /// does not resolve on this device counts as the Default profile's (`localProfileID(for:)`).
     public func spaces(inProfile profileID: UUID) -> [Space] {
-        spaces.values
-            .filter { !$0.meta.isTombstone && $0.profileID == profileID }
+        let resolve = profileResolver
+        return spaces.values
+            .filter { !$0.meta.isTombstone && resolve($0.profileID) == profileID }
             .sorted { SortKey.order(($0.dockSortKey, $0.id), ($1.dockSortKey, $1.id)) }
     }
 
@@ -100,12 +102,37 @@ extension WorkspaceState {
     /// ("The Default Profile cannot be deleted."); "oldest" as the rule is inferred.
     public var defaultProfileID: UUID? { liveProfilesOldestFirst.first?.id }
 
-    /// Settings of the profile behind a space. A missing or tombstoned space or profile gives the
-    /// defaults, so orphaned data still behaves predictably.
+    /// The local profile a profile reference stands for. Profiles do not sync (plan Q13; Arc says
+    /// "Profiles are not synced between computers.", [06 §16.3] observed), while Spaces and
+    /// favorites do and keep the profile id of the device that wrote them. A reference to a live
+    /// profile of this device is itself; any other (unknown here, or tombstoned) resolves to the
+    /// Default profile. Read-only: the stored reference is not rewritten, so nothing is synced
+    /// back. nil only when this device has no live profile at all. Mapping to Default is inferred.
+    public func localProfileID(for profileID: UUID) -> UUID? {
+        profileResolver(profileID)
+    }
+
+    /// The local profile of a Space (`localProfileID(for:)` of its reference); nil for an unknown
+    /// Space.
+    public func profileID(ofSpace spaceID: UUID) -> UUID? {
+        spaces[spaceID].flatMap { localProfileID(for: $0.profileID) }
+    }
+
+    /// `localProfileID(for:)` with the Default profile looked up once, for filters over many records.
+    private var profileResolver: (UUID) -> UUID? {
+        let profiles = self.profiles
+        let fallback = defaultProfileID
+        return { id in
+            if let profile = profiles[id], !profile.meta.isTombstone { return id }
+            return fallback
+        }
+    }
+
+    /// Settings of the profile behind a space (its local profile, see `localProfileID(for:)`). A
+    /// missing space, or no live profile at all, gives the defaults, so orphaned data still
+    /// behaves predictably.
     public func profileSettings(forSpace spaceID: UUID) -> ProfileSettings {
-        guard let profileID = spaces[spaceID]?.profileID,
-              let profile = profiles[profileID], !profile.meta.isTombstone
-        else { return .default }
+        guard let profileID = profileID(ofSpace: spaceID), let profile = profiles[profileID] else { return .default }
         return profile.settings
     }
 
@@ -121,10 +148,19 @@ extension WorkspaceState {
             .sorted { SortKey.order(($0.dockSortKey, $0.id), ($1.dockSortKey, $1.id)) }
     }
 
-    /// Live tabs at exactly this location, in display order.
+    /// Live tabs at exactly this location, in display order. Favorites are matched by local
+    /// profile (`localProfileID(for:)`): the Default profile's favorites include those whose
+    /// profile is unknown on this device.
     public func tabs(at location: TabLocation) -> [TabNode] {
-        tabs.values
-            .filter { !$0.meta.isTombstone && $0.location == location }
+        let matches: (TabLocation) -> Bool
+        if case .favorite(let profileID) = location {
+            let resolve = profileResolver
+            matches = { if case .favorite(let p) = $0 { return resolve(p) == profileID } else { return false } }
+        } else {
+            matches = { $0 == location }
+        }
+        return tabs.values
+            .filter { !$0.meta.isTombstone && matches($0.location) }
             .sorted { SortKey.order(($0.sortKey, $0.id), ($1.sortKey, $1.id)) }
     }
 

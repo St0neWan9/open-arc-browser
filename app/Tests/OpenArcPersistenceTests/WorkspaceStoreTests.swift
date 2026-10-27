@@ -334,15 +334,15 @@ final class WorkspaceStoreTests: XCTestCase {
         let store = makeStore()
         let base = try Sample.workspace()
         await store.update(base)
-        // A remote batch adds a profile the caller has not seen yet.
-        let remote = Profile(id: Fx.uuid(90), name: "From another Mac", now: Fx.t(10))
-        try await store.apply(RemoteChangeBatch(upserts: [.profile(remote)]))
+        // A remote batch adds a folder the caller has not seen yet.
+        let remote = Folder(id: Fx.uuid(90), spaceID: Sample.ids.space, title: "From another Mac", sortKey: SortKey.sequence(count: 1)[0], now: Fx.t(10))
+        try await store.apply(RemoteChangeBatch(upserts: [.folder(remote)]))
         // The caller renames a tab on its older copy and submits only that change.
         let renamed = try TreeOps.renameTab(base, id: Sample.ids.todayTab, customTitle: "Local", now: Fx.t(20))
         store.submit(changesFrom: base, to: renamed)
         try await store.flush()
         let saved = makeStore().loadResult.workspace
-        XCTAssertEqual(saved.profiles[remote.id], remote, "the remote record survives")
+        XCTAssertEqual(saved.folders[remote.id], remote, "the remote record survives")
         XCTAssertEqual(saved.tabs[Sample.ids.todayTab], renamed.tabs[Sample.ids.todayTab], "the local edit is saved")
     }
 

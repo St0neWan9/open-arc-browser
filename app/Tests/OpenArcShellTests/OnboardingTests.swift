@@ -227,7 +227,9 @@ final class OnboardingTests: XCTestCase {
         _ = openWindow(controller)
         let onboarding = controller.onboarding
         while onboarding.step != .sync { onboarding.next() }
-        XCTAssertTrue(onboarding.syncEnabled, "Sync Sidebar starts on")
+        XCTAssertFalse(onboarding.syncEnabled, "Sync Sidebar starts off (plan Q14, B73)")
+        onboarding.setSyncEnabled(true)
+        XCTAssertTrue(preferences.isSidebarSyncEnabled)
         onboarding.setSyncEnabled(false)
         XCTAssertFalse(preferences.isSidebarSyncEnabled)
         XCTAssertTrue(preferences.needsFullSyncUpload, "turning it off marks a full upload, like the toggle")

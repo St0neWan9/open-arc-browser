@@ -205,14 +205,14 @@ final class SyncDatabaseTests: XCTestCase {
         var server = tab
         server.title = "Server"
         server.meta.stamp([TabNode.FieldGroup.content], at: Fx.t(700))
-        let newProfile = Profile(id: Fx.uuid(40), name: "Work", now: Fx.t(700))
+        let newFolder = Folder(id: Fx.uuid(40), spaceID: Sample.ids.space, title: "Work", sortKey: SortKey.sequence(count: 1)[0], now: Fx.t(700))
         let batch = RemoteChangeBatch(
-            upserts: [.tab(server), .profile(newProfile)],
+            upserts: [.tab(server), .folder(newFolder)],
             deletions: [SyncRecordID(type: .splitLayout, uuid: Sample.ids.split)]
         )
         try await store.apply(batch)
         let afterFirst = await store.workspace
-        XCTAssertEqual(afterFirst.profiles[newProfile.id], newProfile)
+        XCTAssertEqual(afterFirst.folders[newFolder.id], newFolder)
         XCTAssertNil(afterFirst.splits[Sample.ids.split])
         XCTAssertEqual(afterFirst.tabs[tab.id]?.title, "Server")
         var writes = await store.writeCount
@@ -223,6 +223,52 @@ final class SyncDatabaseTests: XCTestCase {
         XCTAssertEqual(afterSecond, afterFirst)
         writes = await store.writeCount
         XCTAssertEqual(writes, writesBefore + 1, "a repeated batch does not write")
+    }
+
+    // MARK: Local-only profiles (B73)
+
+    /// Plan Q13, [06 §16.3] observed "Profiles are not synced between computers.": profile edits,
+    /// creations and purges produce no pending change; the rest of the diff is unchanged; a full
+    /// upload lists no profile.
+    func testProfileChangesProduceNoPendingChanges() throws {
+        let i = Sample.ids
+        let old = try Sample.workspace()
+        var new = TreeOps.createProfile(old, id: Fx.uuid(60), name: "Work", now: Fx.t(100))
+        new = try TreeOps.updateProfileSettings(new, id: i.profile, settings: ProfileSettings(searchEngine: .duckDuckGo), now: Fx.t(101))
+        new = try TreeOps.renameFolder(new, id: i.folder, title: "Updated", now: Fx.t(102))
+        var purged = new
+        purged.profiles[Fx.uuid(60)] = nil
+
+        let changes = WorkspaceDiff.changes(from: old, to: new)
+        XCTAssertTrue(changes.saved.contains(SyncRecordID(type: .profile, uuid: i.profile)), "the diff still sees the profile")
+        XCTAssertEqual(changes.pendingChanges, [.save(SyncRecordID(type: .folder, uuid: i.folder))])
+        XCTAssertEqual(WorkspaceDiff.pendingChanges(from: new, to: purged), [])
+        XCTAssertFalse(new.allSyncedRecordIDs.contains { $0.type == .profile })
+        XCTAssertEqual(new.allSyncedRecordIDs.count, new.allRecordIDs.count - new.profiles.count)
+    }
+
+    /// Profile records in a remote batch (an older build uploaded them) are ignored: an unknown
+    /// one is not inserted, a known one is neither overwritten nor purged, and nothing is written.
+    func testIncomingProfileRecordsAreIgnored() async throws {
+        let store = makeStore()
+        let state = try Sample.workspace()
+        await store.update(state)
+        try await store.flush()
+        let writesBefore = await store.writeCount
+
+        var remoteEdit = try XCTUnwrap(state.profiles[Sample.ids.profile])
+        remoteEdit.name = "Renamed elsewhere"
+        remoteEdit.meta.stamp([Profile.FieldGroup.naming], at: Fx.t(900))
+        let foreign = Profile(id: Fx.uuid(61), name: "Other Mac", now: Fx.t(900))
+        try await store.apply(RemoteChangeBatch(
+            upserts: [.profile(remoteEdit), .profile(foreign)],
+            deletions: [SyncRecordID(type: .profile, uuid: Sample.ids.profile)]
+        ))
+
+        let after = await store.workspace
+        XCTAssertEqual(after, state)
+        let writes = await store.writeCount
+        XCTAssertEqual(writes, writesBefore, "an all-profile batch changes nothing")
     }
 
     /// The merge helper resolves the same way as the policy for every record type.

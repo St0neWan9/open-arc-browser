@@ -289,7 +289,7 @@ enum LibraryBoard {
     static func columns(in workspace: WorkspaceState, systemAppearance: ResolvedAppearance = .light) -> [LibraryBoardColumn] {
         workspace.allLiveSpaces.map { space in
             let theme = space.themeID.flatMap { workspace.themes[$0] }.flatMap { $0.meta.isTombstone ? nil : $0 }
-            let snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: space.id, profileID: space.profileID)
+            let snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: space.id, profileID: workspace.profileID(ofSpace: space.id))
             return LibraryBoardColumn(
                 space: space,
                 palette: ThemeDerivation.palette(for: theme, systemAppearance: systemAppearance),

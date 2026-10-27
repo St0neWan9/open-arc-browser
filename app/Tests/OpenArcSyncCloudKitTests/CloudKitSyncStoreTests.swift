@@ -300,6 +300,68 @@ final class CloudKitSyncStoreTests: XCTestCase {
         XCTAssertTrue(pending.isEmpty)
     }
 
+    // MARK: - Local-only profiles (B73)
+
+    /// Plan Q13, [06 §16.3] observed "Profiles are not synced between computers.": profile saves
+    /// and deletes are never queued or sent, and a queue an older build persisted is cleaned.
+    func testProfileChangesProduceNoPendingCloudKitRecords() async throws {
+        let profileID = SyncRecordID(type: .profile, uuid: Fx.uuid(1))
+        let storage = InMemoryStateStorage()
+        // A queue written by a build that still synced profiles.
+        var legacy = PersistedSyncState()
+        legacy.pending.add(profileID, .save)
+        legacy.pending.add(tabID, .save)
+        try await storage.saveState(legacy.encoded())
+
+        let h = StoreHarness(records: [.profile(Fx.profile()), .tab(Fx.tab())], storage: storage)
+        try await h.start()
+        let driver = try h.driver
+        XCTAssertEqual(driver.pendingChanges, [.save(tabCKID)], "the legacy profile entry is dropped")
+
+        await h.store.enqueue([.save(profileID), .delete(profileID)])
+        var persisted = await h.persisted
+        XCTAssertEqual(persisted.pending.entries.map(\.id), [tabID])
+        let status = await h.store.currentStatus()
+        XCTAssertEqual(status.pendingChangeCount, 1)
+
+        try await h.store.syncNow()
+        XCTAssertFalse(driver.sentBatches.contains { batch in
+            batch.recordsToSave.contains { $0.recordType == "Profile" }
+                || batch.recordIDsToDelete.contains { $0.recordName.hasPrefix("Profile/") }
+        }, "no Profile record is saved or deleted on the server")
+        persisted = await h.persisted
+        XCTAssertTrue(persisted.pending.isEmpty)
+    }
+
+    /// Profile records already on the server (uploaded by an older build) are ignored when
+    /// fetched, and a server deletion of one does not purge the local profile.
+    func testIncomingProfileRecordsAreIgnored() async throws {
+        let local = Fx.profile()
+        var remote = Fx.profile()
+        remote.name = "Renamed on another Mac"
+        remote.meta.stamp([Profile.FieldGroup.naming], at: Fx.t(500))
+        let foreign = Fx.profile(Fx.uuid(77), variant: 1)
+        let h = StoreHarness(records: [.profile(local)])
+        try await h.start()
+        let driver = try h.driver
+        driver.queueFetch([.fetchedRecordChanges(
+            modified: [Fx.serverCK(.profile(remote), tag: "p-1"), Fx.serverCK(.profile(foreign), tag: "p-2"), Fx.serverCK(.folder(Fx.folder()), tag: "f-1")],
+            deleted: [DriverFetchedDeletion(recordID: Fx.mapper.recordID(for: SyncRecordID(type: .profile, uuid: local.id)), recordType: "Profile")]
+        )])
+        try await h.store.syncNow()
+
+        let kept = await h.database.record(for: SyncRecordID(type: .profile, uuid: local.id))
+        XCTAssertEqual(kept, .profile(local), "the local profile is neither overwritten nor purged")
+        let unknown = await h.database.record(for: SyncRecordID(type: .profile, uuid: foreign.id))
+        XCTAssertNil(unknown)
+        let folder = await h.database.record(for: folderID)
+        XCTAssertNotNil(folder, "other records in the same fetch still apply")
+        let batches = await h.database.appliedBatches
+        XCTAssertFalse(batches.contains { $0.upserts.contains { $0.id.type == .profile } || $0.deletions.contains { $0.type == .profile } })
+        let persisted = await h.persisted
+        XCTAssertNil(persisted.systemFields[SyncRecordID(type: .profile, uuid: local.id).recordName])
+    }
+
     // MARK: - Conflicts
 
     func testServerRecordChangedIsMergedAppliedAndResent() async throws {

@@ -90,7 +90,7 @@ final class SyncUITests: XCTestCase {
 
     private func makeController(
         _ store: any SyncStore,
-        preferences: AppPreferences = .inMemory(),
+        preferences: AppPreferences = .syncOn(),
         database: (any SyncLocalDatabase)? = NullDatabase(),
         now: Date? = nil
     ) -> SidebarSyncController {
@@ -156,7 +156,7 @@ final class SyncUITests: XCTestCase {
 
     /// With `DisabledSyncStore` nothing happens: no start, the toggle does nothing.
     func testDisabledStoreNeverStarts() async {
-        let preferences = AppPreferences.inMemory()
+        let preferences = AppPreferences.syncOn()
         let sync = makeController(DisabledSyncStore(), preferences: preferences)
         sync.launch()
         sync.setEnabled(false)
@@ -183,7 +183,7 @@ final class SyncUITests: XCTestCase {
 
     func testToggleOffStopsAndOnStartsAgain() async {
         let store = RecordingSyncStore()
-        let preferences = AppPreferences.inMemory()
+        let preferences = AppPreferences.syncOn()
         let sync = makeController(store, preferences: preferences)
         sync.launch()
         sync.setEnabled(false)
@@ -200,7 +200,7 @@ final class SyncUITests: XCTestCase {
     func testSettingsToggleStopsAndStartsStore() async {
         let store = RecordingSyncStore()
         let persistence = WorkspaceStore(directory: directory)
-        let deps = AppDependencies(engine: FakeEngine(), sync: store, persistence: persistence)
+        let deps = AppDependencies(engine: FakeEngine(), sync: store, persistence: persistence, preferences: .syncOn())
         let now = clock
         let shell = ShellModel(dependencies: deps, workspace: .firstLaunch(now: now), now: { now }, notificationCenter: NotificationCenter())
         defer { shell.stop() }
@@ -218,7 +218,7 @@ final class SyncUITests: XCTestCase {
     /// covered by one full upload at the next start.
     func testChangesWhileOffAreUploadedOnceAfterRestart() async {
         let store = RecordingSyncStore()
-        let preferences = AppPreferences.inMemory()
+        let preferences = AppPreferences.syncOn()
         preferences.needsFullSyncUpload = false
         let sync = makeController(store, preferences: preferences)
         sync.launch()
@@ -264,7 +264,7 @@ final class SyncUITests: XCTestCase {
 
     func testSettingsCardButtonCallsSyncNow() async {
         let store = RecordingSyncStore(statuses: [SyncStatus(phase: .failed(message: "offline"))])
-        let deps = AppDependencies(engine: FakeEngine(), sync: store)
+        let deps = AppDependencies(engine: FakeEngine(), sync: store, preferences: .syncOn())
         let now = clock
         let shell = ShellModel(dependencies: deps, workspace: .demo(now: now), now: { now })
         defer { shell.stop() }
@@ -299,7 +299,7 @@ final class SyncUITests: XCTestCase {
     func testStartFailureShowsErrorAndKeepsFullUpload() async {
         let store = RecordingSyncStore(statuses: [])
         await store.failStart(true)
-        let preferences = AppPreferences.inMemory()
+        let preferences = AppPreferences.syncOn()
         preferences.needsFullSyncUpload = false
         let sync = makeController(store, preferences: preferences)
         sync.launch()
