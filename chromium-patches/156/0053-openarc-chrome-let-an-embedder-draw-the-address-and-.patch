@@ -1,0 +1,189 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 23:11:33 -0700
+Subject: [PATCH] openarc: chrome: let an embedder draw the address and card
+ save prompts
+
+Plan C30 (C13 follow-up). After a form submission Chrome's Autofill offers
+to save a new address (or update a saved one) and to save a payment card on
+the device, through AddressBubblesController and SaveCardBubbleControllerImpl.
+Both draw Views bubbles anchored to a Browser window: without one the address
+bubble dereferences a missing BrowserWindow, and the card bubble declines to
+show (no AutofillBubbleHandler), so nothing new was ever saved in an app whose
+tabs have no Browser.
+
+Two Mac-only hooks for an app that embeds Chrome's browser process and owns
+the UI (chrome::EmbedderOwnsUI()):
+
+- ChromeAutofillClient::SetEmbedderAddressSavePrompt(): while set,
+  ConfirmSaveAddressProfile() hands the profile, the saved profile it would
+  update (or null) and the bubble type to the embedder, which runs Chrome's
+  AddressProfileSavePromptCallback once with the user's decision.
+- ChromePaymentsAutofillClient::SetEmbedderLocalCardSavePrompt(): while set,
+  ShowSaveCreditCardLocally() hands the card and the SaveCreditCardOptions
+  to the embedder, which runs the LocalSaveCardPromptCallback once. Saving
+  to the Google account (ShowSaveCreditCardToCloud) is unchanged.
+
+Chrome's managers keep deciding when to offer (strike databases, duplicate
+detection) and what saving does. Without either call nothing changes.
+---
+ .../ui/autofill/chrome_autofill_client.cc     | 21 ++++++++++++++++++
+ .../ui/autofill/chrome_autofill_client.h      | 18 +++++++++++++++
+ .../chrome_payments_autofill_client.cc        | 22 +++++++++++++++++++
+ .../chrome_payments_autofill_client.h         | 21 ++++++++++++++++++
+ 4 files changed, 82 insertions(+)
+
+diff --git a/chrome/browser/ui/autofill/chrome_autofill_client.cc b/chrome/browser/ui/autofill/chrome_autofill_client.cc
+index 5220b34d64f6..3975fe4deecb 100644
+--- a/chrome/browser/ui/autofill/chrome_autofill_client.cc
++++ b/chrome/browser/ui/autofill/chrome_autofill_client.cc
+@@ -249,6 +249,12 @@ namespace autofill {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_MAC)
++// Open Arc: see ChromeAutofillClient::SetEmbedderAddressSavePrompt().
++ChromeAutofillClient::EmbedderAddressSavePrompt g_embedder_address_prompt =
++    nullptr;
++#endif
++
+ AutoselectFirstSuggestion ShouldAutofillPopupAutoselectFirstSuggestion(
+     AutofillSuggestionTriggerSource source) {
+   return AutoselectFirstSuggestion(
+@@ -280,6 +286,14 @@ ui::ElementIdentifier GetElementId(AutofillClient::IphFeature iph_feature) {
+ 
+ }  // namespace
+ 
++#if BUILDFLAG(IS_MAC)
++// static
++void ChromeAutofillClient::SetEmbedderAddressSavePrompt(
++    EmbedderAddressSavePrompt prompt) {
++  g_embedder_address_prompt = prompt;
++}
++#endif
++
+ // static
+ void ChromeAutofillClient::CreateForWebContents(
+     content::WebContents* web_contents) {
+@@ -857,6 +871,13 @@ void ChromeAutofillClient::ConfirmSaveAddressProfile(
+           : SaveUpdateAddressProfilePromptMode::kSaveNewProfile,
+       std::move(callback));
+ #else
++#if BUILDFLAG(IS_MAC)
++  if (g_embedder_address_prompt) {
++    g_embedder_address_prompt(web_contents(), profile, original_profile,
++                              save_address_bubble_type, std::move(callback));
++    return;
++  }
++#endif
+   AddressBubblesController::SetUpAndShowSaveOrUpdateAddressBubble(
+       web_contents(), profile, original_profile, save_address_bubble_type,
+       !GetPersonalDataManager().address_data_manager().GetProfiles().empty(),
+diff --git a/chrome/browser/ui/autofill/chrome_autofill_client.h b/chrome/browser/ui/autofill/chrome_autofill_client.h
+index 3b6c4b773719..c5145e1c4d7a 100644
+--- a/chrome/browser/ui/autofill/chrome_autofill_client.h
++++ b/chrome/browser/ui/autofill/chrome_autofill_client.h
+@@ -138,6 +138,24 @@ class ChromeAutofillClient : public ContentAutofillClient {
+   void ShowAutofillAtMemoryPromo();
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that embeds Chrome's browser process and owns the UI
++  // (chrome::EmbedderOwnsUI()) draws the address save / update prompt itself;
++  // Chrome's bubble needs a Browser window around the tab. While a prompt
++  // function is set, ConfirmSaveAddressProfile() hands it the prompt instead
++  // of AddressBubblesController (whose Views bubble would dereference the
++  // missing Browser window). It must run `callback` exactly once, on the UI
++  // thread (kIgnored when the prompt goes away unanswered).
++  using EmbedderAddressSavePrompt =
++      void (*)(content::WebContents* web_contents,
++               const AutofillProfile& profile,
++               const AutofillProfile* original_profile,
++               SaveAddressBubbleType save_address_bubble_type,
++               AddressProfileSavePromptCallback callback);
++  // nullptr clears it. UI thread only.
++  static void SetEmbedderAddressSavePrompt(EmbedderAddressSavePrompt prompt);
++#endif
++
+   // AutofillClient:
+   base::WeakPtr<AutofillClient> GetWeakPtr() final;
+   const std::string& GetAppLocale() const final;
+diff --git a/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.cc b/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.cc
+index a084d6b53a78..0480b10f600c 100644
+--- a/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.cc
++++ b/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.cc
+@@ -138,6 +138,21 @@
+ // TODO(crbug.com/407106692): Refactor for Platform-Specific Code Separation.
+ namespace autofill::payments {
+ 
++#if BUILDFLAG(IS_MAC)
++namespace {
++// Open Arc: see
++// ChromePaymentsAutofillClient::SetEmbedderLocalCardSavePrompt().
++ChromePaymentsAutofillClient::EmbedderLocalCardSavePrompt
++    g_embedder_local_card_prompt = nullptr;
++}  // namespace
++
++// static
++void ChromePaymentsAutofillClient::SetEmbedderLocalCardSavePrompt(
++    EmbedderLocalCardSavePrompt prompt) {
++  g_embedder_local_card_prompt = prompt;
++}
++#endif
++
+ ChromePaymentsAutofillClient::ChromePaymentsAutofillClient(
+     ContentAutofillClient* client)
+     : content::WebContentsObserver(&client->GetWebContents()),
+@@ -322,6 +337,13 @@ void ChromePaymentsAutofillClient::ShowSaveCreditCardLocally(
+     bridge->RequestShowContent(ui_info, std::move(save_card_delegate));
+   }
+ #else   // !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_MAC)
++  if (g_embedder_local_card_prompt) {
++    g_embedder_local_card_prompt(web_contents(), card, options,
++                                 std::move(callback));
++    return;
++  }
++#endif
+   SaveCardBubbleControllerImpl::CreateForWebContents(web_contents());
+   SaveCardBubbleControllerImpl::FromWebContents(web_contents())
+       ->OfferLocalSave(card, options, std::move(callback));
+diff --git a/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.h b/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.h
+index 24d9a419973b..ef11758d9400 100644
+--- a/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.h
++++ b/chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.h
+@@ -12,6 +12,7 @@
+ #include "base/containers/span.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ref.h"
++#include "build/build_config.h"
+ #include "components/autofill/core/browser/data_model/payments/credit_card.h"
+ #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
+ #include "components/autofill/core/browser/payments/iban_manager.h"
+@@ -101,6 +102,26 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
+   static constexpr base::TimeDelta kSaveCardConfirmationSnackbarDuration =
+       base::Seconds(3);
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that embeds Chrome's browser process and owns the UI
++  // (chrome::EmbedderOwnsUI()) draws the prompt to save a payment card on the
++  // device itself; Chrome's bubble needs a Browser window around the tab.
++  // While a prompt function is set, ShowSaveCreditCardLocally() hands it the
++  // offer (card, or card with its security code, or the security code of a
++  // saved card, per `options.card_save_type`) instead of
++  // SaveCardBubbleControllerImpl. It must run `callback` exactly once, on the
++  // UI thread (kIgnored when the prompt goes away unanswered). Saving to the
++  // Google account (ShowSaveCreditCardToCloud) is not affected.
++  using EmbedderLocalCardSavePrompt =
++      void (*)(content::WebContents* web_contents,
++               const CreditCard& card,
++               SaveCreditCardOptions options,
++               LocalSaveCardPromptCallback callback);
++  // nullptr clears it. UI thread only.
++  static void SetEmbedderLocalCardSavePrompt(
++      EmbedderLocalCardSavePrompt prompt);
++#endif
++
+   // RiskDataLoader:
+   void LoadRiskData(
+       base::OnceCallback<void(const std::string&)> callback) override;

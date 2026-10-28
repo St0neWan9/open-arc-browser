@@ -669,6 +669,63 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         })
     }
 
+    /// C30: Autofill offers to save (or update) the submitted address.
+    func tab(_ tab: OACTab, offerToSaveAddress prompt: OACAddressSavePrompt) -> Bool {
+        deliver(prompt, default: AutofillSaveReply.ignore, answer: { prompt, answer in
+            switch answer {
+            case .save: prompt.save()
+            case .decline: prompt.decline()
+            case .ignore: prompt.cancel()
+            }
+        }, make: { id, reply in
+            .addressSave(AddressSavePrompt(
+                id: id,
+                origin: prompt.origin.map(SiteOrigin.init(bridge:)),
+                kind: prompt.kind == .update ? .update : .save,
+                addressSummary: prompt.addressSummary,
+                email: prompt.email,
+                phone: prompt.phone,
+                changes: prompt.changes.map { change in
+                    let field: AddressSavePrompt.Change.Field = switch change.field {
+                    case .name: .name
+                    case .email: .email
+                    case .phone: .phone
+                    default: .address
+                    }
+                    return AddressSavePrompt.Change(field: field, oldValue: change.oldValue, newValue: change.updatedValue)
+                },
+                reply: reply
+            ))
+        })
+    }
+
+    /// C30: Autofill offers to save the submitted payment card on this Mac.
+    func tab(_ tab: OACTab, offerToSaveCard prompt: OACCardSavePrompt) -> Bool {
+        deliver(prompt, default: AutofillSaveReply.ignore, answer: { prompt, answer in
+            switch answer {
+            case .save: prompt.save()
+            case .decline: prompt.decline()
+            case .ignore: prompt.cancel()
+            }
+        }, make: { id, reply in
+            let kind: CardSavePrompt.Kind = switch prompt.kind {
+            case .cardWithSecurityCode: .cardWithSecurityCode
+            case .securityCodeOnly: .securityCodeOnly
+            default: .card
+            }
+            return .cardSave(CardSavePrompt(
+                id: id,
+                origin: prompt.origin.map(SiteOrigin.init(bridge:)),
+                kind: kind,
+                network: prompt.network,
+                lastFourDigits: prompt.lastFourDigits,
+                expiration: prompt.expiration,
+                cardholderName: prompt.cardholderName,
+                reply: reply
+            ))
+        })
+    }
+
     /// C13: the autofill dropdown. Its rows change while it is open (`didUpdateAutofillPopup`), so
     /// besides the single-shot reply it carries an `AutofillPopupSession`.
     func tab(_ tab: OACTab, showAutofillPopup popup: OACAutofillPopup) -> Bool {

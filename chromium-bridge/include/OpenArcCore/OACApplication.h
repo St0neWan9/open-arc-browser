@@ -163,8 +163,11 @@ NS_SWIFT_UI_ACTOR
 @protocol OACApplicationDelegate <NSObject>
 @optional
 
-/// Something outside any tab wants a new tab: an extension (`chrome.tabs.create`), a notification
-/// click, a WebUI link. `request.opener` is nil. Maps to `EngineEvent.newTabRequested`.
+/// Something outside any tab wants a new tab: an extension (`chrome.tabs.create`,
+/// `chrome.windows.create`, `chrome.runtime.openOptionsPage`), a notification click, a WebUI link.
+/// `request.opener` is nil; `request.profile` is the profile it belongs to. Extension requests
+/// carry the tab the engine already made (`hasPendingContents`, plan C31): adopt or decline it as
+/// for a script-opened window. Maps to `EngineEvent.newTabRequested`.
 - (void)application:(OACApplication *)application didRequestNewTab:(OACNewTabRequest *)request;
 
 /// A profile's last off-the-record tab closed and its off-the-record context was destroyed

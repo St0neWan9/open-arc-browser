@@ -44,6 +44,7 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     private let fakeTranslation = FakeTranslation()
     private let fakeImporterService = FakeImporter()
     private let fakeAutocompleteService: FakeAutocomplete
+    private let autofillStore = FakeAutofillStore()
 
     /// - Parameter clock: visit times of the fake history (plan B66); default the system clock.
     public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle,
@@ -74,6 +75,8 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     public var autocomplete: any EngineAutocomplete { fakeAutocompleteService }
     /// Typed access for tests (plan B66).
     public var fakeAutocomplete: FakeAutocomplete { fakeAutocompleteService }
+    /// Saved addresses and cards (plan C30). For tests.
+    public var fakeAutofill: FakeAutofillStore { autofillStore }
 
     /// Ids of all live tabs (for tests and debug UI).
     public var tabIDs: Set<EngineTabID> {
@@ -180,6 +183,7 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
         }
         zoomMap.removeAll(profileID: profileID)
         fakeAutocompleteService.removeHistory(profileID: profileID)
+        autofillStore.removeAll(profileID: profileID)
     }
 
     public func clearBrowsingData(_ profileID: Profile.ID, types: BrowsingDataTypes, since: Date?) async {
@@ -202,6 +206,28 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
         broadcaster.yield(.newTabRequested(NewTabRequest(
             opener: nil, url: origin, disposition: .foregroundTab, hasUserGesture: true
         )))
+    }
+
+    /// Plan C31: an extension of `profileID` opens a page through an API that needs a window
+    /// (`chrome.tabs.create` → `.foregroundTab` / `.backgroundTab`, `chrome.windows.create` →
+    /// `.newWindow` / `.popup`, `chrome.runtime.openOptionsPage` → `.foregroundTab` on its options
+    /// page). Like the Chromium engine, the engine makes the tab first (the extension gets its id)
+    /// and asks the shell to adopt it, without an opener and with the extension's profile.
+    /// Returns the token.
+    @discardableResult
+    public func simulateExtensionOpensTab(
+        url: URL, profileID: Profile.ID, disposition: NewTabDisposition = .foregroundTab
+    ) -> PendingTabToken {
+        let token = PendingTabToken(UUID())
+        lock.withLock {
+            pendingTabs[token] = Pending(
+                profileID: profileID, isOffTheRecord: false, opener: nil, url: url, colorScheme: .light
+            )
+        }
+        broadcaster.yield(.newTabRequested(NewTabRequest(
+            opener: nil, url: url, disposition: disposition, hasUserGesture: true, pendingTab: token, profileID: profileID
+        )))
+        return token
     }
 
     /// Simulates a script-opened window (`window.open`, target=_blank with opener): the engine
@@ -243,7 +269,8 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
             colorScheme: colorScheme,
             titleProvider: titleProvider,
             pageTopColorProvider: pageTopColorProvider,
-            zoomMap: zoomMap
+            zoomMap: zoomMap,
+            autofillStore: autofillStore
         )
         tab.onSiteZoomChange = { [weak self] source, key, factor in self?.propagateZoom(from: source, key: key, factor: factor) }
         tab.onNewTabRequest = { [weak self] request in self?.broadcaster.yield(.newTabRequested(request)) }
@@ -323,6 +350,8 @@ public enum FakeDialogAnswer: Hashable, Sendable {
     case externalProtocol(ExternalProtocolReply)
     case passwordSave(PasswordSaveReply)
     case autofillPopup(AutofillPopupReply)
+    case addressSave(AutofillSaveReply)
+    case cardSave(AutofillSaveReply)
     case extensionInstall(ExtensionInstallReply)
     case unresponsivePage(UnresponsivePageReply)
     case clientCertificate(ClientCertificateReply)
@@ -432,6 +461,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
     private let titleProvider: FakeEngine.TitleProvider
     private let pageTopColorProvider: FakeEngine.PageTopColorProvider?
     private let zoomMap: FakeZoomMap
+    private let autofillStore: FakeAutofillStore
     var onSiteZoomChange: (@Sendable (EngineTabID, FakeZoomMap.Key, Double) -> Void)?
     var onNewTabRequest: (@Sendable (NewTabRequest) -> Void)?
     /// A navigation committed (URL, title): the engine records it in the history (plan B66).
@@ -446,7 +476,8 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         colorScheme: WebColorScheme = .light,
         titleProvider: @escaping FakeEngine.TitleProvider,
         pageTopColorProvider: FakeEngine.PageTopColorProvider? = nil,
-        zoomMap: FakeZoomMap = FakeZoomMap()
+        zoomMap: FakeZoomMap = FakeZoomMap(),
+        autofillStore: FakeAutofillStore = FakeAutofillStore()
     ) {
         self.id = id
         self.profileID = profileID
@@ -456,6 +487,7 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         self.titleProvider = titleProvider
         self.pageTopColorProvider = pageTopColorProvider
         self.zoomMap = zoomMap
+        self.autofillStore = autofillStore
         let fakeSurface = FakeSurface(tabID: id)
         self.fakeSurface = fakeSurface
         self.surface = fakeSurface
@@ -1157,6 +1189,90 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
             session?.finish()
         })
         return (requestID, session)
+    }
+
+    /// Plan C30: the page submits an address form. Like Chromium's Autofill: off the record nothing
+    /// is offered; an address already saved is not offered; a known person at the same street is
+    /// an update prompt listing what changed; a new address is offered unless the site's offers were
+    /// declined `FakeAutofillStore.maximumStrikes` times. `.save` stores it in the profile (shared by
+    /// the engine's tabs). Returns the request id, or nil when nothing was offered.
+    @discardableResult
+    public func simulateAddressSubmission(_ address: FakeAddress) -> UUID? {
+        guard !isOffTheRecord, let origin = currentOrigin() else { return nil }
+        let site = origin.displayHost
+        let store = autofillStore
+        let profile = profileID
+        let (offer, original) = store.addressOffer(address, profileID: profile, site: site)
+        guard offer else { return nil }
+        let requestID = UUID()
+        let record = answerHandler(requestID) { FakeDialogAnswer.addressSave($0) }
+        let reply = DialogReply<AutofillSaveReply>(default: .ignore) { answer in
+            record(answer)
+            switch answer {
+            case .save: store.saveAddress(address, replacing: original, profileID: profile, site: site)
+            case .decline: store.declineAddress(site: site, wasUpdate: original != nil)
+            case .ignore: break
+            }
+        }
+        var changes: [AddressSavePrompt.Change] = []
+        if let original {
+            if original.street != address.street || original.city != address.city
+                || original.postalCode != address.postalCode || original.country != address.country {
+                changes.append(.init(field: .address, oldValue: original.summary, newValue: address.summary))
+            }
+            if original.email != address.email { changes.append(.init(field: .email, oldValue: original.email, newValue: address.email)) }
+            if original.phone != address.phone { changes.append(.init(field: .phone, oldValue: original.phone, newValue: address.phone)) }
+        }
+        let request = AddressSavePrompt(
+            id: requestID, origin: origin, kind: original == nil ? .save : .update, addressSummary: address.summary,
+            email: address.email, phone: address.phone, changes: changes, reply: reply
+        )
+        deliver(.addressSave(request), withdraw: { [weak reply] in reply?.withdraw() })
+        return requestID
+    }
+
+    /// Plan C30: the page submits a payment-card form. Off the record nothing is offered; a saved
+    /// card is not offered again (unless the form adds the security code it lacked: a
+    /// security-code-only prompt); a card declined `FakeAutofillStore.maximumStrikes` times is not
+    /// offered. `.save` stores it; `.decline` and `.ignore` count a strike, as Chromium does for a
+    /// shown prompt. Returns the request id, or nil when nothing was offered.
+    @discardableResult
+    public func simulateCardSubmission(_ card: FakeCard) -> UUID? {
+        guard !isOffTheRecord, let kind = autofillStore.cardOffer(card, profileID: profileID) else { return nil }
+        let store = autofillStore
+        let profile = profileID
+        let requestID = UUID()
+        let record = answerHandler(requestID) { FakeDialogAnswer.cardSave($0) }
+        let reply = DialogReply<AutofillSaveReply>(default: .ignore) { answer in
+            record(answer)
+            if answer == .save { store.saveCard(card, profileID: profile) } else { store.strikeCard(card) }
+        }
+        let request = CardSavePrompt(
+            id: requestID, origin: currentOrigin(), kind: kind, network: card.network,
+            lastFourDigits: card.lastFourDigits, expiration: card.expiration,
+            cardholderName: card.cardholderName, reply: reply
+        )
+        deliver(.cardSave(request), withdraw: { [weak reply] in reply?.withdraw() })
+        return requestID
+    }
+
+    /// Plan C30: the user focuses an address or card field. With saved entries of that kind the
+    /// engine shows its dropdown (one row per entry, as Chromium labels them); without, nothing.
+    @discardableResult
+    public func simulateAutofillFieldFocus(_ field: FakeAutofillField, elementBounds: EngineRect = EngineRect(x: 20, y: 40, width: 240, height: 24)) -> (id: UUID, session: AutofillPopupSession)? {
+        let rows: [AutofillSuggestion]
+        switch field {
+        case .address:
+            rows = autofillStore.savedAddresses(profileID: profileID).map {
+                AutofillSuggestion(kind: .address, mainText: $0.name, label: $0.street)
+            }
+        case .card:
+            rows = autofillStore.savedCards(profileID: profileID).map {
+                AutofillSuggestion(kind: .creditCard, mainText: "\($0.network) ••••\($0.lastFourDigits)", label: "Expires \($0.expiration)")
+            }
+        }
+        guard !rows.isEmpty else { return nil }
+        return simulateAutofillPopup(AutofillPopupState(suggestions: rows, elementBounds: elementBounds))
     }
 
     /// Commands the shell sent to autofill dropdowns, oldest first. For tests.

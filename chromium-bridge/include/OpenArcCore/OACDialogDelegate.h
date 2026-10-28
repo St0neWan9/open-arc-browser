@@ -23,7 +23,8 @@
 // - Dropping the last reference to an unanswered request answers it with its default (alert:
 //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
 //   file chooser: cancel, external protocol: block, unresponsive page: wait, client certificate:
-//   continue without one, info bar: left open), so a page never hangs.
+//   continue without one, info bar: left open, address / card save: ignored), so a page never
+//   hangs.
 // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
 //   right away.
 //
@@ -44,6 +45,9 @@
 // OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook);
 // engine info bars (plan C23) from the tab's `infobars::ContentInfoBarManager` (confirm info bars
 // only), including //chrome's global ones (`GlobalConfirmInfoBar`, through an Open Arc hook).
+// Added in plan C30: Autofill's address and payment-card save prompts (OACAutofill.h) from
+// //chrome's `ChromeAutofillClient::ConfirmSaveAddressProfile` and
+// `ChromePaymentsAutofillClient::ShowSaveCreditCardLocally` (Open Arc hooks).
 
 #import <OpenArcCore/OACDefines.h>
 #import <OpenArcCore/OACTab.h>
@@ -314,6 +318,8 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 // MARK: - Delegate
 
 @class OACPasswordSavePrompt;
+@class OACAddressSavePrompt;
+@class OACCardSavePrompt;
 @class OACAutofillPopup;
 @class OACWebAuthnDialog;
 
@@ -330,6 +336,12 @@ NS_SWIFT_UI_ACTOR
 /// Password manager save / update prompt (plan C13, OACAutofill.h).
 - (BOOL)tab:(OACTab *)tab offerToSavePassword:(OACPasswordSavePrompt *)prompt
     NS_SWIFT_NAME(tab(_:offerToSavePassword:));
+/// Autofill's address save / update prompt (plan C30, OACAutofill.h).
+- (BOOL)tab:(OACTab *)tab offerToSaveAddress:(OACAddressSavePrompt *)prompt
+    NS_SWIFT_NAME(tab(_:offerToSaveAddress:));
+/// Autofill's payment-card save prompt (plan C30, OACAutofill.h).
+- (BOOL)tab:(OACTab *)tab offerToSaveCard:(OACCardSavePrompt *)prompt
+    NS_SWIFT_NAME(tab(_:offerToSaveCard:));
 /// Autofill dropdown for the focused field (plan C13, OACAutofill.h).
 - (BOOL)tab:(OACTab *)tab showAutofillPopup:(OACAutofillPopup *)popup
     NS_SWIFT_NAME(tab(_:showAutofillPopup:));

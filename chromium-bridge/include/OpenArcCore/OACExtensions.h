@@ -30,9 +30,15 @@
 // switch is on); chrome://extensions lists them under "Errors". `OACExtensionInfo.errorCount`
 // counts them.
 //
-// Not covered: the extension context menu, side panels, `chrome.action.openPopup()`, and APIs that
-// need a Chrome `Browser` window (`chrome.tabs.create`, `chrome.windows.*`,
-// `chrome.runtime.openOptionsPage`): they fail as in a Chrome without windows. "Manage
+// Tabs and windows (plan C31): `chrome.tabs.create`, `chrome.windows.create` and
+// `chrome.runtime.openOptionsPage` open in the shell. The engine makes the tab (the extension gets
+// its id back) and hands it to `-[OACApplicationDelegate application:didRequestNewTab:]` as a
+// request with pending contents and no opener; `windows.create` asks for a new window (or a popup).
+// Moving tabs between windows, incognito windows and window ids other than the current one are
+// errors for the extension.
+//
+// Not covered: the extension context menu, side panels, `chrome.action.openPopup()` and the rest
+// of `chrome.windows.*` (no window objects): they fail as in a Chrome without windows. "Manage
 // Extensions…" opens chrome://extensions in a tab until a native page exists.
 
 #import <OpenArcCore/OACDefines.h>

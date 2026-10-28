@@ -301,13 +301,22 @@ public struct NewTabRequest: Hashable, Sendable {
     /// Set when the engine already made the tab (see `PendingTabToken`). nil: a plain URL request;
     /// the shell creates the tab with `makeTab` (with `opener` set).
     public var pendingTab: PendingTabToken?
+    /// The profile the request belongs to when there is no opener (plan C31: an extension's
+    /// `chrome.tabs.create` / `windows.create` / `runtime.openOptionsPage` in that profile). The
+    /// shell then opens the tab in a Space of that profile. nil: the opener's profile, or (no
+    /// opener) the current Space's.
+    public var profileID: Profile.ID?
 
-    public init(opener: EngineTabID?, url: URL, disposition: NewTabDisposition, hasUserGesture: Bool, pendingTab: PendingTabToken? = nil) {
+    public init(
+        opener: EngineTabID?, url: URL, disposition: NewTabDisposition, hasUserGesture: Bool,
+        pendingTab: PendingTabToken? = nil, profileID: Profile.ID? = nil
+    ) {
         self.opener = opener
         self.url = url
         self.disposition = disposition
         self.hasUserGesture = hasUserGesture
         self.pendingTab = pendingTab
+        self.profileID = profileID
     }
 }
 
