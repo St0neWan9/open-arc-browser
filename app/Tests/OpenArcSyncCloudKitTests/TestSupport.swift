@@ -77,7 +77,7 @@ enum Fx {
     static func archiveItem(_ id: UUID = uuid(6), variant: Int = 0) -> ArchiveItem {
         variant == 0
             ? ArchiveItem(id: id, url: URL(string: "https://c.example/"), title: "Closed", faviconURL: URL(string: "https://c.example/f.ico"), spaceID: uuid(3), folderPath: ["Reading", "Later"], reason: .closed, archivedAt: t0)
-            : ArchiveItem(id: id, url: URL(string: "https://d.example/"), title: "Auto", faviconURL: URL(string: "https://d.example/f.ico"), spaceID: uuid(103), folderPath: ["Docs"], reason: .autoArchived, archivedAt: t0)
+            : ArchiveItem(id: id, url: URL(string: "https://d.example/"), title: "Auto", faviconURL: URL(string: "https://d.example/f.ico"), spaceID: uuid(103), folderPath: ["Docs"], reason: .autoArchived, archivedAt: t0, isFromLittleArc: true)
     }
 
     static func splitLayout(_ id: UUID = uuid(7), variant: Int = 0) -> SplitLayout {

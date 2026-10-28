@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import OpenArcModel
+import OpenArcEngine
 
 /// State and actions of the Library mode of the main window. Owned by `ShellModel`.
 /// [06 §8] observed: the whole window switches to the Library view (rail, list column, web panel
@@ -16,6 +17,11 @@ public final class LibraryModel: ObservableObject {
     /// that it appears on the first visit. Dismissal is kept in the per-device UI state, so it
     /// stays hidden after a relaunch. inferred.
     @Published public private(set) var isMediaIntroVisible = true
+    /// Section whose Filter panel is open (title + Done instead of the search field, chips above
+    /// the list); nil when closed. [06 §8] Filter, observed.
+    @Published public private(set) var filterPanelSection: LibrarySection?
+    /// Chips switched on in the open Filter panel. Empty when the panel is closed.
+    @Published public private(set) var filterSelection = LibraryFilterSelection()
     /// Space column being dragged by its handle on the Spaces board.
     @Published var draggingSpaceID: UUID?
     @Published public private(set) var lastError: Error?
@@ -59,8 +65,10 @@ public final class LibraryModel: ObservableObject {
 
     /// Shows the Library on `section`.
     public func open(_ section: LibrarySection) {
+        // Another section closes the Filter panel (it belongs to its section). inferred.
+        if filterPanelSection != nil, filterPanelSection != section { resetFilter() }
         self.section = section
-        if section == .downloads { downloads.observe(profileID: sidebar.currentProfileID) }
+        if section == .downloads { observeDownloads() }
         updateMediaActivity()
         guard lastSection != section else { return }
         lastSection = section
@@ -77,10 +85,79 @@ public final class LibraryModel: ObservableObject {
     public func exit() {
         section = nil
         draggingSpaceID = nil
+        resetFilter()
         updateMediaActivity()
     }
 
     func query(for section: LibrarySection) -> String { searchText[section] ?? "" }
+
+    /// The search text that filters `section`'s list. While the Filter panel replaces the search
+    /// field, the hidden text does not apply (the user cannot see it). inferred.
+    func activeQuery(for section: LibrarySection) -> String {
+        filterPanelSection == section ? "" : query(for: section)
+    }
+
+    // MARK: Filter panel [06 §8] Filter
+
+    public var isFilterPanelOpen: Bool { filterPanelSection != nil && filterPanelSection == section }
+
+    /// Groups of chips for the section on screen. [06 §8] observed.
+    public var filterGroups: [LibraryFilterGroup] {
+        guard let section else { return [] }
+        return LibraryFilter.groups(for: section, in: sidebar.workspace)
+    }
+
+    /// The "Filter" button: opens the panel on the section on screen, with no chip selected.
+    public func openFilterPanel() {
+        guard let section, section.hasFilterButton, filterPanelSection != section else { return }
+        filterSelection = LibraryFilterSelection()
+        filterPanelSection = section
+    }
+
+    /// Clicking a chip switches it on or off.
+    public func toggleFilter(_ option: LibraryFilterOption) {
+        guard isFilterPanelOpen else { return }
+        if filterSelection.options.contains(option) {
+            filterSelection.options.remove(option)
+        } else {
+            filterSelection.options.insert(option)
+        }
+        if section == .downloads { observeDownloads() }
+    }
+
+    /// "Done": closes the panel and brings the search field back. The chips are cleared, so the
+    /// list is unfiltered again (inferred: the spec does not say whether the filter stays).
+    public func closeFilterPanel() {
+        resetFilter()
+    }
+
+    private func resetFilter() {
+        guard filterPanelSection != nil || !filterSelection.isEmpty else { return }
+        filterPanelSection = nil
+        filterSelection = LibraryFilterSelection()
+        if section == .downloads { observeDownloads() }
+    }
+
+    /// Downloads follow the current space's profile; with Profiles chips selected, the selected
+    /// profiles instead (in chip order).
+    private func observeDownloads() {
+        let selected = filterGroups.flatMap { $0.chips }.compactMap { chip -> UUID? in
+            guard case .profile(let id) = chip.option, filterSelection.options.contains(chip.option) else { return nil }
+            return id
+        }
+        if selected.isEmpty {
+            downloads.observe(profileID: sidebar.currentProfileID)
+        } else {
+            downloads.observe(profileIDs: selected)
+        }
+    }
+
+    /// The Downloads list: search text, then the Filter panel's chips.
+    public var visibleDownloads: [DownloadItem] {
+        downloads.filtered(by: activeQuery(for: .downloads)).filter {
+            filterSelection.allows(LibraryFilter.traits(of: $0))
+        }
+    }
 
     // MARK: Media
 
@@ -98,7 +175,8 @@ public final class LibraryModel: ObservableObject {
     /// Archived tabs matching the Archived Tabs search, grouped by date. [06 §8] observed
     /// (search field, date groups, favicon + title + gray URL).
     public var archiveGroups: [LibraryArchiveGroup] {
-        LibraryArchive.groups(in: sidebar.workspace, query: query(for: .archivedTabs), now: now(), calendar: calendar)
+        let selection = filterPanelSection == .archivedTabs ? filterSelection : LibraryFilterSelection()
+        return LibraryArchive.groups(in: sidebar.workspace, query: activeQuery(for: .archivedTabs), filter: selection, now: now(), calendar: calendar)
     }
 
     /// Clicking a row restores the tab (`TreeOps.restoreFromArchive` through the sidebar) and

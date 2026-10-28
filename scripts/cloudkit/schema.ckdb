@@ -157,6 +157,7 @@ DEFINE SCHEMA
         content_spaceID         STRING,
         content_reason          STRING,
         content_archivedAt      TIMESTAMP,
+        content_fromLittleArc   INT64,
         meta_createdAt          TIMESTAMP,
         meta_modifiedAt         TIMESTAMP,
         meta_version            INT64,

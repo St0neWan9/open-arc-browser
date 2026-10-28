@@ -28,6 +28,7 @@ final class TreeOpsArchivePageTests: XCTestCase {
         XCTAssertEqual(item.folderPath, [])
         XCTAssertEqual(item.reason, .autoArchived)
         XCTAssertEqual(item.archivedAt, stamp)
+        XCTAssertTrue(item.isFromLittleArc, "B94: the archive filter's Little Arc chip")
         XCTAssertEqual(item.meta.createdAt, stamp)
         XCTAssertEqual(s.tabs, base.tabs)
         XCTAssertEqual(s.spaces, base.spaces)
@@ -39,6 +40,23 @@ final class TreeOpsArchivePageTests: XCTestCase {
         s = try TreeOps.restoreFromArchive(s, itemID: id, newTabID: tab, spaceID: spaceID, now: t0.addingTimeInterval(1))
         XCTAssertEqual(s.today(spaceID: spaceID).first?.id, tab)
         XCTAssertEqual(s.archive[id]?.meta.isTombstone, true)
+    }
+
+    /// B94: an archived sidebar tab is not from Little Arc; data written before the field existed
+    /// decodes as not from Little Arc.
+    func testLittleArcOriginOfOtherItemsAndOldData() throws {
+        let tab = UUID()
+        var s = try state()
+        s = try TreeOps.openTab(s, id: tab, spaceID: spaceID, url: URL(string: "https://a.example"), title: "A", now: t0)
+        s = try TreeOps.archiveTab(s, id: tab, reason: .closed, now: t0)
+        XCTAssertEqual(s.archive[tab]?.isFromLittleArc, false)
+
+        let item = try XCTUnwrap(s.archive[tab])
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any])
+        XCTAssertEqual(json["isFromLittleArc"] as? Bool, false)
+        json["isFromLittleArc"] = nil
+        let old = try JSONDecoder().decode(ArchiveItem.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(old, item)
     }
 
     func testArchivePageRejectsUsedIdsAndDeadSpaces() throws {

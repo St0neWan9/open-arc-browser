@@ -10,15 +10,18 @@ import OpenArcEngine
 // Chromium's behavior: progress while running, pause / resume / cancel, a "keep or discard" step for
 // files Chromium flags as dangerous, open and reveal when done.
 
-/// Downloads of one profile, live from the engine. Owned by `LibraryModel`.
+/// Downloads of one or more profiles, live from the engine. Owned by `LibraryModel`. Normally the
+/// current space's profile; the Filter panel's Profiles chips (B94, [06 §8] observed) widen it to
+/// the selected profiles.
 @MainActor
 public final class LibraryDownloads: ObservableObject {
     /// Newest first.
     @Published public private(set) var items: [DownloadItem] = []
 
     private let engine: any EngineDownloads
-    private var profileID: UUID?
-    private var observation: Task<Void, Never>?
+    /// Profiles followed, in the order given.
+    private(set) var profileIDs: [UUID] = []
+    private var observations: [Task<Void, Never>] = []
 
     init(engine: any EngineDownloads) {
         self.engine = engine
@@ -26,24 +29,37 @@ public final class LibraryDownloads: ObservableObject {
 
     /// Follows `profileID`'s downloads (the current space's profile). Idempotent.
     func observe(profileID: UUID?) {
-        guard profileID != self.profileID else { return }
-        self.profileID = profileID
-        observation?.cancel()
+        observe(profileIDs: profileID.map { [$0] } ?? [])
+    }
+
+    /// Follows the downloads of every profile in `profileIDs`, merged newest first. Idempotent for
+    /// the same set.
+    func observe(profileIDs: [UUID]) {
+        var seen = Set<UUID>()
+        let ids = profileIDs.filter { seen.insert($0).inserted }
+        guard Set(ids) != Set(self.profileIDs) else { return }
+        self.profileIDs = ids
+        observations.forEach { $0.cancel() }
         items = []
-        guard let profileID else { return }
         let engine = self.engine
-        observation = Task { [weak self] in
-            // Subscribe first, then read the list, so nothing that happens in between is lost;
-            // events for items already in the list are applied idempotently.
-            let events = engine.events(profileID: profileID)
-            let initial = await engine.items(profileID: profileID)
-            guard let self, !Task.isCancelled else { return }
-            self.items = initial
-            for await event in events {
-                guard !Task.isCancelled else { return }
-                self.apply(event)
+        observations = ids.map { profileID in
+            Task { [weak self] in
+                // Subscribe first, then read the list, so nothing that happens in between is lost;
+                // events for items already in the list are applied idempotently.
+                let events = engine.events(profileID: profileID)
+                let initial = await engine.items(profileID: profileID)
+                guard let self, !Task.isCancelled else { return }
+                self.merge(initial)
+                for await event in events {
+                    guard !Task.isCancelled else { return }
+                    self.apply(event)
+                }
             }
         }
+    }
+
+    private func merge(_ list: [DownloadItem]) {
+        for item in list { apply(.added(item)) }
     }
 
     /// Items whose file name or source URL contains `query` (case-insensitive). Empty query: all.

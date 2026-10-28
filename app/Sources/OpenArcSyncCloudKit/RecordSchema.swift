@@ -181,7 +181,10 @@ enum ArchiveItemFields {
     static let spaceID = FieldSpec("content_spaceID", G.content)
     static let reason = FieldSpec("content_reason", G.content)
     static let archivedAt = FieldSpec("content_archivedAt", G.content)
-    static let all = [url, title, faviconURL, folderPath, spaceID, reason, archivedAt]
+    /// `ArchiveItem.isFromLittleArc` as 0/1 (Int64). Added in B94; records saved before it lack the
+    /// key and decode as false. Plain: where the page came from, like `reason`, is no user content.
+    static let fromLittleArc = FieldSpec("content_fromLittleArc", G.content)
+    static let all = [url, title, faviconURL, folderPath, spaceID, reason, archivedAt, fromLittleArc]
 }
 
 enum SplitLayoutFields {

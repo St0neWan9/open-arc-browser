@@ -165,6 +165,7 @@ public enum RecordMerge {
             m.folderPath = l.folderPath
             m.reason = l.reason
             m.archivedAt = l.archivedAt
+            m.isFromLittleArc = l.isFromLittleArc
         }
     }
 

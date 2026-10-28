@@ -365,9 +365,14 @@ public struct ArchiveItem: SyncableEntity, Hashable {
     public var folderPath: [String]
     public var reason: ArchiveReason
     public var archivedAt: Date
+    /// Part of the `content` group: the page came from a Little Arc window (`TreeOps.archivePage`),
+    /// not from a tab of the sidebar. The Library's archive filter "Where was the tab?" ▸ Little Arc
+    /// needs it ([06 §8] Filter, observed). Files and records written before this field existed
+    /// decode with false.
+    public var isFromLittleArc: Bool
     public var meta: SyncMetadata
 
-    public init(id: UUID, url: URL?, title: String, faviconURL: URL?, spaceID: UUID?, folderPath: [String], reason: ArchiveReason, archivedAt: Date) {
+    public init(id: UUID, url: URL?, title: String, faviconURL: URL?, spaceID: UUID?, folderPath: [String], reason: ArchiveReason, archivedAt: Date, isFromLittleArc: Bool = false) {
         self.id = id
         self.url = url
         self.title = title
@@ -376,7 +381,28 @@ public struct ArchiveItem: SyncableEntity, Hashable {
         self.folderPath = folderPath
         self.reason = reason
         self.archivedAt = archivedAt
+        self.isFromLittleArc = isFromLittleArc
         self.meta = .new(at: archivedAt, groups: FieldGroup.self)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, url, title, faviconURL, spaceID, folderPath, reason, archivedAt, isFromLittleArc, meta
+    }
+
+    /// Decodes an archive item; a missing `isFromLittleArc` (data written before the field existed)
+    /// becomes false.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        url = try c.decodeIfPresent(URL.self, forKey: .url)
+        title = try c.decode(String.self, forKey: .title)
+        faviconURL = try c.decodeIfPresent(URL.self, forKey: .faviconURL)
+        spaceID = try c.decodeIfPresent(UUID.self, forKey: .spaceID)
+        folderPath = try c.decode([String].self, forKey: .folderPath)
+        reason = try c.decode(ArchiveReason.self, forKey: .reason)
+        archivedAt = try c.decode(Date.self, forKey: .archivedAt)
+        isFromLittleArc = try c.decodeIfPresent(Bool.self, forKey: .isFromLittleArc) ?? false
+        meta = try c.decode(SyncMetadata.self, forKey: .meta)
     }
 }
 

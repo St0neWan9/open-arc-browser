@@ -509,8 +509,9 @@ public enum TreeOps {
     /// Archives a page that never had a tab in the tree: an idle Little Arc window's page (plan
     /// B82; [03 §Links] observed "Archive Little Arcs after", default 6 hours). Creates a live
     /// `ArchiveItem` with id `id` and touches nothing else. `spaceID`, when given, must be a live
-    /// Space (the item restores there); nil leaves the item without a Space. Throws when `id` is
-    /// already used by an archive item or a tab (ids never repeat, see `ArchiveItem`).
+    /// Space (the item restores there); nil leaves the item without a Space. The item is marked
+    /// `isFromLittleArc`. Throws when `id` is already used by an archive item or a tab (ids never
+    /// repeat, see `ArchiveItem`).
     public static func archivePage(
         _ state: WorkspaceState,
         id: UUID,
@@ -526,7 +527,7 @@ public enum TreeOps {
         var s = state
         s.archive[id] = ArchiveItem(
             id: id, url: url, title: title, faviconURL: faviconURL, spaceID: spaceID,
-            folderPath: [], reason: reason, archivedAt: now
+            folderPath: [], reason: reason, archivedAt: now, isFromLittleArc: true
         )
         return s
     }
