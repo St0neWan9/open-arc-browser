@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 19:33:28 -0700
+Subject: [PATCH] openarc: chrome: let an embedder handle web notification
+ clicks
+
+Plan C24. A click on a page's (non-persistent) notification runs the page's
+"click" event; when that fails, Chrome opens the origin in a new Browser
+tab, and it never brings the page's own tab forward. An app that owns its
+tabs (chrome/browser/embedder_owned_ui_mac.h) has no Browser windows, so
+the fallback did nothing.
+
+- content: NotificationEventDispatcher::GetNonPersistentNotificationDocument()
+  returns the live document that showed a notification (null when it is
+  gone, in back/forward cache, or the notification came from a worker).
+- chrome (Mac): NonPersistentNotificationHandler::SetEmbedderClickCallback().
+  When set, every click reaches the callback after the page's event ran,
+  with the WebContents of that document (looked up before the page's
+  handler can navigate away) or null; Chrome's Browser-tab fallback is
+  skipped and the notification is closed as before.
+---
+ .../non_persistent_notification_handler.cc    | 70 +++++++++++++++++--
+ .../non_persistent_notification_handler.h     | 21 ++++++
+ .../notification_event_dispatcher_impl.cc     | 14 ++++
+ .../notification_event_dispatcher_impl.h      |  2 +
+ .../browser/notification_event_dispatcher.h   |  8 +++
+ 5 files changed, 108 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/browser/notifications/non_persistent_notification_handler.cc b/chrome/browser/notifications/non_persistent_notification_handler.cc
+index 0cfc4322a0c9..dc6a52a198b9 100644
+--- a/chrome/browser/notifications/non_persistent_notification_handler.cc
++++ b/chrome/browser/notifications/non_persistent_notification_handler.cc
+@@ -7,6 +7,7 @@
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/metrics/histogram_macros.h"
++#include "base/no_destructor.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/notifications/notification_common.h"
+@@ -18,6 +19,8 @@
+ #include "components/permissions/permission_uma_util.h"
+ #include "components/permissions/permission_util.h"
+ #include "content/public/browser/notification_event_dispatcher.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
+ #include "services/metrics/public/cpp/ukm_recorder.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/message_center/message_center_stats_collector.h"
+@@ -30,6 +33,26 @@
+ #include "ui/base/page_transition_types.h"
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
++#if BUILDFLAG(IS_MAC)
++namespace {
++
++NonPersistentNotificationHandler::EmbedderClickCallback&
++EmbedderClickCallbackStorage() {
++  static base::NoDestructor<
++      NonPersistentNotificationHandler::EmbedderClickCallback>
++      callback;
++  return *callback;
++}
++
++}  // namespace
++
++// static
++void NonPersistentNotificationHandler::SetEmbedderClickCallback(
++    EmbedderClickCallback callback) {
++  EmbedderClickCallbackStorage() = std::move(callback);
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ NonPersistentNotificationHandler::NonPersistentNotificationHandler() = default;
+ NonPersistentNotificationHandler::~NonPersistentNotificationHandler() = default;
+ 
+@@ -63,13 +86,24 @@ void NonPersistentNotificationHandler::OnClick(
+   DCHECK(!action_index.has_value());
+   DCHECK(!reply.has_value());
+ 
+-  content::NotificationEventDispatcher::GetInstance()
+-      ->DispatchNonPersistentClickEvent(
+-          notification_id,
+-          base::BindOnce(
+-              &NonPersistentNotificationHandler::DidDispatchClickEvent,
+-              weak_ptr_factory_.GetWeakPtr(), profile, origin, notification_id,
+-              std::move(completed_closure)));
++  content::NotificationEventDispatcher* dispatcher =
++      content::NotificationEventDispatcher::GetInstance();
++  // The tab that showed the notification, looked up before the page's click
++  // handler runs (it may navigate away).
++  base::WeakPtr<content::WebContents> web_contents;
++  if (content::RenderFrameHost* document =
++          dispatcher->GetNonPersistentNotificationDocument(notification_id)) {
++    if (content::WebContents* contents =
++            content::WebContents::FromRenderFrameHost(document)) {
++      web_contents = contents->GetWeakPtr();
++    }
++  }
++  dispatcher->DispatchNonPersistentClickEvent(
++      notification_id,
++      base::BindOnce(&NonPersistentNotificationHandler::DidDispatchClickEvent,
++                     weak_ptr_factory_.GetWeakPtr(), profile, origin,
++                     notification_id, web_contents,
++                     std::move(completed_closure)));
+ 
+   auto* service = NotificationsEngagementServiceFactory::GetForProfile(profile);
+   // This service might be missing for incognito profiles and in tests.
+@@ -93,8 +127,30 @@ void NonPersistentNotificationHandler::DidDispatchClickEvent(
+     Profile* profile,
+     const GURL& origin,
+     const std::string& notification_id,
++    base::WeakPtr<content::WebContents> web_contents,
+     base::OnceClosure completed_closure,
+     bool success) {
++#if BUILDFLAG(IS_MAC)
++  if (const EmbedderClickCallback& callback = EmbedderClickCallbackStorage();
++      callback) {
++    callback.Run(profile, origin, success ? web_contents.get() : nullptr);
++    if (!success) {
++      // As below: the user acknowledged the notification.
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE,
++          base::BindOnce(
++              [](Profile* profile, const std::string& notification_id) {
++                PlatformNotificationServiceFactory::GetForProfile(profile)
++                    ->CloseNotification(notification_id);
++              },
++              profile, notification_id)
++              .Then(std::move(completed_closure)));
++    } else {
++      std::move(completed_closure).Run();
++    }
++    return;
++  }
++#endif  // BUILDFLAG(IS_MAC)
+ #if !BUILDFLAG(IS_ANDROID)
+   // Non-persistent notifications are able to outlive the document that created
+   // them. In such cases the JavaScript event handler might not be available
+diff --git a/chrome/browser/notifications/non_persistent_notification_handler.h b/chrome/browser/notifications/non_persistent_notification_handler.h
+index 4151a6294168..4fefe04e5e4a 100644
+--- a/chrome/browser/notifications/non_persistent_notification_handler.h
++++ b/chrome/browser/notifications/non_persistent_notification_handler.h
+@@ -5,9 +5,15 @@
+ #ifndef CHROME_BROWSER_NOTIFICATIONS_NON_PERSISTENT_NOTIFICATION_HANDLER_H_
+ #define CHROME_BROWSER_NOTIFICATIONS_NON_PERSISTENT_NOTIFICATION_HANDLER_H_
+ 
++#include "base/functional/callback_forward.h"
+ #include "base/memory/weak_ptr.h"
++#include "build/build_config.h"
+ #include "chrome/browser/notifications/notification_handler.h"
+ 
++namespace content {
++class WebContents;
++}
++
+ // NotificationHandler implementation for non persistent notifications.
+ class NonPersistentNotificationHandler : public NotificationHandler {
+  public:
+@@ -37,6 +43,20 @@ class NonPersistentNotificationHandler : public NotificationHandler {
+                             const std::optional<bool>& is_suspicious) override;
+   void OpenSettings(Profile* profile, const GURL& origin) override;
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that owns its tabs (chrome/browser/embedder_owned_ui_mac.h)
++  // hears about every click on a page's notification, after the page's
++  // "click" event ran: `web_contents` is the tab of the document that showed
++  // it, or null when that document is gone (navigated away, closed, in
++  // back/forward cache). Chrome's own fallback, opening the origin in a new
++  // Browser tab, is skipped then: the embedder decides. Set once at startup.
++  using EmbedderClickCallback =
++      base::RepeatingCallback<void(Profile* profile,
++                                   const GURL& origin,
++                                   content::WebContents* web_contents)>;
++  static void SetEmbedderClickCallback(EmbedderClickCallback callback);
++#endif
++
+  private:
+   // Called when the "click" event for non-persistent notification has been
+   // dispatched. The |success| boolean indicates whether the click could be
+@@ -44,6 +64,7 @@ class NonPersistentNotificationHandler : public NotificationHandler {
+   void DidDispatchClickEvent(Profile* profile,
+                              const GURL& origin,
+                              const std::string& notification_id,
++                             base::WeakPtr<content::WebContents> web_contents,
+                              base::OnceClosure completed_closure,
+                              bool success);
+ 
+diff --git a/content/browser/notifications/notification_event_dispatcher_impl.cc b/content/browser/notifications/notification_event_dispatcher_impl.cc
+index a17db79ca9cc..ffcba8a1fb68 100644
+--- a/content/browser/notifications/notification_event_dispatcher_impl.cc
++++ b/content/browser/notifications/notification_event_dispatcher_impl.cc
+@@ -396,6 +396,12 @@ void OnDispatchNotificationCloseEventComplete(
+ }  // namespace
+ 
+ // static
++RenderFrameHost*
++NotificationEventDispatcher::GetNonPersistentNotificationDocument(
++    const std::string& notification_id) {
++  return nullptr;
++}
++
+ NotificationEventDispatcher* NotificationEventDispatcher::GetInstance() {
+   return NotificationEventDispatcherImpl::GetInstance();
+ }
+@@ -584,6 +590,14 @@ void NotificationEventDispatcherImpl::DispatchNonPersistentCloseEvent(
+   }
+ }
+ 
++RenderFrameHost*
++NotificationEventDispatcherImpl::GetNonPersistentNotificationDocument(
++    const std::string& notification_id) {
++  auto listener = GetListenerIfNotifiable(notification_id);
++  return listener.has_value() ? listener->document.AsRenderFrameHostIfValid()
++                              : nullptr;
++}
++
+ void NotificationEventDispatcherImpl::OnNonPersistentCloseComplete(
+     const std::string& notification_id,
+     base::OnceClosure completed_closure) {
+diff --git a/content/browser/notifications/notification_event_dispatcher_impl.h b/content/browser/notifications/notification_event_dispatcher_impl.h
+index 21d521b2500f..cb7c43f488f0 100644
+--- a/content/browser/notifications/notification_event_dispatcher_impl.h
++++ b/content/browser/notifications/notification_event_dispatcher_impl.h
+@@ -57,6 +57,8 @@ class CONTENT_EXPORT NotificationEventDispatcherImpl
+   void DispatchNonPersistentCloseEvent(
+       const std::string& notification_id,
+       base::OnceClosure completed_closure) override;
++  RenderFrameHost* GetNonPersistentNotificationDocument(
++      const std::string& notification_id) override;
+ 
+   // Registers the associated document weak pointer and the listener to receive
+   // the show, click and close events of the non-persistent notification
+diff --git a/content/public/browser/notification_event_dispatcher.h b/content/public/browser/notification_event_dispatcher.h
+index bd890827a334..b78bf3d2416b 100644
+--- a/content/public/browser/notification_event_dispatcher.h
++++ b/content/public/browser/notification_event_dispatcher.h
+@@ -16,6 +16,7 @@ class GURL;
+ namespace content {
+ 
+ class BrowserContext;
++class RenderFrameHost;
+ enum class PersistentNotificationStatus;
+ 
+ // This is the dispatcher to be used for firing events related to notifications.
+@@ -65,6 +66,13 @@ class CONTENT_EXPORT NotificationEventDispatcher {
+       const std::string& notification_id,
+       base::OnceClosure completed_closure) = 0;
+ 
++  // Open Arc: the live document that showed the non-persistent notification
++  // `notification_id` (null when it is gone, in back/forward cache, or the
++  // notification came from a worker), so an embedder that owns its tabs can
++  // bring that tab forward when the notification is clicked.
++  virtual RenderFrameHost* GetNonPersistentNotificationDocument(
++      const std::string& notification_id);
++
+  protected:
+   virtual ~NotificationEventDispatcher() {}
+ };

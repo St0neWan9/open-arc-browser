@@ -1,0 +1,626 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 20:59:45 -0700
+Subject: [PATCH] openarc: embedder: extension keyboard commands and error
+ counts
+
+Plan C26.
+
+- Each profile's OACExtensions owns an ExtensionKeybindingRegistry subclass
+  (openarc/bridge/oac_extension_commands.mm) that keeps the active
+  accelerators of its extensions' `commands` (named commands and
+  `_execute_action`, as Chrome's Android registry does). A tab's
+  PreHandleKeyboardEvent offers each key press to its profile's registry
+  before the page sees it, as Chrome's FocusManager registers extension
+  accelerators at high priority: a named command sends commands.onCommand
+  with that tab (activeTab granted when asked for); `_execute_action` runs
+  the action on the tab, and a popup it opens goes to the delegate
+  (-extensions:didOpenPopup:fromKeyboardOnTab:; closed when unhandled).
+  Shortcuts keep being edited in chrome://extensions/shortcuts.
+- Runtime errors: Chromium's error console already collects them while
+  developer mode is on and chrome://extensions lists them; the bridge now
+  reports OACExtensionInfo.errorCount and
+  -extensions:didChangeErrorsOfExtension: from the console's observer.
+---
+ openarc/BUILD.gn                              |   3 +
+ openarc/bridge/oac_extension_commands.mm      | 149 ++++++++++++++++++
+ .../bridge/oac_extension_commands_internal.h  |  84 ++++++++++
+ openarc/bridge/oac_extensions.mm              |  96 ++++++++++-
+ openarc/bridge/oac_extensions_internal.h      |  10 ++
+ openarc/bridge/oac_tab.mm                     |  10 ++
+ .../bridge/public/OpenArcCore/OACExtensions.h |  28 +++-
+ 7 files changed, 371 insertions(+), 9 deletions(-)
+ create mode 100644 openarc/bridge/oac_extension_commands.mm
+ create mode 100644 openarc/bridge/oac_extension_commands_internal.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index e8046e726173..5346ce1eb9c2 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -262,6 +262,8 @@ source_set("bridge") {
+               "bridge/oac_dialog_requests_internal.h",
+               "bridge/oac_downloads.mm",
+               "bridge/oac_downloads_internal.h",
++              "bridge/oac_extension_commands.mm",
++              "bridge/oac_extension_commands_internal.h",
+               "bridge/oac_extensions.mm",
+               "bridge/oac_extensions_internal.h",
+               "bridge/oac_link_preview.mm",
+@@ -298,6 +300,7 @@ source_set("bridge") {
+     "//chrome/browser/extensions",
+     "//chrome/browser/picture_in_picture",
+     "//chrome/browser/notifications",
++    "//ui/content_accelerators",
+     "//components/infobars/content",
+     "//components/infobars/core",
+     "//chrome/browser/translate",
+diff --git a/openarc/bridge/oac_extension_commands.mm b/openarc/bridge/oac_extension_commands.mm
+new file mode 100644
+index 000000000000..78d11c0a3cf5
+--- /dev/null
++++ b/openarc/bridge/oac_extension_commands.mm
+@@ -0,0 +1,149 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "openarc/bridge/oac_extension_commands_internal.h"
++
++#include <map>
++#include <set>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/strings/sys_string_conversions.h"
++#include "chrome/browser/extensions/commands/command_service.h"
++#include "chrome/browser/extensions/extension_keybinding_registry.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/input/native_web_keyboard_event.h"
++#include "content/public/browser/web_contents.h"
++#include "extensions/common/api/extension_action/action_info.h"
++#include "extensions/common/command.h"
++#include "extensions/common/extension.h"
++#include "ui/base/accelerators/accelerator.h"
++#include "ui/content_accelerators/accelerator_util.h"
++
++#import <OpenArcCore/OACExtensions.h>
++#import <OpenArcCore/OACProfile.h>
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_extensions_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++
++namespace openarc {
++
++ExtensionCommandRegistry::ExtensionCommandRegistry(OACExtensions* owner,
++                                                   Profile* profile)
++    : ExtensionKeybindingRegistry(profile,
++                                  /*tab_list_interface=*/nullptr,
++                                  ExtensionFilter::ALL_EXTENSIONS),
++      owner_(owner) {
++  Init();
++}
++
++ExtensionCommandRegistry::~ExtensionCommandRegistry() = default;
++
++bool ExtensionCommandRegistry::HandleKeyDown(
++    content::WebContents* web_contents,
++    const input::NativeWebKeyboardEvent& event) {
++  if (shortcut_handling_suspended()) {
++    return false;
++  }
++  const ui::Accelerator accelerator =
++      ui::GetAcceleratorFromNativeWebKeyboardEvent(event);
++  if (!accelerators_.contains(accelerator)) {
++    return false;
++  }
++  if (auto it = action_accelerators_.find(accelerator);
++      it != action_accelerators_.end()) {
++    OACTab* tab = OACTabForWebContents(web_contents);
++    if (!tab) {
++      return false;
++    }
++    // As a click on the toolbar button: activeTab, then the popup or
++    // action.onClicked; the popup reaches the shell through the delegate.
++    [owner_ runActionFromKeyboardOfExtension:base::SysUTF8ToNSString(
++                                                 it->second)
++                                       onTab:tab];
++    return true;
++  }
++  active_web_contents_ = web_contents;
++  const bool handled = NotifyEventTargets(accelerator);
++  active_web_contents_ = nullptr;
++  return handled;
++}
++
++bool ExtensionCommandRegistry::PopulateCommands(
++    const extensions::Extension* extension,
++    ui::CommandMap* commands) {
++  extensions::CommandService* service =
++      extensions::CommandService::Get(browser_context());
++  const bool named = service->GetNamedCommands(
++      extension->id(), extensions::CommandService::ACTIVE,
++      extensions::CommandService::REGULAR, commands);
++  extensions::Command action;
++  const bool has_action = service->GetExtensionActionCommand(
++      extension->id(), extensions::ActionInfo::Type::kAction,
++      extensions::CommandService::ACTIVE, &action, /*active=*/nullptr);
++  if (has_action) {
++    (*commands)[action.command_name()] = action;
++  }
++  return named || has_action;
++}
++
++bool ExtensionCommandRegistry::RegisterAccelerator(
++    const ui::Accelerator& accelerator,
++    const extensions::ExtensionId& extension_id,
++    const std::string& command_name) {
++  accelerators_.insert(accelerator);
++  if (extensions::Command::IsActionRelatedCommand(command_name)) {
++    action_accelerators_[accelerator] = extension_id;
++  }
++  return true;
++}
++
++void ExtensionCommandRegistry::UnregisterAccelerator(
++    const ui::Accelerator& accelerator) {
++  accelerators_.erase(accelerator);
++  action_accelerators_.erase(accelerator);
++}
++
++bool ExtensionCommandRegistry::ShouldIgnoreCommand(
++    const std::string& command) const {
++  return false;  // Action commands are handled here too.
++}
++
++content::WebContents*
++ExtensionCommandRegistry::GetActiveWebContentsForCommand() {
++  return active_web_contents_;
++}
++
++std::unique_ptr<ExtensionCommandRegistry> CreateExtensionCommandRegistry(
++    OACExtensions* owner,
++    Profile* profile) {
++  return std::make_unique<ExtensionCommandRegistry>(owner, profile);
++}
++
++void DestroyExtensionCommandRegistry(
++    std::unique_ptr<ExtensionCommandRegistry> registry) {
++  registry.reset();
++}
++
++bool HandleExtensionCommandKeyEvent(content::WebContents* web_contents,
++                                    const input::NativeWebKeyboardEvent& event) {
++  if (!web_contents ||
++      event.GetType() != blink::WebInputEvent::Type::kRawKeyDown) {
++    return false;
++  }
++  OACTab* tab = OACTabForWebContents(web_contents);
++  OACProfile* profile = tab.profile;
++  if (!profile.valid) {
++    return false;
++  }
++  // Off-the-record tabs use their original profile's extensions (only those
++  // allowed in incognito have commands there: the registry's event router
++  // skips the others).
++  ExtensionCommandRegistry* registry = [profile.extensions commandRegistry];
++  return registry && registry->HandleKeyDown(tab.webContents, event);
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/oac_extension_commands_internal.h b/openarc/bridge/oac_extension_commands_internal.h
+new file mode 100644
+index 000000000000..6b10923aed55
+--- /dev/null
++++ b/openarc/bridge/oac_extension_commands_internal.h
+@@ -0,0 +1,84 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_EXTENSION_COMMANDS_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_EXTENSION_COMMANDS_INTERNAL_H_
++
++#import <OpenArcCore/OACExtensions.h>
++
++#include <map>
++#include <memory>
++#include <set>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "chrome/browser/extensions/extension_keybinding_registry.h"
++#include "extensions/common/extension_id.h"
++#include "ui/base/accelerators/accelerator.h"
++
++namespace content {
++class WebContents;
++}
++
++namespace input {
++struct NativeWebKeyboardEvent;
++}
++
++class Profile;
++
++namespace openarc {
++
++// Chrome's keybinding registry with the bridge's tabs: accelerators are kept
++// here (Chrome registers them with a Views FocusManager) and key presses come
++// from the tabs (HandleExtensionCommandKeyEvent). Like Chrome's Android
++// registry it also handles `_execute_action`, which Chrome's desktop toolbar
++// buttons own.
++class ExtensionCommandRegistry
++    : public extensions::ExtensionKeybindingRegistry {
++ public:
++  ExtensionCommandRegistry(OACExtensions* owner, Profile* profile);
++  ExtensionCommandRegistry(const ExtensionCommandRegistry&) = delete;
++  ExtensionCommandRegistry& operator=(const ExtensionCommandRegistry&) = delete;
++  ~ExtensionCommandRegistry() override;
++
++  // Returns whether a command took the key press of |web_contents|.
++  bool HandleKeyDown(content::WebContents* web_contents,
++                     const input::NativeWebKeyboardEvent& event);
++
++ private:
++  // extensions::ExtensionKeybindingRegistry:
++  bool PopulateCommands(const extensions::Extension* extension,
++                        ui::CommandMap* commands) override;
++  bool RegisterAccelerator(const ui::Accelerator& accelerator,
++                           const extensions::ExtensionId& extension_id,
++                           const std::string& command_name) override;
++  void UnregisterAccelerator(const ui::Accelerator& accelerator) override;
++  bool ShouldIgnoreCommand(const std::string& command) const override;
++  content::WebContents* GetActiveWebContentsForCommand() override;
++
++  __weak OACExtensions* owner_;
++  std::set<ui::Accelerator> accelerators_;
++  std::map<ui::Accelerator, extensions::ExtensionId> action_accelerators_;
++  // The tab of the key press being handled.
++  raw_ptr<content::WebContents> active_web_contents_ = nullptr;
++};
++
++// Plan C26: the keyboard commands of one profile's extensions (manifest
++// `commands`): named commands fire `commands.onCommand`, `_execute_action`
++// runs the extension's action on the tab (its popup through the extensions
++// delegate). Owned by the profile's OACExtensions.
++std::unique_ptr<ExtensionCommandRegistry> CreateExtensionCommandRegistry(
++    OACExtensions* owner,
++    Profile* profile);
++void DestroyExtensionCommandRegistry(
++    std::unique_ptr<ExtensionCommandRegistry> registry);
++
++// A key press in |web_contents| (before the page sees it). Returns YES when an
++// extension command of the tab's profile took it.
++bool HandleExtensionCommandKeyEvent(content::WebContents* web_contents,
++                                    const input::NativeWebKeyboardEvent& event);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BRIDGE_OAC_EXTENSION_COMMANDS_INTERNAL_H_
+diff --git a/openarc/bridge/oac_extensions.mm b/openarc/bridge/oac_extensions.mm
+index 6cbc5fc92146..af81228a5269 100644
+--- a/openarc/bridge/oac_extensions.mm
++++ b/openarc/bridge/oac_extensions.mm
+@@ -15,6 +15,7 @@
+ //   OACExtensionInstallRequest for the profile's delegate.
+ 
+ #import "openarc/bridge/oac_extensions_internal.h"
++#import "openarc/bridge/oac_extension_commands_internal.h"
+ 
+ #import <AppKit/AppKit.h>
+ 
+@@ -35,6 +36,7 @@
+ #include "base/scoped_observation.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "chrome/browser/extensions/extension_action_dispatcher.h"
++#include "chrome/browser/extensions/error_console/error_console.h"
+ #include "chrome/browser/extensions/extension_action_runner.h"
+ #include "chrome/browser/extensions/extension_install_prompt.h"
+ #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
+@@ -95,6 +97,7 @@ - (void)registryDidChange;
+ - (void)actionDidUpdate:(const std::string&)extensionID
+             webContents:(content::WebContents*)webContents;
+ - (void)popupDidClose:(OACExtensionPopup*)popup;
++- (void)errorsDidChangeForExtension:(const std::string&)extensionID;
+ @end
+ 
+ @interface OACExtensionPopup ()
+@@ -129,7 +132,8 @@ - (instancetype)initWithIdentifier:(NSString*)identifier
+                          badgeText:(NSString*)badgeText
+                        actionTitle:(NSString*)actionTitle
+                      actionEnabled:(BOOL)actionEnabled
+-                          hasPopup:(BOOL)hasPopup;
++                          hasPopup:(BOOL)hasPopup
++                        errorCount:(NSInteger)errorCount;
+ @end
+ 
+ namespace {
+@@ -173,6 +177,14 @@ bool IsUserExtension(const Extension& extension) {
+ }
+ 
+ // The on-disk profile behind |tab|, and whether the tab is off the record.
++// Errors the error console holds for |extension_id| (plan C26).
++NSInteger ErrorCountOf(const std::string& extension_id, Profile* profile) {
++  extensions::ErrorConsole* console = extensions::ErrorConsole::Get(profile);
++  return console ? static_cast<NSInteger>(
++                       console->GetErrorsForExtension(extension_id).size())
++                 : 0;
++}
++
+ Profile* OriginalProfileOfTab(OACTab* tab) {
+   content::WebContents* contents = tab.webContents;
+   if (!contents) {
+@@ -205,7 +217,8 @@ bool IsUserExtension(const Extension& extension) {
+ class ExtensionsObserverBridge : public extensions::ExtensionRegistryObserver,
+                                  public extensions::ExtensionActionDispatcher::
+                                      Observer,
+-                                 public extensions::IconImage::Observer {
++                                 public extensions::IconImage::Observer,
++                                 public extensions::ErrorConsole::Observer {
+  public:
+   ExtensionsObserverBridge(OACExtensions* owner, Profile* profile)
+       : owner_(owner), profile_(profile) {
+@@ -215,6 +228,10 @@ bool IsUserExtension(const Extension& extension) {
+       dispatcher_ = dispatcher;
+       dispatcher->AddObserver(this);
+     }
++    // Plan C26: runtime errors (collected while developer mode is on).
++    if (auto* console = extensions::ErrorConsole::Get(profile)) {
++      error_console_observation_.Observe(console);
++    }
+   }
+   ExtensionsObserverBridge(const ExtensionsObserverBridge&) = delete;
+   ExtensionsObserverBridge& operator=(const ExtensionsObserverBridge&) =
+@@ -294,6 +311,19 @@ void OnExtensionIconImageDestroyed(extensions::IconImage* image) override {
+     icon_extensions_.erase(image);
+   }
+ 
++  // extensions::ErrorConsole::Observer:
++  void OnErrorAdded(const extensions::ExtensionError* error) override {
++    [owner_ errorsDidChangeForExtension:error->extension_id()];
++  }
++  void OnErrorsRemoved(const std::set<std::string>& extension_ids) override {
++    for (const std::string& extension_id : extension_ids) {
++      [owner_ errorsDidChangeForExtension:extension_id];
++    }
++  }
++  void OnErrorConsoleDestroyed() override {
++    error_console_observation_.Reset();
++  }
++
+  private:
+   void Changed() { [owner_ registryDidChange]; }
+ 
+@@ -307,6 +337,9 @@ void OnExtensionIconImageDestroyed(extensions::IconImage* image) override {
+                                      extensions::IconImage::Observer>
+       icon_observations_{this};
+   std::map<extensions::IconImage*, std::string> icon_extensions_;
++  base::ScopedObservation<extensions::ErrorConsole,
++                          extensions::ErrorConsole::Observer>
++      error_console_observation_{this};
+ };
+ 
+ // The ExtensionView of a popup: hosts nothing itself (the shell's bubble
+@@ -406,6 +439,7 @@ @implementation OACExtensionInfo {
+   NSString* _actionTitle;
+   BOOL _isActionEnabled;
+   BOOL _hasPopup;
++  NSInteger _errorCount;
+ }
+ 
+ - (instancetype)initWithIdentifier:(NSString*)identifier
+@@ -418,8 +452,10 @@ - (instancetype)initWithIdentifier:(NSString*)identifier
+                          badgeText:(NSString*)badgeText
+                        actionTitle:(NSString*)actionTitle
+                      actionEnabled:(BOOL)actionEnabled
+-                          hasPopup:(BOOL)hasPopup {
++                          hasPopup:(BOOL)hasPopup
++                        errorCount:(NSInteger)errorCount {
+   if ((self = [super init])) {
++    _errorCount = errorCount;
+     _identifier = [identifier copy];
+     _name = [name copy];
+     _version = [version copy];
+@@ -472,6 +508,9 @@ - (BOOL)isActionEnabled {
+ - (BOOL)hasPopup {
+   return _hasPopup;
+ }
++- (NSInteger)errorCount {
++  return _errorCount;
++}
+ 
+ - (NSString*)description {
+   return [NSString stringWithFormat:@"<OACExtensionInfo %@ %@ %@>",
+@@ -727,6 +766,8 @@ - (void)hostDidAskToClose {
+ @implementation OACExtensions {
+   __weak OACProfile* _profile;
+   std::unique_ptr<openarc::ExtensionsObserverBridge> _observer;
++  // Keyboard commands of the profile's extensions (plan C26).
++  std::unique_ptr<openarc::ExtensionCommandRegistry> _commands;
+   OACExtensionPopup* _popup;
+   BOOL _changePosted;
+ }
+@@ -739,6 +780,8 @@ - (instancetype)initWithProfile:(OACProfile*)profile {
+     if (Profile* chrome = profile.chromeProfile) {
+       _observer = std::make_unique<openarc::ExtensionsObserverBridge>(
+           self, chrome->GetOriginalProfile());
++      _commands = openarc::CreateExtensionCommandRegistry(
++          self, chrome->GetOriginalProfile());
+     }
+   }
+   return self;
+@@ -747,9 +790,53 @@ - (instancetype)initWithProfile:(OACProfile*)profile {
+ - (void)invalidate {
+   [_popup close];
+   _popup = nil;
++  openarc::DestroyExtensionCommandRegistry(std::move(_commands));
+   _observer.reset();
+ }
+ 
++- (openarc::ExtensionCommandRegistry*)commandRegistry {
++  return _commands.get();
++}
++
++- (void)runActionFromKeyboardOfExtension:(NSString*)extensionIdentifier
++                                   onTab:(OACTab*)tab {
++  OACExtensionPopup* popup = [self runActionOfExtension:extensionIdentifier
++                                                  onTab:tab];
++  if (!popup) {
++    return;  // action.onClicked was sent (or nothing to run).
++  }
++  __weak OACExtensions* weakSelf = self;
++  __weak OACTab* weakTab = tab;
++  OACPostToMainThread(^{
++    OACExtensions* strongSelf = weakSelf;
++    OACTab* strongTab = weakTab;
++    id<OACExtensionsDelegate> delegate = strongSelf.delegate;
++    if (strongSelf && strongTab && !popup.closed &&
++        [delegate respondsToSelector:@selector(extensions:
++                                          didOpenPopup:fromKeyboardOnTab:)]) {
++      [delegate extensions:strongSelf
++                didOpenPopup:popup
++           fromKeyboardOnTab:strongTab];
++    } else {
++      [popup close];
++    }
++  });
++}
++
++- (void)errorsDidChangeForExtension:(const std::string&)extensionID {
++  NSString* identifier = ToNS(extensionID);
++  __weak OACExtensions* weakSelf = self;
++  OACPostToMainThread(^{
++    OACExtensions* strongSelf = weakSelf;
++    id<OACExtensionsDelegate> delegate = strongSelf.delegate;
++    if (strongSelf &&
++        [delegate respondsToSelector:@selector(extensions:
++                                          didChangeErrorsOfExtension:)]) {
++      [delegate extensions:strongSelf didChangeErrorsOfExtension:identifier];
++    }
++  });
++}
++
+ - (OACProfile*)profile {
+   return _profile;
+ }
+@@ -816,7 +903,8 @@ - (OACExtensionInfo*)infoForExtension:(const Extension&)extension
+                badgeText:badge
+              actionTitle:title
+            actionEnabled:actionEnabled
+-                hasPopup:hasPopup];
++                hasPopup:hasPopup
++              errorCount:ErrorCountOf(extension.id(), profile)];
+ }
+ 
+ - (NSArray<OACExtensionInfo*>*)installedExtensions {
+diff --git a/openarc/bridge/oac_extensions_internal.h b/openarc/bridge/oac_extensions_internal.h
+index bfe776bad068..a9cc23828212 100644
+--- a/openarc/bridge/oac_extensions_internal.h
++++ b/openarc/bridge/oac_extensions_internal.h
+@@ -7,6 +7,10 @@
+ 
+ #import <OpenArcCore/OACExtensions.h>
+ 
++namespace openarc {
++class ExtensionCommandRegistry;
++}
++
+ @interface OACExtensions ()
+ // The extensions of the on-disk |profile| (its off-the-record variant shares
+ // them). Observes the profile's ExtensionRegistry and the action dispatcher
+@@ -15,6 +19,12 @@
+ // The profile goes away (deletion, engine shutdown): closes the popup and
+ // stops observing.
+ - (void)invalidate;
++// Plan C26: the profile's extension keyboard commands (nullptr once invalid).
++- (openarc::ExtensionCommandRegistry*)commandRegistry;
++// An `_execute_action` shortcut: runs the action on |tab| and hands its popup,
++// if any, to the delegate (-extensions:didOpenPopup:fromKeyboardOnTab:).
++- (void)runActionFromKeyboardOfExtension:(NSString*)extensionIdentifier
++                                   onTab:(OACTab*)tab;
+ @end
+ 
+ // Registers the bridge's hooks in //chrome's extension code (plan C14): the
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 2d87165aea81..f50221223130 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -81,6 +81,7 @@
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
++#import "openarc/bridge/oac_extension_commands_internal.h"
+ #import "openarc/bridge/oac_infobars_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
+@@ -295,6 +296,15 @@ bool HandleKeyboardEvent(
+       const input::NativeWebKeyboardEvent& event) override {
+     return [tab_ webContentsHandleUnhandledKeyEvent:event];
+   }
++  // Plan C26: extension keyboard commands come before the page, as Chrome's
++  // FocusManager registers them at high priority.
++  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
++      content::WebContents* source,
++      const input::NativeWebKeyboardEvent& event) override {
++    return openarc::HandleExtensionCommandKeyEvent(source, event)
++               ? content::KeyboardEventProcessingResult::HANDLED
++               : content::KeyboardEventProcessingResult::NOT_HANDLED;
++  }
+   void FindReply(content::WebContents* web_contents,
+                  int request_id,
+                  int number_of_matches,
+diff --git a/openarc/bridge/public/OpenArcCore/OACExtensions.h b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+index 36208c4382fd..362e35bbea88 100644
+--- a/openarc/bridge/public/OpenArcCore/OACExtensions.h
++++ b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+@@ -19,11 +19,21 @@
+ // confirmations (Chrome's install dialog, an Open Arc hook in `ExtensionInstallPrompt`) are
+ // requests the shell answers.
+ //
+-// Not covered: the extension context menu, side panels, `chrome.action.openPopup()`, keyboard
+-// shortcuts of extension commands, and APIs that need a Chrome `Browser` window
+-// (`chrome.tabs.create`, `chrome.windows.*`, `chrome.runtime.openOptionsPage`): they fail as in a
+-// Chrome without windows. "Manage Extensions…" opens chrome://extensions in a tab until a native
+-// page exists.
++// Keyboard commands (plan C26): the manifest's `commands` work while a tab of the profile has the
++// keyboard, as in Chrome: a named command sends `commands.onCommand` with that tab (and grants
++// activeTab when the extension asks for it); `_execute_action` runs the action on the tab and its
++// popup comes to the delegate (`-extensions:didOpenPopup:fromKeyboardOnTab:`). Shortcuts are set
++// in chrome://extensions/shortcuts. Global (system-wide) commands are not registered.
++//
++// Runtime errors (plan C26): with developer mode on, Chromium's error console collects them for
++// every extension (all of an unpacked one's, and errors of others once their "Collect errors"
++// switch is on); chrome://extensions lists them under "Errors". `OACExtensionInfo.errorCount`
++// counts them.
++//
++// Not covered: the extension context menu, side panels, `chrome.action.openPopup()`, and APIs that
++// need a Chrome `Browser` window (`chrome.tabs.create`, `chrome.windows.*`,
++// `chrome.runtime.openOptionsPage`): they fail as in a Chrome without windows. "Manage
++// Extensions…" opens chrome://extensions in a tab until a native page exists.
+ 
+ #import <OpenArcCore/OACDefines.h>
+ 
+@@ -57,6 +67,9 @@ OAC_EXPORT NS_SWIFT_SENDABLE
+ @property (nonatomic, readonly) BOOL isActionEnabled;
+ /// Clicking the action opens a popup (else it sends a click event to the extension).
+ @property (nonatomic, readonly) BOOL hasPopup;
++/// Runtime and manifest errors the error console holds for the extension (plan C26); 0 while
++/// developer mode is off (the console then collects nothing).
++@property (nonatomic, readonly) NSInteger errorCount;
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;
+ @end
+@@ -135,6 +148,11 @@ NS_SWIFT_UI_ACTOR
+ - (void)extensions:(OACExtensions *)extensions didUpdateActionOfExtension:(NSString *)extensionIdentifier tab:(nullable OACTab *)tab;
+ /// Chromium wants to confirm an install. Return YES to show UI and answer later, NO to cancel.
+ - (BOOL)extensions:(OACExtensions *)extensions confirmInstall:(OACExtensionInstallRequest *)request;
++/// An extension's `_execute_action` shortcut opened its popup on `tab` (plan C26). The shell shows
++/// it as after `-runActionOfExtension:onTab:`. Without this method the popup is closed.
++- (void)extensions:(OACExtensions *)extensions didOpenPopup:(OACExtensionPopup *)popup fromKeyboardOnTab:(OACTab *)tab;
++/// An extension's error count changed (plan C26, `OACExtensionInfo.errorCount`).
++- (void)extensions:(OACExtensions *)extensions didChangeErrorsOfExtension:(NSString *)extensionIdentifier;
+ @end
+ 
+ /// A profile's extensions. Off-the-record profiles share their original profile's object; only

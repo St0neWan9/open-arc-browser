@@ -347,12 +347,18 @@ struct WebPanel: View {
         ZStack {
             background.swiftUI
             if let tab {
-                SurfaceHostRepresentable(surface: tab.surface, panelColor: background)
-                    .id(tab.id)
-                if let crashed { CrashedPageView(state: crashed, panelColor: background) }
-                if let findBar { FindBarOverlay(host: findBar) }
-                if let dialogCenter {
-                    TabDialogOverlay(center: dialogCenter, tabID: tab.id, windowDrawnPermissionTab: windowDrawnPermissionTab)
+                VStack(spacing: 0) {
+                    // Engine info bars (C23) sit above the page, which moves down under them.
+                    if let dialogCenter { InfoBarStack(center: dialogCenter, tabID: tab.id) }
+                    ZStack {
+                        SurfaceHostRepresentable(surface: tab.surface, panelColor: background)
+                            .id(tab.id)
+                        if let crashed { CrashedPageView(state: crashed, panelColor: background) }
+                        if let findBar { FindBarOverlay(host: findBar) }
+                        if let dialogCenter {
+                            TabDialogOverlay(center: dialogCenter, tabID: tab.id, windowDrawnPermissionTab: windowDrawnPermissionTab)
+                        }
+                    }
                 }
             }
         }

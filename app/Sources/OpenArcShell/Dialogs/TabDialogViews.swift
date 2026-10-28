@@ -96,8 +96,8 @@ struct TabDialogOverlay: View {
                     }
                     .id(request.id)
                 }
-            case .dropdown:
-                // Never queued (`DialogCenter.autofillPopups`).
+            case .dropdown, .infoBar:
+                // Never queued (`DialogCenter.autofillPopups`, `DialogCenter.infoBarLists`).
                 EmptyView()
             }
         }

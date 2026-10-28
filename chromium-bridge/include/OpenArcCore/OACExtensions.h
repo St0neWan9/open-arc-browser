@@ -19,11 +19,21 @@
 // confirmations (Chrome's install dialog, an Open Arc hook in `ExtensionInstallPrompt`) are
 // requests the shell answers.
 //
-// Not covered: the extension context menu, side panels, `chrome.action.openPopup()`, keyboard
-// shortcuts of extension commands, and APIs that need a Chrome `Browser` window
-// (`chrome.tabs.create`, `chrome.windows.*`, `chrome.runtime.openOptionsPage`): they fail as in a
-// Chrome without windows. "Manage Extensions…" opens chrome://extensions in a tab until a native
-// page exists.
+// Keyboard commands (plan C26): the manifest's `commands` work while a tab of the profile has the
+// keyboard, as in Chrome: a named command sends `commands.onCommand` with that tab (and grants
+// activeTab when the extension asks for it); `_execute_action` runs the action on the tab and its
+// popup comes to the delegate (`-extensions:didOpenPopup:fromKeyboardOnTab:`). Shortcuts are set
+// in chrome://extensions/shortcuts. Global (system-wide) commands are not registered.
+//
+// Runtime errors (plan C26): with developer mode on, Chromium's error console collects them for
+// every extension (all of an unpacked one's, and errors of others once their "Collect errors"
+// switch is on); chrome://extensions lists them under "Errors". `OACExtensionInfo.errorCount`
+// counts them.
+//
+// Not covered: the extension context menu, side panels, `chrome.action.openPopup()`, and APIs that
+// need a Chrome `Browser` window (`chrome.tabs.create`, `chrome.windows.*`,
+// `chrome.runtime.openOptionsPage`): they fail as in a Chrome without windows. "Manage
+// Extensions…" opens chrome://extensions in a tab until a native page exists.
 
 #import <OpenArcCore/OACDefines.h>
 
@@ -57,6 +67,9 @@ OAC_EXPORT NS_SWIFT_SENDABLE
 @property (nonatomic, readonly) BOOL isActionEnabled;
 /// Clicking the action opens a popup (else it sends a click event to the extension).
 @property (nonatomic, readonly) BOOL hasPopup;
+/// Runtime and manifest errors the error console holds for the extension (plan C26); 0 while
+/// developer mode is off (the console then collects nothing).
+@property (nonatomic, readonly) NSInteger errorCount;
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
 @end
@@ -135,6 +148,11 @@ NS_SWIFT_UI_ACTOR
 - (void)extensions:(OACExtensions *)extensions didUpdateActionOfExtension:(NSString *)extensionIdentifier tab:(nullable OACTab *)tab;
 /// Chromium wants to confirm an install. Return YES to show UI and answer later, NO to cancel.
 - (BOOL)extensions:(OACExtensions *)extensions confirmInstall:(OACExtensionInstallRequest *)request;
+/// An extension's `_execute_action` shortcut opened its popup on `tab` (plan C26). The shell shows
+/// it as after `-runActionOfExtension:onTab:`. Without this method the popup is closed.
+- (void)extensions:(OACExtensions *)extensions didOpenPopup:(OACExtensionPopup *)popup fromKeyboardOnTab:(OACTab *)tab;
+/// An extension's error count changed (plan C26, `OACExtensionInfo.errorCount`).
+- (void)extensions:(OACExtensions *)extensions didChangeErrorsOfExtension:(NSString *)extensionIdentifier;
 @end
 
 /// A profile's extensions. Off-the-record profiles share their original profile's object; only

@@ -158,6 +158,9 @@ final class ChromiumEngineCore {
     private var pending: [PendingTabToken: (request: OACNewTabRequest, opener: EngineTabID)] = [:]
     private var isShutDown = false
     private var launchObserver: NSObjectProtocol?
+    /// Receives the engine-wide bridge callbacks (requests from outside a tab). Strong: the
+    /// bridge holds its delegate weakly.
+    private lazy var applicationDelegate = ChromiumApplicationDelegate(engine: self)
     /// Called once per on-disk profile after it loaded (C14 attaches the extensions delegate).
     var onProfileLoaded: ((Profile.ID, OACProfile) -> Void)?
 
@@ -205,6 +208,7 @@ final class ChromiumEngineCore {
             } catch {
                 throw EngineError.engineFailure("Chromium failed to start: \(error.localizedDescription)")
             }
+            app.delegate = applicationDelegate
             return app
         case .shuttingDown, .terminated:
             throw EngineError.shuttingDown
@@ -270,6 +274,7 @@ final class ChromiumEngineCore {
         tabConfiguration.requestedIdentifier = configuration.requestedID?.rawValue
         tabConfiguration.opener = configuration.opener.flatMap { tabs[$0]?.core.tab }
         tabConfiguration.preferredColorScheme = OACColorScheme(configuration.preferredColorScheme)
+        tabConfiguration.sessionHistory = configuration.sessionHistory?.data
         // Hidden until a host attaches the surface (`TabSurface.attach`).
         tabConfiguration.startsHidden = true
         let tab: OACTab
@@ -302,6 +307,21 @@ final class ChromiumEngineCore {
     func tabDidClose(_ id: EngineTabID) {
         guard tabs.removeValue(forKey: id) != nil else { return }
         broadcaster.yield(.tabClosed(id))
+    }
+
+    /// A new tab asked for from outside any tab (plan C24: a click on a notification whose page is
+    /// gone opens its site). Only URL requests come this way; `opener` is nil.
+    func newTabRequestedOutsideTabs(_ request: OACNewTabRequest) {
+        guard !isShutDown, !request.hasPendingContents else {
+            request.decline()
+            return
+        }
+        broadcaster.yield(.newTabRequested(NewTabRequest(
+            opener: nil,
+            url: request.url,
+            disposition: NewTabDisposition(request.disposition),
+            hasUserGesture: request.hasUserGesture
+        )))
     }
 
     func newTabRequested(_ request: OACNewTabRequest, opener: EngineTabID) {
@@ -432,6 +452,24 @@ extension EngineError {
 extension OACColorScheme {
     init(_ scheme: WebColorScheme) {
         self = scheme == .dark ? .dark : .light
+    }
+}
+
+/// `OACApplicationDelegate` for the engine core (the core is not an `NSObject`).
+@MainActor
+final class ChromiumApplicationDelegate: NSObject, OACApplicationDelegate {
+    private weak var engine: ChromiumEngineCore?
+
+    init(engine: ChromiumEngineCore) {
+        self.engine = engine
+    }
+
+    func application(_ application: OACApplication, didRequestNewTab request: OACNewTabRequest) {
+        guard let engine else {
+            request.decline()
+            return
+        }
+        engine.newTabRequestedOutsideTabs(request)
     }
 }
 

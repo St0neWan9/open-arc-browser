@@ -106,6 +106,10 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
     private var actionLog: [String] = []
     private var broadcasters: [Profile.ID: AsyncBroadcaster<ExtensionEvent>] = [:]
     private var openPopup: FakeExtensionPopup?
+    /// Keyboard commands per extension (plan C26): command name → shortcut text.
+    private var commandsByExtension: [String: [String: String]] = [:]
+    private var commandLog: [String] = []
+    private let keyboardPopups = AsyncBroadcaster<ExtensionPopupOpenedFromKeyboard>()
 
     public init() {}
 
@@ -131,6 +135,60 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
             return broadcaster(profileID)
         }
         target.yield(.actionUpdated(extensionID: info.id, tabID: tabID))
+    }
+
+    // MARK: Keyboard commands and errors (plan C26)
+
+    /// The extension declares `commands` (name → shortcut, e.g. "c26-run": "⇧⌘Y"; the name
+    /// "_execute_action" runs its action).
+    public func simulateCommands(_ commands: [String: String], extensionID: String) {
+        lock.withLock { commandsByExtension[extensionID] = commands }
+    }
+
+    /// "<extension id>:<command>@<tab id>" for every named command sent. For tests.
+    public var commandsSent: [String] { lock.withLock { commandLog } }
+
+    /// The user pressed `shortcut` while `tabID` had the keyboard: like the Chromium engine, a
+    /// named command goes to its extension with the tab, `_execute_action` runs the action (and a
+    /// popup it opens comes out of `popupsOpenedFromKeyboard()`). Returns whether a command took
+    /// the key.
+    @discardableResult
+    public func simulateShortcut(_ shortcut: String, tabID: EngineTabID) async -> Bool {
+        let match: (extensionID: String, command: String)? = lock.withLock {
+            guard let profile = tabProfiles[tabID] else { return nil }
+            let enabled = Set((installedByProfile[profile] ?? []).filter(\.isEnabled).map(\.id))
+            for (extensionID, commands) in commandsByExtension where enabled.contains(extensionID) {
+                if let command = commands.first(where: { $0.value == shortcut })?.key {
+                    return (extensionID, command)
+                }
+            }
+            return nil
+        }
+        guard let match else { return false }
+        if match.command == "_execute_action" {
+            if let popup = await runAction(match.extensionID, on: tabID) {
+                keyboardPopups.yield(ExtensionPopupOpenedFromKeyboard(popup: popup))
+            }
+        } else {
+            lock.withLock { commandLog.append("\(match.extensionID):\(match.command)@\(tabID)") }
+        }
+        return true
+    }
+
+    /// The extension's error count changed (plan C26): it reports a runtime error, or its errors
+    /// were cleared.
+    public func simulateErrors(count: Int, extensionID: String, profileID: Profile.ID) {
+        let target: AsyncBroadcaster<ExtensionEvent> = lock.withLock {
+            if let index = installedByProfile[profileID]?.firstIndex(where: { $0.id == extensionID }) {
+                installedByProfile[profileID]?[index].errorCount = count
+            }
+            return broadcaster(profileID)
+        }
+        target.yield(.errorsChanged(extensionID: extensionID))
+    }
+
+    public func popupsOpenedFromKeyboard() -> AsyncStream<ExtensionPopupOpenedFromKeyboard> {
+        keyboardPopups.subscribe()
     }
 
     /// FakeEngine tells this object which profile a tab belongs to.

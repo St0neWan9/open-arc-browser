@@ -180,6 +180,12 @@ public final class ChromiumTab: BrowserTab, @unchecked Sendable {
     public func neverTranslateSite() async {
         await core.perform { $0.neverTranslateSite() }
     }
+
+    // MARK: Session history (plan C20, `-[OACTab sessionHistory]`)
+
+    public func sessionHistory() async -> TabSessionHistory? {
+        await core.sessionHistory()
+    }
 }
 
 // MARK: - Channel
@@ -353,6 +359,11 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
     func enterPictureInPicture(automatically: Bool) -> Bool {
         guard let tab, !tab.isClosed else { return false }
         return tab.enterPictureInPicture(automatically: automatically)
+    }
+
+    func sessionHistory() -> TabSessionHistory? {
+        guard let tab, !tab.isClosed, let data = tab.sessionHistory else { return nil }
+        return TabSessionHistory(data: data)
     }
 
     func selectedText() async -> String {
@@ -612,6 +623,28 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         }, make: { id, reply in
             .unresponsivePage(UnresponsivePagePrompt(
                 id: id, origin: request.origin.map(SiteOrigin.init(bridge:)), reply: reply
+            ))
+        })
+    }
+
+    /// C23: an engine info bar above the page.
+    func tab(_ tab: OACTab, showInfoBar request: OACInfoBarRequest) -> Bool {
+        deliver(request, default: InfoBarReply.leaveOpen, answer: { request, answer in
+            switch answer {
+            case .accept: request.accept()
+            case .decline: request.decline()
+            case .close: request.close()
+            case .openLink: request.openLink()
+            case .leaveOpen: request.cancel()
+            }
+        }, make: { id, reply in
+            var buttons: InfoBarRequest.Buttons = []
+            if request.buttons.contains(.OK) { buttons.insert(.ok) }
+            if request.buttons.contains(.cancel) { buttons.insert(.cancel) }
+            return .infoBar(InfoBarRequest(
+                id: id, message: request.message, linkTitle: request.linkTitle, buttons: buttons,
+                okTitle: request.okButtonTitle, cancelTitle: request.cancelButtonTitle,
+                isCloseable: request.isCloseable, reply: reply
             ))
         })
     }

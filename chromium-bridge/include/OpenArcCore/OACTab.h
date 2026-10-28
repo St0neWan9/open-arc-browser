@@ -75,6 +75,12 @@ OAC_EXPORT
 /// Default light.
 @property (nonatomic) OACColorScheme preferredColorScheme;
 
+/// A back/forward list saved earlier with `-[OACTab sessionHistory]` (plan C20). When the bridge
+/// can read it, the tab starts with those entries and loads the selected one (with its saved
+/// scroll position and form contents), and `initialURL` is ignored; data it cannot read (another
+/// format version, truncated) is ignored and `initialURL` loads as usual. nil: a new history.
+@property (nonatomic, copy, nullable) NSData *sessionHistory;
+
 - (instancetype)initWithProfile:(OACProfile *)profile NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
@@ -225,6 +231,15 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// Reload. `bypassingCache`: View ▸ Force Refresh the Page ([01 §View] observed item).
 - (BOOL)reloadBypassingCache:(BOOL)bypassingCache error:(NSError **)error NS_SWIFT_NAME(reload(bypassingCache:));
 - (BOOL)stopLoadingWithError:(NSError **)error;
+
+// MARK: Session history (plan C20, `BrowserTab.sessionHistory`)
+
+/// The tab's back/forward list as opaque data for `OACTabConfiguration.sessionHistory`: the
+/// entries around the current one (at most 50, the renderer's own limit) with their URLs, titles
+/// and page state (scroll position, form contents). nil for a tab with no committed page and
+/// after `-close`. The format is the bridge's own and versioned; the shell stores it per device
+/// and never syncs it.
+@property (nonatomic, readonly, copy, nullable) NSData *sessionHistory;
 
 // MARK: Audio (`BrowserTab.setMuted`)
 

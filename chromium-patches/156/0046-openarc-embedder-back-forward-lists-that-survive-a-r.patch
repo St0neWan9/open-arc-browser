@@ -1,0 +1,321 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 18:43:14 -0700
+Subject: [PATCH] openarc: embedder: back/forward lists that survive a relaunch
+
+Plan C20. With "restore windows from previous session" on, a restored tab
+gets its back/forward list back, not only its URL.
+
+- -[OACTab sessionHistory] returns the tab's navigation entries (at most
+  the renderer's 50, around the current one; the initial blank entry is
+  left out) as opaque data: a small versioned envelope (magic, version,
+  selected index, count) around //components/sessions'
+  SerializedNavigationEntry pickles, the per-entry encoding Chrome's
+  session service uses (URL, title, page state with scroll position and
+  form contents, referrer, transition, timestamps). nil before the first
+  commit and after -close.
+- OACTabConfiguration.sessionHistory restores such data into the new
+  tab's navigation controller (NavigationController::Restore, then
+  LoadIfNecessary, since a hidden tab is not activated) and ignores
+  initialURL. Data the bridge cannot read (another version, truncated)
+  is ignored and initialURL loads as before.
+
+The shell stores the data per device next to its workspace and never
+syncs it.
+---
+ openarc/BUILD.gn                              |   2 +
+ openarc/bridge/oac_session_history.mm         | 127 ++++++++++++++++++
+ openarc/bridge/oac_session_history_internal.h |  33 +++++
+ openarc/bridge/oac_tab.mm                     |  23 +++-
+ openarc/bridge/public/OpenArcCore/OACTab.h    |  15 +++
+ 5 files changed, 199 insertions(+), 1 deletion(-)
+ create mode 100644 openarc/bridge/oac_session_history.mm
+ create mode 100644 openarc/bridge/oac_session_history_internal.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index c6b8d0d1aca4..52d6baef5d3b 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -270,6 +270,8 @@ source_set("bridge") {
+               "bridge/oac_profile_internal.h",
+               "bridge/oac_requests.mm",
+               "bridge/oac_requests_internal.h",
++              "bridge/oac_session_history.mm",
++              "bridge/oac_session_history_internal.h",
+               "bridge/oac_site_settings.mm",
+               "bridge/oac_site_settings_internal.h",
+               "bridge/oac_tab.mm",
+diff --git a/openarc/bridge/oac_session_history.mm b/openarc/bridge/oac_session_history.mm
+new file mode 100644
+index 000000000000..a378a701d19f
+--- /dev/null
++++ b/openarc/bridge/oac_session_history.mm
+@@ -0,0 +1,127 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "openarc/bridge/oac_session_history_internal.h"
++
++#include <stdint.h>
++
++#include <algorithm>
++#include <memory>
++#include <vector>
++
++#include "base/apple/foundation_util.h"
++#include "base/containers/span.h"
++#include "base/pickle.h"
++#include "components/sessions/content/content_serialized_navigation_builder.h"
++#include "components/sessions/core/serialized_navigation_entry.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/restore_type.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/common/history/session_history_constants.h"
++
++namespace {
++
++// "OAsh": tells our blob from anything else a caller might pass.
++constexpr uint32_t kMagic = 0x4f417368;
++// Bump when the envelope changes; older blobs are then refused (the tab loads
++// its URL alone, as before C20).
++constexpr int kVersion = 1;
++// Bytes of URL, title and page state kept per entry. Chrome's session service
++// allows about 63 KB; a page whose state is larger loses its form contents
++// and scroll position, not its entry.
++constexpr int kMaxEntryBytes = 64 * 1024;
++
++}  // namespace
++
++NSData* OACSerializeSessionHistory(content::WebContents* web_contents) {
++  if (!web_contents) {
++    return nil;
++  }
++  content::NavigationController& controller = web_contents->GetController();
++  const int count = controller.GetEntryCount();
++  const int current = controller.GetCurrentEntryIndex();
++  if (count <= 0 || current < 0) {
++    return nil;
++  }
++  // The renderer keeps at most kMaxSessionHistoryEntries; keep a window of
++  // that size around the current entry, as many forward entries as there are.
++  const int limit = blink::kMaxSessionHistoryEntries;
++  int first = std::max(0, current - (limit - 1));
++  int last = std::min(count - 1, first + limit - 1);
++
++  std::vector<sessions::SerializedNavigationEntry> entries;
++  int selected = -1;
++  for (int i = first; i <= last; ++i) {
++    content::NavigationEntry* entry = controller.GetEntryAtIndex(i);
++    // The blank entry a new tab starts with is not history.
++    if (!entry || entry->IsInitialEntry() || !entry->GetURL().is_valid()) {
++      continue;
++    }
++    if (i == current) {
++      selected = static_cast<int>(entries.size());
++    }
++    entries.push_back(
++        sessions::ContentSerializedNavigationBuilder::FromNavigationEntry(
++            static_cast<int>(entries.size()), entry));
++  }
++  if (entries.empty() || selected < 0) {
++    return nil;
++  }
++
++  base::Pickle pickle;
++  pickle.WriteUInt32(kMagic);
++  pickle.WriteInt(kVersion);
++  pickle.WriteInt(selected);
++  pickle.WriteInt(static_cast<int>(entries.size()));
++  for (const sessions::SerializedNavigationEntry& entry : entries) {
++    entry.WriteToPickle(kMaxEntryBytes, &pickle);
++  }
++  base::span<const uint8_t> bytes = pickle.AsBytes();
++  NSMutableData* data = [NSMutableData dataWithLength:bytes.size()];
++  base::apple::NSMutableDataToSpan(data).copy_from(bytes);
++  return data;
++}
++
++bool OACRestoreSessionHistory(content::WebContents* web_contents,
++                              NSData* data) {
++  if (!web_contents || data.length == 0) {
++    return false;
++  }
++  // The pickle reader needs its own aligned copy.
++  base::Pickle pickle = base::Pickle::WithData(base::apple::NSDataToSpan(data));
++  base::PickleIterator iterator(pickle);
++  uint32_t magic = 0;
++  int version = 0;
++  int selected = -1;
++  int count = 0;
++  if (!iterator.ReadUInt32(&magic) || magic != kMagic ||
++      !iterator.ReadInt(&version) || version != kVersion ||
++      !iterator.ReadInt(&selected) || !iterator.ReadInt(&count) ||
++      count <= 0 || count > blink::kMaxSessionHistoryEntries || selected < 0 ||
++      selected >= count) {
++    return false;
++  }
++  std::vector<sessions::SerializedNavigationEntry> navigations(
++      static_cast<size_t>(count));
++  for (sessions::SerializedNavigationEntry& navigation : navigations) {
++    if (!navigation.ReadFromPickle(&iterator) ||
++        !navigation.virtual_url().is_valid()) {
++      return false;
++    }
++  }
++  for (size_t i = 0; i < navigations.size(); ++i) {
++    navigations[i].set_index(static_cast<int>(i));
++  }
++
++  content::NavigationController& controller = web_contents->GetController();
++  std::vector<std::unique_ptr<content::NavigationEntry>> entries =
++      sessions::ContentSerializedNavigationBuilder::ToNavigationEntries(
++          navigations, web_contents->GetBrowserContext());
++  controller.Restore(selected, content::RestoreType::kRestored, &entries);
++  // A hidden tab is not activated by content, so load the selected entry now
++  // (with its saved page state: scroll position, form contents).
++  controller.LoadIfNecessary();
++  return true;
++}
+diff --git a/openarc/bridge/oac_session_history_internal.h b/openarc/bridge/oac_session_history_internal.h
+new file mode 100644
+index 000000000000..7c0ecf82fb73
+--- /dev/null
++++ b/openarc/bridge/oac_session_history_internal.h
+@@ -0,0 +1,33 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_SESSION_HISTORY_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_SESSION_HISTORY_INTERNAL_H_
++
++#import <Foundation/Foundation.h>
++
++namespace content {
++class WebContents;
++}
++
++// Plan C20: a tab's back/forward list as an opaque blob
++// (-[OACTab sessionHistory]) and back (OACTabConfiguration.sessionHistory).
++//
++// The blob is our own small envelope (a magic number, a format version, the
++// selected index and the entry count) around //components/sessions'
++// SerializedNavigationEntry pickles, the same per-entry encoding Chrome's
++// session service writes (URL, title, page state with scroll position and
++// form contents, referrer, transition, timestamps).
++
++// The navigation list of |web_contents| (at most 50 entries, the renderer's
++// session history limit, kept around the current one); nil when there is no
++// committed page yet.
++NSData* OACSerializeSessionHistory(content::WebContents* web_contents);
++
++// Restores |data| into the fresh navigation controller of |web_contents| and
++// starts loading the selected entry. Returns false (and changes nothing) for
++// data it cannot read: another envelope version, truncated or empty data.
++bool OACRestoreSessionHistory(content::WebContents* web_contents, NSData* data);
++
++#endif  // OPENARC_BRIDGE_OAC_SESSION_HISTORY_INTERNAL_H_
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index f9a75957d5e1..59f42ff75d8b 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -83,6 +83,7 @@
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
++#import "openarc/bridge/oac_session_history_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
+ #import "openarc/bridge/oac_translation_internal.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+@@ -518,6 +519,7 @@ @implementation OACTabConfiguration {
+   BOOL _startsHidden;
+   CGSize _initialSize;
+   OACColorScheme _preferredColorScheme;
++  NSData* _sessionHistory;
+ }
+ 
+ - (instancetype)initWithProfile:(OACProfile*)profile {
+@@ -570,6 +572,12 @@ - (OACColorScheme)preferredColorScheme {
+ - (void)setPreferredColorScheme:(OACColorScheme)preferredColorScheme {
+   _preferredColorScheme = preferredColorScheme;
+ }
++- (NSData*)sessionHistory {
++  return _sessionHistory;
++}
++- (void)setSessionHistory:(NSData*)sessionHistory {
++  _sessionHistory = [sessionHistory copy];
++}
+ 
+ - (id)copyWithZone:(NSZone*)zone {
+   OACTabConfiguration* copy =
+@@ -580,6 +588,7 @@ - (id)copyWithZone:(NSZone*)zone {
+   copy.startsHidden = _startsHidden;
+   copy.initialSize = _initialSize;
+   copy.preferredColorScheme = _preferredColorScheme;
++  copy.sessionHistory = _sessionHistory;
+   return copy;
+ }
+ 
+@@ -675,7 +684,15 @@ - (instancetype)initWithIdentifier:(NSUUID*)identifier
+                        profile:profile
+                    colorScheme:configuration.preferredColorScheme
+                           size:configuration.initialSize];
+-    if (initialURL.is_valid()) {
++    // Plan C20: a saved back/forward list replaces the initial URL; data the
++    // bridge cannot read falls back to it.
++    const bool restored =
++        configuration.sessionHistory &&
++        OACRestoreSessionHistory(_webContents.get(),
++                                 configuration.sessionHistory);
++    if (restored) {
++      [self refreshState];
++    } else if (initialURL.is_valid()) {
+       [self loadGURL:initialURL];
+     }
+   }
+@@ -831,6 +848,10 @@ - (BOOL)isClosed {
+   return _closed;
+ }
+ 
++- (NSData*)sessionHistory {
++  return _closed ? nil : OACSerializeSessionHistory(_webContents.get());
++}
++
+ - (NSView*)nativeView {
+   return _webContents ? _webContents->GetNativeView().GetNativeNSView() : nil;
+ }
+diff --git a/openarc/bridge/public/OpenArcCore/OACTab.h b/openarc/bridge/public/OpenArcCore/OACTab.h
+index a943778da238..e31e2f69d813 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTab.h
++++ b/openarc/bridge/public/OpenArcCore/OACTab.h
+@@ -75,6 +75,12 @@ OAC_EXPORT
+ /// Default light.
+ @property (nonatomic) OACColorScheme preferredColorScheme;
+ 
++/// A back/forward list saved earlier with `-[OACTab sessionHistory]` (plan C20). When the bridge
++/// can read it, the tab starts with those entries and loads the selected one (with its saved
++/// scroll position and form contents), and `initialURL` is ignored; data it cannot read (another
++/// format version, truncated) is ignored and `initialURL` loads as usual. nil: a new history.
++@property (nonatomic, copy, nullable) NSData *sessionHistory;
++
+ - (instancetype)initWithProfile:(OACProfile *)profile NS_DESIGNATED_INITIALIZER;
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;
+@@ -226,6 +232,15 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ - (BOOL)reloadBypassingCache:(BOOL)bypassingCache error:(NSError **)error NS_SWIFT_NAME(reload(bypassingCache:));
+ - (BOOL)stopLoadingWithError:(NSError **)error;
+ 
++// MARK: Session history (plan C20, `BrowserTab.sessionHistory`)
++
++/// The tab's back/forward list as opaque data for `OACTabConfiguration.sessionHistory`: the
++/// entries around the current one (at most 50, the renderer's own limit) with their URLs, titles
++/// and page state (scroll position, form contents). nil for a tab with no committed page and
++/// after `-close`. The format is the bridge's own and versioned; the shell stores it per device
++/// and never syncs it.
++@property (nonatomic, readonly, copy, nullable) NSData *sessionHistory;
++
+ // MARK: Audio (`BrowserTab.setMuted`)
+ 
+ - (void)setMuted:(BOOL)muted;
