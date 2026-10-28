@@ -1,0 +1,202 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Wed, 28 Oct 2026 00:21:44 -0700
+Subject: [PATCH] openarc: embedder: extension tabs and windows open in the
+ shell
+
+Plan C31. The bridge registers the embedder tab opener of the previous
+patch (OACInstallExtensionHooks): the WebContents is made right away in the
+extension's profile, with //chrome's tab helpers (so it has the session id
+the extension gets back) and its URL loading, and goes to the shell as an
+OACNewTabRequest with pending contents and no opener through
+-[OACApplicationDelegate application:didRequestNewTab:] (tab dispositions
+foreground / background, windows.create new window / popup). The shell
+adopts it like a script-opened window; a request nobody adopts is declined
+and its contents dropped.
+---
+ openarc/bridge/oac_extensions.mm              | 88 +++++++++++++++++++
+ openarc/bridge/oac_extensions_internal.h      |  6 +-
+ .../public/OpenArcCore/OACApplication.h       |  7 +-
+ .../bridge/public/OpenArcCore/OACExtensions.h | 12 ++-
+ 4 files changed, 106 insertions(+), 7 deletions(-)
+
+diff --git a/openarc/bridge/oac_extensions.mm b/openarc/bridge/oac_extensions.mm
+index af81228a5269..2e9a32988e7a 100644
+--- a/openarc/bridge/oac_extensions.mm
++++ b/openarc/bridge/oac_extensions.mm
+@@ -51,6 +51,7 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "content/public/browser/keyboard_event_processing_result.h"
++#include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+@@ -82,10 +83,13 @@
+ #include "ui/gfx/image/image.h"
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/gfx/image/image_skia_rep.h"
++#include "openarc/browser/openarc_tab_helpers.h"
++#include "ui/base/page_transition_types.h"
+ #include "url/gurl.h"
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_requests_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
+ 
+ using extensions::Extension;
+@@ -1270,6 +1274,88 @@ void ShowInstallConfirmation(
+   return result;
+ }
+ 
++// The bridge profile (or its off-the-record variant) of a Chrome profile.
++OACProfile* BridgeProfileForExtensions(Profile* profile) {
++  if (!profile) {
++    return nil;
++  }
++  for (OACProfile* candidate in OACApplication.sharedApplication
++           .loadedProfiles) {
++    if (candidate.valid &&
++        candidate.chromeProfile == profile->GetOriginalProfile()) {
++      return profile->IsOffTheRecord() ? candidate.offTheRecordProfile
++                                       : candidate;
++    }
++  }
++  return nil;
++}
++
++OACNewTabDisposition DispositionForExtensionTab(
++    extensions::ExtensionTabUtil::EmbedderTabDisposition disposition) {
++  using Disposition = extensions::ExtensionTabUtil::EmbedderTabDisposition;
++  switch (disposition) {
++    case Disposition::kForegroundTab:
++      return OACNewTabDispositionForegroundTab;
++    case Disposition::kBackgroundTab:
++      return OACNewTabDispositionBackgroundTab;
++    case Disposition::kNewWindow:
++      return OACNewTabDispositionNewWindow;
++    case Disposition::kPopup:
++      return OACNewTabDispositionPopup;
++  }
++  return OACNewTabDispositionForegroundTab;
++}
++
++// ExtensionTabUtil's embedder tab opener (plan C31): chrome.tabs.create,
++// chrome.windows.create and chrome.runtime.openOptionsPage. The extension
++// gets the new tab's id right away, so the WebContents is made here (with
++// //chrome's tab helpers, which give it its session id) and starts loading;
++// the shell adopts it like a script-opened window
++// (-[OACApplicationDelegate application:didRequestNewTab:] with pending
++// contents and no opener) and places it.
++content::WebContents* OpenTabForExtension(
++    content::BrowserContext* browser_context,
++    const GURL& url,
++    extensions::ExtensionTabUtil::EmbedderTabDisposition disposition) {
++  OACApplication* application = OACApplication.sharedApplication;
++  OACProfile* profile =
++      BridgeProfileForExtensions(Profile::FromBrowserContext(browser_context));
++  if (!profile || application.state != OACApplicationStateRunning ||
++      ![application.delegate
++          respondsToSelector:@selector(application:didRequestNewTab:)]) {
++    return nullptr;
++  }
++  content::WebContents::CreateParams params(browser_context);
++  params.initially_hidden = true;
++  std::unique_ptr<content::WebContents> contents =
++      content::WebContents::Create(params);
++  openarc::TabHelpersAccess::AttachTabHelpers(contents.get());
++  content::NavigationController::LoadURLParams load(url);
++  load.transition_type = ui::PAGE_TRANSITION_LINK;
++  contents->GetController().LoadURLWithParams(load);
++  content::WebContents* raw = contents.get();
++  OACNewTabRequest* request = [[OACNewTabRequest alloc]
++       initWithOpener:nil
++              profile:profile
++                  URL:net::NSURLWithGURL(url)
++          disposition:DispositionForExtensionTab(disposition)
++       hasUserGesture:YES
++       requestedFrame:CGRectNull
++      pendingContents:std::move(contents)];
++  // From a posted task (OACDefines.h): never inside the extension function.
++  OACPostToMainThread(^{
++    OACApplication* app = OACApplication.sharedApplication;
++    id<OACApplicationDelegate> delegate = app.delegate;
++    if (app.state == OACApplicationStateRunning &&
++        [delegate respondsToSelector:@selector(application:didRequestNewTab:)]) {
++      [delegate application:app didRequestNewTab:request];
++    } else {
++      [request decline];
++    }
++  });
++  return raw;
++}
++
+ }  // namespace
+ 
+ void OACInstallExtensionHooks() {
+@@ -1277,4 +1363,6 @@ void OACInstallExtensionHooks() {
+       base::BindRepeating(&ShowInstallConfirmation));
+   extensions::ExtensionTabUtil::SetEmbedderTabList(
+       base::BindRepeating(&ListTabs));
++  extensions::ExtensionTabUtil::SetEmbedderTabOpener(
++      base::BindRepeating(&OpenTabForExtension));
+ }
+diff --git a/openarc/bridge/oac_extensions_internal.h b/openarc/bridge/oac_extensions_internal.h
+index a9cc23828212..f3df5554f406 100644
+--- a/openarc/bridge/oac_extensions_internal.h
++++ b/openarc/bridge/oac_extensions_internal.h
+@@ -28,8 +28,10 @@ class ExtensionCommandRegistry;
+ @end
+ 
+ // Registers the bridge's hooks in //chrome's extension code (plan C14): the
+-// install confirmation (ExtensionInstallPrompt's embedder dialog) and the
+-// embedder tab list of chrome.tabs.query. Called once when the engine starts.
++// install confirmation (ExtensionInstallPrompt's embedder dialog), the
++// embedder tab list of chrome.tabs.query, and (plan C31) the embedder tab
++// opener of chrome.tabs.create, chrome.windows.create and
++// chrome.runtime.openOptionsPage. Called once when the engine starts.
+ void OACInstallExtensionHooks();
+ 
+ #endif  // OPENARC_BRIDGE_OAC_EXTENSIONS_INTERNAL_H_
+diff --git a/openarc/bridge/public/OpenArcCore/OACApplication.h b/openarc/bridge/public/OpenArcCore/OACApplication.h
+index 9a730ab993e5..69f7cd68092f 100644
+--- a/openarc/bridge/public/OpenArcCore/OACApplication.h
++++ b/openarc/bridge/public/OpenArcCore/OACApplication.h
+@@ -163,8 +163,11 @@ NS_SWIFT_UI_ACTOR
+ @protocol OACApplicationDelegate <NSObject>
+ @optional
+ 
+-/// Something outside any tab wants a new tab: an extension (`chrome.tabs.create`), a notification
+-/// click, a WebUI link. `request.opener` is nil. Maps to `EngineEvent.newTabRequested`.
++/// Something outside any tab wants a new tab: an extension (`chrome.tabs.create`,
++/// `chrome.windows.create`, `chrome.runtime.openOptionsPage`), a notification click, a WebUI link.
++/// `request.opener` is nil; `request.profile` is the profile it belongs to. Extension requests
++/// carry the tab the engine already made (`hasPendingContents`, plan C31): adopt or decline it as
++/// for a script-opened window. Maps to `EngineEvent.newTabRequested`.
+ - (void)application:(OACApplication *)application didRequestNewTab:(OACNewTabRequest *)request;
+ 
+ /// A profile's last off-the-record tab closed and its off-the-record context was destroyed
+diff --git a/openarc/bridge/public/OpenArcCore/OACExtensions.h b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+index 362e35bbea88..36cf46095519 100644
+--- a/openarc/bridge/public/OpenArcCore/OACExtensions.h
++++ b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+@@ -30,9 +30,15 @@
+ // switch is on); chrome://extensions lists them under "Errors". `OACExtensionInfo.errorCount`
+ // counts them.
+ //
+-// Not covered: the extension context menu, side panels, `chrome.action.openPopup()`, and APIs that
+-// need a Chrome `Browser` window (`chrome.tabs.create`, `chrome.windows.*`,
+-// `chrome.runtime.openOptionsPage`): they fail as in a Chrome without windows. "Manage
++// Tabs and windows (plan C31): `chrome.tabs.create`, `chrome.windows.create` and
++// `chrome.runtime.openOptionsPage` open in the shell. The engine makes the tab (the extension gets
++// its id back) and hands it to `-[OACApplicationDelegate application:didRequestNewTab:]` as a
++// request with pending contents and no opener; `windows.create` asks for a new window (or a popup).
++// Moving tabs between windows, incognito windows and window ids other than the current one are
++// errors for the extension.
++//
++// Not covered: the extension context menu, side panels, `chrome.action.openPopup()` and the rest
++// of `chrome.windows.*` (no window objects): they fail as in a Chrome without windows. "Manage
+ // Extensions…" opens chrome://extensions in a tab until a native page exists.
+ 
+ #import <OpenArcCore/OACDefines.h>

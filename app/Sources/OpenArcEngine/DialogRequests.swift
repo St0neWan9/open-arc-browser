@@ -15,7 +15,8 @@ import os
 //   `TabEvent.dialogCancelled(id)` and the reply ignores answers from then on.
 // The look of every dialog is not in docs/arc-spec (unknown); the shell designs them.
 // Plan C13 adds the password manager's save prompt and the autofill dropdown ([00 §A] observed:
-// "inherited from the engine; prompts drawn by the shell, style not captured"). F1 step 2 adds the
+// "inherited from the engine; prompts drawn by the shell, style not captured"); plan C30 adds
+// Autofill's address and payment-card save prompts on the same footing. F1 step 2 adds the
 // unresponsive-page prompt (C22, [00 §A] inferred (analysis): "Page unresponsive" dialog for a hung
 // page, wait or leave), the client-certificate picker (C25, [00 §A] inferred (analysis)) and the
 // passkey / security-key dialog (C21, [00 §A] inferred (analysis): drawn by the shell) and engine
@@ -338,6 +339,119 @@ public enum PasswordSaveReply: Hashable, Sendable {
     /// Not now / no thanks.
     case decline
     case dismiss
+}
+
+// MARK: - Address and payment-card save prompts (plan C30)
+
+/// Autofill offers to save the address the user just submitted in a form, or to update a saved
+/// address with the submitted values. The engine decides when (a complete address, not saved yet,
+/// not refused too often); texts are formatted by the engine. Bridge: `OACAddressSavePrompt`.
+/// [00 §A] observed: "inherited from the engine; prompts drawn by the shell, style not
+/// captured"; look unknown.
+public struct AddressSavePrompt: Identifiable, Hashable, Sendable {
+    public enum Kind: String, Hashable, Sendable {
+        case save
+        /// New values for a saved address (`changes` lists them).
+        case update
+    }
+
+    /// One changed value of an update prompt.
+    public struct Change: Hashable, Sendable {
+        public enum Field: String, Hashable, Sendable {
+            case name
+            /// The postal address as one block.
+            case address
+            case email
+            case phone
+        }
+
+        public var field: Field
+        /// The saved value (empty when there was none).
+        public var oldValue: String
+        public var newValue: String
+
+        public init(field: Field, oldValue: String, newValue: String) {
+            self.field = field
+            self.oldValue = oldValue
+            self.newValue = newValue
+        }
+    }
+
+    public let id: UUID
+    public let origin: SiteOrigin?
+    public let kind: Kind
+    /// Name and postal address as they would be saved, several lines.
+    public let addressSummary: String
+    /// May be empty.
+    public let email: String
+    /// May be empty.
+    public let phone: String
+    /// Update prompts only.
+    public let changes: [Change]
+    public let reply: DialogReply<AutofillSaveReply>
+
+    public init(
+        id: UUID, origin: SiteOrigin?, kind: Kind = .save, addressSummary: String, email: String = "",
+        phone: String = "", changes: [Change] = [], reply: DialogReply<AutofillSaveReply>
+    ) {
+        self.id = id
+        self.origin = origin
+        self.kind = kind
+        self.addressSummary = addressSummary
+        self.email = email
+        self.phone = phone
+        self.changes = changes
+        self.reply = reply
+    }
+}
+
+/// Autofill offers to save the payment card the user just submitted, in the profile on this Mac
+/// (never uploaded). The card number stays in the engine. Bridge: `OACCardSavePrompt`. [00 §A]
+/// observed (see `AddressSavePrompt`); look unknown.
+public struct CardSavePrompt: Identifiable, Hashable, Sendable {
+    public enum Kind: String, Hashable, Sendable {
+        /// A new card, without its security code.
+        case card
+        /// A new card with the security code the form submitted.
+        case cardWithSecurityCode
+        /// Only the security code of a card saved earlier.
+        case securityCodeOnly
+    }
+
+    public let id: UUID
+    public let origin: SiteOrigin?
+    public let kind: Kind
+    /// "Visa", "Mastercard"…; may be empty.
+    public let network: String
+    public let lastFourDigits: String
+    /// "MM/YY"; may be empty.
+    public let expiration: String
+    /// May be empty.
+    public let cardholderName: String
+    public let reply: DialogReply<AutofillSaveReply>
+
+    public init(
+        id: UUID, origin: SiteOrigin?, kind: Kind = .card, network: String, lastFourDigits: String,
+        expiration: String = "", cardholderName: String = "", reply: DialogReply<AutofillSaveReply>
+    ) {
+        self.id = id
+        self.origin = origin
+        self.kind = kind
+        self.network = network
+        self.lastFourDigits = lastFourDigits
+        self.expiration = expiration
+        self.cardholderName = cardholderName
+        self.reply = reply
+    }
+}
+
+/// Answer to an address or card save prompt. Default: `.ignore` (closed without a choice; the
+/// engine counts it and stops offering after a few, Chromium's rule).
+public enum AutofillSaveReply: Hashable, Sendable {
+    case save
+    /// "No thanks".
+    case decline
+    case ignore
 }
 
 /// One row of the autofill dropdown.
@@ -892,6 +1006,10 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
     case passwordSave(PasswordSavePrompt)
     /// Autofill dropdown under the focused field (plan C13). Not modal.
     case autofillPopup(AutofillPopup)
+    /// Autofill's address save / update prompt (plan C30).
+    case addressSave(AddressSavePrompt)
+    /// Autofill's payment-card save prompt (plan C30).
+    case cardSave(CardSavePrompt)
     /// Extension install confirmation (plan C14).
     case extensionInstall(ExtensionInstallPrompt)
     /// The page stopped responding (plan C22).
@@ -912,6 +1030,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.id
         case .passwordSave(let r): r.id
         case .autofillPopup(let r): r.id
+        case .addressSave(let r): r.id
+        case .cardSave(let r): r.id
         case .extensionInstall(let r): r.id
         case .unresponsivePage(let r): r.id
         case .clientCertificate(let r): r.id
@@ -929,6 +1049,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.origin
         case .passwordSave(let r): r.origin
         case .autofillPopup(let r): r.origin
+        case .addressSave(let r): r.origin
+        case .cardSave(let r): r.origin
         case .extensionInstall(let r): r.origin
         case .unresponsivePage(let r): r.origin
         case .clientCertificate(let r): r.origin
@@ -947,6 +1069,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.reply.isFinished
         case .passwordSave(let r): r.reply.isFinished
         case .autofillPopup(let r): r.reply.isFinished
+        case .addressSave(let r): r.reply.isFinished
+        case .cardSave(let r): r.reply.isFinished
         case .extensionInstall(let r): r.reply.isFinished
         case .unresponsivePage(let r): r.reply.isFinished
         case .clientCertificate(let r): r.reply.isFinished
@@ -966,6 +1090,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.reply.sendDefault()
         case .passwordSave(let r): r.reply.sendDefault()
         case .autofillPopup(let r): r.reply.sendDefault()
+        case .addressSave(let r): r.reply.sendDefault()
+        case .cardSave(let r): r.reply.sendDefault()
         case .extensionInstall(let r): r.reply.sendDefault()
         case .unresponsivePage(let r): r.reply.sendDefault()
         case .clientCertificate(let r): r.reply.sendDefault()
@@ -984,6 +1110,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .externalProtocol(let r): r.reply.withdraw()
         case .passwordSave(let r): r.reply.withdraw()
         case .autofillPopup(let r): r.reply.withdraw()
+        case .addressSave(let r): r.reply.withdraw()
+        case .cardSave(let r): r.reply.withdraw()
         case .extensionInstall(let r): r.reply.withdraw()
         case .unresponsivePage(let r): r.reply.withdraw()
         case .clientCertificate(let r): r.reply.withdraw()

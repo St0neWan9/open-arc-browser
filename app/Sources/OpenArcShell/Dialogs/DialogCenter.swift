@@ -6,16 +6,16 @@ import OpenArcDesign
 
 // Shell side of engine dialog requests (plan C7b / C12 / C13; chromium-bridge/SWIFT_PROTOCOL_CHANGES.md
 // §3). The engine raises JavaScript dialogs, HTTP auth, permission prompts, file choosers,
-// external-protocol prompts, password save prompts, autofill dropdowns, unresponsive-page
+// external-protocol prompts, password / address / card save prompts, autofill dropdowns, unresponsive-page
 // prompts (C22), client-certificate pickers (C25) and the WebAuthn dialog (C21) per tab (`BrowserTab.dialogRequests()`); this queue holds them per
 // tab and the views draw the head of each queue (TabDialogViews.swift).
 //
 // Decisions without evidence (the spec records none of these dialogs; all inferred):
 // - One FIFO queue per tab: a tab shows one dialog at a time, the next one after it is answered.
 // - Dialogs are tab-modal: they cover only that tab's web panel or split pane, never the window.
-// - Permission prompts and the password save prompt (C13) are a bubble under the sidebar's URL box
-//   when the tab is the selected tab and the sidebar shows; otherwise at the top left of the tab's
-//   panel.
+// - Permission prompts, the password save prompt (C13) and the address / card save prompts (C30)
+//   are a bubble under the sidebar's URL box when the tab is the selected tab and the sidebar
+//   shows; otherwise at the top left of the tab's panel.
 // - The autofill dropdown (C13) is not queued: one per tab, under its form field, beside whatever
 //   dialog shows.
 // - Engine info bars (C23, [00 §A] inferred (analysis)) are not queued either: every open bar of a
@@ -31,6 +31,8 @@ public enum DialogAnswer: Hashable, Sendable {
     case fileChooser(FileChooserReply)
     case externalProtocol(ExternalProtocolReply)
     case passwordSave(PasswordSaveReply)
+    case addressSave(AutofillSaveReply)
+    case cardSave(AutofillSaveReply)
     case autofillPopup(AutofillPopupReply)
     case extensionInstall(ExtensionInstallReply)
     case unresponsivePage(UnresponsivePageReply)
@@ -121,6 +123,8 @@ public final class DialogCenter: ObservableObject {
         case (.fileChooser(let r), .fileChooser(let a)): sent = r.reply.send(a)
         case (.externalProtocol(let r), .externalProtocol(let a)): sent = r.reply.send(a)
         case (.passwordSave(let r), .passwordSave(let a)): sent = r.reply.send(a)
+        case (.addressSave(let r), .addressSave(let a)): sent = r.reply.send(a)
+        case (.cardSave(let r), .cardSave(let a)): sent = r.reply.send(a)
         case (.autofillPopup(let r), .autofillPopup(let a)): sent = r.reply.send(a)
         case (.extensionInstall(let r), .extensionInstall(let a)): sent = r.reply.send(a)
         case (.unresponsivePage(let r), .unresponsivePage(let a)): sent = r.reply.send(a)
@@ -286,6 +290,38 @@ public struct DialogPresentation: Equatable, Sendable {
             fields = [.text(placeholder: "Username", initial: prompt.username)]
             checkbox = nil
             buttons = prompt.kind == .update ? ["Not Now", "Update"] : ["Never", "Not Now", "Save"]
+        case .addressSave(let prompt):
+            // C30: hangs under the URL box like the password prompt (Chrome anchors it to its
+            // address bar). [00 §A] observed: drawn by the shell, style not captured; wording is
+            // Chrome's meaning in our words: unknown.
+            style = .permissionBubble
+            if prompt.kind == .update {
+                title = "Update address?"
+                message = prompt.changes.map { change in
+                    let label = change.field.displayName
+                    return change.oldValue.isEmpty
+                        ? "\(label): \(change.newValue)"
+                        : "\(label): \(change.oldValue) → \(change.newValue)"
+                }.joined(separator: "\n")
+            } else {
+                title = "Save address?"
+                message = ([prompt.addressSummary, prompt.email, prompt.phone].filter { !$0.isEmpty }).joined(separator: "\n")
+            }
+            fields = []
+            checkbox = nil
+            buttons = ["No Thanks", prompt.kind == .update ? "Update" : "Save"]
+        case .cardSave(let prompt):
+            // C30: like the address prompt. Saved on this Mac only (Open Arc has no Google Payments).
+            style = .permissionBubble
+            title = prompt.kind == .securityCodeOnly ? "Save security code?" : "Save card?"
+            let card = [prompt.network, "••••" + prompt.lastFourDigits].filter { !$0.isEmpty }.joined(separator: " ")
+            var lines = [card]
+            if !prompt.expiration.isEmpty { lines.append("Expires " + prompt.expiration) }
+            if !prompt.cardholderName.isEmpty { lines.append(prompt.cardholderName) }
+            message = lines.joined(separator: "\n")
+            fields = []
+            checkbox = nil
+            buttons = ["No Thanks", "Save"]
         case .extensionInstall(let prompt):
             // Chrome's install dialog, tab-modal over the store page. The spec does not record the
             // Web Store flow (C14): title and buttons are Chrome's meaning in our words, unknown.
@@ -390,6 +426,10 @@ public struct DialogPresentation: Equatable, Sendable {
                 return .passwordSave(.save(username: edited == prompt.username ? nil : edited))
             }
             return .passwordSave(prompt.kind == .save && index == 0 ? .neverForThisSite : .decline)
+        case .addressSave:
+            return .addressSave(isDefaultButton ? .save : .decline)
+        case .cardSave:
+            return .cardSave(isDefaultButton ? .save : .decline)
         case .autofillPopup:
             return .autofillPopup(.dismiss)
         case .extensionInstall:
@@ -406,6 +446,18 @@ public struct DialogPresentation: Equatable, Sendable {
             // Buttons as in `buttons`: Cancel (when there is one) first, OK last.
             let isCancel = bar.buttons.contains(.cancel) && index == 0
             return .infoBar(isCancel || !bar.buttons.contains(.ok) ? .decline : .accept)
+        }
+    }
+}
+
+extension AddressSavePrompt.Change.Field {
+    /// Row label of an update prompt. Our wording: unknown.
+    var displayName: String {
+        switch self {
+        case .name: "Name"
+        case .address: "Address"
+        case .email: "Email"
+        case .phone: "Phone"
         }
     }
 }

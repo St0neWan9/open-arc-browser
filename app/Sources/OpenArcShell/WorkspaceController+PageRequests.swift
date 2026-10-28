@@ -23,6 +23,12 @@ import OpenArcEngine
 // - Requests from a tab this controller does not own are left to the controller that owns it;
 //   requests without an opener (extensions, notifications) go to the app's controller. A pending
 //   tab nobody adopts is declined by the engine when its opener closes.
+// - Extension APIs that need a window (plan C31, `docs/f1-review-final.md` 09 #17;
+//   `chrome.tabs.create`, `chrome.windows.create`, `chrome.runtime.openOptionsPage`) arrive
+//   without an opener but with the tab the engine already made (the extension holds its id) and
+//   the extension's profile: the tab opens in the window's Space when it uses that profile, else
+//   in the profile's first Space, and is adopted like a script-opened window. `.newWindow` (from
+//   `windows.create`) opens a new browser window on it.
 
 /// Bookkeeping for page-initiated tabs. One per `WorkspaceController`.
 @MainActor
@@ -104,7 +110,10 @@ extension WorkspaceController {
         }
 
         let window = openerTabID.flatMap(windowShowing) ?? activeWindowSidebar
-        guard let spaceID = openerTabID.flatMap(spaceOfOpener) ?? window?.selectedSpaceID ?? activeSpaceID else {
+        let windowSpace = window?.selectedSpaceID ?? activeSpaceID
+        guard let spaceID = openerTabID.flatMap(spaceOfOpener)
+                ?? request.profileID.flatMap({ spaceOfProfile($0, preferring: windowSpace) })
+                ?? windowSpace else {
             decline(request)
             return
         }
@@ -255,6 +264,14 @@ extension WorkspaceController {
     private func spaceOfOpener(_ opener: UUID) -> UUID? {
         guard let tab = workspace.tabs[opener] else { return nil }
         return tab.location.spaceID ?? windowShowing(opener)?.selectedSpaceID
+    }
+
+    /// The Space a tab of profile `profileID` opens in when no opener says (plan C31: an extension
+    /// opened it): `preferred` (the window's Space) when it uses that profile, else the first Space
+    /// of the profile in the dock's order; nil when none does (the caller uses `preferred`).
+    private func spaceOfProfile(_ profileID: UUID, preferring preferred: UUID?) -> UUID? {
+        if let preferred, workspace.spaces[preferred]?.profileID == profileID { return preferred }
+        return workspace.allLiveSpaces.first { $0.profileID == profileID }?.id
     }
 
     /// The window that has `tabID` on screen.

@@ -155,7 +155,9 @@ final class ChromiumEngineCore {
     private let additionalSwitches: [String]
     private let broadcaster: AsyncBroadcaster<EngineEvent>
     private(set) var tabs: [EngineTabID: ChromiumTab] = [:]
-    private var pending: [PendingTabToken: (request: OACNewTabRequest, opener: EngineTabID)] = [:]
+    /// Engine-made tabs waiting for `adoptTab` / `declineTab`; `opener` is nil for tabs an extension
+    /// opened (plan C31).
+    private var pending: [PendingTabToken: (request: OACNewTabRequest, opener: EngineTabID?)] = [:]
     private var isShutDown = false
     private var launchObserver: NSObjectProtocol?
     /// Receives the engine-wide bridge callbacks (requests from outside a tab). Strong: the
@@ -311,16 +313,28 @@ final class ChromiumEngineCore {
 
     /// A new tab asked for from outside any tab (plan C24: a click on a notification whose page is
     /// gone opens its site). Only URL requests come this way; `opener` is nil.
+    ///
+    /// Plan C31: extension APIs that need a window (`chrome.tabs.create`, `chrome.windows.create`,
+    /// `chrome.runtime.openOptionsPage`) come with the tab the engine already made (the extension
+    /// holds its id): the shell adopts it like a script-opened window, without an opener.
     func newTabRequestedOutsideTabs(_ request: OACNewTabRequest) {
-        guard !isShutDown, !request.hasPendingContents else {
+        guard !isShutDown else {
             request.decline()
             return
+        }
+        var token: PendingTabToken?
+        if request.hasPendingContents {
+            let newToken = PendingTabToken(UUID())
+            pending[newToken] = (request, nil)
+            token = newToken
         }
         broadcaster.yield(.newTabRequested(NewTabRequest(
             opener: nil,
             url: request.url,
             disposition: NewTabDisposition(request.disposition),
-            hasUserGesture: request.hasUserGesture
+            hasUserGesture: request.hasUserGesture,
+            pendingTab: token,
+            profileID: request.profile.identifier
         )))
     }
 
@@ -357,7 +371,7 @@ final class ChromiumEngineCore {
         } catch {
             throw EngineError(bridge: error)
         }
-        let profileID = tabs[entry.opener]?.profileID ?? entry.request.profile.identifier
+        let profileID = entry.opener.flatMap { tabs[$0]?.profileID } ?? entry.request.profile.identifier
         // The shell sends the tab's scheme right away for adopted tabs.
         return register(tab, profileID: profileID, colorScheme: .light)
     }

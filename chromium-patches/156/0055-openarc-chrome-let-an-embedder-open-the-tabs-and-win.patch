@@ -1,0 +1,367 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Wed, 28 Oct 2026 00:21:41 -0700
+Subject: [PATCH] openarc: chrome: let an embedder open the tabs and windows
+ extensions ask for
+
+Plan C31. Extension APIs that need a browser window find none in an app that
+embeds Chrome's browser process and shows its tabs itself
+(chrome::EmbedderOwnsUI(), where Chrome's Browser windows are never
+created): chrome.tabs.create failed with "No current window",
+chrome.windows.create with "Browser windows not allowed", and
+chrome.runtime.openOptionsPage resolved false.
+
+Adds ExtensionTabUtil::SetEmbedderTabOpener() (EmbedderTabDisposition:
+foreground tab, background tab, new window, popup). The embedder makes the
+tab's WebContents in the given profile, starts loading the URL and hands it
+to its UI; it returns that WebContents (no window, no index) or null. With
+an opener set:
+
+- tabs.create without a window id (or with the current window's) opens the
+  tab through it (active or not); the extension gets the tab object.
+  Extension pages of a spanning extension called from an incognito context
+  open in the original profile, as Chrome falls back to a regular window;
+  other off-the-record tabs, splitWithTabId and explicit window ids are
+  errors.
+- windows.create opens its first URL as a new window (a popup for type
+  "popup"/"panel"), further URLs as background tabs, and returns a window
+  object listing them. Moving an existing tab (tabId) and incognito windows
+  are errors.
+- runtime.openOptionsPage, and the "Extension options" link of
+  chrome://extensions in an embedder tab, bring an embedder tab that already
+  shows the options page forward (WebContentsDelegate::ActivateContents),
+  as Chrome's singleton tab does, or open it in a new foreground tab
+  (ExtensionTabUtil::OpenOptionsPageInEmbedder()).
+
+Nothing changes when no embedder registers an opener.
+---
+ .../runtime/chrome_runtime_api_delegate.cc    |  9 ++
+ .../browser/extensions/api/tabs/tabs_api.cc   | 97 +++++++++++++++++++
+ chrome/browser/extensions/api/tabs/tabs_api.h |  7 ++
+ .../browser/extensions/extension_tab_util.cc  | 66 +++++++++++++
+ .../browser/extensions/extension_tab_util.h   | 33 +++++++
+ 5 files changed, 212 insertions(+)
+
+diff --git a/chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.cc b/chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.cc
+index fb00714a3e96..917a1f5d7613 100644
+--- a/chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.cc
++++ b/chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.cc
+@@ -414,6 +414,15 @@ void ChromeRuntimeAPIDelegate::OpenOptionsPage(
+           *profile, /*include_incognito_or_parent=*/false);
+   const bool create_new_browser = !browser;
+ 
++  // Open Arc: an embedder that owns the UI opens the page in its own tab.
++  if (create_new_browser &&
++      extensions::ExtensionTabUtil::HasEmbedderTabOpener()) {
++    std::move(callback).Run(
++        extensions::ExtensionTabUtil::OpenOptionsPageInEmbedder(extension,
++                                                                profile));
++    return;
++  }
++
+   if (create_new_browser) {
+     if (GetBrowserWindowCreationStatusForProfile(*profile) !=
+         BrowserWindowInterface::CreationStatus::kOk) {
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
+index ec24e6ac63d6..6d016e00bd78 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -79,6 +79,7 @@
+ #include "ui/base/page_transition_types.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/display/screen.h"
++#include "url/url_constants.h"
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+@@ -1051,6 +1052,14 @@ ExtensionFunction::ResponseAction WindowsCreateFunction::Run() {
+     return RespondNow(Error(tabs_constants::kInvalidWindowStateError));
+   }
+ 
++  // Open Arc: an embedder that owns the UI opens the window itself (Chrome's
++  // browser windows are never created there).
++  if (ExtensionTabUtil::HasEmbedderTabOpener() &&
++      GetBrowserWindowCreationStatusForProfile(*window_profile) !=
++          BrowserWindowInterface::CreationStatus::kOk) {
++    return RespondNow(CreateInEmbedder(window_profile));
++  }
++
+   // Look for optional tab id.
+   bool is_locked_fullscreen =
+       create_data_ &&
+@@ -1204,6 +1213,51 @@ ExtensionFunction::ResponseAction WindowsCreateFunction::Run() {
+ #endif  // BUILDFLAG(IS_ANDROID)
+ }
+ 
++ExtensionFunction::ResponseValue WindowsCreateFunction::CreateInEmbedder(
++    Profile* window_profile) {
++  if (create_data_ && create_data_->tab_id) {
++    return Error("Moving a tab into a new window is not supported.");
++  }
++  if (window_profile->IsOffTheRecord()) {
++    return Error("Incognito windows cannot be opened by extensions.");
++  }
++  const bool is_popup =
++      create_data_ && (create_data_->type == windows::CreateType::kPopup ||
++                       create_data_->type == windows::CreateType::kPanel);
++  std::vector<GURL> urls = urls_;
++  if (urls.empty()) {
++    urls.emplace_back(url::kAboutBlankURL);
++  }
++  windows::Window window;
++  window.focused = true;
++  window.incognito = false;
++  window.always_on_top = false;
++  window.type = is_popup ? windows::WindowType::kPopup
++                         : windows::WindowType::kNormal;
++  window.state = windows::WindowState::kNormal;
++  std::vector<api::tabs::Tab> tab_objects;
++  for (size_t i = 0; i < urls.size(); ++i) {
++    const ExtensionTabUtil::EmbedderTabDisposition disposition =
++        i > 0      ? ExtensionTabUtil::EmbedderTabDisposition::kBackgroundTab
++        : is_popup ? ExtensionTabUtil::EmbedderTabDisposition::kPopup
++                   : ExtensionTabUtil::EmbedderTabDisposition::kNewWindow;
++    content::WebContents* contents = ExtensionTabUtil::OpenEmbedderTab(
++        window_profile, urls[i], disposition);
++    if (!contents) {
++      return Error(ExtensionTabUtil::kBrowserWindowNotAllowed);
++    }
++    api::tabs::Tab tab_object = tabs_internal::CreateTabObjectHelper(
++        contents, extension(), source_context_type(), /*browser=*/nullptr,
++        /*tab_index=*/-1);
++    tab_object.active = i == 0;
++    tab_object.selected = i == 0;
++    tab_object.highlighted = i == 0;
++    tab_objects.push_back(std::move(tab_object));
++  }
++  window.tabs = std::move(tab_objects);
++  return WithArguments(window.ToValue());
++}
++
+ #if BUILDFLAG(IS_ANDROID)
+ void WindowsCreateFunction::OnBrowserWindowCreatedAsynchronously(
+     BrowserWindowInterface* new_window) {
+@@ -2280,6 +2334,14 @@ ExtensionFunction::ResponseAction TabsCreateFunction::Run() {
+     browser = controller->GetBrowserWindowInterface();
+   }
+ 
++  // Open Arc: an embedder that owns the UI has no Browser windows; it opens
++  // the tab itself (in its current window, for the current window id).
++  if (!browser && ExtensionTabUtil::HasEmbedderTabOpener() &&
++      create_properties.window_id.value_or(extension_misc::kCurrentWindowId) ==
++          extension_misc::kCurrentWindowId) {
++    return RespondNow(OpenTabInEmbedder());
++  }
++
+   // We didn't find a browser. Bail.
+   // TODO(https://crbug.com/468223125): This isn't consistent, since sometimes
+   // we *will* create a new browser below.
+@@ -2524,6 +2586,41 @@ void TabsCreateFunction::OpenTabInBrowser(BrowserWindowInterface& browser,
+   Respond(NoArguments());
+ }
+ 
++ExtensionFunction::ResponseValue TabsCreateFunction::OpenTabInEmbedder() {
++  if (split_with_tab_id_) {
++    return Error(tabs_constants::kSplitViewCreationFailedError);
++  }
++  // Extension pages cannot run off the record unless the extension runs in
++  // split mode: they open in the original profile, as Chrome falls back to a
++  // regular window. Other pages are not opened off the record by extensions.
++  Profile* profile = Profile::FromBrowserContext(browser_context());
++  if (profile->IsOffTheRecord()) {
++    if (!validated_url_.SchemeIs(kExtensionScheme) ||
++        (extension() && IncognitoInfo::IsSplitMode(extension()))) {
++      return Error("Incognito tabs cannot be opened by extensions.");
++    }
++    profile = profile->GetOriginalProfile();
++  }
++  const bool active = active_.value_or(true);
++  content::WebContents* contents = ExtensionTabUtil::OpenEmbedderTab(
++      profile, validated_url_,
++      active ? ExtensionTabUtil::EmbedderTabDisposition::kForegroundTab
++             : ExtensionTabUtil::EmbedderTabDisposition::kBackgroundTab);
++  if (!contents) {
++    return Error(ExtensionTabUtil::kBrowserWindowNotAllowed);
++  }
++  if (!has_callback()) {
++    return NoArguments();
++  }
++  api::tabs::Tab tab_object = tabs_internal::CreateTabObjectHelper(
++      contents, extension(), source_context_type(), /*browser=*/nullptr,
++      /*tab_index=*/-1);
++  tab_object.active = active;
++  tab_object.selected = active;
++  tab_object.highlighted = active;
++  return WithArguments(tab_object.ToValue());
++}
++
+ ExtensionFunction::ResponseAction TabsDuplicateFunction::Run() {
+   std::optional<tabs::Duplicate::Params> params =
+       tabs::Duplicate::Params::Create(args());
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.h b/chrome/browser/extensions/api/tabs/tabs_api.h
+index 994f863ffb0a..88ec2b0ff58d 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.h
++++ b/chrome/browser/extensions/api/tabs/tabs_api.h
+@@ -218,6 +218,10 @@ class WindowsCreateFunction : public ExtensionFunction {
+   // Returns the response to pass back to the extension.
+   ResponseValue OnBrowserWindowCreated(BrowserWindowInterface* new_window);
+ 
++  // Open Arc: opens the window's tabs through ExtensionTabUtil's embedder tab
++  // opener (the first URL in a new window, any others as background tabs).
++  ResponseValue CreateInEmbedder(Profile* window_profile);
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   void OnBocaWindowCreatedAsynchronously(const SessionID& session_id);
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+@@ -328,6 +332,9 @@ class TabsCreateFunction : public ExtensionFunction {
+   void OpenTabInBrowser(BrowserWindowInterface& browser,
+                         content::WebContents* opener_tab);
+ 
++  // Open Arc: opens the tab through ExtensionTabUtil's embedder tab opener.
++  ResponseValue OpenTabInEmbedder();
++
+   // Stashed properties, since the browser window to use may be created
+   // asynchronously.
+   std::optional<int> opener_tab_id_;
+diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
+index fb17298da6bf..5a740842d77c 100644
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -53,6 +53,7 @@
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_delegate.h"
+ #include "extensions/browser/extension_function.h"
+ #include "extensions/browser/extension_util.h"
+ #include "extensions/buildflags/buildflags.h"
+@@ -117,6 +118,12 @@ ExtensionTabUtil::EmbedderTabList& EmbedderTabListCallback() {
+   return *list;
+ }
+ 
++// Open Arc: see ExtensionTabUtil::SetEmbedderTabOpener().
++ExtensionTabUtil::EmbedderTabOpener& EmbedderTabOpenerCallback() {
++  static base::NoDestructor<ExtensionTabUtil::EmbedderTabOpener> opener;
++  return *opener;
++}
++
+ constexpr char kGroupNotFoundError[] = "No group with id: *.";
+ constexpr char kSplitNotFoundError[] = "No split view with id: *.";
+ constexpr char kInvalidSplitIdError[] = "Invalid split view id: *.";
+@@ -754,6 +761,60 @@ void ExtensionTabUtil::SetEmbedderTabList(EmbedderTabList list) {
+   EmbedderTabListCallback() = std::move(list);
+ }
+ 
++// static
++void ExtensionTabUtil::SetEmbedderTabOpener(EmbedderTabOpener opener) {
++  EmbedderTabOpenerCallback() = std::move(opener);
++}
++
++// static
++bool ExtensionTabUtil::HasEmbedderTabOpener() {
++  return !EmbedderTabOpenerCallback().is_null();
++}
++
++// static
++WebContents* ExtensionTabUtil::OpenEmbedderTab(
++    content::BrowserContext* browser_context,
++    const GURL& url,
++    EmbedderTabDisposition disposition) {
++  const EmbedderTabOpener& opener = EmbedderTabOpenerCallback();
++  if (!opener || !browser_context) {
++    return nullptr;
++  }
++  return opener.Run(browser_context, url, disposition);
++}
++
++// static
++bool ExtensionTabUtil::OpenOptionsPageInEmbedder(
++    const Extension* extension,
++    content::BrowserContext* browser_context) {
++  const std::optional<GURL> url = GetOptionsPageUrlToNavigate(extension);
++  if (!url || !browser_context) {
++    return false;
++  }
++  Profile* profile = Profile::FromBrowserContext(browser_context);
++  // A spanning extension cannot save its settings off the record.
++  if (profile->IsOffTheRecord() && !IncognitoInfo::IsSplitMode(extension)) {
++    profile = profile->GetOriginalProfile();
++  }
++  // Like Chrome's singleton tab: the page already open comes forward (the
++  // reference fragment does not count).
++  GURL::Replacements strip_ref;
++  strip_ref.ClearRef();
++  const GURL wanted = url->ReplaceComponents(strip_ref);
++  for (const EmbedderTab& tab :
++       GetEmbedderTabs(profile, /*include_incognito=*/false)) {
++    if (tab.contents && tab.contents->GetBrowserContext() == profile &&
++        tab.contents->GetLastCommittedURL().ReplaceComponents(strip_ref) ==
++            wanted &&
++        tab.contents->GetDelegate()) {
++      tab.contents->GetDelegate()->ActivateContents(tab.contents);
++      return true;
++    }
++  }
++  return OpenEmbedderTab(profile, *url,
++                         EmbedderTabDisposition::kForegroundTab) != nullptr;
++}
++
+ // static
+ std::vector<ExtensionTabUtil::EmbedderTab> ExtensionTabUtil::GetEmbedderTabs(
+     content::BrowserContext* browser_context,
+@@ -1265,6 +1326,11 @@ bool ExtensionTabUtil::OpenOptionsPageFromWebContents(
+   const bool open_in_tab = ShouldOpenInTab(extension);
+   BrowserWindowInterface* browser =
+       browser_window_util::GetBrowserForTabContents(*web_contents);
++  // Open Arc: chrome://extensions in an embedder tab has no Browser.
++  if (!browser && HasEmbedderTabOpener()) {
++    return OpenOptionsPageInEmbedder(extension,
++                                     web_contents->GetBrowserContext());
++  }
+   CHECK(browser);
+   return WindowControllerFromBrowser(browser)->OpenOptionsPage(extension, *url,
+                                                                open_in_tab);
+diff --git a/chrome/browser/extensions/extension_tab_util.h b/chrome/browser/extensions/extension_tab_util.h
+index 3558e8724fe5..493af9527a67 100644
+--- a/chrome/browser/extensions/extension_tab_util.h
++++ b/chrome/browser/extensions/extension_tab_util.h
+@@ -219,6 +219,39 @@ class ExtensionTabUtil {
+       content::BrowserContext* browser_context,
+       bool include_incognito);
+ 
++  // Open Arc: the same embedder opens the tabs and windows that extension
++  // APIs ask for (chrome.tabs.create, chrome.windows.create,
++  // chrome.runtime.openOptionsPage) where Chrome would use or create a
++  // Browser window. The opener makes the new tab's WebContents in
++  // `browser_context` (tab helpers attached, `url` loading) and hands it to
++  // its UI; it returns that WebContents, which has no window and no index, or
++  // null when it cannot open one. Not part of upstream Chromium.
++  enum class EmbedderTabDisposition {
++    kForegroundTab,
++    kBackgroundTab,
++    kNewWindow,
++    kPopup,
++  };
++  using EmbedderTabOpener =
++      base::RepeatingCallback<content::WebContents*(content::BrowserContext*,
++                                                    const GURL& url,
++                                                    EmbedderTabDisposition)>;
++  static void SetEmbedderTabOpener(EmbedderTabOpener opener);
++  static bool HasEmbedderTabOpener();
++  // Runs the embedder's opener; null when none is registered.
++  static content::WebContents* OpenEmbedderTab(
++      content::BrowserContext* browser_context,
++      const GURL& url,
++      EmbedderTabDisposition disposition);
++  // The extension's options page in an embedder tab: an embedder tab already
++  // showing it is brought forward (WebContentsDelegate::ActivateContents), as
++  // Chrome's singleton tab is; otherwise a new foreground tab. Off the record,
++  // a spanning extension's page opens in the original profile, as in Chrome.
++  // Returns whether a page was shown.
++  static bool OpenOptionsPageInEmbedder(
++      const Extension* extension,
++      content::BrowserContext* browser_context);
++
+   // Gets the extensions-specific Group ID.
+   static int GetGroupId(const tab_groups::TabGroupId& id);
+ 

@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// The password manager's save prompt and the autofill dropdown, drawn by the shell (plan C13).
+// The password manager's save prompt and the autofill dropdown, drawn by the shell (plan C13), and
+// Autofill's address and payment-card save prompts (plan C30).
 //
-// Maps to: `EngineDialogRequest.passwordSave` and `.autofillPopup`
+// Maps to: `EngineDialogRequest.passwordSave`, `.autofillPopup`, `.addressSave` and `.cardSave`
 // (app/Sources/OpenArcEngine/DialogRequests.swift).
 //
 // Why shell-drawn (README §Keeping //chrome without its UI): Chrome draws its password bubble and
@@ -54,6 +55,96 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// prompt treats it as `-decline`).
 - (void)neverForThisSite;
 /// "Not now" / "No thanks": declined this time.
+- (void)decline;
+@end
+
+// MARK: - Address save prompt (plan C30)
+
+typedef NS_ENUM(NSInteger, OACAddressSavePromptKind) {
+    /// A new address ("Save address?").
+    OACAddressSavePromptKindSave = 0,
+    /// New values for a saved address ("Update address?"); `changes` lists them.
+    OACAddressSavePromptKindUpdate = 1,
+};
+
+typedef NS_ENUM(NSInteger, OACAddressFieldKind) {
+    OACAddressFieldKindName = 0,
+    /// The postal address (street, city, region, postal code, country), as one block.
+    OACAddressFieldKindAddress = 1,
+    OACAddressFieldKindEmail = 2,
+    OACAddressFieldKindPhone = 3,
+};
+
+/// One changed value of an update prompt.
+OAC_EXPORT NS_SWIFT_SENDABLE
+@interface OACAddressChange : NSObject
+@property (nonatomic, readonly) OACAddressFieldKind field;
+/// The saved value (empty when the saved address had none).
+@property (nonatomic, readonly, copy) NSString *oldValue;
+/// The value the form submitted.
+@property (nonatomic, readonly, copy) NSString *updatedValue;
+- (instancetype)init NS_UNAVAILABLE;
++ (instancetype)new NS_UNAVAILABLE;
+@end
+
+/// Autofill offers to save the address the user just submitted in a form (or to update a saved
+/// one with the submitted values). Chrome decides when to offer (a complete address, not saved
+/// yet, the site and the address not refused too often); the shell draws the prompt. Texts are
+/// formatted by the engine for the app's locale.
+///
+/// Default answer (dropped or cancelled): closed without a choice (Chrome counts it as ignored).
+OAC_EXPORT NS_SWIFT_UI_ACTOR
+@interface OACAddressSavePrompt : OACDialogRequest
+@property (nonatomic, readonly) OACAddressSavePromptKind kind;
+/// The address as it would be saved: name and postal address in the country's envelope style,
+/// several lines. For an update, the address after the update.
+@property (nonatomic, readonly, copy) NSString *addressSummary;
+/// May be empty.
+@property (nonatomic, readonly, copy) NSString *email;
+/// Formatted for display; may be empty.
+@property (nonatomic, readonly, copy) NSString *phone;
+/// Update prompts: the values that change (name, address, email, phone order). Empty for save.
+@property (nonatomic, readonly, copy) NSArray<OACAddressChange *> *changes;
+
+/// Save (or update) the address in the profile.
+- (void)save;
+/// "No thanks": refused this time (Chrome stops offering for this address, or on this site,
+/// after a few refusals).
+- (void)decline;
+@end
+
+// MARK: - Payment card save prompt (plan C30)
+
+typedef NS_ENUM(NSInteger, OACCardSavePromptKind) {
+    /// A new card, without its security code.
+    OACCardSavePromptKindCard = 0,
+    /// A new card with the security code the form submitted.
+    OACCardSavePromptKindCardWithSecurityCode = 1,
+    /// Only the security code of a card saved earlier.
+    OACCardSavePromptKindSecurityCodeOnly = 2,
+};
+
+/// Autofill offers to save the payment card the user just submitted in a form, on this Mac, in
+/// the profile (never uploaded: Open Arc has no Google Payments). The card number stays in the
+/// engine; the shell gets what Chrome's own bubble shows.
+///
+/// Default answer (dropped or cancelled): closed without a choice (Chrome counts it as ignored
+/// and stops offering a card after a few).
+OAC_EXPORT NS_SWIFT_UI_ACTOR
+@interface OACCardSavePrompt : OACDialogRequest
+@property (nonatomic, readonly) OACCardSavePromptKind kind;
+/// The card network for display ("Visa", "Mastercard"; may be empty).
+@property (nonatomic, readonly, copy) NSString *network;
+/// The last four digits of the number.
+@property (nonatomic, readonly, copy) NSString *lastFourDigits;
+/// "MM/YY"; may be empty.
+@property (nonatomic, readonly, copy) NSString *expiration;
+/// The name on the card; may be empty.
+@property (nonatomic, readonly, copy) NSString *cardholderName;
+
+/// Save the card (or its security code) in the profile.
+- (void)save;
+/// "No thanks": refused this time.
 - (void)decline;
 @end
 

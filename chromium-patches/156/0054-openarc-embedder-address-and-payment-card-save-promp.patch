@@ -1,0 +1,648 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 23:11:36 -0700
+Subject: [PATCH] openarc: embedder: address and payment-card save prompts
+ drawn by the shell
+
+Plan C30. The bridge answers the two hooks of the previous patch
+(openarc::InstallBridgeAutofillHost) with requests for the tab's dialog
+delegate (OACAutofill.h):
+
+- OACAddressSavePrompt (-tab:offerToSaveAddress:): save or update; the
+  address in the country's envelope style (name and postal address), email,
+  formatted phone, and for an update the changed values (old and new, from
+  Chrome's GetProfileDifferenceForUi). Save -> kAccepted, No thanks ->
+  kDeclined (Chrome's strikes), dropped -> kIgnored. Prompts that move an
+  address into the Google account need a signed-in account, which the app
+  never has: answered kAutoDeclined without asking.
+- OACCardSavePrompt (-tab:offerToSaveCard:): card, card with security code,
+  or security code only; network, last four digits, MM/YY expiry and the
+  name on the card (the number stays in the engine). Save -> kAccepted,
+  No thanks -> kDeclined, dropped -> kIgnored. An offer without show_prompt
+  (the card was refused too often; Chrome would only show an omnibox icon)
+  ends as kIgnored.
+
+Saved addresses and cards land in the profile's Web Data (card numbers
+encrypted by os_crypt) and come back as rows of the shell-drawn Autofill
+dropdown (C13).
+---
+ openarc/BUILD.gn                              |   2 +
+ openarc/bridge/oac_autofill.mm                | 392 +++++++++++++++++-
+ .../bridge/public/OpenArcCore/OACAutofill.h   |  95 ++++-
+ .../public/OpenArcCore/OACDialogDelegate.h    |  14 +-
+ 4 files changed, 499 insertions(+), 4 deletions(-)
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 5346ce1eb9c2..0464bbfd000b 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -295,6 +295,8 @@ source_set("bridge") {
+     ":embedder",
+     ":importer",
+     ":page_tools",
++    "//chrome/browser:browser_process",
++    "//chrome/browser/ui/autofill/payments",
+     "//chrome/browser/devtools",
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/extensions",
+diff --git a/openarc/bridge/oac_autofill.mm b/openarc/bridge/oac_autofill.mm
+index f07632ab1d48..d0086fe9059e 100644
+--- a/openarc/bridge/oac_autofill.mm
++++ b/openarc/bridge/oac_autofill.mm
+@@ -3,7 +3,8 @@
+ // found in the LICENSE file.
+ 
+ // The password manager's save bubble and the autofill popup, drawn by the
+-// shell (plan C13, OACAutofill.h). //chrome's ManagePasswordsUIController and
++// shell (plan C13, OACAutofill.h), and Autofill's address and payment-card
++// save prompts (plan C30). //chrome's ManagePasswordsUIController and
+ // AutofillPopupControllerImpl keep deciding when to prompt and what to fill;
+ // the classes here are their views (through two Open Arc hooks in //chrome)
+ // and turn each prompt into an OACDialogRequest for the tab's dialog delegate.
+@@ -25,16 +26,26 @@
+ #include "base/no_destructor.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/ui/autofill/autofill_popup_controller.h"
++#include "chrome/browser/ui/autofill/chrome_autofill_client.h"
++#include "chrome/browser/ui/autofill/payments/chrome_payments_autofill_client.h"
+ #include "chrome/browser/ui/autofill/autofill_popup_view.h"
+ #include "chrome/browser/ui/passwords/bubble_controllers/save_update_bubble_controller.h"
+ #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
+ #include "chrome/browser/ui/passwords/passwords_model_delegate.h"
++#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
++#include "components/autofill/core/browser/data_model/addresses/autofill_profile_comparator.h"
++#include "components/autofill/core/browser/data_model/payments/credit_card.h"
++#include "components/autofill/core/browser/field_types.h"
+ #include "components/autofill/core/browser/filling/filling_product.h"
++#include "components/autofill/core/browser/foundations/autofill_client.h"
++#include "components/autofill/core/browser/geo/phone_number_i18n.h"
+ #include "components/autofill/core/browser/metrics/autofill_metrics.h"
+ #include "components/autofill/core/browser/suggestions/suggestion.h"
+ #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
+ #include "components/autofill/core/browser/suggestions/suggestion_type.h"
++#include "components/autofill/core/browser/ui/addresses/autofill_address_util.h"
+ #include "components/input/native_web_keyboard_event.h"
+ #include "components/password_manager/core/common/password_manager_ui.h"
+ #include "content/public/browser/render_frame_host.h"
+@@ -138,6 +149,216 @@ - (void)cancel {
+ 
+ @end
+ 
++// MARK: - OACAddressChange, OACAddressSavePrompt, OACCardSavePrompt (C30)
++
++namespace openarc {
++// What the user chose in an address or card save prompt.
++enum class AutofillSaveAnswer {
++  kSave,
++  kDecline,
++  kIgnore,
++};
++}  // namespace openarc
++
++@interface OACAddressChange ()
++- (instancetype)initWithField:(OACAddressFieldKind)field
++                     oldValue:(NSString*)oldValue
++                 updatedValue:(NSString*)updatedValue;
++@end
++
++@implementation OACAddressChange {
++  OACAddressFieldKind _field;
++  NSString* _oldValue;
++  NSString* _updatedValue;
++}
++
++- (instancetype)initWithField:(OACAddressFieldKind)field
++                     oldValue:(NSString*)oldValue
++                 updatedValue:(NSString*)updatedValue {
++  if ((self = [super init])) {
++    _field = field;
++    _oldValue = [oldValue copy];
++    _updatedValue = [updatedValue copy];
++  }
++  return self;
++}
++
++- (OACAddressFieldKind)field {
++  return _field;
++}
++- (NSString*)oldValue {
++  return _oldValue;
++}
++- (NSString*)updatedValue {
++  return _updatedValue;
++}
++
++@end
++
++@interface OACAddressSavePrompt ()
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                       kind:(OACAddressSavePromptKind)kind
++             addressSummary:(NSString*)addressSummary
++                      email:(NSString*)email
++                      phone:(NSString*)phone
++                    changes:(NSArray<OACAddressChange*>*)changes
++                     answer:(base::OnceCallback<void(openarc::AutofillSaveAnswer)>)
++                                answer;
++@end
++
++@implementation OACAddressSavePrompt {
++  OACAddressSavePromptKind _kind;
++  NSString* _addressSummary;
++  NSString* _email;
++  NSString* _phone;
++  NSArray<OACAddressChange*>* _changes;
++  base::OnceCallback<void(openarc::AutofillSaveAnswer)> _answer;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                       kind:(OACAddressSavePromptKind)kind
++             addressSummary:(NSString*)addressSummary
++                      email:(NSString*)email
++                      phone:(NSString*)phone
++                    changes:(NSArray<OACAddressChange*>*)changes
++                     answer:(base::OnceCallback<void(openarc::AutofillSaveAnswer)>)
++                                answer {
++  if ((self = [super initWithTab:tab origin:origin isFromSubframe:NO])) {
++    _kind = kind;
++    _addressSummary = [addressSummary copy];
++    _email = [email copy];
++    _phone = [phone copy];
++    _changes = [changes copy];
++    _answer = std::move(answer);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (OACAddressSavePromptKind)kind {
++  return _kind;
++}
++- (NSString*)addressSummary {
++  return _addressSummary;
++}
++- (NSString*)email {
++  return _email;
++}
++- (NSString*)phone {
++  return _phone;
++}
++- (NSArray<OACAddressChange*>*)changes {
++  return _changes;
++}
++
++- (void)answer:(openarc::AutofillSaveAnswer)answer {
++  if (![self markFinished]) {
++    return;
++  }
++  if (_answer) {
++    std::move(_answer).Run(answer);
++  }
++}
++
++- (void)save {
++  [self answer:openarc::AutofillSaveAnswer::kSave];
++}
++- (void)decline {
++  [self answer:openarc::AutofillSaveAnswer::kDecline];
++}
++- (void)cancel {
++  [self answer:openarc::AutofillSaveAnswer::kIgnore];
++}
++
++@end
++
++@interface OACCardSavePrompt ()
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                       kind:(OACCardSavePromptKind)kind
++                    network:(NSString*)network
++             lastFourDigits:(NSString*)lastFourDigits
++                 expiration:(NSString*)expiration
++             cardholderName:(NSString*)cardholderName
++                     answer:(base::OnceCallback<void(openarc::AutofillSaveAnswer)>)
++                                answer;
++@end
++
++@implementation OACCardSavePrompt {
++  OACCardSavePromptKind _kind;
++  NSString* _network;
++  NSString* _lastFourDigits;
++  NSString* _expiration;
++  NSString* _cardholderName;
++  base::OnceCallback<void(openarc::AutofillSaveAnswer)> _answer;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                       kind:(OACCardSavePromptKind)kind
++                    network:(NSString*)network
++             lastFourDigits:(NSString*)lastFourDigits
++                 expiration:(NSString*)expiration
++             cardholderName:(NSString*)cardholderName
++                     answer:(base::OnceCallback<void(openarc::AutofillSaveAnswer)>)
++                                answer {
++  if ((self = [super initWithTab:tab origin:origin isFromSubframe:NO])) {
++    _kind = kind;
++    _network = [network copy];
++    _lastFourDigits = [lastFourDigits copy];
++    _expiration = [expiration copy];
++    _cardholderName = [cardholderName copy];
++    _answer = std::move(answer);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (OACCardSavePromptKind)kind {
++  return _kind;
++}
++- (NSString*)network {
++  return _network;
++}
++- (NSString*)lastFourDigits {
++  return _lastFourDigits;
++}
++- (NSString*)expiration {
++  return _expiration;
++}
++- (NSString*)cardholderName {
++  return _cardholderName;
++}
++
++- (void)answer:(openarc::AutofillSaveAnswer)answer {
++  if (![self markFinished]) {
++    return;
++  }
++  if (_answer) {
++    std::move(_answer).Run(answer);
++  }
++}
++
++- (void)save {
++  [self answer:openarc::AutofillSaveAnswer::kSave];
++}
++- (void)decline {
++  [self answer:openarc::AutofillSaveAnswer::kDecline];
++}
++- (void)cancel {
++  [self answer:openarc::AutofillSaveAnswer::kIgnore];
++}
++
++@end
++
+ // MARK: - OACAutofillSuggestion
+ 
+ @interface OACAutofillSuggestion ()
+@@ -809,6 +1030,171 @@ void Close(ShellPasswordBubble* bubble) {
+   }
+ }
+ 
++// MARK: Address and card save prompts (C30)
++
++OACAddressFieldKind AddressFieldKindFor(autofill::FieldType type) {
++  switch (type) {
++    case autofill::NAME_FULL:
++      return OACAddressFieldKindName;
++    case autofill::EMAIL_ADDRESS:
++      return OACAddressFieldKindEmail;
++    case autofill::PHONE_HOME_WHOLE_NUMBER:
++      return OACAddressFieldKindPhone;
++    default:
++      return OACAddressFieldKindAddress;
++  }
++}
++
++OACOrigin* MainFrameOrigin(content::WebContents* web_contents) {
++  return OACOriginFromURLOrigin(
++      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
++}
++
++// ChromeAutofillClient::SetEmbedderAddressSavePrompt's prompt.
++void ShowShellAddressSavePrompt(
++    content::WebContents* web_contents,
++    const autofill::AutofillProfile& profile,
++    const autofill::AutofillProfile* original_profile,
++    autofill::AutofillClient::SaveAddressBubbleType save_address_bubble_type,
++    autofill::AutofillClient::AddressProfileSavePromptCallback callback) {
++  using Decision = autofill::AutofillClient::AddressPromptUserDecision;
++  OACTab* tab = OACTabForWebContents(web_contents);
++  // Moving a saved address into the Google account (and merging account
++  // addresses) needs a signed-in Google account, which Open Arc never has:
++  // suppressed like a prompt Chrome cannot show (no strikes counted).
++  if (!tab || tab.isClosed ||
++      save_address_bubble_type !=
++          autofill::AutofillClient::SaveAddressBubbleType::kSave) {
++    std::move(callback).Run(Decision::kAutoDeclined, std::nullopt);
++    return;
++  }
++  const std::string& locale = g_browser_process->GetApplicationLocale();
++  NSMutableArray<OACAddressChange*>* changes = [NSMutableArray array];
++  if (original_profile) {
++    // The first values are the submitted ones, the second the saved ones (as
++    // Chrome's update bubble reads them).
++    for (const autofill::ProfileValueDifference& difference :
++         autofill::GetProfileDifferenceForUi(profile, *original_profile,
++                                             locale)) {
++      [changes addObject:[[OACAddressChange alloc]
++                             initWithField:AddressFieldKindFor(difference.type)
++                                  oldValue:base::SysUTF16ToNSString(
++                                               difference.second_value)
++                              updatedValue:base::SysUTF16ToNSString(
++                                               difference.first_value)]];
++    }
++  }
++  NSString* summary =
++      base::SysUTF16ToNSString(autofill::GetEnvelopeStyleAddress(
++          profile, locale, /*include_recipient=*/true,
++          /*include_country=*/true));
++  NSString* email = base::SysUTF16ToNSString(
++      profile.GetInfo(autofill::EMAIL_ADDRESS, locale));
++  NSString* phone = base::SysUTF16ToNSString(
++      autofill::i18n::GetFormattedPhoneNumberForDisplay(profile, locale));
++  auto answer = base::BindOnce(
++      [](autofill::AutofillClient::AddressProfileSavePromptCallback callback,
++         AutofillSaveAnswer answer) {
++        switch (answer) {
++          case AutofillSaveAnswer::kSave:
++            std::move(callback).Run(Decision::kAccepted, std::nullopt);
++            break;
++          case AutofillSaveAnswer::kDecline:
++            std::move(callback).Run(Decision::kDeclined, std::nullopt);
++            break;
++          case AutofillSaveAnswer::kIgnore:
++            std::move(callback).Run(Decision::kIgnored, std::nullopt);
++            break;
++        }
++      },
++      std::move(callback));
++  OACAddressSavePrompt* request = [[OACAddressSavePrompt alloc]
++         initWithTab:tab
++              origin:MainFrameOrigin(web_contents)
++                kind:original_profile ? OACAddressSavePromptKindUpdate
++                                      : OACAddressSavePromptKindSave
++      addressSummary:summary
++               email:email
++               phone:phone
++             changes:changes
++              answer:std::move(answer)];
++  OACPresentDialogRequest(
++      tab, request, @selector(tab:offerToSaveAddress:),
++      ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++        return [delegate tab:owner offerToSaveAddress:request];
++      });
++}
++
++// ChromePaymentsAutofillClient::SetEmbedderLocalCardSavePrompt's prompt.
++void ShowShellLocalCardSavePrompt(
++    content::WebContents* web_contents,
++    const autofill::CreditCard& card,
++    autofill::payments::PaymentsAutofillClient::SaveCreditCardOptions options,
++    autofill::payments::PaymentsAutofillClient::LocalSaveCardPromptCallback
++        callback) {
++  using Decision =
++      autofill::payments::PaymentsAutofillClient::SaveCardOfferUserDecision;
++  using SaveType = autofill::payments::PaymentsAutofillClient::CardSaveType;
++  OACTab* tab = OACTabForWebContents(web_contents);
++  // Without `show_prompt` (the card was refused too often) Chrome only shows
++  // its omnibox icon; Open Arc has no such icon, so the offer ends ignored.
++  if (!tab || tab.isClosed || !options.show_prompt) {
++    std::move(callback).Run(Decision::kIgnored);
++    return;
++  }
++  OACCardSavePromptKind kind = OACCardSavePromptKindCard;
++  switch (options.card_save_type) {
++    case SaveType::kCardSaveOnly:
++      kind = OACCardSavePromptKindCard;
++      break;
++    case SaveType::kCardSaveWithCvc:
++      kind = OACCardSavePromptKindCardWithSecurityCode;
++      break;
++    case SaveType::kCvcSaveOnly:
++      kind = OACCardSavePromptKindSecurityCodeOnly;
++      break;
++  }
++  const std::string& locale = g_browser_process->GetApplicationLocale();
++  NSString* expiration = @"";
++  if (card.expiration_month() > 0 && card.expiration_year() > 0) {
++    expiration = base::SysUTF16ToNSString(
++        card.Expiration2DigitMonthAsString() + u"/" +
++        card.Expiration2DigitYearAsString());
++  }
++  auto answer = base::BindOnce(
++      [](autofill::payments::PaymentsAutofillClient::LocalSaveCardPromptCallback
++             callback,
++         AutofillSaveAnswer answer) {
++        switch (answer) {
++          case AutofillSaveAnswer::kSave:
++            std::move(callback).Run(Decision::kAccepted);
++            break;
++          case AutofillSaveAnswer::kDecline:
++            std::move(callback).Run(Decision::kDeclined);
++            break;
++          case AutofillSaveAnswer::kIgnore:
++            std::move(callback).Run(Decision::kIgnored);
++            break;
++        }
++      },
++      std::move(callback));
++  OACCardSavePrompt* request = [[OACCardSavePrompt alloc]
++         initWithTab:tab
++              origin:MainFrameOrigin(web_contents)
++                kind:kind
++             network:base::SysUTF16ToNSString(card.NetworkForDisplay())
++      lastFourDigits:base::SysUTF16ToNSString(card.LastFourDigits())
++          expiration:expiration
++      cardholderName:base::SysUTF16ToNSString(
++                         card.GetInfo(autofill::CREDIT_CARD_NAME_FULL, locale))
++              answer:std::move(answer)];
++  OACPresentDialogRequest(
++      tab, request, @selector(tab:offerToSaveCard:),
++      ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++        return [delegate tab:owner offerToSaveCard:request];
++      });
++}
++
+ }  // namespace
+ 
+ void InstallBridgeAutofillHost() {
+@@ -816,6 +1202,10 @@ void InstallBridgeAutofillHost() {
+       &BridgePasswordBubbleHost::Get());
+   autofill::AutofillPopupView::SetEmbedderFactory(
+       &CreateShellAutofillPopupView);
++  autofill::ChromeAutofillClient::SetEmbedderAddressSavePrompt(
++      &ShowShellAddressSavePrompt);
++  autofill::payments::ChromePaymentsAutofillClient::
++      SetEmbedderLocalCardSavePrompt(&ShowShellLocalCardSavePrompt);
+ }
+ 
+ }  // namespace openarc
+diff --git a/openarc/bridge/public/OpenArcCore/OACAutofill.h b/openarc/bridge/public/OpenArcCore/OACAutofill.h
+index 2d32d2839b4f..bb071f8dc906 100644
+--- a/openarc/bridge/public/OpenArcCore/OACAutofill.h
++++ b/openarc/bridge/public/OpenArcCore/OACAutofill.h
+@@ -2,9 +2,10 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-// The password manager's save prompt and the autofill dropdown, drawn by the shell (plan C13).
++// The password manager's save prompt and the autofill dropdown, drawn by the shell (plan C13), and
++// Autofill's address and payment-card save prompts (plan C30).
+ //
+-// Maps to: `EngineDialogRequest.passwordSave` and `.autofillPopup`
++// Maps to: `EngineDialogRequest.passwordSave`, `.autofillPopup`, `.addressSave` and `.cardSave`
+ // (app/Sources/OpenArcEngine/DialogRequests.swift).
+ //
+ // Why shell-drawn (README §Keeping //chrome without its UI): Chrome draws its password bubble and
+@@ -57,6 +58,96 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ - (void)decline;
+ @end
+ 
++// MARK: - Address save prompt (plan C30)
++
++typedef NS_ENUM(NSInteger, OACAddressSavePromptKind) {
++    /// A new address ("Save address?").
++    OACAddressSavePromptKindSave = 0,
++    /// New values for a saved address ("Update address?"); `changes` lists them.
++    OACAddressSavePromptKindUpdate = 1,
++};
++
++typedef NS_ENUM(NSInteger, OACAddressFieldKind) {
++    OACAddressFieldKindName = 0,
++    /// The postal address (street, city, region, postal code, country), as one block.
++    OACAddressFieldKindAddress = 1,
++    OACAddressFieldKindEmail = 2,
++    OACAddressFieldKindPhone = 3,
++};
++
++/// One changed value of an update prompt.
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACAddressChange : NSObject
++@property (nonatomic, readonly) OACAddressFieldKind field;
++/// The saved value (empty when the saved address had none).
++@property (nonatomic, readonly, copy) NSString *oldValue;
++/// The value the form submitted.
++@property (nonatomic, readonly, copy) NSString *updatedValue;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// Autofill offers to save the address the user just submitted in a form (or to update a saved
++/// one with the submitted values). Chrome decides when to offer (a complete address, not saved
++/// yet, the site and the address not refused too often); the shell draws the prompt. Texts are
++/// formatted by the engine for the app's locale.
++///
++/// Default answer (dropped or cancelled): closed without a choice (Chrome counts it as ignored).
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACAddressSavePrompt : OACDialogRequest
++@property (nonatomic, readonly) OACAddressSavePromptKind kind;
++/// The address as it would be saved: name and postal address in the country's envelope style,
++/// several lines. For an update, the address after the update.
++@property (nonatomic, readonly, copy) NSString *addressSummary;
++/// May be empty.
++@property (nonatomic, readonly, copy) NSString *email;
++/// Formatted for display; may be empty.
++@property (nonatomic, readonly, copy) NSString *phone;
++/// Update prompts: the values that change (name, address, email, phone order). Empty for save.
++@property (nonatomic, readonly, copy) NSArray<OACAddressChange *> *changes;
++
++/// Save (or update) the address in the profile.
++- (void)save;
++/// "No thanks": refused this time (Chrome stops offering for this address, or on this site,
++/// after a few refusals).
++- (void)decline;
++@end
++
++// MARK: - Payment card save prompt (plan C30)
++
++typedef NS_ENUM(NSInteger, OACCardSavePromptKind) {
++    /// A new card, without its security code.
++    OACCardSavePromptKindCard = 0,
++    /// A new card with the security code the form submitted.
++    OACCardSavePromptKindCardWithSecurityCode = 1,
++    /// Only the security code of a card saved earlier.
++    OACCardSavePromptKindSecurityCodeOnly = 2,
++};
++
++/// Autofill offers to save the payment card the user just submitted in a form, on this Mac, in
++/// the profile (never uploaded: Open Arc has no Google Payments). The card number stays in the
++/// engine; the shell gets what Chrome's own bubble shows.
++///
++/// Default answer (dropped or cancelled): closed without a choice (Chrome counts it as ignored
++/// and stops offering a card after a few).
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACCardSavePrompt : OACDialogRequest
++@property (nonatomic, readonly) OACCardSavePromptKind kind;
++/// The card network for display ("Visa", "Mastercard"; may be empty).
++@property (nonatomic, readonly, copy) NSString *network;
++/// The last four digits of the number.
++@property (nonatomic, readonly, copy) NSString *lastFourDigits;
++/// "MM/YY"; may be empty.
++@property (nonatomic, readonly, copy) NSString *expiration;
++/// The name on the card; may be empty.
++@property (nonatomic, readonly, copy) NSString *cardholderName;
++
++/// Save the card (or its security code) in the profile.
++- (void)save;
++/// "No thanks": refused this time.
++- (void)decline;
++@end
++
+ // MARK: - Autofill dropdown
+ 
+ typedef NS_ENUM(NSInteger, OACAutofillSuggestionKind) {
+diff --git a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+index 4d6c18bac19e..e5ac9f750ae4 100644
+--- a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+@@ -23,7 +23,8 @@
+ // - Dropping the last reference to an unanswered request answers it with its default (alert:
+ //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
+ //   file chooser: cancel, external protocol: block, unresponsive page: wait, client certificate:
+-//   continue without one, info bar: left open), so a page never hangs.
++//   continue without one, info bar: left open, address / card save: ignored), so a page never
++//   hangs.
+ // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
+ //   right away.
+ //
+@@ -44,6 +45,9 @@
+ // OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook);
+ // engine info bars (plan C23) from the tab's `infobars::ContentInfoBarManager` (confirm info bars
+ // only), including //chrome's global ones (`GlobalConfirmInfoBar`, through an Open Arc hook).
++// Added in plan C30: Autofill's address and payment-card save prompts (OACAutofill.h) from
++// //chrome's `ChromeAutofillClient::ConfirmSaveAddressProfile` and
++// `ChromePaymentsAutofillClient::ShowSaveCreditCardLocally` (Open Arc hooks).
+ 
+ #import <OpenArcCore/OACDefines.h>
+ #import <OpenArcCore/OACTab.h>
+@@ -314,6 +318,8 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ // MARK: - Delegate
+ 
+ @class OACPasswordSavePrompt;
++@class OACAddressSavePrompt;
++@class OACCardSavePrompt;
+ @class OACAutofillPopup;
+ @class OACWebAuthnDialog;
+ 
+@@ -330,6 +336,12 @@ NS_SWIFT_UI_ACTOR
+ /// Password manager save / update prompt (plan C13, OACAutofill.h).
+ - (BOOL)tab:(OACTab *)tab offerToSavePassword:(OACPasswordSavePrompt *)prompt
+     NS_SWIFT_NAME(tab(_:offerToSavePassword:));
++/// Autofill's address save / update prompt (plan C30, OACAutofill.h).
++- (BOOL)tab:(OACTab *)tab offerToSaveAddress:(OACAddressSavePrompt *)prompt
++    NS_SWIFT_NAME(tab(_:offerToSaveAddress:));
++/// Autofill's payment-card save prompt (plan C30, OACAutofill.h).
++- (BOOL)tab:(OACTab *)tab offerToSaveCard:(OACCardSavePrompt *)prompt
++    NS_SWIFT_NAME(tab(_:offerToSaveCard:));
+ /// Autofill dropdown for the focused field (plan C13, OACAutofill.h).
+ - (BOOL)tab:(OACTab *)tab showAutofillPopup:(OACAutofillPopup *)popup
+     NS_SWIFT_NAME(tab(_:showAutofillPopup:));

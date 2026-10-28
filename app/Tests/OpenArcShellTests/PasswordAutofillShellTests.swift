@@ -85,6 +85,74 @@ final class PasswordAutofillShellTests: XCTestCase {
         XCTAssertEqual(live.dialogAnswers[update], .passwordSave(.dismiss))
     }
 
+    // MARK: Address and card save prompts (C30)
+
+    /// Plan C30, [00 §A] observed (shell-drawn, style not captured): the address prompt hangs under
+    /// the URL box like the password prompt; Save stores the address and the next address field
+    /// offers it. Wording is ours (unknown).
+    func testAddressPromptSavesAndIsOfferedNextTime() async throws {
+        let live = try await openPage("https://shop.example")
+        let center = model.controller.dialogs
+        let address = FakeAddress(name: "Ada Lovelace", street: "12 Example Street", city: "Springfield", postalCode: "12345",
+                                  email: "ada@example.test")
+        let id = try XCTUnwrap(live.simulateAddressSubmission(address))
+        try await waitUntil { center.current(for: live.id)?.id == id }
+        let request = try XCTUnwrap(center.current(for: live.id))
+        let presentation = DialogPresentation(request)
+        XCTAssertEqual(presentation.style, .permissionBubble)
+        XCTAssertEqual(presentation.title, "Save address?")
+        XCTAssertTrue(presentation.message.contains("12 Example Street"))
+        XCTAssertTrue(presentation.message.contains("ada@example.test"))
+        XCTAssertEqual(presentation.buttons, ["No Thanks", "Save"])
+        XCTAssertEqual(DialogPresentation.answer(for: request, button: 0, fieldValues: [], checkbox: false), .addressSave(.decline))
+        center.answer(id, with: DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false))
+        XCTAssertEqual(live.dialogAnswers[id], .addressSave(.save))
+        XCTAssertNil(center.current(for: live.id))
+        XCTAssertNotNil(live.simulateAutofillFieldFocus(.address))
+        try await waitUntil { center.autofillPopup(for: live.id)?.session.state.suggestions.first?.kind == .address }
+    }
+
+    /// Plan C30: an update prompt lists old → new values.
+    func testAddressUpdatePromptListsChanges() async throws {
+        let live = try await openPage("https://shop.example")
+        let center = model.controller.dialogs
+        var address = FakeAddress(name: "Ada Lovelace", street: "12 Example Street", city: "Springfield", postalCode: "12345")
+        let first = try XCTUnwrap(live.simulateAddressSubmission(address))
+        try await waitUntil { center.current(for: live.id)?.id == first }
+        center.answer(first, with: .addressSave(.save))
+        address.phone = "+1 555 0100"
+        let update = try XCTUnwrap(live.simulateAddressSubmission(address))
+        try await waitUntil { center.current(for: live.id)?.id == update }
+        let presentation = DialogPresentation(try XCTUnwrap(center.current(for: live.id)))
+        XCTAssertEqual(presentation.title, "Update address?")
+        XCTAssertEqual(presentation.message, "Phone: +1 555 0100")
+        XCTAssertEqual(presentation.buttons, ["No Thanks", "Update"])
+    }
+
+    /// Plan C30: the card prompt shows network, last four digits and expiry, never the number;
+    /// No Thanks saves nothing; Escape (dismiss) answers `.ignore`.
+    func testCardPrompt() async throws {
+        let live = try await openPage("https://shop.example")
+        let center = model.controller.dialogs
+        let card = FakeCard(number: "4111111111111111", expirationMonth: 4, expirationYear: 2031, cardholderName: "Ada Lovelace")
+        let id = try XCTUnwrap(live.simulateCardSubmission(card))
+        try await waitUntil { center.current(for: live.id)?.id == id }
+        let request = try XCTUnwrap(center.current(for: live.id))
+        let presentation = DialogPresentation(request)
+        XCTAssertEqual(presentation.style, .permissionBubble)
+        XCTAssertEqual(presentation.title, "Save card?")
+        XCTAssertEqual(presentation.message, "Visa ••••1111\nExpires 04/31\nAda Lovelace")
+        XCTAssertFalse(presentation.message.contains("4111111111111111"))
+        center.answer(id, with: DialogPresentation.answer(for: request, button: 0, fieldValues: [], checkbox: false))
+        XCTAssertEqual(live.dialogAnswers[id], .cardSave(.decline))
+        XCTAssertTrue(engine.fakeAutofill.savedCards(profileID: live.profileID).isEmpty)
+
+        let again = try XCTUnwrap(live.simulateCardSubmission(card))
+        try await waitUntil { center.current(for: live.id)?.id == again }
+        center.dismiss(again)
+        XCTAssertEqual(live.dialogAnswers[again], .cardSave(.ignore))
+    }
+
     // MARK: Autofill dropdown
 
     /// Not queued: it shows beside a queued dialog, a newer one replaces it, and withdrawing it
