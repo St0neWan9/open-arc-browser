@@ -460,16 +460,30 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(SettingsCatalog.control("shortcuts.reset").isEnabled)
     }
 
-    /// B68 (F1 #10): no disabled row waits on a plan task that is already done or closed
-    /// (D1 app project, C8 framework, B16 visual pass, B19 real-app check, C17 not needed).
+    /// B68 (F1 #10), B93: no disabled row waits on a plan task that is already done or closed
+    /// (D1 app project, C8 framework, B16 visual pass, B19 real-app check, C17 not needed,
+    /// E3 Notes capture).
     func testNoPendingRowWaitsOnAFinishedTask() {
-        let finished: Set<String> = ["D1", "C8", "B16", "B19", "C17"]
+        let finished: Set<String> = ["D1", "C8", "B16", "B19", "C17", "E3"]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {
                 guard case .pending(let task) = control.backing else { continue }
                 XCTAssertFalse(finished.contains(task), "\(control.id) waits on finished task \(task)")
             }
         }
+    }
+
+    /// B93: [03 §Profiles] observed a "New documents" dropdown whose choices were not recorded, and
+    /// [06 §23] (E3) observed that Arc 1.170 has no working Notes entry. The row is shown, disabled,
+    /// and names the spec gap instead of the finished E3.
+    func testNewDocumentsRowIsAShownSpecGap() {
+        let control = SettingsCatalog.control("profiles.newDocuments")
+        XCTAssertEqual(control.label, "New documents")
+        XCTAssertTrue(SettingsCatalog.controls(in: .profiles).contains { $0.id == control.id })
+        guard case .picker = control.kind else { return XCTFail("New documents is a dropdown") }
+        XCTAssertFalse(control.isEnabled)
+        guard case .pending(let task) = control.backing else { return XCTFail("expected pending") }
+        XCTAssertEqual(task, "unknown (spec gap)")
     }
 
     /// [03 §General] observed: "Warn before quitting", on by default; per device. B68.
