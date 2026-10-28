@@ -1,0 +1,17 @@
+{
+  "type": "org.openarc.adblock-ruleset",
+  "format": 1,
+  "serial": 20261028061819,
+  "version": "20261028-9143ffec3490",
+  "published": "2026-10-28T06:18:19Z",
+  "ruleset": {
+    "path": "rulesets/20261028-9143ffec3490/ruleset.pb",
+    "size": 4069033,
+    "sha256": "9143ffec3490750e495fef04958b8ade4a478e7acadf94a78be41cdf869a780f"
+  },
+  "attribution": {
+    "path": "rulesets/20261028-9143ffec3490/ATTRIBUTION",
+    "size": 721,
+    "sha256": "ab4708fcb165b157de93c3881ea980410e2b6a397dd277e795126b0b54de7714"
+  }
+}

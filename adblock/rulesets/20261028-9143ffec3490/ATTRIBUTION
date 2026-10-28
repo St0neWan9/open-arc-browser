@@ -1,0 +1,13 @@
+Open Arc's built-in ad blocker uses these filter lists, converted into
+Chromium's subresource filter format:
+
+  EasyList     version 202610280605    https://easylist.to/easylist/easylist.txt
+  EasyPrivacy  version 202610280610    https://easylist.to/easylist/easyprivacy.txt
+
+The EasyList authors (https://easylist.to/) publish both lists under a dual
+license: the Creative Commons Attribution-ShareAlike 3.0 Unported license
+(https://creativecommons.org/licenses/by-sa/3.0/) or, at your option, the
+GNU General Public License, version 3 or later
+(https://www.gnu.org/licenses/gpl.html). Open Arc uses them under
+CC BY-SA 3.0. The converted ruleset is a derivative of the lists and is
+distributed under the same license.
