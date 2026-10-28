@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Wed, 28 Oct 2026 01:37:48 -0700
+Subject: [PATCH] openarc: components: let an embedder allow only some
+ components
+
+Plan C33. Chromium 156 ships no CRLSet of its own (the bundled one is
+an empty placeholder), so a browser that keeps the component updater
+off never blocks revoked certificates beyond the compiled-in lists. An
+embedder that wants the CRLSet, and nothing else Google serves through
+the component updater, needs a way to keep every other component out:
+--disable-component-update only skips Chrome's startup registration,
+and installers that register on demand (the optimization guide's
+on-device model manifest, speech, text-to-speech, translate language
+packs) would otherwise reach update.googleapis.com and dl.google.com.
+
+Adds component_updater::AllowOnlyComponentsForEmbedder(app_ids). Once
+called, CrxUpdateService::RegisterComponent() refuses every app id not
+in the list, so such a component is never registered, loaded, checked
+or downloaded; on-demand requests for it fail locally with
+INVALID_ARGUMENT, as for any unregistered component. The allowed ones
+update on the normal schedule.
+
+Chrome never calls it and is unchanged. No upstream equivalent.
+---
+ .../component_updater_service.cc              | 19 +++++++++++++++++++
+ .../component_updater_service.h               |  8 ++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/components/component_updater/component_updater_service.cc b/components/component_updater/component_updater_service.cc
+index 446968669083..bfbccee959ec 100644
+--- a/components/component_updater/component_updater_service.cc
++++ b/components/component_updater/component_updater_service.cc
+@@ -21,6 +21,7 @@
+ #include "base/functional/callback_helpers.h"
+ #include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/notreached.h"
+ #include "base/sequence_checker.h"
+@@ -54,6 +55,13 @@ enum UpdateType {
+   UPDATE_TYPE_COUNT,
+ };
+ 
++// Open Arc: see AllowOnlyComponentsForEmbedder(). Unset means that every
++// component may register.
++std::optional<std::vector<std::string>>& EmbedderComponentAllowlist() {
++  static base::NoDestructor<std::optional<std::vector<std::string>>> allowlist;
++  return *allowlist;
++}
++
+ }  // namespace
+ 
+ namespace component_updater {
+@@ -208,6 +216,13 @@ bool CrxUpdateService::RegisterComponent(
+     return false;
+   }
+ 
++  if (const auto& allowlist = EmbedderComponentAllowlist();
++      allowlist && !std::ranges::contains(*allowlist, component.app_id)) {
++    VLOG(1) << "The embedder does not allow component " << component.name
++            << " (" << component.app_id << ")";
++    return false;
++  }
++
+   // Cancel any pending unregistration for this component.
+   std::erase(components_pending_unregistration_, component.app_id);
+ 
+@@ -580,6 +595,10 @@ std::unique_ptr<ComponentUpdateService> ComponentUpdateServiceFactory(
+                                             std::move(update_client), brand);
+ }
+ 
++void AllowOnlyComponentsForEmbedder(std::vector<std::string> app_ids) {
++  EmbedderComponentAllowlist() = std::move(app_ids);
++}
++
+ // Register prefs required by the component update service.
+ void RegisterComponentUpdateServicePrefs(PrefRegistrySimple* registry) {
+   // If the preference is not set the component updates are enabled by default
+diff --git a/components/component_updater/component_updater_service.h b/components/component_updater/component_updater_service.h
+index 999198d5e168..ee9c1fe211b7 100644
+--- a/components/component_updater/component_updater_service.h
++++ b/components/component_updater/component_updater_service.h
+@@ -268,6 +268,14 @@ std::unique_ptr<ComponentUpdateService> ComponentUpdateServiceFactory(
+ // Register prefs required by the component update service.
+ void RegisterComponentUpdateServicePrefs(PrefRegistrySimple* registry);
+ 
++// Open Arc: an embedder that wants only some components (for example only the
++// CRLSet) calls this on the browser's main sequence before anything registers
++// a component. From then on RegisterComponent() refuses every app id not in
++// |app_ids|, so no other component is registered, loaded from disk, checked
++// for updates or downloaded, whoever asks for it (the startup registration or
++// an installer that registers on demand). Chrome never calls it.
++void AllowOnlyComponentsForEmbedder(std::vector<std::string> app_ids);
++
+ }  // namespace component_updater
+ 
+ #endif  // COMPONENTS_COMPONENT_UPDATER_COMPONENT_UPDATER_SERVICE_H_

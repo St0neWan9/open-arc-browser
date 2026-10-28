@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Wed, 28 Oct 2026 01:37:51 -0700
+Subject: [PATCH] openarc: embedder: CRLSet updates, every other component off
+
+Plan C33 (decision Q21 revised). Replaces the call to
+DisableComponentUpdaterNetworkForEmbedder() (C27) with
+AllowOnlyComponentsForEmbedder({CRLSet app id}) in
+PostEarlyInitialization, and registers the CRLSet component in
+PreProfileInit, where Chrome's RegisterComponentsForUpdate() (skipped
+by --disable-component-update) would. Registration loads the CRLSet in
+<user data dir>/CertificateRevocation into the certificate verifier
+before any profile loads; the component updater checks
+update.googleapis.com one minute after start and every 5 hours, and
+downloads a new CRLSet from Google's download hosts when there is one.
+
+All other components still fail to register, so they make no requests.
+--disable-component-update and --disable-background-networking stay on.
+DisableComponentUpdaterNetworkForEmbedder() (patch 0042) is no longer
+called.
+---
+ .../openarc_browser_main_extra_parts.h        |  2 ++
+ .../openarc_browser_main_extra_parts.mm       | 33 +++++++++++++++----
+ 2 files changed, 29 insertions(+), 6 deletions(-)
+
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.h b/openarc/browser/openarc_browser_main_extra_parts.h
+index d3dec129d3fa..fad0fa20f277 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.h
++++ b/openarc/browser/openarc_browser_main_extra_parts.h
+@@ -20,6 +20,7 @@ namespace openarc {
+ //   workspace; Chrome sync is never set up), background mode off;
+ // - hands the bundled ad blocking ruleset to Chrome's RulesetService (plan
+ //   C16, openarc_ad_blocker.h);
++// - lets the component updater have the CRLSet and nothing else (plan C33);
+ // - runs the bridge's callback before Chrome tears profiles down, so every
+ //   OACTab closes its WebContents while its profile is still alive.
+ class OpenArcBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
+@@ -39,6 +40,7 @@ class OpenArcBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
+ 
+   // ChromeBrowserMainExtraParts:
+   void PostEarlyInitialization() override;
++  void PreProfileInit() override;
+   void PostProfileInit(Profile* profile, bool is_initial_profile) override;
+   void PostBrowserStart() override;
+   void PostMainMessageLoopRun() override;
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.mm b/openarc/browser/openarc_browser_main_extra_parts.mm
+index 1cb865ea50af..a06869da1a9b 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.mm
++++ b/openarc/browser/openarc_browser_main_extra_parts.mm
+@@ -9,10 +9,11 @@
+ #include "base/check.h"
+ #include "base/values.h"
+ #include "chrome/browser/browser_process.h"
+-#include "chrome/browser/component_updater/chrome_component_updater_configurator.h"
++#include "chrome/browser/component_updater/crl_set_component_installer.h"
+ #include "chrome/browser/extensions/updater/extension_updater.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/common/pref_names.h"
++#include "components/component_updater/component_updater_service.h"
+ #include "components/embedder_support/pref_names.h"
+ #include "components/network_time/network_time_pref_names.h"
+ #include "components/os_crypt/common/keychain_password_mac.h"
+@@ -28,6 +29,10 @@
+ 
+ OpenArcBrowserMainExtraParts* g_extra_parts = nullptr;
+ 
++// The CRLSet component's app id: the id derived from the SHA-256 of the key
++// that signs Google's CRLSets (CRLSetPolicy::GetHash).
++constexpr char kCRLSetComponentId[] = "hfnkpimlhhgieaddgfemjhofmfblmnib";
++
+ }  // namespace
+ 
+ OpenArcBrowserMainExtraParts::OpenArcBrowserMainExtraParts() {
+@@ -70,12 +75,15 @@
+   extensions::ExtensionUpdater::
+       AllowWebStoreUpdatesWithoutBackgroundNetworking();
+ 
+-  // Plan C27: --disable-component-update (decision Q21) only skips the
+-  // components Chrome registers at startup. Installers that register on
+-  // demand still reach update.googleapis.com and dl.google.com; the
++  // Plans C27 and C33: --disable-component-update (decision Q21) only skips
++  // the components Chrome registers at startup. Installers that register on
++  // demand would still reach update.googleapis.com and dl.google.com; the
+   // optimization guide's on-device model manifest does so at every first
+-  // start. Give the component updater no server at all.
+-  component_updater::DisableComponentUpdaterNetworkForEmbedder();
++  // start. Allow the CRLSet alone (registered in PreProfileInit): Chromium
++  // ships no CRLSet of its own, so revoked certificates are only blocked once
++  // Google's daily CRLSet arrives. Every other component fails to register,
++  // so it is never loaded, checked or downloaded. Before anything registers.
++  component_updater::AllowOnlyComponentsForEmbedder({kCRLSetComponentId});
+ 
+   // No Chrome background mode: the app's own lifetime decides.
+   if (PrefService* local_state = g_browser_process->local_state()) {
+@@ -96,6 +104,19 @@
+   }
+ }
+ 
++void OpenArcBrowserMainExtraParts::PreProfileInit() {
++  // Plan C33: the CRLSet component, as Chrome's RegisterComponentsForUpdate()
++  // registers it (which --disable-component-update skips). Registration loads
++  // the CRLSet already in <user data dir>/CertificateRevocation into the
++  // certificate verifier; the component updater then checks
++  // update.googleapis.com 1 minute after start and every 5 hours. Before
++  // profiles load, so the first pages are verified against it.
++  component_updater::ComponentUpdateService* cus =
++      g_browser_process->component_updater();
++  CHECK(cus);
++  component_updater::RegisterCRLSetComponent(cus);
++}
++
+ void OpenArcBrowserMainExtraParts::PostProfileInit(Profile* profile,
+                                                    bool is_initial_profile) {
+   // Defaults, not user values: a later settings UI (or policy) still wins.
