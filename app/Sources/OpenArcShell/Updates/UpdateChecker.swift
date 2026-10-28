@@ -79,8 +79,9 @@ public enum UpdateConfiguration: Equatable, Sendable {
     /// The `SUPublicEDKey` value in `app/Bundle/Info.plist` until a release key exists. Not valid
     /// base64, so even if Sparkle were started with it, it would refuse to run (fails closed).
     public static let placeholderPublicKey = "OPENARC_PLACEHOLDER_EDDSA_PUBLIC_KEY"
-    /// Placeholder feed: GitHub Pages of a not-yet-created `openarc` organization.
-    public static let placeholderFeedURL = URL(string: "https://openarc.github.io/appcast.xml")!
+    /// The appcast on our static host: raw content of the public repository's `updates` branch
+    /// (plan D14). Sparkle stays off until `SUPublicEDKey` is a real key.
+    public static let hostedFeedURL = URL(string: "https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/appcast.xml")!
 
     /// - Parameter infoDictionary: `Bundle.main.infoDictionary`.
     public init(infoDictionary: [String: Any]) {

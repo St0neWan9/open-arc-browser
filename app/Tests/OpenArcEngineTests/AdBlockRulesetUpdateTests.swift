@@ -186,9 +186,11 @@ final class AdBlockRulesetUpdateTests: XCTestCase {
 
     // MARK: Configuration
 
-    func testManifestURLStaysOffUntilTheHostExists() {
-        XCTAssertTrue(AdBlockRulesetUpdateConfiguration.isHostPlaceholder)
-        XCTAssertNil(AdBlockRulesetUpdateConfiguration.manifestURL(environment: [:]))
+    /// D14: the built-in manifest URL is the public repository's `updates` branch (https).
+    func testManifestURLPointsAtTheHostedFeed() {
+        XCTAssertFalse(AdBlockRulesetUpdateConfiguration.isHostPlaceholder)
+        XCTAssertEqual(AdBlockRulesetUpdateConfiguration.manifestURL(environment: [:]),
+                       URL(string: "https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/adblock/manifest.json"))
         XCTAssertEqual(
             AdBlockRulesetUpdateConfiguration.manifestURL(environment: ["OPENARC_ADBLOCK_MANIFEST_URL": "http://127.0.0.1:8765/adblock/manifest.json"]),
             manifestURL

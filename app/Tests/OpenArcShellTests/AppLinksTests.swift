@@ -43,7 +43,7 @@ final class AppLinksTests: XCTestCase {
         let root = repositoryRoot
         let linksFile = root.appendingPathComponent("app/Sources/OpenArcShell/MenuBar/AppLinks.swift").standardizedFileURL
         XCTAssertTrue(FileManager.default.fileExists(atPath: linksFile.path))
-        let allowedFeeds = ["openarc.github.io/appcast.xml", "openarc.github.io/adblock/"]
+        let allowedFeeds = ["openarc.github.io/appcast.xml", "openarc.github.io/adblock/"]  // test fixtures only; the real feeds live on raw.githubusercontent.com (D14)
         let pattern = try NSRegularExpression(pattern: #"(?:https?://|mailto:[^@\s"]*@)(openarc\.[A-Za-z0-9.-]+)([^\s"'<>)]*)"#)
 
         var offenders: [String] = []

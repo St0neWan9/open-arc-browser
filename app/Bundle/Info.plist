@@ -160,8 +160,7 @@
 
 	<!--
 	  Sparkle 2 software updates (plan D7). See docs/release.md.
-	  SUFeedURL: PLACEHOLDER. GitHub Pages of a not-yet-created "openarc" organization; replace
-	    it with the real appcast URL (GitHub Releases / Pages) before the first release.
+	  SUFeedURL: raw content of the public repository's "updates" branch (plan D14).
 	  SUPublicEDKey: PLACEHOLDER. TODO(release): replace with the base64 Ed25519 public key
 	    printed by Sparkle's generate_keys. The private key stays in the release machine's
 	    Keychain and is never committed. While this placeholder is here the app does not start
@@ -170,7 +169,7 @@
 	    app/Sources/OpenArcShell/Updates/UpdateChecker.swift.
 	-->
 	<key>SUFeedURL</key>
-	<string>https://openarc.github.io/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>OPENARC_PLACEHOLDER_EDDSA_PUBLIC_KEY</string>
 	<key>SUEnableAutomaticChecks</key>

@@ -172,17 +172,17 @@ final class UpdatesTests: XCTestCase {
     func testConfigurationRequiresBundleFeedAndRealKey() {
         let base: [String: Any] = [
             "CFBundleIdentifier": AppIdentity.bundleIdentifier,
-            UpdateConfiguration.feedURLKey: "https://openarc.github.io/appcast.xml",
+            UpdateConfiguration.feedURLKey: "https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/appcast.xml",
             UpdateConfiguration.publicKeyKey: validKey,
         ]
-        XCTAssertEqual(UpdateConfiguration(infoDictionary: base), .ready(feedURL: UpdateConfiguration.placeholderFeedURL))
+        XCTAssertEqual(UpdateConfiguration(infoDictionary: base), .ready(feedURL: UpdateConfiguration.hostedFeedURL))
 
         XCTAssertEqual(UpdateConfiguration(infoDictionary: [:]), .unavailable(.notAnAppBundle))
         var other = base; other["CFBundleIdentifier"] = "com.apple.dt.xctest.tool"
         XCTAssertEqual(UpdateConfiguration(infoDictionary: other), .unavailable(.notAnAppBundle))
         var noFeed = base; noFeed[UpdateConfiguration.feedURLKey] = nil
         XCTAssertEqual(UpdateConfiguration(infoDictionary: noFeed), .unavailable(.missingFeedURL))
-        var http = base; http[UpdateConfiguration.feedURLKey] = "http://openarc.github.io/appcast.xml"
+        var http = base; http[UpdateConfiguration.feedURLKey] = "http://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/appcast.xml"
         XCTAssertEqual(UpdateConfiguration(infoDictionary: http), .unavailable(.missingFeedURL))
         var placeholder = base; placeholder[UpdateConfiguration.publicKeyKey] = UpdateConfiguration.placeholderPublicKey
         XCTAssertEqual(UpdateConfiguration(infoDictionary: placeholder), .unavailable(.missingPublicKey))
@@ -194,7 +194,7 @@ final class UpdatesTests: XCTestCase {
     func testDevelopmentBuildHasNoUpdates() {
         let dev: [String: Any] = [
             "CFBundleIdentifier": AppIdentity.developmentBundleIdentifier,
-            UpdateConfiguration.feedURLKey: "https://openarc.github.io/appcast.xml",
+            UpdateConfiguration.feedURLKey: "https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/appcast.xml",
             UpdateConfiguration.publicKeyKey: validKey,
         ]
         XCTAssertEqual(UpdateConfiguration(infoDictionary: dev), .unavailable(.missingFeedURL))
@@ -212,11 +212,11 @@ final class UpdatesTests: XCTestCase {
         return try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     }
 
-    /// The template carries Sparkle's keys with the documented placeholders, so the app does not
-    /// start Sparkle until a release key replaces them (docs/release.md).
+    /// The template carries Sparkle's keys: the hosted feed (D14) and the placeholder public key,
+    /// so the app does not start Sparkle until a release key replaces it (docs/release.md).
     func testInfoPlistTemplateHasSparkleKeys() throws {
         let plist = try bundleInfoPlist()
-        XCTAssertEqual(plist[UpdateConfiguration.feedURLKey] as? String, UpdateConfiguration.placeholderFeedURL.absoluteString)
+        XCTAssertEqual(plist[UpdateConfiguration.feedURLKey] as? String, UpdateConfiguration.hostedFeedURL.absoluteString)
         XCTAssertEqual(plist[UpdateConfiguration.publicKeyKey] as? String, UpdateConfiguration.placeholderPublicKey)
         XCTAssertEqual(plist["SUEnableAutomaticChecks"] as? Bool, true)
         XCTAssertEqual(UpdateConfiguration(infoDictionary: plist), .unavailable(.missingPublicKey))
