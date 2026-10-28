@@ -1,0 +1,188 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 19:33:31 -0700
+Subject: [PATCH] openarc: embedder: web notification clicks bring their tab
+ forward
+
+Plan C24. Chrome's Mac notification bridge already shows web notifications
+in Notification Center for the embedder (banners from the app's own bundle
+id, requireInteraction alerts from "Open Arc Helper (Alerts).app"; checked
+in usernoted's log). A click now:
+
+- activates the app and reports -tabDidRequestActivation: for the tab of
+  the document that showed the notification (the shell selects the tab and
+  brings its window forward, as for window.focus());
+- when that page is gone, asks OACApplicationDelegate for a foreground tab
+  on the notification's origin (application:didRequestNewTab:, opener nil),
+  in the profile that showed it.
+
+Uses the //chrome hook of the previous patch, installed when the engine
+starts.
+---
+ openarc/BUILD.gn                            |  3 +
+ openarc/bridge/oac_application.mm           |  3 +
+ openarc/bridge/oac_notifications.mm         | 87 +++++++++++++++++++++
+ openarc/bridge/oac_notifications_internal.h | 18 +++++
+ 4 files changed, 111 insertions(+)
+ create mode 100644 openarc/bridge/oac_notifications.mm
+ create mode 100644 openarc/bridge/oac_notifications_internal.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 52d6baef5d3b..fb47a52cf764 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -265,6 +265,8 @@ source_set("bridge") {
+               "bridge/oac_extensions.mm",
+               "bridge/oac_extensions_internal.h",
+               "bridge/oac_link_preview.mm",
++              "bridge/oac_notifications.mm",
++              "bridge/oac_notifications_internal.h",
+               "bridge/oac_import.mm",
+               "bridge/oac_profile.mm",
+               "bridge/oac_profile_internal.h",
+@@ -293,6 +295,7 @@ source_set("bridge") {
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/extensions",
+     "//chrome/browser/picture_in_picture",
++    "//chrome/browser/notifications",
+     "//chrome/browser/translate",
+     "//components/translate/core/browser",
+     "//extensions/browser",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 5ec477bb1eb5..cf6a4003f1b9 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -40,6 +40,7 @@
+ #include "openarc/app/openarc_main_delegate.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
+ #import "openarc/bridge/oac_extensions_internal.h"
++#import "openarc/bridge/oac_notifications_internal.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+@@ -360,6 +361,8 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   // Extensions (plan C14): install confirmations are shell-drawn, and
+   // chrome.tabs.query lists the bridge's tabs.
+   OACInstallExtensionHooks();
++  // Web notifications (plan C24): a click brings its tab forward.
++  OACInstallNotificationHooks();
+   // DevTools treats them as pages, with Elements, Console and Network.
+   ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate(
+       base::BindRepeating([](content::WebContents* contents) {
+diff --git a/openarc/bridge/oac_notifications.mm b/openarc/bridge/oac_notifications.mm
+new file mode 100644
+index 000000000000..109179b2e30b
+--- /dev/null
++++ b/openarc/bridge/oac_notifications.mm
+@@ -0,0 +1,87 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "openarc/bridge/oac_notifications_internal.h"
++
++#import <AppKit/AppKit.h>
++
++#include "base/functional/bind.h"
++#include "chrome/browser/notifications/non_persistent_notification_handler.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_delegate.h"
++#include "net/base/apple/url_conversions.h"
++#include "url/gurl.h"
++
++#import <OpenArcCore/OACApplication.h>
++#import <OpenArcCore/OACProfile.h>
++#import <OpenArcCore/OACTabDelegate.h>
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_requests_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++
++namespace {
++
++// The bridge profile wrapping |profile| (or its off-the-record variant).
++OACProfile* BridgeProfileFor(Profile* profile) {
++  if (!profile) {
++    return nil;
++  }
++  for (OACProfile* candidate in OACApplication.sharedApplication
++           .loadedProfiles) {
++    if (!candidate.valid ||
++        candidate.chromeProfile != profile->GetOriginalProfile()) {
++      continue;
++    }
++    return profile->IsOffTheRecord() ? candidate.offTheRecordProfile
++                                     : candidate;
++  }
++  return nil;
++}
++
++void NotificationClicked(Profile* profile,
++                         const GURL& origin,
++                         content::WebContents* web_contents) {
++  // The user clicked in Notification Center: the app comes forward, as
++  // Chrome's notification clicks bring Chrome forward.
++  [NSApp activateIgnoringOtherApps:YES];
++  // The tab's own contents (the document may sit in an inner one, a PDF).
++  content::WebContents* tab_contents =
++      OACTabForWebContents(web_contents).webContents;
++  if (tab_contents && tab_contents->GetDelegate()) {
++    // The shell selects the tab and brings its window forward, as for
++    // window.focus() (tabDidRequestActivation:).
++    tab_contents->GetDelegate()->ActivateContents(tab_contents);
++    return;
++  }
++  // The page that showed it is gone: open its origin in a new tab, as
++  // Chrome does. Requests from outside a tab go to the app delegate.
++  OACProfile* bridge_profile = BridgeProfileFor(profile);
++  if (!bridge_profile || !origin.is_valid()) {
++    return;
++  }
++  OACNewTabRequest* request = [[OACNewTabRequest alloc]
++      initWithOpener:nil
++             profile:bridge_profile
++                 URL:net::NSURLWithGURL(origin)
++         disposition:OACNewTabDispositionForegroundTab
++      hasUserGesture:YES
++      requestedFrame:CGRectNull];
++  OACPostToMainThread(^{
++    OACApplication* application = OACApplication.sharedApplication;
++    id<OACApplicationDelegate> delegate = application.delegate;
++    if ([delegate respondsToSelector:@selector(application:didRequestNewTab:)]) {
++      [delegate application:application didRequestNewTab:request];
++    }
++  });
++}
++
++}  // namespace
++
++void OACInstallNotificationHooks() {
++  NonPersistentNotificationHandler::SetEmbedderClickCallback(
++      base::BindRepeating(&NotificationClicked));
++}
+diff --git a/openarc/bridge/oac_notifications_internal.h b/openarc/bridge/oac_notifications_internal.h
+new file mode 100644
+index 000000000000..f7ad9864b9c5
+--- /dev/null
++++ b/openarc/bridge/oac_notifications_internal.h
+@@ -0,0 +1,18 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_NOTIFICATIONS_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_NOTIFICATIONS_INTERNAL_H_
++
++// Plan C24: web notifications. Chrome's Mac notification bridge already shows
++// them in Notification Center (banners from the app, alerts from the Alerts
++// helper). A click goes through //chrome's non-persistent handler; this hook
++// brings the tab that showed the notification forward
++// (-[OACTabDelegate tabDidRequestActivation:]) and, when that page is gone,
++// asks the app delegate for a new tab on the notification's origin
++// (-[OACApplicationDelegate application:didRequestNewTab:]) instead of
++// Chrome's Browser-window fallback. Called once when the engine starts.
++void OACInstallNotificationHooks();
++
++#endif  // OPENARC_BRIDGE_OAC_NOTIFICATIONS_INTERNAL_H_

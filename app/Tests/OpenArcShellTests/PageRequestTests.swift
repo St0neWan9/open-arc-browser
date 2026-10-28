@@ -54,6 +54,30 @@ final class PageRequestTests: XCTestCase {
         XCTFail("condition not met", file: file, line: line)
     }
 
+    // MARK: - Web notifications (plan C24)
+
+    /// Plan C24, `docs/arc-spec/00-feature-inventory.md` §A inferred (analysis): web notifications
+    /// reach Notification Center; clicking one brings its tab forward.
+    func testNotificationClickSelectsItsTab() async throws {
+        let (pageID, page) = try await openPage("https://chat.example")
+        let (otherID, _) = try await openPage("https://other.example")
+        XCTAssertEqual(model.selectedTabID, otherID)
+        page.simulateNotificationClick()
+        try await waitUntil { self.model.selectedTabID == pageID }
+    }
+
+    /// Plan C24: a click on a notification whose page is gone opens its site in a new tab of the
+    /// current Space, selected (Chromium's own fallback; inferred).
+    func testNotificationClickWithoutItsPageOpensTheSite() async throws {
+        let before = todayIDs
+        let origin = try url("https://chat.example")
+        engine.simulateNotificationClickWithoutPage(origin: origin)
+        try await waitUntil { self.todayIDs.count == before.count + 1 }
+        let opened = try XCTUnwrap(todayIDs.first { !before.contains($0) })
+        XCTAssertEqual(model.workspace.tabs[opened]?.url, origin)
+        XCTAssertEqual(model.selectedTabID, opened)
+    }
+
     // MARK: - Engine-created tabs (§1)
 
     func testWindowOpenAdoptsTheEngineTabBelowTheOpenerAndSelectsIt() async throws {

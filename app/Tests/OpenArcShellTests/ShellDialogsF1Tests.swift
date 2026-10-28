@@ -208,4 +208,52 @@ final class ShellDialogsF1Tests: XCTestCase {
         try await waitUntil { center.current(for: live.id) == nil }
         XCTAssertNil(live.dialogAnswers[second])
     }
+
+    // MARK: C23 engine info bars
+
+    /// Plan C23, `docs/arc-spec/00-feature-inventory.md` §A inferred (analysis): info bars are
+    /// strips above the page, not queued: they show beside a queued sheet, all of them at once.
+    func testInfoBarsShowBesideDialogsAndStack() async throws {
+        let live = try await openPage("https://bars.example")
+        let center = model.controller.dialogs
+        let first = live.simulateInfoBar(message: "First bar", buttons: [.ok, .cancel], okTitle: "Allow", cancelTitle: "Deny")
+        let second = live.simulateInfoBar(message: "Second bar")
+        let sheet = live.simulateUnresponsivePage()
+        try await waitUntil { center.infoBars(for: live.id).count == 2 && center.current(for: live.id) != nil }
+        XCTAssertEqual(center.infoBars(for: live.id).map(\.id), [first, second], "oldest on top")
+        XCTAssertEqual(center.current(for: live.id)?.id, sheet, "the sheet is not held up by the bars")
+        let bar = try XCTUnwrap(center.infoBars(for: live.id).first)
+        let presentation = DialogPresentation(.infoBar(bar))
+        XCTAssertEqual(presentation.style, .infoBar)
+        XCTAssertEqual(presentation.message, "First bar")
+        XCTAssertEqual(presentation.buttons, ["Deny", "Allow"])
+        XCTAssertEqual(DialogPresentation.answer(for: .infoBar(bar), button: 0, fieldValues: [], checkbox: false), .infoBar(.decline))
+        XCTAssertEqual(DialogPresentation.answer(for: .infoBar(bar), button: 1, fieldValues: [], checkbox: false), .infoBar(.accept))
+    }
+
+    /// Plan C23: the close button dismisses the bar in the engine and removes the strip.
+    func testInfoBarCloseRemovesIt() async throws {
+        let live = try await openPage("https://bars.example")
+        let center = model.controller.dialogs
+        let id = live.simulateInfoBar(message: "Dismiss me")
+        try await waitUntil { !center.infoBars(for: live.id).isEmpty }
+        XCTAssertTrue(center.answer(id, with: .infoBar(.close)))
+        XCTAssertEqual(live.dialogAnswers[id], .infoBar(.close))
+        XCTAssertTrue(center.infoBars(for: live.id).isEmpty)
+    }
+
+    /// Plan C23: a bar the engine keeps after an answer comes back as a new request; a bar the
+    /// engine withdraws disappears.
+    func testInfoBarKeptOrWithdrawnByTheEngine() async throws {
+        let live = try await openPage("https://bars.example")
+        let center = model.controller.dialogs
+        let kept = live.simulateInfoBar(message: "Stays", buttons: [.ok], okTitle: "Apply", keepsOpenOn: [.accept])
+        try await waitUntil { center.infoBars(for: live.id).first?.id == kept }
+        XCTAssertTrue(center.answer(kept, with: .infoBar(.accept)))
+        try await waitUntil { center.infoBars(for: live.id).count == 1 && center.infoBars(for: live.id).first?.id != kept }
+        let again = try XCTUnwrap(center.infoBars(for: live.id).first)
+        XCTAssertEqual(again.message, "Stays")
+        live.simulateDialogCancel(again.id)
+        try await waitUntil { center.infoBars(for: live.id).isEmpty }
+    }
 }

@@ -1,0 +1,637 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 20:19:23 -0700
+Subject: [PATCH] openarc: embedder: engine info bars drawn by the shell
+
+Plan C23. Chrome draws a tab's info bars in its Views InfoBarContainer;
+without a Browser window nothing showed them, and the actions behind them
+(an extension's debugger warning, "reload to apply", the PDF offer) could
+never be answered.
+
+- OACInfoBarRequest (OACDialogDelegate.h, -tab:showInfoBar:): each confirm
+  info bar of the tab's ContentInfoBarManager as a request with the
+  engine's message (templates filled in), link title, OK / Cancel titles
+  and whether it can be closed. Accept, decline, close and the link do
+  what Chrome's views do (Accept() / Cancel() decide whether the bar
+  closes, InfoBarDismissed(), LinkClicked() opening a new foreground tab).
+  A bar that stays open after an action is presented again; one that goes
+  away on its own (navigation, replaced, closed by its feature) is
+  withdrawn. The default answer leaves the bar open.
+- //chrome's global bars reach every bridge tab (the hook of the previous
+  patch): installed at engine start, and each new tab gets the open ones.
+---
+ openarc/BUILD.gn                              |   4 +
+ openarc/bridge/oac_application.mm             |   3 +
+ openarc/bridge/oac_infobars.mm                | 340 ++++++++++++++++++
+ openarc/bridge/oac_infobars_internal.h        |  79 ++++
+ openarc/bridge/oac_tab.mm                     |   9 +
+ .../public/OpenArcCore/OACDialogDelegate.h    |  51 ++-
+ 6 files changed, 484 insertions(+), 2 deletions(-)
+ create mode 100644 openarc/bridge/oac_infobars.mm
+ create mode 100644 openarc/bridge/oac_infobars_internal.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index fb47a52cf764..e8046e726173 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -267,6 +267,8 @@ source_set("bridge") {
+               "bridge/oac_link_preview.mm",
+               "bridge/oac_notifications.mm",
+               "bridge/oac_notifications_internal.h",
++              "bridge/oac_infobars.mm",
++              "bridge/oac_infobars_internal.h",
+               "bridge/oac_import.mm",
+               "bridge/oac_profile.mm",
+               "bridge/oac_profile_internal.h",
+@@ -296,6 +298,8 @@ source_set("bridge") {
+     "//chrome/browser/extensions",
+     "//chrome/browser/picture_in_picture",
+     "//chrome/browser/notifications",
++    "//components/infobars/content",
++    "//components/infobars/core",
+     "//chrome/browser/translate",
+     "//components/translate/core/browser",
+     "//extensions/browser",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index cf6a4003f1b9..1b4d40eb94de 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -40,6 +40,7 @@
+ #include "openarc/app/openarc_main_delegate.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
+ #import "openarc/bridge/oac_extensions_internal.h"
++#import "openarc/bridge/oac_infobars_internal.h"
+ #import "openarc/bridge/oac_notifications_internal.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+@@ -363,6 +364,8 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   OACInstallExtensionHooks();
+   // Web notifications (plan C24): a click brings its tab forward.
+   OACInstallNotificationHooks();
++  // Engine info bars (plan C23): //chrome's global bars reach every tab.
++  openarc::InstallInfoBarHooks();
+   // DevTools treats them as pages, with Elements, Console and Network.
+   ChromeDevToolsManagerDelegate::SetEmbedderTabPredicate(
+       base::BindRepeating([](content::WebContents* contents) {
+diff --git a/openarc/bridge/oac_infobars.mm b/openarc/bridge/oac_infobars.mm
+new file mode 100644
+index 000000000000..01371c6256e3
+--- /dev/null
++++ b/openarc/bridge/oac_infobars.mm
+@@ -0,0 +1,340 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "openarc/bridge/oac_infobars_internal.h"
++
++#include <map>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/strings/string_util.h"
++#include "base/strings/sys_string_conversions.h"
++#include "chrome/browser/devtools/global_confirm_info_bar.h"
++#include "components/infobars/content/content_infobar_manager.h"
++#include "components/infobars/core/confirm_infobar_delegate.h"
++#include "components/infobars/core/infobar.h"
++#include "components/infobars/core/infobar_manager.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/window_open_disposition.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_requests_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++
++namespace {
++
++// The message as a plain string: a template's placeholders get their
++// substitutions' text (link substitutions included; the bar's own link is
++// separate).
++NSString* MessageOf(const ConfirmInfoBarDelegate& delegate) {
++  const std::u16string format = delegate.GetMessageTextTemplate();
++  if (format.empty()) {
++    return base::SysUTF16ToNSString(delegate.GetMessageText());
++  }
++  std::vector<std::u16string> texts;
++  for (const MessageSubstitution& substitution :
++       delegate.GetMessageSubstitutions()) {
++    texts.push_back(substitution.text);
++  }
++  return base::SysUTF16ToNSString(
++      base::ReplaceStringPlaceholders(format, texts, nullptr));
++}
++
++}  // namespace
++
++// MARK: - Request
++
++@interface OACInfoBarRequest ()
++- (instancetype)initWithTab:(OACTab*)tab
++                    message:(NSString*)message
++                  linkTitle:(NSString*)linkTitle
++                    buttons:(OACInfoBarButtons)buttons
++              OKButtonTitle:(NSString*)OKButtonTitle
++          cancelButtonTitle:(NSString*)cancelButtonTitle
++                 closeable:(BOOL)closeable
++                     action:(base::RepeatingCallback<void(int)>)action;
++@end
++
++// The actions an OACInfoBarRequest sends to its bridge.
++namespace {
++enum InfoBarAction {
++  kAccept = 0,
++  kDecline = 1,
++  kClose = 2,
++  kOpenLink = 3,
++};
++}  // namespace
++
++@implementation OACInfoBarRequest {
++  NSString* _message;
++  NSString* _linkTitle;
++  OACInfoBarButtons _buttons;
++  NSString* _OKButtonTitle;
++  NSString* _cancelButtonTitle;
++  BOOL _closeable;
++  base::RepeatingCallback<void(int)> _action;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                    message:(NSString*)message
++                  linkTitle:(NSString*)linkTitle
++                    buttons:(OACInfoBarButtons)buttons
++              OKButtonTitle:(NSString*)OKButtonTitle
++          cancelButtonTitle:(NSString*)cancelButtonTitle
++                 closeable:(BOOL)closeable
++                     action:(base::RepeatingCallback<void(int)>)action {
++  if ((self = [super initWithTab:tab origin:nil isFromSubframe:NO])) {
++    _message = [message copy];
++    _linkTitle = [linkTitle copy];
++    _buttons = buttons;
++    _OKButtonTitle = [OKButtonTitle copy];
++    _cancelButtonTitle = [cancelButtonTitle copy];
++    _closeable = closeable;
++    _action = std::move(action);
++  }
++  return self;
++}
++
++- (NSString*)message {
++  return _message;
++}
++- (NSString*)linkTitle {
++  return _linkTitle;
++}
++- (OACInfoBarButtons)buttons {
++  return _buttons;
++}
++- (NSString*)OKButtonTitle {
++  return _OKButtonTitle;
++}
++- (NSString*)cancelButtonTitle {
++  return _cancelButtonTitle;
++}
++- (BOOL)isCloseable {
++  return _closeable;
++}
++
++- (void)send:(InfoBarAction)action {
++  if (![self markFinished]) {
++    return;
++  }
++  base::RepeatingCallback<void(int)> callback = std::move(_action);
++  if (callback) {
++    callback.Run(action);
++  }
++}
++
++- (void)accept {
++  [self send:kAccept];
++}
++- (void)decline {
++  [self send:kDecline];
++}
++- (void)close {
++  [self send:kClose];
++}
++- (void)openLink {
++  [self send:kOpenLink];
++}
++
++- (void)cancel {
++  // The default: the bar stays open in the engine (OACDialogDelegate.h).
++  [self markFinished];
++  _action.Reset();
++}
++
++- (void)withdrawByEngine {
++  _action.Reset();
++  [super withdrawByEngine];
++}
++
++@end
++
++// MARK: - Per-tab bridge
++
++namespace openarc {
++
++TabInfoBarBridge::TabInfoBarBridge(OACTab* tab,
++                                   infobars::ContentInfoBarManager* manager)
++    : tab_(tab), manager_(manager) {
++  observation_.Observe(manager);
++  // Bars added before the tab existed (an adopted window).
++  for (infobars::InfoBar* infobar : manager->infobars()) {
++    Present(infobar);
++  }
++}
++
++TabInfoBarBridge::~TabInfoBarBridge() {
++  for (auto& [infobar, request] : requests_) {
++    [request withdrawByEngine];
++  }
++}
++
++void TabInfoBarBridge::OnInfoBarAdded(infobars::InfoBar* infobar) {
++  Present(infobar);
++}
++
++void TabInfoBarBridge::OnInfoBarRemoved(infobars::InfoBar* infobar,
++                                        bool animate) {
++  Withdraw(infobar);
++}
++
++void TabInfoBarBridge::OnInfoBarReplaced(infobars::InfoBar* old_infobar,
++                                         infobars::InfoBar* new_infobar) {
++  Withdraw(old_infobar);
++  Present(new_infobar);
++}
++
++void TabInfoBarBridge::OnManagerWillBeDestroyed(
++    infobars::InfoBarManager* manager) {
++  observation_.Reset();
++  manager_ = nullptr;
++  for (auto& [infobar, request] : requests_) {
++    [request withdrawByEngine];
++  }
++  requests_.clear();
++}
++
++void TabInfoBarBridge::Present(infobars::InfoBar* infobar) {
++  ConfirmInfoBarDelegate* delegate =
++      infobar->delegate()->AsConfirmInfoBarDelegate();
++  // Only confirm bars have a text form; other kinds (translate, theme
++  // preview) have their own shell surfaces or none.
++  if (!delegate || requests_.contains(infobar)) {
++    return;
++  }
++  const int buttons = delegate->GetButtons();
++  OACInfoBarButtons bridge_buttons = 0;
++  if (buttons & ConfirmInfoBarDelegate::BUTTON_OK) {
++    bridge_buttons |= OACInfoBarButtonOK;
++  }
++  if (buttons & ConfirmInfoBarDelegate::BUTTON_CANCEL) {
++    bridge_buttons |= OACInfoBarButtonCancel;
++  }
++  const std::u16string link = delegate->GetLinkText();
++  base::WeakPtr<infobars::InfoBar> weak_infobar = infobar->AsWeakPtr();
++  base::WeakPtr<TabInfoBarBridge> weak_this = weak_factory_.GetWeakPtr();
++  OACInfoBarRequest* request = [[OACInfoBarRequest alloc]
++        initWithTab:tab_
++            message:MessageOf(*delegate)
++          linkTitle:link.empty() ? nil : base::SysUTF16ToNSString(link)
++            buttons:bridge_buttons
++      OKButtonTitle:(buttons & ConfirmInfoBarDelegate::BUTTON_OK)
++                        ? base::SysUTF16ToNSString(delegate->GetButtonLabel(
++                              ConfirmInfoBarDelegate::BUTTON_OK))
++                        : @""
++  cancelButtonTitle:(buttons & ConfirmInfoBarDelegate::BUTTON_CANCEL)
++                        ? base::SysUTF16ToNSString(delegate->GetButtonLabel(
++                              ConfirmInfoBarDelegate::BUTTON_CANCEL))
++                        : @""
++          closeable:delegate->IsCloseable()
++             action:base::BindRepeating(
++                        [](base::WeakPtr<TabInfoBarBridge> self,
++                           base::WeakPtr<infobars::InfoBar> bar, int action) {
++                          if (self && bar) {
++                            self->Perform(bar.get(), action);
++                          }
++                        },
++                        weak_this, weak_infobar)];
++  requests_[infobar] = request;
++  OACPresentDialogRequest(
++      tab_, request, @selector(tab:showInfoBar:),
++      ^BOOL(id<OACDialogDelegate> dialog_delegate, OACTab* owner) {
++        return [dialog_delegate tab:owner showInfoBar:request];
++      });
++}
++
++void TabInfoBarBridge::Withdraw(infobars::InfoBar* infobar) {
++  auto it = requests_.find(infobar);
++  if (it == requests_.end()) {
++    return;
++  }
++  OACInfoBarRequest* request = it->second;
++  requests_.erase(it);
++  [request withdrawByEngine];
++}
++
++// What the bar's buttons do in Chrome's views (ConfirmInfoBar,
++// InfoBarView): the delegate decides whether the bar closes. The bridge
++// never shows the bar in a views container, so a removed bar is deleted at
++// once: everything after the delegate call goes through weak pointers.
++void TabInfoBarBridge::Perform(infobars::InfoBar* infobar, int action) {
++  if (!manager_ || !infobar->owner()) {
++    return;  // Closing already.
++  }
++  // The answered request is done; a bar that stays open gets a new one.
++  requests_.erase(infobar);
++  base::WeakPtr<infobars::InfoBar> weak_infobar = infobar->AsWeakPtr();
++  base::WeakPtr<TabInfoBarBridge> weak_this = weak_factory_.GetWeakPtr();
++  ConfirmInfoBarDelegate* delegate =
++      infobar->delegate()->AsConfirmInfoBarDelegate();
++  bool remove = false;
++  switch (static_cast<InfoBarAction>(action)) {
++    case kAccept:
++      remove = delegate && delegate->Accept();
++      break;
++    case kDecline:
++      remove = delegate && delegate->Cancel();
++      break;
++    case kClose:
++      infobar->delegate()->InfoBarDismissed();
++      remove = true;
++      break;
++    case kOpenLink:
++      remove = infobar->delegate()->LinkClicked(
++          WindowOpenDisposition::NEW_FOREGROUND_TAB);
++      break;
++  }
++  // The delegate may have closed the bar (a global bar closes all its
++  // copies) or the whole tab.
++  if (!weak_infobar || !weak_infobar->owner()) {
++    return;
++  }
++  if (remove) {
++    weak_infobar->RemoveSelf();
++    return;
++  }
++  if (weak_this) {
++    Present(weak_infobar.get());
++  }
++}
++
++std::unique_ptr<TabInfoBarBridge> CreateTabInfoBarBridge(
++    OACTab* tab,
++    content::WebContents* web_contents) {
++  infobars::ContentInfoBarManager* manager =
++      infobars::ContentInfoBarManager::FromWebContents(web_contents);
++  if (!manager) {
++    return nullptr;
++  }
++  return std::make_unique<TabInfoBarBridge>(tab, manager);
++}
++
++void DestroyTabInfoBarBridge(std::unique_ptr<TabInfoBarBridge> bridge) {
++  bridge.reset();
++}
++
++void InstallInfoBarHooks() {
++  GlobalConfirmInfoBar::SetEmbedderTabs(base::BindRepeating([] {
++    std::vector<content::WebContents*> contents;
++    for (OACTab* tab in OACApplication.sharedApplication.liveTabsForBridge) {
++      if (content::WebContents* web_contents = tab.webContents) {
++        contents.push_back(web_contents);
++      }
++    }
++    return contents;
++  }));
++}
++
++void AddGlobalInfoBarsToTab(content::WebContents* web_contents) {
++  GlobalConfirmInfoBar::EmbedderTabAdded(web_contents);
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/oac_infobars_internal.h b/openarc/bridge/oac_infobars_internal.h
+new file mode 100644
+index 000000000000..a312de26a5ae
+--- /dev/null
++++ b/openarc/bridge/oac_infobars_internal.h
+@@ -0,0 +1,79 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_INFOBARS_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_INFOBARS_INTERNAL_H_
++
++#import <OpenArcCore/OACDialogDelegate.h>
++
++#include <map>
++#include <memory>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "components/infobars/core/infobar_manager.h"
++
++namespace content {
++class WebContents;
++}
++
++namespace infobars {
++class ContentInfoBarManager;
++class InfoBar;
++}  // namespace infobars
++
++namespace openarc {
++
++// Observes one tab's InfoBarManager and keeps one OACInfoBarRequest per
++// confirm info bar that is open.
++class TabInfoBarBridge : public infobars::InfoBarManager::Observer {
++ public:
++  TabInfoBarBridge(OACTab* tab, infobars::ContentInfoBarManager* manager);
++  TabInfoBarBridge(const TabInfoBarBridge&) = delete;
++  TabInfoBarBridge& operator=(const TabInfoBarBridge&) = delete;
++  ~TabInfoBarBridge() override;
++
++  // infobars::InfoBarManager::Observer:
++  void OnInfoBarAdded(infobars::InfoBar* infobar) override;
++  void OnInfoBarRemoved(infobars::InfoBar* infobar, bool animate) override;
++  void OnInfoBarReplaced(infobars::InfoBar* old_infobar,
++                         infobars::InfoBar* new_infobar) override;
++  void OnManagerWillBeDestroyed(infobars::InfoBarManager* manager) override;
++
++ private:
++  void Present(infobars::InfoBar* infobar);
++  void Withdraw(infobars::InfoBar* infobar);
++  // One of the request's actions (accept, decline, close, open link).
++  void Perform(infobars::InfoBar* infobar, int action);
++
++  __weak OACTab* tab_;
++  raw_ptr<infobars::InfoBarManager> manager_;
++  base::ScopedObservation<infobars::InfoBarManager,
++                          infobars::InfoBarManager::Observer>
++      observation_{this};
++  std::map<infobars::InfoBar*, OACInfoBarRequest*> requests_;
++  base::WeakPtrFactory<TabInfoBarBridge> weak_factory_{this};
++};
++
++// Plan C23: the confirm info bars of one tab's ContentInfoBarManager, each
++// handed to the tab's dialog delegate as an OACInfoBarRequest. Owned by the
++// OACTab; destroyed before its WebContents.
++std::unique_ptr<TabInfoBarBridge> CreateTabInfoBarBridge(
++    OACTab* tab,
++    content::WebContents* web_contents);
++
++// Destroys |bridge| (withdraws its open requests).
++void DestroyTabInfoBarBridge(std::unique_ptr<TabInfoBarBridge> bridge);
++
++// //chrome's global info bars (GlobalConfirmInfoBar, shown on every tab) find
++// the bridge's tabs through this hook. Called once when the engine starts.
++void InstallInfoBarHooks();
++
++// A new tab (created or adopted) gets the global info bars that are open.
++void AddGlobalInfoBarsToTab(content::WebContents* web_contents);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BRIDGE_OAC_INFOBARS_INTERNAL_H_
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 59f42ff75d8b..2d87165aea81 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -81,6 +81,7 @@
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
++#import "openarc/bridge/oac_infobars_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
+ #import "openarc/bridge/oac_session_history_internal.h"
+@@ -606,6 +607,8 @@ @implementation OACTab {
+   OACPageTopColorKind _pageTopColorKind;
+   OACColor _pageTopColor;
+   std::unique_ptr<openarc::TabJavaScriptDialogManager> _dialogManager;
++  // Engine info bars as shell-drawn requests (plan C23).
++  std::unique_ptr<openarc::TabInfoBarBridge> _infoBars;
+   OACTabStateFields _fields;
+   OACTabState* _state;
+   BOOL _closed;
+@@ -757,6 +760,10 @@ - (void)setUpWithWebContents:(std::unique_ptr<content::WebContents>)contents
+   [LiveTabs() setObject:self forKey:_identifier];
+   [OACApplication.sharedApplication registerTab:self];
+   [self refreshState];
++  // Plan C23: the tab's info bars, including //chrome's global ones that are
++  // open (an extension debugging the browser, for example).
++  _infoBars = openarc::CreateTabInfoBarBridge(self, _webContents.get());
++  openarc::AddGlobalInfoBarsToTab(_webContents.get());
+ }
+ 
+ - (void)dealloc {
+@@ -765,6 +772,7 @@ - (void)dealloc {
+   for (OACNewTabRequest* request in _pendingRequests) {
+     [request decline];
+   }
++  openarc::DestroyTabInfoBarBridge(std::move(_infoBars));
+   _pageTopColorSampler.reset();
+   _bridge.reset();
+   _webContents.reset();
+@@ -1680,6 +1688,7 @@ - (void)close {
+   }
+   [_pendingRequests removeAllObjects];
+   _dialogManager->CancelDialogs(_webContents.get(), /*reset_state=*/true);
++  openarc::DestroyTabInfoBarBridge(std::move(_infoBars));
+   _pageTopColorSampler.reset();
+   _bridge.reset();
+   _webContents.reset();
+diff --git a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+index e989f0eacc9e..4d6c18bac19e 100644
+--- a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+@@ -23,7 +23,7 @@
+ // - Dropping the last reference to an unanswered request answers it with its default (alert:
+ //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
+ //   file chooser: cancel, external protocol: block, unresponsive page: wait, client certificate:
+-//   continue without one), so a page never hangs.
++//   continue without one, info bar: left open), so a page never hangs.
+ // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
+ //   right away.
+ //
+@@ -41,7 +41,9 @@
+ // `WebContentsDelegate::RendererUnresponsive`; the client-certificate picker (plan C25) from
+ // //chrome's `ShowSSLClientCertificateSelector` (an Open Arc hook), after Chrome's policy
+ // (AutoSelectCertificateForUrls) found nothing to pick on its own; the WebAuthn dialog (plan C21,
+-// OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook).
++// OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook);
++// engine info bars (plan C23) from the tab's `infobars::ContentInfoBarManager` (confirm info bars
++// only), including //chrome's global ones (`GlobalConfirmInfoBar`, through an Open Arc hook).
+ 
+ #import <OpenArcCore/OACDefines.h>
+ #import <OpenArcCore/OACTab.h>
+@@ -266,6 +268,49 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ - (void)continueWithoutCertificate;
+ @end
+ 
++// MARK: - Info bar (plan C23)
++
++/// The buttons of an info bar. Maps to `InfoBarRequest.Buttons`.
++typedef NS_OPTIONS(NSUInteger, OACInfoBarButtons) {
++    OACInfoBarButtonOK = 1 << 0,
++    OACInfoBarButtonCancel = 1 << 1,
++};
++
++/// An engine info bar: a one-line message strip the engine wants above a tab's page, with up to two
++/// buttons, an optional link and a close button (Chromium's confirm info bars: "an extension is
++/// debugging this browser", "reload to apply your new settings", the PDF viewer offer, and
++/// others). It is not modal: the page stays usable, other requests of the tab show as usual, and
++/// several bars can be open at once (in the order they came).
++///
++/// The engine withdraws the request when the bar goes away on its own (navigation, the feature
++/// closed it, a newer bar replaced it). After an action that keeps the bar open, a new request
++/// for the same bar follows (its texts may have changed).
++///
++/// Default answer (dropped or cancelled): none. The bar stays open in the engine, unseen, until it
++/// closes by its own rules; only `-close` dismisses it. (Some bars are shown on every tab at once,
++/// and dismissing one dismisses all of them.)
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACInfoBarRequest : OACDialogRequest
++/// The message (the engine's text, in its UI language).
++@property (nonatomic, readonly, copy) NSString *message;
++/// The link after the message ("Learn more"), or nil.
++@property (nonatomic, readonly, copy, nullable) NSString *linkTitle;
++@property (nonatomic, readonly) OACInfoBarButtons buttons;
++/// Button titles; empty for a button `buttons` does not have.
++@property (nonatomic, readonly, copy) NSString *OKButtonTitle;
++@property (nonatomic, readonly, copy) NSString *cancelButtonTitle;
++/// The bar has a close (✕) button.
++@property (nonatomic, readonly, getter=isCloseable) BOOL closeable;
++/// The OK button.
++- (void)accept;
++/// The Cancel button.
++- (void)decline;
++/// The close button.
++- (void)close;
++/// The link: the engine opens its page (in a new tab, through the usual new-tab request).
++- (void)openLink;
++@end
++
+ // MARK: - Delegate
+ 
+ @class OACPasswordSavePrompt;
+@@ -303,6 +348,8 @@ NS_SWIFT_UI_ACTOR
+ /// The WebAuthn dialog moved to another step or its content changed.
+ - (void)tab:(OACTab *)tab didUpdateWebAuthnDialog:(OACWebAuthnDialog *)dialog
+     NS_SWIFT_NAME(tab(_:didUpdateWebAuthnDialog:));
++/// An engine info bar for the top of the tab's page (plan C23).
++- (BOOL)tab:(OACTab *)tab showInfoBar:(OACInfoBarRequest *)request NS_SWIFT_NAME(tab(_:showInfoBar:));
+ 
+ /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
+ - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;

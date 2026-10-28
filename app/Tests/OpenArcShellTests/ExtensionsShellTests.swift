@@ -165,4 +165,36 @@ final class ExtensionsShellTests: XCTestCase {
         center.answer(id, with: DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false))
         XCTAssertEqual(tab.dialogAnswers[id], .extensionInstall(.add))
     }
+
+    // MARK: C26 keyboard commands
+
+    /// Plan C26, `docs/arc-spec/00-feature-inventory.md` §A inferred (analysis): an extension's
+    /// `_execute_action` shortcut opens its popup in the window showing the tab, as a click on the
+    /// action does.
+    func testExecuteActionShortcutShowsThePopup() async throws {
+        let tab = try await openPage("https://site.example")
+        let fakes = engine.fakeExtensionService
+        fakes.simulateInstalled(EngineExtensionInfo(id: "pop", name: "Pop", hasPopup: true), profileID: profileID)
+        fakes.simulateCommands(["_execute_action": "⌥⇧P"], extensionID: "pop")
+        let sc = model.siteControls
+        let handled = await fakes.simulateShortcut("⌥⇧P", tabID: tab.id)
+        XCTAssertTrue(handled)
+        try await waitUntil { sc.extensionPopup?.extensionID == "pop" }
+        XCTAssertEqual(sc.extensionPopup?.tabID, model.selectedTabID)
+        let popup = try XCTUnwrap(fakes.popup)
+        popup.simulateLoad()
+        try await waitUntil { sc.extensionPopup?.isLoaded == true }
+    }
+
+    /// Plan C26: a popup a shortcut opened on a tab no window shows is closed.
+    func testExecuteActionShortcutOnAHiddenTabClosesThePopup() async throws {
+        let hidden = try await openPage("https://hidden.example")
+        _ = try await openPage("https://shown.example")
+        let fakes = engine.fakeExtensionService
+        fakes.simulateInstalled(EngineExtensionInfo(id: "pop", name: "Pop", hasPopup: true), profileID: profileID)
+        fakes.simulateCommands(["_execute_action": "⌥⇧P"], extensionID: "pop")
+        _ = await fakes.simulateShortcut("⌥⇧P", tabID: hidden.id)
+        try await waitUntil { fakes.popup == nil }
+        XCTAssertNil(model.siteControls.extensionPopup)
+    }
 }

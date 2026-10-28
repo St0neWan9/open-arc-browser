@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 20:19:20 -0700
+Subject: [PATCH] openarc: chrome: let an embedder's tabs get global info bars
+
+Plan C23. GlobalConfirmInfoBar ("<extension> started debugging this
+browser", the automation bar, the remote-debugging bar) finds its tabs
+through Browser tab strips, which an app that owns its tabs
+(chrome/browser/embedder_owned_ui_mac.h) does not have, so those bars
+never appeared.
+
+On Mac, GlobalConfirmInfoBar::SetEmbedderTabs() lets the embedder list its
+tabs (asked when a global bar is shown) and EmbedderTabAdded() reports a new
+tab, so a global bar reaches every tab as it does in Chrome. Closing one
+copy still closes all of them.
+---
+ .../devtools/global_confirm_info_bar.cc       | 43 +++++++++++++++++++
+ .../devtools/global_confirm_info_bar.h        | 15 +++++++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/chrome/browser/devtools/global_confirm_info_bar.cc b/chrome/browser/devtools/global_confirm_info_bar.cc
+index 774a946b8298..e57b0628685f 100644
+--- a/chrome/browser/devtools/global_confirm_info_bar.cc
++++ b/chrome/browser/devtools/global_confirm_info_bar.cc
+@@ -7,6 +7,7 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/no_destructor.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/infobars/confirm_infobar_creator.h"
+ #include "chrome/browser/ui/tabs/tab_change_type.h"
+@@ -258,6 +259,37 @@ class GlobalConfirmInfoBar::TabHelper : public TabStripModelObserver {
+ };
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
++#if BUILDFLAG(IS_MAC)
++namespace {
++
++GlobalConfirmInfoBar::EmbedderTabsCallback& EmbedderTabs() {
++  static base::NoDestructor<GlobalConfirmInfoBar::EmbedderTabsCallback> tabs;
++  return *tabs;
++}
++
++// The global infobars that are open, for EmbedderTabAdded().
++std::vector<GlobalConfirmInfoBar*>& OpenGlobalInfoBars() {
++  static base::NoDestructor<std::vector<GlobalConfirmInfoBar*>> bars;
++  return *bars;
++}
++
++}  // namespace
++
++// static
++void GlobalConfirmInfoBar::SetEmbedderTabs(EmbedderTabsCallback tabs) {
++  EmbedderTabs() = std::move(tabs);
++}
++
++// static
++void GlobalConfirmInfoBar::EmbedderTabAdded(content::WebContents* web_contents) {
++  // Copied: adding may close a global infobar (see MaybeAddInfoBar()).
++  const std::vector<GlobalConfirmInfoBar*> bars = OpenGlobalInfoBars();
++  for (GlobalConfirmInfoBar* bar : bars) {
++    bar->MaybeAddInfoBar(web_contents);
++  }
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ // static
+ GlobalConfirmInfoBar* GlobalConfirmInfoBar::Show(
+     std::unique_ptr<ConfirmInfoBarDelegate> delegate) {
+@@ -271,9 +303,20 @@ GlobalConfirmInfoBar::GlobalConfirmInfoBar(
+       tab_helper_(std::make_unique<TabHelper>(this)) {
+   // Must be initialized after GlobalConfirmInfoBar construction completes.
+   tab_helper_->Init();
++#if BUILDFLAG(IS_MAC)
++  OpenGlobalInfoBars().push_back(this);
++  if (const EmbedderTabsCallback& tabs = EmbedderTabs(); tabs) {
++    for (content::WebContents* web_contents : tabs.Run()) {
++      MaybeAddInfoBar(web_contents);
++    }
++  }
++#endif
+ }
+ 
+ GlobalConfirmInfoBar::~GlobalConfirmInfoBar() {
++#if BUILDFLAG(IS_MAC)
++  std::erase(OpenGlobalInfoBars(), this);
++#endif
+   tab_helper_.reset();
+   while (!proxies_.empty()) {
+     auto it = proxies_.begin();
+diff --git a/chrome/browser/devtools/global_confirm_info_bar.h b/chrome/browser/devtools/global_confirm_info_bar.h
+index f8b1fa39491d..8b26fd415634 100644
+--- a/chrome/browser/devtools/global_confirm_info_bar.h
++++ b/chrome/browser/devtools/global_confirm_info_bar.h
+@@ -7,8 +7,11 @@
+ 
+ #include <map>
+ #include <memory>
++#include <vector>
+ 
++#include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
++#include "build/build_config.h"
+ #include "base/memory/weak_ptr.h"
+ #include "components/infobars/content/content_infobar_manager.h"
+ #include "components/infobars/core/confirm_infobar_delegate.h"
+@@ -48,6 +51,18 @@ class GlobalConfirmInfoBar : public infobars::InfoBarManager::Observer {
+   // Closes all the infobars.
+   void Close();
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that owns its tabs (chrome/browser/embedder_owned_ui_mac.h)
++  // has no tab strips for this class to track. It lists its tabs here
++  // (called when a global infobar is shown) and reports each new tab with
++  // EmbedderTabAdded(), so global infobars reach every tab. Set once at
++  // startup.
++  using EmbedderTabsCallback =
++      base::RepeatingCallback<std::vector<content::WebContents*>()>;
++  static void SetEmbedderTabs(EmbedderTabsCallback tabs);
++  static void EmbedderTabAdded(content::WebContents* web_contents);
++#endif
++
+  private:
+   class DelegateProxy;
+ 

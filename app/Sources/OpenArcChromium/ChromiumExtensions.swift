@@ -14,6 +14,8 @@ final class ChromiumExtensions: EngineExtensions, @unchecked Sendable {
     // `observers` is read and written only on the main actor.
     private let core: ChromiumEngineCore
     @MainActor private var observers: [Profile.ID: ExtensionsObserver] = [:]
+    /// Popups the `_execute_action` shortcuts opened (plan C26), from every profile.
+    private let keyboardPopups = AsyncBroadcaster<ExtensionPopupOpenedFromKeyboard>()
 
     init(core: ChromiumEngineCore) {
         self.core = core
@@ -104,6 +106,10 @@ final class ChromiumExtensions: EngineExtensions, @unchecked Sendable {
         await extensions(profileID)?.uninstallExtension(extensionID)
     }
 
+    func popupsOpenedFromKeyboard() -> AsyncStream<ExtensionPopupOpenedFromKeyboard> {
+        keyboardPopups.subscribe()
+    }
+
     func events(profileID: Profile.ID) -> AsyncStream<ExtensionEvent> {
         let (stream, continuation) = AsyncStream<ExtensionEvent>.makeStream(bufferingPolicy: .unbounded)
         let task = Task { @MainActor [weak self] in
@@ -131,7 +137,7 @@ final class ChromiumExtensions: EngineExtensions, @unchecked Sendable {
     @MainActor
     private func observer(for profileID: Profile.ID, extensions: OACExtensions) -> ExtensionsObserver {
         if let existing = observers[profileID], extensions.delegate === existing { return existing }
-        let made = ExtensionsObserver(core: core)
+        let made = ExtensionsObserver(core: core, keyboardPopups: keyboardPopups)
         extensions.delegate = made
         observers[profileID] = made
         return made
@@ -150,10 +156,12 @@ final class ChromiumExtensions: EngineExtensions, @unchecked Sendable {
 @MainActor
 private final class ExtensionsObserver: NSObject, OACExtensionsDelegate {
     private weak var core: ChromiumEngineCore?
+    private let keyboardPopups: AsyncBroadcaster<ExtensionPopupOpenedFromKeyboard>
     private var continuations: [UUID: AsyncStream<ExtensionEvent>.Continuation] = [:]
 
-    init(core: ChromiumEngineCore) {
+    init(core: ChromiumEngineCore, keyboardPopups: AsyncBroadcaster<ExtensionPopupOpenedFromKeyboard>) {
         self.core = core
+        self.keyboardPopups = keyboardPopups
     }
 
     func add(_ continuation: AsyncStream<ExtensionEvent>.Continuation) {
@@ -174,6 +182,22 @@ private final class ExtensionsObserver: NSObject, OACExtensionsDelegate {
 
     func extensions(_ extensions: OACExtensions, didUpdateActionOfExtension extensionIdentifier: String, tab: OACTab?) {
         send(.actionUpdated(extensionID: extensionIdentifier, tabID: tab.map { EngineTabID($0.identifier) }))
+    }
+
+    /// C26: an `_execute_action` shortcut opened the popup; nobody listening closes it.
+    func extensions(_ extensions: OACExtensions, didOpen popup: OACExtensionPopup, fromKeyboardOn tab: OACTab) {
+        guard keyboardPopups.subscriberCount > 0 else {
+            popup.close()
+            return
+        }
+        keyboardPopups.yield(ExtensionPopupOpenedFromKeyboard(
+            popup: ChromiumExtensionPopup(popup: popup, tabID: EngineTabID(tab.identifier))
+        ))
+    }
+
+    /// C26: the extension's error count changed.
+    func extensions(_ extensions: OACExtensions, didChangeErrorsOfExtension extensionIdentifier: String) {
+        send(.errorsChanged(extensionID: extensionIdentifier))
     }
 
     /// The confirmation goes over the tab that asked; a tab-less install (from the API) goes over
@@ -310,7 +334,8 @@ extension EngineExtensionInfo {
             badgeText: info.badgeText,
             actionTitle: info.actionTitle,
             isActionEnabled: info.isActionEnabled,
-            hasPopup: info.hasPopup
+            hasPopup: info.hasPopup,
+            errorCount: info.errorCount
         )
     }
 }

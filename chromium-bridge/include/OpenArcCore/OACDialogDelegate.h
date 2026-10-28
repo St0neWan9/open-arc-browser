@@ -23,7 +23,7 @@
 // - Dropping the last reference to an unanswered request answers it with its default (alert:
 //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
 //   file chooser: cancel, external protocol: block, unresponsive page: wait, client certificate:
-//   continue without one), so a page never hangs.
+//   continue without one, info bar: left open), so a page never hangs.
 // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
 //   right away.
 //
@@ -41,7 +41,9 @@
 // `WebContentsDelegate::RendererUnresponsive`; the client-certificate picker (plan C25) from
 // //chrome's `ShowSSLClientCertificateSelector` (an Open Arc hook), after Chrome's policy
 // (AutoSelectCertificateForUrls) found nothing to pick on its own; the WebAuthn dialog (plan C21,
-// OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook).
+// OACWebAuthn.h) from //chrome's `AuthenticatorRequestDialogViewController` (an Open Arc hook);
+// engine info bars (plan C23) from the tab's `infobars::ContentInfoBarManager` (confirm info bars
+// only), including //chrome's global ones (`GlobalConfirmInfoBar`, through an Open Arc hook).
 
 #import <OpenArcCore/OACDefines.h>
 #import <OpenArcCore/OACTab.h>
@@ -266,6 +268,49 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 - (void)continueWithoutCertificate;
 @end
 
+// MARK: - Info bar (plan C23)
+
+/// The buttons of an info bar. Maps to `InfoBarRequest.Buttons`.
+typedef NS_OPTIONS(NSUInteger, OACInfoBarButtons) {
+    OACInfoBarButtonOK = 1 << 0,
+    OACInfoBarButtonCancel = 1 << 1,
+};
+
+/// An engine info bar: a one-line message strip the engine wants above a tab's page, with up to two
+/// buttons, an optional link and a close button (Chromium's confirm info bars: "an extension is
+/// debugging this browser", "reload to apply your new settings", the PDF viewer offer, and
+/// others). It is not modal: the page stays usable, other requests of the tab show as usual, and
+/// several bars can be open at once (in the order they came).
+///
+/// The engine withdraws the request when the bar goes away on its own (navigation, the feature
+/// closed it, a newer bar replaced it). After an action that keeps the bar open, a new request
+/// for the same bar follows (its texts may have changed).
+///
+/// Default answer (dropped or cancelled): none. The bar stays open in the engine, unseen, until it
+/// closes by its own rules; only `-close` dismisses it. (Some bars are shown on every tab at once,
+/// and dismissing one dismisses all of them.)
+OAC_EXPORT NS_SWIFT_UI_ACTOR
+@interface OACInfoBarRequest : OACDialogRequest
+/// The message (the engine's text, in its UI language).
+@property (nonatomic, readonly, copy) NSString *message;
+/// The link after the message ("Learn more"), or nil.
+@property (nonatomic, readonly, copy, nullable) NSString *linkTitle;
+@property (nonatomic, readonly) OACInfoBarButtons buttons;
+/// Button titles; empty for a button `buttons` does not have.
+@property (nonatomic, readonly, copy) NSString *OKButtonTitle;
+@property (nonatomic, readonly, copy) NSString *cancelButtonTitle;
+/// The bar has a close (✕) button.
+@property (nonatomic, readonly, getter=isCloseable) BOOL closeable;
+/// The OK button.
+- (void)accept;
+/// The Cancel button.
+- (void)decline;
+/// The close button.
+- (void)close;
+/// The link: the engine opens its page (in a new tab, through the usual new-tab request).
+- (void)openLink;
+@end
+
 // MARK: - Delegate
 
 @class OACPasswordSavePrompt;
@@ -303,6 +348,8 @@ NS_SWIFT_UI_ACTOR
 /// The WebAuthn dialog moved to another step or its content changed.
 - (void)tab:(OACTab *)tab didUpdateWebAuthnDialog:(OACWebAuthnDialog *)dialog
     NS_SWIFT_NAME(tab(_:didUpdateWebAuthnDialog:));
+/// An engine info bar for the top of the tab's page (plan C23).
+- (BOOL)tab:(OACTab *)tab showInfoBar:(OACInfoBarRequest *)request NS_SWIFT_NAME(tab(_:showInfoBar:));
 
 /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
 - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;

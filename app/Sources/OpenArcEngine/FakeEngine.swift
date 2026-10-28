@@ -105,7 +105,11 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
             opener: configuration.opener,
             colorScheme: configuration.preferredColorScheme
         )
-        if let url = configuration.initialURL {
+        // Plan C20: a saved back/forward list replaces the initial URL; one the fake cannot read
+        // falls back to it, as in the Chromium engine.
+        if let saved = configuration.sessionHistory.flatMap(FakeSessionHistory.init(saved:)) {
+            try await tab.restoreHistory(saved)
+        } else if let url = configuration.initialURL {
             try await tab.load(url)
         }
         return tab
@@ -188,6 +192,16 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     /// Simulates a page asking for a new tab by URL (⌘-click, extension request…).
     public func simulateNewTabRequest(_ request: NewTabRequest) {
         broadcaster.yield(.newTabRequested(request))
+    }
+
+    /// Plan C24: a click in Notification Center on a web notification whose page is gone
+    /// (navigated away, closed). Like the Chromium engine, the engine asks for a foreground tab
+    /// on the notification's origin, from outside any tab (`opener` nil). A click whose page is
+    /// still open is `FakeTab.simulateNotificationClick()`.
+    public func simulateNotificationClickWithoutPage(origin: URL) {
+        broadcaster.yield(.newTabRequested(NewTabRequest(
+            opener: nil, url: origin, disposition: .foregroundTab, hasUserGesture: true
+        )))
     }
 
     /// Simulates a script-opened window (`window.open`, target=_blank with opener): the engine
@@ -313,6 +327,7 @@ public enum FakeDialogAnswer: Hashable, Sendable {
     case unresponsivePage(UnresponsivePageReply)
     case clientCertificate(ClientCertificateReply)
     case webAuthn(WebAuthnReply)
+    case infoBar(InfoBarReply)
 }
 
 /// Per-site zoom levels, shared by every tab of one FakeEngine. Keyed by profile, off-the-record
@@ -336,6 +351,31 @@ final class FakeZoomMap: @unchecked Sendable {
 
     func removeAll(profileID: Profile.ID) {
         lock.withLock { levels = levels.filter { $0.key.profileID != profileID } }
+    }
+}
+
+/// The fake's saved back/forward list (plan C20): JSON with a format marker, so data from another
+/// engine (or a damaged file) is refused like the Chromium engine refuses it.
+struct FakeSessionHistory: Codable, Equatable {
+    static let currentFormat = "fake-session-history-1"
+    var format = FakeSessionHistory.currentFormat
+    var urls: [URL]
+    var index: Int
+
+    init(urls: [URL], index: Int) {
+        self.urls = urls
+        self.index = index
+    }
+
+    init?(saved: TabSessionHistory) {
+        guard let decoded = try? JSONDecoder().decode(FakeSessionHistory.self, from: saved.data),
+              decoded.format == Self.currentFormat, decoded.urls.indices.contains(decoded.index)
+        else { return nil }
+        self = decoded
+    }
+
+    var saved: TabSessionHistory? {
+        (try? JSONEncoder().encode(self)).map(TabSessionHistory.init(data:))
     }
 }
 
@@ -472,6 +512,23 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         try mutate {
             guard historyIndex + 1 < history.count else { return nil }
             historyIndex += 1
+            return history[historyIndex]
+        }
+    }
+
+    /// Plan C20: the history stack in the fake's own format (`FakeSessionHistory`).
+    public func sessionHistory() async -> TabSessionHistory? {
+        lock.withLock {
+            guard !isClosed, historyIndex >= 0 else { return nil }
+            return FakeSessionHistory(urls: history, index: historyIndex).saved
+        }
+    }
+
+    /// Starts this new tab with a saved history stack and loads its current entry.
+    func restoreHistory(_ saved: FakeSessionHistory) async throws {
+        try mutate {
+            history = saved.urls
+            historyIndex = saved.index
             return history[historyIndex]
         }
     }
@@ -819,6 +876,13 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         }
     }
 
+    /// Plan C24: a click in Notification Center on a web notification this page showed. The page
+    /// gets its `click` event, and the tab asks to be shown, as the Chromium engine reports it
+    /// (`-[OACTabDelegate tabDidRequestActivation:]`).
+    public func simulateNotificationClick() {
+        simulateActivationRequest()
+    }
+
     /// Simulates a page with one video, playing or paused.
     public func simulateVideo(playing: Bool) {
         lock.withLock {
@@ -1117,6 +1181,40 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         let request = UnresponsivePagePrompt(id: requestID, origin: currentOrigin(), reply: reply)
         lock.withLock { unresponsivePromptID = requestID }
         deliver(.unresponsivePage(request), withdraw: { [weak reply] in reply?.withdraw() })
+        return requestID
+    }
+
+    /// The engine shows an info bar above the page (plan C23). Answers are recorded in
+    /// `dialogAnswers` (`.infoBar`). Like Chromium's confirm bars: `.accept`, `.decline` and
+    /// `.close` remove the bar, unless `keepsOpenOn` holds the answer, in which case a new request
+    /// for the same bar follows (as the bridge re-presents a bar that stays); `.openLink` asks for
+    /// a new foreground tab on `linkURL` and keeps the bar. Returns the request id.
+    @discardableResult
+    public func simulateInfoBar(
+        message: String, linkTitle: String? = nil, linkURL: URL? = nil, buttons: InfoBarRequest.Buttons = [],
+        okTitle: String = "", cancelTitle: String = "", isCloseable: Bool = true, keepsOpenOn: Set<InfoBarReply> = []
+    ) -> UUID {
+        let requestID = UUID()
+        let record = answerHandler(requestID) { FakeDialogAnswer.infoBar($0) }
+        let handler: DialogReply<InfoBarReply>.Handler = { [weak self] answer in
+            record(answer)
+            guard let self, answer != .leaveOpen else { return }
+            if answer == .openLink, let linkURL {
+                self.onNewTabRequest?(NewTabRequest(opener: self.id, url: linkURL, disposition: .foregroundTab, hasUserGesture: true))
+            }
+            if answer == .openLink || keepsOpenOn.contains(answer) {
+                self.simulateInfoBar(
+                    message: message, linkTitle: linkTitle, linkURL: linkURL, buttons: buttons, okTitle: okTitle,
+                    cancelTitle: cancelTitle, isCloseable: isCloseable, keepsOpenOn: keepsOpenOn
+                )
+            }
+        }
+        let reply = DialogReply<InfoBarReply>(default: .leaveOpen, handler: handler)
+        let request = InfoBarRequest(
+            id: requestID, message: message, linkTitle: linkTitle, buttons: buttons, okTitle: okTitle,
+            cancelTitle: cancelTitle, isCloseable: isCloseable, reply: reply
+        )
+        deliver(.infoBar(request), withdraw: { [weak reply] in reply?.withdraw() })
         return requestID
     }
 

@@ -43,6 +43,11 @@ public struct TabConfiguration: Hashable, Sendable {
     /// Color scheme the page sees from its first load (`prefers-color-scheme`); later changes go
     /// through `BrowserTab.setPreferredColorScheme`. B21.
     public var preferredColorScheme: WebColorScheme
+    /// A back/forward list saved with `BrowserTab.sessionHistory()` (plan C20). When the engine
+    /// can read it, the tab starts with those entries and shows the selected one; `initialURL` is
+    /// then ignored. Data the engine cannot read (another engine, another format) is ignored and
+    /// `initialURL` loads as usual.
+    public var sessionHistory: TabSessionHistory?
 
     public init(
         profileID: Profile.ID,
@@ -50,7 +55,8 @@ public struct TabConfiguration: Hashable, Sendable {
         opener: EngineTabID? = nil,
         requestedID: EngineTabID? = nil,
         isOffTheRecord: Bool = false,
-        preferredColorScheme: WebColorScheme = .light
+        preferredColorScheme: WebColorScheme = .light,
+        sessionHistory: TabSessionHistory? = nil
     ) {
         self.profileID = profileID
         self.initialURL = initialURL
@@ -58,7 +64,21 @@ public struct TabConfiguration: Hashable, Sendable {
         self.requestedID = requestedID
         self.isOffTheRecord = isOffTheRecord
         self.preferredColorScheme = preferredColorScheme
+        self.sessionHistory = sessionHistory
     }
+}
+
+/// A tab's back/forward list as the engine saved it (plan C20): opaque bytes in the engine's own
+/// versioned format, with the URLs, titles and page state (scroll position, form contents) of the
+/// entries around the current one. [03 §Advanced] inferred (analysis): with "restore windows from
+/// previous session" on, a restored tab keeps its back/forward history, not only its URL.
+///
+/// Per device: the shell keeps it next to the workspace file and never puts it in a sync record
+/// (it holds page state, and another device has its own history). Bridge:
+/// `-[OACTab sessionHistory]` and `OACTabConfiguration.sessionHistory`.
+public struct TabSessionHistory: Hashable, Sendable {
+    public var data: Data
+    public init(data: Data) { self.data = data }
 }
 
 /// Loading state of the main frame.
@@ -531,11 +551,20 @@ public protocol BrowserTab: AnyObject, Sendable {
     /// navigating (none by default). Takes effect for the next click. See LinkPreview.swift.
     func setLinkPreviewTriggers(_ triggers: LinkPreviewTriggers) async
 
+    // MARK: Session history (plan C20)
+
+    /// The tab's back/forward list for `TabConfiguration.sessionHistory`, or nil when there is
+    /// nothing to keep (no committed page, a closed tab, or an engine without the feature).
+    func sessionHistory() async -> TabSessionHistory?
+
     /// View hosting for this tab (one surface per tab; several can be on screen in split view).
     var surface: any TabSurface { get }
 }
 
 extension BrowserTab {
+    /// Engines without saved back/forward lists keep only the URL (plan C20).
+    public func sessionHistory() async -> TabSessionHistory? { nil }
+
     /// Normal reload (View ▸ Refresh the Page).
     public func reload() async throws {
         try await reload(bypassingCache: false)

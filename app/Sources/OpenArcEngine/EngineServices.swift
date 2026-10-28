@@ -110,12 +110,17 @@ public struct EngineExtensionInfo: Identifiable, Hashable, Sendable {
     public var isActionEnabled: Bool
     /// Clicking the action opens a popup (else it sends a click to the extension).
     public var hasPopup: Bool
+    /// Runtime and manifest errors the engine collected for the extension (plan C26; listed in
+    /// Manage Extensions). [00 §A] inferred (analysis): extension runtime errors are surfaced.
+    /// 0 while the engine collects none (Chromium: developer mode off).
+    public var errorCount: Int
 
     public init(
         id: String, name: String, version: String = "1.0", isEnabled: Bool = true, isAllowedInIncognito: Bool = false,
         isUnpacked: Bool = false, iconPNGData: Data? = nil, badgeText: String = "", actionTitle: String = "",
-        isActionEnabled: Bool = true, hasPopup: Bool = false
+        isActionEnabled: Bool = true, hasPopup: Bool = false, errorCount: Int = 0
     ) {
+        self.errorCount = errorCount
         self.id = id
         self.name = name
         self.version = version
@@ -135,6 +140,17 @@ public enum ExtensionEvent: Hashable, Sendable {
     case changed
     /// An action's icon, badge or enabled state changed for a tab (nil: every tab).
     case actionUpdated(extensionID: String, tabID: EngineTabID?)
+    /// An extension's error count changed (plan C26, `EngineExtensionInfo.errorCount`).
+    case errorsChanged(extensionID: String)
+}
+
+/// An extension's `_execute_action` keyboard shortcut (manifest `commands`) opened its popup on a
+/// tab (plan C26). [00 §A] inferred (analysis): extension keyboard commands work. The shell shows
+/// it as after `EngineExtensions.runAction`. Named commands need no shell part: the engine sends
+/// them to the extension while one of the profile's tabs has the keyboard.
+public struct ExtensionPopupOpenedFromKeyboard: Sendable {
+    public let popup: any ExtensionPopup
+    public init(popup: any ExtensionPopup) { self.popup = popup }
 }
 
 /// What an extension popup reports (`OACExtensionPopupDelegate`).
@@ -186,6 +202,16 @@ public protocol EngineExtensions: AnyObject, Sendable {
     func uninstall(_ extensionID: String, profileID: Profile.ID) async
     /// Changes for one profile. Every call returns a new stream.
     func events(profileID: Profile.ID) -> AsyncStream<ExtensionEvent>
+    /// Popups the extensions' `_execute_action` shortcuts opened, in every profile (plan C26).
+    /// Every call returns a new stream; a popup nobody shows is closed by the engine.
+    func popupsOpenedFromKeyboard() -> AsyncStream<ExtensionPopupOpenedFromKeyboard>
+}
+
+extension EngineExtensions {
+    /// Engines without keyboard commands open no popups that way.
+    public func popupsOpenedFromKeyboard() -> AsyncStream<ExtensionPopupOpenedFromKeyboard> {
+        AsyncStream { $0.finish() }
+    }
 }
 
 // MARK: - Ad blocking (plan C16)

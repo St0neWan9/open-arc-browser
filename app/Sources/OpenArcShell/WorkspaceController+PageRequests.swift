@@ -36,18 +36,23 @@ final class PageRequestState {
     /// The child a page opened last, per opener model tab (the next child goes below it).
     var lastChild: [UUID: UUID] = [:]
     var task: Task<Void, Never>?
+    /// Popups of extension `_execute_action` shortcuts (plan C26).
+    var keyboardPopupTask: Task<Void, Never>?
     private(set) var isStopped = false
 
     func stop() {
         isStopped = true
         task?.cancel()
         task = nil
+        keyboardPopupTask?.cancel()
+        keyboardPopupTask = nil
     }
 }
 
 extension WorkspaceController {
     /// Starts handling `EngineEvent.newTabRequested`. Called once by each init.
     func observeEngineEvents() {
+        observeKeyboardExtensionPopups()
         let stream = dependencies.engine.events()
         pageRequests.task = Task { [weak self] in
             for await event in stream {
@@ -56,6 +61,23 @@ extension WorkspaceController {
                 if case .newTabRequested(let request) = event, !self.handleLinkPeekNewTabRequest(request) {
                     self.handleNewTabRequest(request)
                 }
+            }
+        }
+    }
+
+    /// Shows the popups extension `_execute_action` shortcuts open (plan C26) in the window that
+    /// shows their tab, as after a click on the action. [00 §A] inferred (analysis): extension
+    /// keyboard commands work. The controller that owns the tab answers; when no window shows it,
+    /// the popup is closed.
+    private func observeKeyboardExtensionPopups() {
+        let stream = dependencies.engine.extensions.popupsOpenedFromKeyboard()
+        pageRequests.keyboardPopupTask = Task { [weak self] in
+            for await opened in stream {
+                guard let self else { return }
+                let popup = opened.popup
+                guard let tabID = self.modelTabID(forEngineTab: popup.tabID) else { continue }
+                let shown = self.browserWindows.contains { $0.siteControls.showPopupFromKeyboard(popup, tabID: tabID) }
+                if !shown { Task { await popup.close() } }
             }
         }
     }

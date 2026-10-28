@@ -429,6 +429,19 @@ public final class SiteControlsModel: ObservableObject {
 
     // MARK: Extension popup
 
+    /// An extension's `_execute_action` keyboard shortcut (plan C26) opened `popup` on the engine
+    /// tab whose model tab is `tabID`: it shows in this window's popup bubble when that tab is
+    /// selected here, as after a click on its action. [00 §A] inferred (analysis): extension
+    /// keyboard commands work. Returns whether this window took it.
+    @discardableResult
+    func showPopupFromKeyboard(_ popup: any ExtensionPopup, tabID: UUID) -> Bool {
+        guard sidebar.selectedTabID == tabID else { return false }
+        closeExtensionPopup()
+        close(.action)
+        show(popup, tabID: tabID)
+        return true
+    }
+
     private func show(_ popup: any ExtensionPopup, tabID: UUID) {
         // The tab changed while the engine opened it.
         guard sidebar.selectedTabID == tabID else {

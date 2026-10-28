@@ -104,6 +104,10 @@ public final class WorkspaceController: ObservableObject {
     private lazy var ownAppIcon = AppIconSettings(preferences: dependencies.preferences, display: dependencies.appIconDisplay)
 
     private var liveTabs: [UUID: any BrowserTab] = [:]
+    /// Back/forward lists saved at the last quit (plan C20, `TabHistoryFile`), by model tab id.
+    /// Loaded only while "restore windows from previous session" is on; each is used by the
+    /// engine tabs made for its model tab (`ensureLive`) until one of them is attached.
+    private var savedTabHistories: [UUID: TabHistorySnapshot.Entry] = [:]
     private var eventTasks: [UUID: Task<Void, Never>] = [:]
     /// Dialog requests of every live tab of this controller, queued per tab (C7b).
     public let dialogs = DialogCenter()
@@ -211,6 +215,9 @@ public final class WorkspaceController: ObservableObject {
             pendingRestores = saved.restorableWindows
             libraryFlags = LibraryUIFlags(mediaIntroDismissed: saved.mediaIntroDismissed, lastSection: saved.lastLibrarySection)
             pinRenameHintShown = saved.pinRenameHintShown
+        }
+        if let persistence, !persistence.isReadOnly, dependencies.preferences.restoresWindowsFromPreviousSession {
+            savedTabHistories = TabHistoryFile.load(from: persistence.directory)?.entries ?? [:]
         }
         onboardingCompleted = OnboardingLaunch.isCompleted(persistence: persistence)
         if let persistence {
@@ -494,12 +501,14 @@ public final class WorkspaceController: ObservableObject {
         guard let profileID = engineProfileID(forTab: tab) ?? fallbackProfileID else { return }
         let engine = dependencies.engine
         let scheme = webColorScheme(forTab: id)
+        let initialURL = tab.url ?? tab.pinnedURL
         let configuration = TabConfiguration(
             profileID: profileID,
-            initialURL: tab.url ?? tab.pinnedURL,
+            initialURL: initialURL,
             opener: pageRequests.openers.removeValue(forKey: id),
             isOffTheRecord: isOffTheRecord,
-            preferredColorScheme: scheme
+            preferredColorScheme: scheme,
+            sessionHistory: savedHistory(of: id, url: initialURL)
         )
         let live = try await engine.makeTab(configuration)
         await attachLive(id, live, initialColorScheme: scheme)
@@ -516,6 +525,8 @@ public final class WorkspaceController: ObservableObject {
             return
         }
         liveTabs[id] = live
+        // Its saved back/forward list (plan C20) was used or is out of date now.
+        savedTabHistories.removeValue(forKey: id)
         // The tab moved to a Space of another Profile while the engine made it (C11).
         if reconcileProfile(of: id) { return }
         sentColorSchemes[id] = initialColorScheme
@@ -907,10 +918,55 @@ public final class WorkspaceController: ObservableObject {
         try? UIStateFile.save(currentUIState, to: store.directory)
     }
 
-    /// Writes pending workspace changes and the UI state to disk now.
+    /// Writes pending workspace changes, the UI state and the tabs' back/forward lists to disk now.
     public func flushPersistence() async throws {
         saveUIState()
+        await saveTabHistories()
         try await dependencies.persistence?.flush()
+    }
+
+    // MARK: - Back/forward lists across relaunch (plan C20)
+
+    /// The saved list for model tab `id`, only when it was saved for the URL the tab loads now
+    /// (the URL changed elsewhere since: the list would show another page). [03 §Advanced]
+    /// inferred (analysis). Kept until an engine tab for `id` is attached (`attachLive`): two
+    /// engine tabs can be in the making for one model tab, and either may be the one kept.
+    private func savedHistory(of id: UUID, url: URL?) -> TabSessionHistory? {
+        guard let entry = savedTabHistories[id], entry.url == url else { return nil }
+        return TabSessionHistory(data: entry.data)
+    }
+
+    /// The lists to keep for the next launch: every live engine tab's current list, plus the
+    /// saved lists of tabs that were not opened this run and still show the same URL.
+    func currentTabHistories() async -> TabHistorySnapshot {
+        var entries: [UUID: TabHistorySnapshot.Entry] = [:]
+        for (id, entry) in savedTabHistories {
+            guard let tab = workspace.tabs[id], !tab.meta.isTombstone, (tab.url ?? tab.pinnedURL) == entry.url else { continue }
+            entries[id] = entry
+        }
+        for (id, live) in liveTabs {
+            guard let tab = workspace.tabs[id], !tab.meta.isTombstone,
+                  let history = await live.sessionHistory() else { continue }
+            // The page's own URL: the tab record follows it (`syncContent`), but may not have yet.
+            let url = await live.currentState().url ?? tab.url ?? tab.pinnedURL
+            entries[id] = TabHistorySnapshot.Entry(url: url, data: history.data)
+        }
+        return TabHistorySnapshot(entries: entries)
+    }
+
+    /// Writes `tab-history.plist` next to the workspace file while "restore windows from previous
+    /// session" is on, and removes it while the setting is off (nothing of the pages is kept that
+    /// the user did not ask for). Per device; never synced. Skipped for an incognito controller,
+    /// without persistence and for a read-only store.
+    func saveTabHistories() async {
+        guard !isOffTheRecord, let store = dependencies.persistence, !store.isReadOnly else { return }
+        let directory = store.directory
+        guard dependencies.preferences.restoresWindowsFromPreviousSession else {
+            try? TabHistoryFile.remove(from: directory)
+            return
+        }
+        let snapshot = await currentTabHistories()
+        try? TabHistoryFile.save(snapshot, to: directory)
     }
 
     /// The quit path for `applicationShouldTerminate` (B27): saves the UI state, writes pending
@@ -931,6 +987,8 @@ public final class WorkspaceController: ObservableObject {
         saveUIState()
         // Windows closing while the app quits must not drop themselves from the saved state.
         isTerminating = true
+        // The tabs' back/forward lists, read while the engine still runs (plan C20).
+        _ = await TerminationDeadline.run(timeout: storeFlushTimeout) { [weak self] in await self?.saveTabHistories() }
         if let store = dependencies.persistence, !store.isReadOnly {
             _ = await TerminationDeadline.run(timeout: storeFlushTimeout) { try? await store.flush() }
         }
@@ -958,6 +1016,7 @@ public final class WorkspaceController: ObservableObject {
         isTerminationPrepared = true
         saveUIState()
         isTerminating = true
+        saveTabHistoriesBlocking(timeout: timeout)
         if let store = dependencies.persistence, !store.isReadOnly {
             let done = DispatchSemaphore(value: 0)
             Task.detached {
@@ -967,6 +1026,21 @@ public final class WorkspaceController: ObservableObject {
             _ = done.wait(timeout: .now() + timeout)
         }
         shutDownEngine(timeout: engineShutdownTimeout)
+    }
+
+    /// `saveTabHistories` for the `willTerminate` fallback (plan C20): the engine answers on the
+    /// main actor, so the run loop keeps turning while it waits, at most `timeout` seconds.
+    private func saveTabHistoriesBlocking(timeout: TimeInterval) {
+        guard !isOffTheRecord, dependencies.persistence?.isReadOnly == false else { return }
+        var finished = false
+        Task { @MainActor [weak self] in
+            await self?.saveTabHistories()
+            finished = true
+        }
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !finished, Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: min(deadline, Date(timeIntervalSinceNow: 0.01)))
+        }
     }
 
     /// Runs `engine.shutdown()` and waits for it, at most `timeout` seconds. The main run loop

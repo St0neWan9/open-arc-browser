@@ -164,7 +164,7 @@ final class EngineProtocolTests: XCTestCase {
             case .externalProtocol(let r):
                 XCTAssertEqual(r.handlerApplicationName, "Mail")
                 r.reply.send(.open(rememberForOrigin: false))
-            case .passwordSave, .autofillPopup, .extensionInstall, .unresponsivePage, .clientCertificate, .webAuthn:
+            case .passwordSave, .autofillPopup, .extensionInstall, .unresponsivePage, .clientCertificate, .webAuthn, .infoBar:
                 XCTFail("not raised here (C13, C14 and F1 step 2 have their own tests)")
             }
             XCTAssertTrue(request.isFinished)

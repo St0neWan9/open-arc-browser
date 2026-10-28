@@ -18,6 +18,8 @@ import OpenArcDesign
 //   panel.
 // - The autofill dropdown (C13) is not queued: one per tab, under its form field, beside whatever
 //   dialog shows.
+// - Engine info bars (C23, [00 §A] inferred (analysis)) are not queued either: every open bar of a
+//   tab shows as a strip above its page, oldest on top, beside whatever dialog shows.
 // - Closing the tab's page (archive, unload, window close) answers every queued request with its
 //   default, like the bridge does for a released request.
 
@@ -34,6 +36,7 @@ public enum DialogAnswer: Hashable, Sendable {
     case unresponsivePage(UnresponsivePageReply)
     case clientCertificate(ClientCertificateReply)
     case webAuthn(WebAuthnReply)
+    case infoBar(InfoBarReply)
 }
 
 /// Dialog requests of every live tab of one workspace controller, queued per engine tab.
@@ -44,6 +47,8 @@ public final class DialogCenter: ObservableObject {
     /// The autofill dropdown of each tab (C13). Not queued: it is not modal, a newer one replaces the
     /// older, and it shows alongside a queued dialog.
     @Published public private(set) var autofillPopups: [EngineTabID: AutofillPopup] = [:]
+    /// The open info bars of each tab (C23), oldest first. Not queued: all of them show.
+    @Published public private(set) var infoBarLists: [EngineTabID: [InfoBarRequest]] = [:]
 
     private var observers: [EngineTabID: [Task<Void, Never>]] = [:]
 
@@ -79,6 +84,12 @@ public final class DialogCenter: ObservableObject {
         let pending = queues.removeValue(forKey: tabID) ?? []
         for request in pending { request.answerWithDefault() }
         autofillPopups.removeValue(forKey: tabID)?.reply.sendDefault()
+        for bar in infoBarLists.removeValue(forKey: tabID) ?? [] { bar.reply.sendDefault() }
+    }
+
+    /// The info bars `tabID` shows now, oldest first (C23).
+    public func infoBars(for tabID: EngineTabID) -> [InfoBarRequest] {
+        infoBarLists[tabID]?.filter { !$0.reply.isFinished } ?? []
     }
 
     /// The autofill dropdown `tabID` shows now (C13).
@@ -115,6 +126,7 @@ public final class DialogCenter: ObservableObject {
         case (.unresponsivePage(let r), .unresponsivePage(let a)): sent = r.reply.send(a)
         case (.clientCertificate(let r), .clientCertificate(let a)): sent = r.reply.send(a)
         case (.webAuthn(let r), .webAuthn(let a)): sent = r.reply.send(a)
+        case (.infoBar(let r), .infoBar(let a)): sent = r.reply.send(a)
         default: return false
         }
         remove(requestID)
@@ -136,6 +148,10 @@ public final class DialogCenter: ObservableObject {
             autofillPopups[tabID] = popup
             return
         }
+        if case .infoBar(let bar) = request {
+            infoBarLists[tabID, default: []].append(bar)
+            return
+        }
         queues[tabID, default: []].append(request)
     }
 
@@ -144,11 +160,18 @@ public final class DialogCenter: ObservableObject {
             if let found = queue.first(where: { $0.id == requestID }) { return found }
         }
         if let popup = autofillPopups.values.first(where: { $0.id == requestID }) { return .autofillPopup(popup) }
+        for bars in infoBarLists.values {
+            if let bar = bars.first(where: { $0.id == requestID }) { return .infoBar(bar) }
+        }
         return nil
     }
 
     private func remove(_ requestID: UUID) {
         for (tabID, popup) in autofillPopups where popup.id == requestID { autofillPopups[tabID] = nil }
+        for (tabID, bars) in infoBarLists where bars.contains(where: { $0.id == requestID }) {
+            let rest = bars.filter { $0.id != requestID && !$0.reply.isFinished }
+            infoBarLists[tabID] = rest.isEmpty ? nil : rest
+        }
         for (tabID, queue) in queues where queue.contains(where: { $0.id == requestID }) {
             let rest = queue.filter { $0.id != requestID && !$0.isFinished }
             queues[tabID] = rest.isEmpty ? nil : rest
@@ -173,6 +196,8 @@ public struct DialogPresentation: Equatable, Sendable {
         /// The passkey / security-key sheet (C21; drawn by `WebAuthnSheetView`, its steps change
         /// while it is open).
         case webAuthn
+        /// An engine info bar: a strip above the page (C23; drawn by `InfoBarStrip`).
+        case infoBar
     }
 
     /// One row of a single-choice list (the client-certificate picker, C25).
@@ -311,6 +336,18 @@ public struct DialogPresentation: Equatable, Sendable {
             fields = []
             checkbox = nil
             buttons = []
+        case .infoBar(let bar):
+            // [00 §A] inferred (analysis): engine info bars drawn by the shell above the page. The
+            // texts are the engine's; buttons left to right: Cancel, then OK (the default).
+            style = .infoBar
+            title = ""
+            message = bar.message
+            fields = []
+            checkbox = nil
+            var titles: [String] = []
+            if bar.buttons.contains(.cancel) { titles.append(bar.cancelTitle) }
+            if bar.buttons.contains(.ok) { titles.append(bar.okTitle) }
+            buttons = titles
         case .externalProtocol(let external):
             style = .sheet
             let app = external.handlerApplicationName ?? "the application"
@@ -365,6 +402,10 @@ public struct DialogPresentation: Equatable, Sendable {
             return .clientCertificate(.select(index: chosen))
         case .webAuthn:
             return .webAuthn(.cancel)
+        case .infoBar(let bar):
+            // Buttons as in `buttons`: Cancel (when there is one) first, OK last.
+            let isCancel = bar.buttons.contains(.cancel) && index == 0
+            return .infoBar(isCancel || !bar.buttons.contains(.ok) ? .decline : .accept)
         }
     }
 }

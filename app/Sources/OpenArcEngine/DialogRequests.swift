@@ -18,7 +18,8 @@ import os
 // "inherited from the engine; prompts drawn by the shell, style not captured"). F1 step 2 adds the
 // unresponsive-page prompt (C22, [00 §A] inferred (analysis): "Page unresponsive" dialog for a hung
 // page, wait or leave), the client-certificate picker (C25, [00 §A] inferred (analysis)) and the
-// passkey / security-key dialog (C21, [00 §A] inferred (analysis): drawn by the shell).
+// passkey / security-key dialog (C21, [00 §A] inferred (analysis): drawn by the shell) and engine
+// info bars (C23, [00 §A] inferred (analysis): confirmation strips above the page).
 
 /// Single-shot answer channel of one dialog request. Thread-safe; equal by identity.
 public final class DialogReply<Answer: Sendable>: Sendable, Hashable {
@@ -818,6 +819,66 @@ public enum WebAuthnReply: Hashable, Sendable {
     case cancel
 }
 
+// MARK: - Info bar (plan C23)
+
+/// An engine info bar: a one-line strip the engine wants above the tab's page, with up to two
+/// buttons, an optional link and a close button ("an extension is debugging this browser",
+/// "reload to apply your new settings"). [00 §A] inferred (analysis): engine info bars
+/// (confirmation strips above the page) are drawn by the shell; look unknown.
+///
+/// Not modal: the page stays usable, the tab's other requests show as usual, and several bars can
+/// be open at once. The engine withdraws one when it goes away on its own (navigation, the feature
+/// closed it, a newer bar replaced it); after an answer that keeps the bar open (the engine
+/// decides), a new request for the same bar follows. A bar nobody answers stays open in the
+/// engine, unseen: the default answer does nothing. Bridge: `OACInfoBarRequest`.
+public struct InfoBarRequest: Identifiable, Hashable, Sendable {
+    public struct Buttons: OptionSet, Hashable, Sendable {
+        public let rawValue: Int
+        public init(rawValue: Int) { self.rawValue = rawValue }
+        public static let ok = Buttons(rawValue: 1 << 0)
+        public static let cancel = Buttons(rawValue: 1 << 1)
+    }
+
+    public let id: UUID
+    /// The engine's text, in its UI language.
+    public let message: String
+    /// The link after the message ("Learn more"), or nil.
+    public let linkTitle: String?
+    public let buttons: Buttons
+    /// Empty for a button `buttons` lacks.
+    public let okTitle: String
+    public let cancelTitle: String
+    /// The bar has a close (✕) button.
+    public let isCloseable: Bool
+    public let reply: DialogReply<InfoBarReply>
+
+    public init(
+        id: UUID, message: String, linkTitle: String? = nil, buttons: Buttons = [], okTitle: String = "",
+        cancelTitle: String = "", isCloseable: Bool = true, reply: DialogReply<InfoBarReply>
+    ) {
+        self.id = id
+        self.message = message
+        self.linkTitle = linkTitle
+        self.buttons = buttons
+        self.okTitle = okTitle
+        self.cancelTitle = cancelTitle
+        self.isCloseable = isCloseable
+        self.reply = reply
+    }
+}
+
+/// Answer to an info bar. Default: `.leaveOpen`.
+public enum InfoBarReply: Hashable, Sendable {
+    case accept
+    case decline
+    /// The close button.
+    case close
+    /// The link: the engine opens its page in a new tab (an `EngineEvent.newTabRequested`).
+    case openLink
+    /// No answer (the shell dropped the request): the bar stays open in the engine.
+    case leaveOpen
+}
+
 // MARK: - Request
 
 /// One dialog request of a tab (`BrowserTab.dialogRequests()`).
@@ -839,6 +900,8 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
     case clientCertificate(ClientCertificatePrompt)
     /// The passkey / security-key dialog (plan C21).
     case webAuthn(WebAuthnDialog)
+    /// An engine info bar above the page (plan C23). Not modal.
+    case infoBar(InfoBarRequest)
 
     public var id: UUID {
         switch self {
@@ -853,6 +916,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .unresponsivePage(let r): r.id
         case .clientCertificate(let r): r.id
         case .webAuthn(let r): r.id
+        case .infoBar(let r): r.id
         }
     }
 
@@ -869,6 +933,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .unresponsivePage(let r): r.origin
         case .clientCertificate(let r): r.origin
         case .webAuthn(let r): r.origin
+        case .infoBar: nil
         }
     }
 
@@ -886,6 +951,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .unresponsivePage(let r): r.reply.isFinished
         case .clientCertificate(let r): r.reply.isFinished
         case .webAuthn(let r): r.reply.isFinished
+        case .infoBar(let r): r.reply.isFinished
         }
     }
 
@@ -904,6 +970,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .unresponsivePage(let r): r.reply.sendDefault()
         case .clientCertificate(let r): r.reply.sendDefault()
         case .webAuthn(let r): r.reply.sendDefault()
+        case .infoBar(let r): r.reply.sendDefault()
         }
     }
 
@@ -921,6 +988,7 @@ public enum EngineDialogRequest: Identifiable, Hashable, Sendable {
         case .unresponsivePage(let r): r.reply.withdraw()
         case .clientCertificate(let r): r.reply.withdraw()
         case .webAuthn(let r): r.reply.withdraw()
+        case .infoBar(let r): r.reply.withdraw()
         }
     }
 }

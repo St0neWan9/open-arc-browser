@@ -413,6 +413,64 @@ final class MultiWindowTests: XCTestCase {
         XCTAssertEqual(relaunched.takeAdditionalRestoreCount(), 0, "asked once")
     }
 
+    /// Plan C20, `docs/arc-spec/03-settings.md` §Advanced inferred (analysis): with "restore
+    /// windows from previous session" on, a restored tab gets its back/forward list back after a
+    /// relaunch (saved per device next to the workspace, never in the workspace or sync records).
+    func testRelaunchRestoresBackForwardHistoryWhenRestoreIsOn() async throws {
+        let f = SidebarFixture()
+        let preferences = AppPreferences.inMemory()
+        preferences.restoresWindowsFromPreviousSession = true
+        let sync = RecordingSync()
+        let second = try XCTUnwrap(URL(string: "https://today2.example.com/second"))
+        do {
+            let controller = makeController(f, sync: sync, store: makeStore(), preferences: preferences)
+            let a = window(controller, space: f.home)
+            try await a.activate(tabID: f.today2)
+            let live = try XCTUnwrap(controller.liveTab(for: f.today2))
+            try await live.load(second)
+            await controller.settleEngineWork()
+            await controller.prepareForTermination()
+            a.stop(); controller.stop()
+        }
+        let saved = try XCTUnwrap(TabHistoryFile.load(from: directory))
+        XCTAssertEqual(Set(saved.entries.keys), [f.today2])
+        let workspaceFile = try String(contentsOf: directory.appendingPathComponent(PersistenceDefaults.workspaceFileName), encoding: .utf8)
+        XCTAssertFalse(workspaceFile.contains("fake-session-history"), "never in the workspace file")
+        // Sync only ever sees workspace records; the lists are not part of `WorkspaceState`.
+        let recordTypes = Set(sync.enqueued.map { change -> String in
+            switch change { case .save(let id), .delete(let id): return id.recordName.components(separatedBy: "/")[0] }
+        })
+        XCTAssertTrue(recordTypes.allSatisfy { !$0.lowercased().contains("history") })
+
+        let engine = FakeEngine()
+        let relaunched = makeController(engine: engine, store: makeStore(), preferences: preferences)
+        let restoredWindow = ShellModel.window(for: BrowserWindowRequest(kind: .restore), on: relaunched)
+        addTeardownBlock { @MainActor in restoredWindow.stop() }
+        try await restoredWindow.activate(tabID: f.today2)
+        let restored = try XCTUnwrap(relaunched.liveTab(for: f.today2))
+        var state = await restored.currentState()
+        XCTAssertEqual(state.url, second)
+        XCTAssertTrue(state.navigation.canGoBack, "Back works on the restored tab")
+        try await restored.goBack()
+        state = await restored.currentState()
+        XCTAssertEqual(state.url, URL(string: "https://today2.example.com"))
+    }
+
+    /// With the setting off (default, [03 §Advanced] observed), no list is kept: the file is
+    /// removed at quit and a relaunched tab starts with its URL alone. Plan C20.
+    func testNoBackForwardHistoryKeptWhenRestoreIsOff() async throws {
+        let f = SidebarFixture()
+        let preferences = AppPreferences.inMemory()
+        try TabHistoryFile.save(TabHistorySnapshot(entries: [f.today2: .init(url: nil, data: Data([1]))]), to: directory)
+        let controller = makeController(f, store: makeStore(), preferences: preferences)
+        let a = window(controller, space: f.home)
+        try await a.activate(tabID: f.today2)
+        let live = try XCTUnwrap(controller.liveTab(for: f.today2))
+        try await live.load(try XCTUnwrap(URL(string: "https://today2.example.com/second")))
+        await controller.prepareForTermination()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: TabHistoryFile.url(in: directory).path))
+    }
+
     /// The Advanced toggle is live and stores the per-device preference. [03 §Advanced] observed.
     func testRestoreWindowsSettingIsLive() {
         let controller = makeController()
