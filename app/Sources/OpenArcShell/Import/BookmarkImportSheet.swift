@@ -60,8 +60,8 @@ enum BookmarkImportPresenter {
     }
 }
 
-/// The sheet: a source list (detected Chromium-family profiles and Safari), a checkbox per data
-/// kind (D3b), Choose File…, then a summary.
+/// The sheet: a source list (Arc, detected Chromium-family profiles and Safari), a checkbox per
+/// data kind (D3b; for Arc the first one is its sidebar, D15), Choose File…, then a summary.
 struct BookmarkImportSheet: View {
     @ObservedObject var model: BookmarkImportModel
     typealias T = BookmarkImportLocalTokens
@@ -116,9 +116,10 @@ struct BookmarkImportSheet: View {
     @ViewBuilder
     private var kinds: some View {
         let available = model.availableKinds(for: model.selectedSource)
+        let isArc: Bool = { if case .arc? = model.selectedSource { return true } else { return false } }()
         VStack(alignment: .leading, spacing: 4) {
             ForEach(available, id: \.self) { kind in
-                Toggle(T.label(for: kind), isOn: Binding(
+                Toggle(T.label(for: kind, isSidebarSource: isArc), isOn: Binding(
                     get: { model.selectedKinds.contains(kind) },
                     set: { on in
                         if on { model.selectedKinds.insert(kind) } else { model.selectedKinds.remove(kind) }
@@ -130,8 +131,14 @@ struct BookmarkImportSheet: View {
         if case .safari? = model.selectedSource {
             Text(T.safariHint).font(Typography.settingsCaption.font).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-        } else if model.selectedKinds.contains(.passwords) {
-            Text(T.keychainHint).font(Typography.settingsCaption.font).foregroundStyle(.secondary)
+        } else {
+            if isArc, model.selectedKinds.contains(.bookmarks) {
+                Text(T.arcHint).font(Typography.settingsCaption.font).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if model.selectedKinds.contains(.passwords) {
+                Text(T.keychainHint).font(Typography.settingsCaption.font).foregroundStyle(.secondary)
+            }
         }
         if !model.engineSupports(.history) {
             Text(T.noEngineKinds).font(Typography.settingsCaption.font).foregroundStyle(.tertiary)
