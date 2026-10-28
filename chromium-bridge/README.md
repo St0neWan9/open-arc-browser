@@ -170,6 +170,14 @@ What we replace:
 | Site Control Center (B13) | `OACSiteSettings` | `SiteSettingsProvider` | 1:1, see `OACSiteSettings.h` header comment; §5 for permission kinds |
 | D3b history/password import | Chromium's importer through a later `OACImporter` | `ImportDataKind` | not in this header set |
 | D8 local crash reports | `OACApplicationConfiguration.crashDumpDirectory` | none | covered |
+| C20 back/forward across relaunch | `OACTab.sessionHistory`, `OACTabConfiguration.sessionHistory` (patch 0046) | `BrowserTab.sessionHistory()`, `TabConfiguration.sessionHistory` | done |
+| C21 passkeys / security keys | `OACWebAuthn.h` request + `OACDialogDelegate` (patches 0038, 0040); keychain group from the app's signature | `EngineDialogRequest` WebAuthn kind | done |
+| C22 unresponsive page | `OACUnresponsivePageRequest` (patch 0036) | `EngineDialogRequest.unresponsivePage` | done |
+| C23 engine info bars | confirm-bar requests, global bars reach embedder tabs (patches 0049–0050) | `EngineDialogRequest.infoBar` | done |
+| C24 web notifications | notification clicks routed to the embedder; `OACApplication.delegate` set by the engine (patches 0047–0048) | tab focus through the app delegate | done |
+| C25 client certificates | client-certificate picker request (patches 0037, 0039) | `EngineDialogRequest` certificate kind | done |
+| C26 extension commands, errors | manifest `commands` handled before the page; error counts (patches 0051–0052) | `ExtensionEvent.errorsChanged`, `EngineExtensionInfo.errorCount`, `popupsOpenedFromKeyboard()` | done |
+| C27, C28 network defaults | no background Google requests; Web Store extension updates kept (patches 0041–0045) | none (startup defaults) | done |
 
 ## Mapping of the Swift protocols to the bridge
 
