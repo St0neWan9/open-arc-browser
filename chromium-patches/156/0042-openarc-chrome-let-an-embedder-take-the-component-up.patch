@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 27 Oct 2026 17:50:44 -0700
+Subject: [PATCH] openarc: chrome: let an embedder take the component updater
+ off the network
+
+Plan C27. --disable-component-update only keeps Chrome from registering
+its components at startup (RegisterComponentsForUpdate). Installers that
+register on demand still reach Google's update servers: the optimization
+guide's on-device model manifest (OptimizationGuideGlobalState, created
+in PostBrowserStart) asks update.googleapis.com and downloads from
+dl.google.com at every first start, and speech, text-to-speech and
+translate language packs do the same when used.
+
+Adds component_updater::DisableComponentUpdaterNetworkForEmbedder().
+Once called, ChromeConfigurator returns no update and no ping URL, so
+update_client fails every check locally (MISSING_URLS) and sends no
+pings. Extension updates use their own configurator and are not
+affected.
+
+Chrome never calls it and is unchanged. No upstream equivalent.
+---
+ .../chrome_component_updater_configurator.cc        | 13 +++++++++++++
+ .../chrome_component_updater_configurator.h         |  8 ++++++++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/chrome/browser/component_updater/chrome_component_updater_configurator.cc b/chrome/browser/component_updater/chrome_component_updater_configurator.cc
+index 744a905fa17d..b6f5bc7f0cea 100644
+--- a/chrome/browser/component_updater/chrome_component_updater_configurator.cc
++++ b/chrome/browser/component_updater/chrome_component_updater_configurator.cc
+@@ -59,6 +59,9 @@
+ namespace component_updater {
+ namespace {
+ 
++// Open Arc: see DisableComponentUpdaterNetworkForEmbedder().
++bool g_network_disabled_for_embedder = false;
++
+ class ChromeConfigurator : public update_client::Configurator {
+  public:
+   ChromeConfigurator(const base::CommandLine* cmdline,
+@@ -161,11 +164,17 @@ base::TimeDelta ChromeConfigurator::UpdateDelay() const {
+ 
+ std::vector<GURL> ChromeConfigurator::UpdateUrl() const {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (g_network_disabled_for_embedder) {
++    return {};
++  }
+   return configurator_impl_.UpdateUrl();
+ }
+ 
+ std::vector<GURL> ChromeConfigurator::PingUrl() const {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (g_network_disabled_for_embedder) {
++    return {};
++  }
+   return configurator_impl_.PingUrl();
+ }
+ 
+@@ -341,4 +350,8 @@ MakeChromeComponentUpdaterConfigurator(const base::CommandLine* cmdline,
+   return base::MakeRefCounted<ChromeConfigurator>(cmdline, pref_service);
+ }
+ 
++void DisableComponentUpdaterNetworkForEmbedder() {
++  g_network_disabled_for_embedder = true;
++}
++
+ }  // namespace component_updater
+diff --git a/chrome/browser/component_updater/chrome_component_updater_configurator.h b/chrome/browser/component_updater/chrome_component_updater_configurator.h
+index 56dada50992d..26257ac77168 100644
+--- a/chrome/browser/component_updater/chrome_component_updater_configurator.h
++++ b/chrome/browser/component_updater/chrome_component_updater_configurator.h
+@@ -20,6 +20,14 @@ scoped_refptr<update_client::Configurator>
+ MakeChromeComponentUpdaterConfigurator(const base::CommandLine* cmdline,
+                                        PrefService* pref_service);
+ 
++// Open Arc: --disable-component-update only skips registering the components
++// at startup; installers that register on demand (the optimization guide's
++// on-device model manifest, speech, text-to-speech, translate language packs)
++// still ask Google's update servers. An embedder that wants no component
++// traffic at all calls this: the component updater then has no update or
++// ping URL and fails every check locally. Chrome never calls it.
++void DisableComponentUpdaterNetworkForEmbedder();
++
+ }  // namespace component_updater
+ 
+ #endif  // CHROME_BROWSER_COMPONENT_UPDATER_CHROME_COMPONENT_UPDATER_CONFIGURATOR_H_

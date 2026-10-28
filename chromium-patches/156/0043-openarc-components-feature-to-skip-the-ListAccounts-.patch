@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 27 Oct 2026 17:50:47 -0700
+Subject: [PATCH] openarc: components: feature to skip the /ListAccounts
+ request
+
+Plan C27. GaiaCookieManagerService asks accounts.google.com/ListAccounts
+which Google accounts the cookie jar holds whenever a caller finds the
+list stale; on every profile start the sign-in metrics services
+(AccountInvestigator, SyncSessionDurationsMetricsRecorder) do so, even
+when Google sign-in is off.
+
+Adds the feature GaiaCookieListAccountsFetch (enabled by default). When
+disabled, StartFetchingListAccounts() answers with an empty response,
+which parses as an empty account list: the cookie jar reads as fresh and
+holding no accounts, and no request is sent.
+
+Chrome's behavior is unchanged. No upstream equivalent.
+---
+ .../identity_manager/gaia_cookie_manager_service.cc   | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc b/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
+index db2e0266aa22..b2534f496c3b 100644
+--- a/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
++++ b/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
+@@ -57,6 +57,12 @@
+ 
+ namespace {
+ 
++// Open Arc: an embedder without Google sign-in disables this feature. Every
++// profile start otherwise asks accounts.google.com/ListAccounts which Google
++// accounts the cookie jar holds (for sign-in metrics and the account
++// reconcilor). Disabled, the answer is "no accounts" without a request.
++BASE_FEATURE(kGaiaCookieListAccountsFetch, base::FEATURE_ENABLED_BY_DEFAULT);
++
+ // The maximum number of retries for a fetcher used in this class.
+ constexpr int kMaxFetcherRetries = 8;
+ 
+@@ -867,6 +873,11 @@ void GaiaCookieManagerService::StartGaiaLogOut() {
+ }
+ 
+ void GaiaCookieManagerService::StartFetchingListAccounts() {
++  if (!base::FeatureList::IsEnabled(kGaiaCookieListAccountsFetch)) {
++    // Open Arc: an empty response parses as an empty account list.
++    OnListAccountsSuccess(std::string());
++    return;
++  }
+   gaia_auth_fetcher_ =
+       signin_client_->CreateGaiaAuthFetcher(this, requests_.front().source());
+   gaia_auth_fetcher_->StartListAccounts();

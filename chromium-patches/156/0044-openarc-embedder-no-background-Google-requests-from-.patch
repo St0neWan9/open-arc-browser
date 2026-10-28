@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 27 Oct 2026 17:51:57 -0700
+Subject: [PATCH] openarc: embedder: no background Google requests from the
+ engine
+
+Plan C27 (docs/release.md, Network use). Requests to Google that
+--disable-background-networking and --disable-component-update do not
+stop, found by reading code and in net logs of a fresh profile:
+
+- Network time queries (clients2.google.com/time): Local State pref
+  BrowserNetworkTimeQueriesEnabled default false.
+- Translate ranker model (www.gstatic.com): features TranslateRankerQuery
+  and TranslateRankerEnforcement off; every translatable page is offered
+  (Chrome's answer without a ranker), nothing is fetched until the user
+  translates (B47).
+- Autofill field-type queries (content-autofill.googleapis.com): feature
+  AutofillServerCommunication off; local heuristics remain.
+- Error-page DNS probes (8.8.8.8, 8.8.4.4) and captive-portal detection
+  (www.gstatic.com/generate_204): profile pref
+  alternate_error_pages.enabled default false.
+- AI Mode eligibility (www.google.com/async/folae at startup): feature
+  AimEnabled off.
+- accounts.google.com/ListAccounts at every profile start (sign-in
+  metrics): feature GaiaCookieListAccountsFetch off (patch "feature to
+  skip the /ListAccounts request").
+- On-demand components (update.googleapis.com, dl.google.com; the
+  optimization guide's on-device model manifest at every first start):
+  DisableComponentUpdaterNetworkForEmbedder() (patch "let an embedder
+  take the component updater off the network").
+
+Prefs are defaults, so policy or a later setting still wins.
+---
+ openarc/BUILD.gn                              |  3 +++
+ openarc/app/openarc_main_delegate.mm          | 23 +++++++++++++++-
+ .../openarc_browser_main_extra_parts.mm       | 27 +++++++++++++++++++
+ 3 files changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 7e23c59316ba..e502cfab2b01 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -132,6 +132,7 @@ source_set("embedder") {
+     "//build:branding_buildflags",
+     "//chrome/browser:browser_process",
+     "//chrome/browser:child_process_host_flags",
++    "//chrome/browser/component_updater",
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:tab_helpers",
+@@ -142,7 +143,9 @@ source_set("embedder") {
+     "//chrome/browser/ui/translate",
+     "//components/content_settings/core/browser",
+     "//components/content_settings/core/common",
++    "//components/embedder_support",
+     "//components/language_detection/core",
++    "//components/network_time",
+     "//components/os_crypt/common:keychain_password_mac",
+     "//components/permissions",
+     "//components/prefs",
+diff --git a/openarc/app/openarc_main_delegate.mm b/openarc/app/openarc_main_delegate.mm
+index d2c6719e919f..827ebe16f4fb 100644
+--- a/openarc/app/openarc_main_delegate.mm
++++ b/openarc/app/openarc_main_delegate.mm
+@@ -79,7 +79,28 @@ void KeepCrashReportsLocal() {
+   // optimization guide's downloads, which this build never gets (no Google API
+   // keys, no component updater). Without it, pages without a lang attribute
+   // would never be offered translation; CLD3 detects them instead.
+-  for (const char* feature : {"EnableHangWatcher", "TFLiteLanguageDetection"}) {
++  //
++  // Plan C27: Google requests the engine would otherwise make on its own;
++  // --disable-background-networking stops neither of them.
++  // - TranslateRankerQuery, TranslateRankerEnforcement: the translate ranker
++  //   downloads its model from www.gstatic.com the first time Chrome decides
++  //   whether to offer translation. Without the ranker Chrome offers every
++  //   translatable page (its default answer), and nothing is fetched until
++  //   the user translates.
++  // - AutofillServerCommunication: field-type queries (and votes) for pages
++  //   with forms, sent to content-autofill.googleapis.com. Autofill and the
++  //   password manager keep their local heuristics.
++  // - AimEnabled: the omnibox's AI Mode eligibility service asks
++  //   www.google.com/async/folae at startup and reads the Google accounts in
++  //   the cookie jar (accounts.google.com/ListAccounts). The shell has its
++  //   own command bar and no AI features in v1.
++  // - GaiaCookieListAccountsFetch (an Open Arc patch): Google sign-in is off,
++  //   yet sign-in metrics ask accounts.google.com/ListAccounts at every
++  //   profile start; the cookie jar is then reported as holding no accounts.
++  for (const char* feature :
++       {"EnableHangWatcher", "TFLiteLanguageDetection", "TranslateRankerQuery",
++        "TranslateRankerEnforcement", "AutofillServerCommunication",
++        "AimEnabled", "GaiaCookieListAccountsFetch"}) {
+     if (disabled.find(feature) == std::string::npos) {
+       disabled += disabled.empty() ? "" : ",";
+       disabled += feature;
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.mm b/openarc/browser/openarc_browser_main_extra_parts.mm
+index 230040e2bb62..dfdff5f3dfe8 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.mm
++++ b/openarc/browser/openarc_browser_main_extra_parts.mm
+@@ -9,8 +9,11 @@
+ #include "base/check.h"
+ #include "base/values.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/component_updater/chrome_component_updater_configurator.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/common/pref_names.h"
++#include "components/embedder_support/pref_names.h"
++#include "components/network_time/network_time_pref_names.h"
+ #include "components/os_crypt/common/keychain_password_mac.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+@@ -58,10 +61,27 @@
+   KeychainPassword::GetServiceName() = product_name + " Safe Storage";
+   KeychainPassword::GetAccountName() = product_name;
+ 
++  // Plan C27: --disable-component-update (decision Q21) only skips the
++  // components Chrome registers at startup. Installers that register on
++  // demand still reach update.googleapis.com and dl.google.com; the
++  // optimization guide's on-device model manifest does so at every first
++  // start. Give the component updater no server at all.
++  component_updater::DisableComponentUpdaterNetworkForEmbedder();
++
+   // No Chrome background mode: the app's own lifetime decides.
+   if (PrefService* local_state = g_browser_process->local_state()) {
+     local_state->SetDefaultPrefValue(prefs::kBackgroundModeEnabled,
+                                      base::Value(false));
++    // Plan C27: no network time queries (clients2.google.com/time). Chrome's
++    // tracker asks at startup when it has no fresh time mapping, then at
++    // random and on certificate date errors, and
++    // --disable-background-networking does not stop it. Certificate date
++    // checks then rely on the system clock alone. A default, so the
++    // BrowserNetworkTimeQueriesEnabled policy still wins; set before the
++    // tracker starts (BrowserProcessImpl::PreMainMessageLoopRun), and the
++    // tracker reads the pref at each check anyway.
++    local_state->SetDefaultPrefValue(
++        network_time::prefs::kNetworkTimeQueriesEnabled, base::Value(false));
+     // The ad blocker's global switch (plan C16).
+     AdBlocker::Get().Initialize(local_state);
+   }
+@@ -73,6 +93,13 @@
+   PrefService* prefs = profile->GetPrefs();
+   prefs->SetDefaultPrefValue(prefs::kSafeBrowsingEnabled, base::Value(false));
+   prefs->SetDefaultPrefValue(prefs::kSigninAllowed, base::Value(false));
++  // Plan C27: Chrome's "alternate error pages" pref gates the DNS probes of a
++  // name-resolution error page (Google Public DNS, 8.8.8.8 and 8.8.4.4) and
++  // captive-portal detection on certificate and timeout errors
++  // (www.gstatic.com/generate_204). Off: error pages show the plain network
++  // error. The off-the-record profile shares this registry's defaults.
++  prefs->SetDefaultPrefValue(embedder_support::kAlternateErrorPagesEnabled,
++                             base::Value(false));
+ }
+ 
+ void OpenArcBrowserMainExtraParts::PostBrowserStart() {
