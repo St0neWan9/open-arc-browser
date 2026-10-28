@@ -19,6 +19,15 @@ struct SidebarRowFramesKey: PreferenceKey {
     }
 }
 
+/// Frames of the rows' speaker glyphs in the sidebar's root space, keyed by tab id. A press on
+/// one must not select the row. [05 §tab audio indicator] observed.
+struct SidebarAudioGlyphFramesKey: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
 @MainActor
 enum SidebarPasteboard {
     static func copy(_ url: URL) {
@@ -274,7 +283,7 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
             pending = (hit.item, point)
             pendingFrame = hit.frame
             // [06 §15.1] observed: the press alone selects the tab and brings it to the front.
-            if let select = hit.selectRect, select.contains(point) {
+            if hit.selects(at: point) {
                 // A held, already selected row darkens ≈ 1 %. [07 §7] observed.
                 viewModel?.pressBegan(hit.item)
                 if clickCount == 1 { viewModel?.pressSelect(hit.item) }

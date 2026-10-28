@@ -12,6 +12,7 @@ public struct SidebarView: View {
     @ObservedObject private var viewModel: SidebarViewModel
     @State private var isSidebarHovered = false
     @State private var rowFrames: [UUID: CGRect] = [:]
+    @State private var audioGlyphFrames: [UUID: CGRect] = [:]
     @State private var regions: [SidebarDropRegion: CGRect] = [:]
     /// The floating peek panel's deeper fill instead of the window color. [06 §14] B34.
     @Environment(\.sidebarFillOverride) private var fillOverride
@@ -110,6 +111,7 @@ public struct SidebarView: View {
         .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
         .coordinateSpace(name: SidebarCoordinateSpace.root)
         .onPreferenceChange(SidebarRowFramesKey.self) { rowFrames = $0 }
+        .onPreferenceChange(SidebarAudioGlyphFramesKey.self) { audioGlyphFrames = $0 }
         .onPreferenceChange(SidebarDropRegionsKey.self) { regions = $0 }
         // Auto-scroll moves rows under a pointer that may not move: re-hit-test with the new frames
         // so the indicator stays on the row actually under the pointer. inferred (B20).
@@ -167,7 +169,8 @@ public struct SidebarView: View {
             rowFrames: rowFrames,
             listViewport: regions[.list] ?? .null,
             favoriteSlots: favoriteSlots,
-            accessoryWidth: layout.width - layout.rowFillFrame.maxX + SidebarLocalTokens.rowAccessoryTrailingPadding + SidebarLocalTokens.rowAccessoryButtonSize
+            accessoryWidth: layout.width - layout.rowFillFrame.maxX + SidebarLocalTokens.rowAccessoryTrailingPadding + SidebarLocalTokens.rowAccessoryButtonSize,
+            audioGlyphFrames: Array(audioGlyphFrames.values)
         )
     }
 

@@ -72,8 +72,8 @@ extension View {
 }
 
 /// A tab row in the pinned area or in Today. States: normal, hover (darker fill + ✕ / —),
-/// selected (near-white rounded fill), loading (spinner instead of icon), audible (speaker),
-/// renaming (inline text field). [06 §4, §12] observed; title SF Regular 14 in the theme's row
+/// selected (near-white rounded fill), loading (spinner instead of icon), audible or muted (speaker
+/// between icon and title, [05 §tab audio indicator] observed), renaming (inline text field). [06 §4, §12] observed; title SF Regular 14 in the theme's row
 /// text color, unchanged when selected [07 §3, §8] observed.
 struct SidebarTabRowView: View {
     @ObservedObject var viewModel: SidebarViewModel
@@ -96,68 +96,77 @@ struct SidebarTabRowView: View {
 
         SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), shadow: isSelected ? Metrics.Sidebar.selectedRowShadow : nil,
                         depth: depth, splitPreview: viewModel.splitPreviewSide(for: tab.id), splitPreviewFill: palette.splitPreviewFill.swiftUI) {
-            Group {
-                if viewModel.isEaselRow(tab.id) {
-                    // An Easel row has the Easel icon. [06 §4] observed. B56.
-                    Image(systemName: EaselIcon.symbol)
-                        .font(.system(size: iconSize * 0.8, weight: .medium))
-                        .foregroundStyle(textColor)
-                } else if live?.isLoading == true {
-                    ProgressView().controlSize(.small).scaleEffect(0.6)
-                } else if let icon = tab.icon {
-                    // Change Icon… replaces the favicon. [06 §21.5] observed item (B77).
-                    SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor)
-                } else {
-                    SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: iconSize, tint: placeholderTint(isSelected: isSelected, palette: palette), placeholder: .roundedSquare)
-                }
-            }
-            .frame(width: iconSize, height: iconSize)
-            .accessibilityBox(label: "Icon", identifier: "openarc.sidebar.row.icon", traits: .isImage)
-            .padding(.trailing, SidebarLayout().rowTitleGap)
-
-            if viewModel.renamingItemID == tab.id {
-                TextField("", text: $renameText)
-                    .textFieldStyle(.plain)
-                    .font(style.font)
-                    .foregroundStyle(textColor)
-                    .focused($renameFocused)
-                    .onSubmit { viewModel.commitRename(tab.id, text: renameText) }
-                    .onExitCommand { viewModel.cancelRename() }
-                    .onChange(of: renameFocused) { _, focused in
-                        if !focused, viewModel.renamingItemID == tab.id { viewModel.commitRename(tab.id, text: renameText) }
+            // Favicon, then the speaker while the tab is audible or muted, then the title.
+            // [05 §tab audio indicator] observed.
+            ForEach(SidebarTabRowPart.leadingParts(audio: viewModel.audioIndicator(for: tab.id)), id: \.self) { part in
+                switch part {
+                case .icon:
+                    Group {
+                        if viewModel.isEaselRow(tab.id) {
+                            // An Easel row has the Easel icon. [06 §4] observed. B56.
+                            Image(systemName: EaselIcon.symbol)
+                                .font(.system(size: iconSize * 0.8, weight: .medium))
+                                .foregroundStyle(textColor)
+                        } else if live?.isLoading == true {
+                            ProgressView().controlSize(.small).scaleEffect(0.6)
+                        } else if let icon = tab.icon {
+                            // Change Icon… replaces the favicon. [06 §21.5] observed item (B77).
+                            SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor)
+                        } else {
+                            SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: iconSize, tint: placeholderTint(isSelected: isSelected, palette: palette), placeholder: .roundedSquare)
+                        }
                     }
-                    .onAppear {
-                        renameText = tab.displayTitle
-                        renameFocused = true
-                    }
-                    .accessibilityIdentifier("openarc.sidebar.row.renameField")
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle)
-                        .font(style.font)
-                        .foregroundStyle(textColor)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        // Ink 1 pt inside the 43 pt text frame ([07 §4] ink at 45, B33).
-                        .padding(.leading, SidebarLocalTokens.textInkInset)
-                        .frame(height: CGFloat(style.lineHeight))
-                        .accessibilityBox(label: tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle, identifier: "openarc.sidebar.row.title")
-                    if viewModel.showsPinRenameHint(tab.id) {
-                        // The first pin's faint hint under the title. [06 §4] observed; the hover
-                        // card's hint style (11 pt, 50 %) is reused, inferred. B76.
-                        Text(SidebarLocalTokens.hoverCardHint)
-                            .font(Typography.hoverCardHint.font)
-                            .foregroundStyle(textColor.opacity(Typography.hoverCardHint.opacity))
-                            .lineLimit(1)
-                            .padding(.leading, SidebarLocalTokens.textInkInset)
-                            .frame(height: CGFloat(Typography.hoverCardHint.lineHeight))
-                            .accessibilityIdentifier("openarc.sidebar.row.renameHint")
+                    .frame(width: iconSize, height: iconSize)
+                    .accessibilityBox(label: "Icon", identifier: "openarc.sidebar.row.icon", traits: .isImage)
+                    .padding(.trailing, SidebarLayout().rowTitleGap)
+                case .audio(let audio):
+                    SidebarAudioGlyphButton(viewModel: viewModel, tabID: tab.id, indicator: audio, textColor: textColor)
+                case .title:
+                    if viewModel.renamingItemID == tab.id {
+                        TextField("", text: $renameText)
+                            .textFieldStyle(.plain)
+                            .font(style.font)
+                            .foregroundStyle(textColor)
+                            .focused($renameFocused)
+                            .onSubmit { viewModel.commitRename(tab.id, text: renameText) }
+                            .onExitCommand { viewModel.cancelRename() }
+                            .onChange(of: renameFocused) { _, focused in
+                                if !focused, viewModel.renamingItemID == tab.id { viewModel.commitRename(tab.id, text: renameText) }
+                            }
+                            .onAppear {
+                                renameText = tab.displayTitle
+                                renameFocused = true
+                            }
+                            .accessibilityIdentifier("openarc.sidebar.row.renameField")
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle)
+                                .font(style.font)
+                                .foregroundStyle(textColor)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                // Ink 1 pt inside the 43 pt text frame ([07 §4] ink at 45, B33).
+                                .padding(.leading, SidebarLocalTokens.textInkInset)
+                                .frame(height: CGFloat(style.lineHeight))
+                                .accessibilityBox(label: tab.displayTitle.isEmpty ? "New Tab" : tab.displayTitle, identifier: "openarc.sidebar.row.title")
+                            if viewModel.showsPinRenameHint(tab.id) {
+                                // The first pin's faint hint under the title. [06 §4] observed; the hover
+                                // card's hint style (11 pt, 50 %) is reused, inferred. B76.
+                                Text(SidebarLocalTokens.hoverCardHint)
+                                    .font(Typography.hoverCardHint.font)
+                                    .foregroundStyle(textColor.opacity(Typography.hoverCardHint.opacity))
+                                    .lineLimit(1)
+                                    .padding(.leading, SidebarLocalTokens.textInkInset)
+                                    .frame(height: CGFloat(Typography.hoverCardHint.lineHeight))
+                                    .accessibilityIdentifier("openarc.sidebar.row.renameHint")
+                            }
+                        }
                     }
                 }
             }
 
             Spacer(minLength: 4)
-            accessory(live: live, textColor: textColor)
+            accessory(textColor: textColor)
         }
         .onHover { hovering in
             isHovering = hovering
@@ -200,7 +209,7 @@ struct SidebarTabRowView: View {
     }
 
     @ViewBuilder
-    private func accessory(live: SidebarTabLiveState?, textColor: Color) -> some View {
+    private func accessory(textColor: Color) -> some View {
         if isHovering && viewModel.renamingItemID != tab.id {
             // ✕ archives a Today tab; — on a pinned row unloads it (ambiguous in the spec, see
             // `SidebarViewModel.unloadPinnedTab`). [06 §12] observed.
@@ -216,13 +225,40 @@ struct SidebarTabRowView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(area == .pinned ? "Unload pinned tab" : "Archive tab")
             .accessibilityIdentifier("openarc.sidebar.row.accessory")
-        } else if live?.isAudible == true {
-            Image(systemName: "speaker.wave.2.fill")
+        }
+    }
+}
+
+/// The speaker glyph between a row's favicon and title, in the row's ink: sound waves while the
+/// tab plays, crossed out while it is muted; a click mutes / unmutes without selecting the row.
+/// [05 §tab audio indicator] observed. Its frame is reported (`SidebarAudioGlyphFramesKey`) so the
+/// sidebar's press-to-select monitor leaves it alone.
+struct SidebarAudioGlyphButton: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let tabID: UUID
+    let indicator: SidebarAudioIndicator
+    let textColor: Color
+
+    var body: some View {
+        Button {
+            viewModel.audioIndicatorClicked(tabID)
+        } label: {
+            Image(systemName: indicator.symbol)
                 .font(.system(size: SidebarLocalTokens.rowAccessoryGlyphSize))
                 .foregroundStyle(textColor.opacity(SidebarLocalTokens.rowAccessoryInkOpacity))
-                .frame(width: SidebarLocalTokens.rowAccessoryButtonSize, height: SidebarLocalTokens.rowAccessoryButtonSize)
-                .accessibilityLabel("Playing audio")
+                .frame(width: SidebarLocalTokens.rowAudioGlyphCellWidth, height: SidebarLocalTokens.rowAccessoryButtonSize)
+                .padding(.trailing, SidebarLocalTokens.rowAudioGlyphTitleGap)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: SidebarAudioGlyphFramesKey.self,
+                                       value: [tabID: proxy.frame(in: .named(SidebarCoordinateSpace.root))])
+            }
+        )
+        .accessibilityLabel(indicator.accessibilityLabel)
+        .accessibilityIdentifier(SidebarAudioIndicator.accessibilityIdentifier)
     }
 }
 
@@ -334,6 +370,11 @@ struct SidebarSplitGroupRowView: View {
                 }
             }
             .frame(width: iconSize, height: iconSize)
+            // Each member's speaker sits between its favicon and title. [05 §tab audio indicator] observed.
+            if let audio = viewModel.audioIndicator(for: member.id) {
+                SidebarAudioGlyphButton(viewModel: viewModel, tabID: member.id, indicator: audio, textColor: textColor)
+                    .padding(.trailing, -SidebarLocalTokens.splitGroupMemberIconGap)
+            }
             Text(member.displayTitle.isEmpty ? "New Tab" : member.displayTitle)
                 .font(Typography.tabRowTitle.font)
                 .foregroundStyle(textColor)
