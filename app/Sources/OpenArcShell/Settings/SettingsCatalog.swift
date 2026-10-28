@@ -144,8 +144,10 @@ public enum SettingsCatalog {
         // Per-profile `ProfileSettings.includesSearchSuggestions`; the command bar asks the engine (B66).
         SettingsControl("profiles.searchSuggestions", "Include search engine suggestions", .toggle(defaultValue: true), .live),
         SettingsControl("profiles.archiveTabsAfter", "Archive tabs after", .picker(defaultValue: ArchiveLifetime.default.displayName), .live),
-        // Default app for new documents (Notes/Easels are E3 gaps); default value unknown.
-        SettingsControl("profiles.newDocuments", "New documents", .picker(defaultValue: "—"), .pending(task: "E3")),
+        // Observed: a default-document-app dropdown ([03 §Profiles]); its choices and default were
+        // not recorded (unknown). E3 ([06 §23] observed) found no working Notes entry in Arc 1.170,
+        // so there is nothing for the row to choose between yet: it stays disabled as a spec gap.
+        SettingsControl("profiles.newDocuments", "New documents", .picker(defaultValue: "—"), .pending(task: "unknown (spec gap)")),
         // Live (B83): the engine keeps the folder per profile (`EngineDownloads.setDefaultDirectory`).
         SettingsControl("profiles.downloadLocation", "Download location", .picker(defaultValue: "Downloads"), .live),
         // Live (B83): each row opens the engine's page for the profile in a tab (inferred targets,
