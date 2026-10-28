@@ -12,7 +12,7 @@ struct LibraryDownloadsList: View {
     let palette: ThemePalette
 
     var body: some View {
-        let items = downloads.filtered(by: library.query(for: .downloads))
+        let items = library.visibleDownloads
         if downloads.items.isEmpty, let empty = LibrarySection.downloads.emptyState {
             LibraryEmptyStateView(state: empty, isBoosts: false, palette: palette)
         } else {

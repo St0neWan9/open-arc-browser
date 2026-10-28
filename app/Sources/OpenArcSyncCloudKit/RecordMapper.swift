@@ -128,6 +128,7 @@ struct RecordMapper: Sendable {
             w.set(ArchiveItemFields.spaceID, v.spaceID?.uuidString)
             w.set(ArchiveItemFields.reason, v.reason.rawValue)
             w.set(ArchiveItemFields.archivedAt, v.archivedAt)
+            w.set(ArchiveItemFields.fromLittleArc, Int64(v.isFromLittleArc ? 1 : 0))
         case .splitLayout(let v):
             w.set(SplitLayoutFields.spaceID, v.spaceID.uuidString)
             w.set(SplitLayoutFields.root, Self.json(v.root))
@@ -268,7 +269,8 @@ struct RecordMapper: Sendable {
                 spaceID: try r.optionalUUID(ArchiveItemFields.spaceID),
                 folderPath: r.optional(ArchiveItemFields.folderPath) ?? [],
                 reason: reason,
-                archivedAt: try r.required(ArchiveItemFields.archivedAt)
+                archivedAt: try r.required(ArchiveItemFields.archivedAt),
+                isFromLittleArc: (r.optional(ArchiveItemFields.fromLittleArc) as Int64?).map { $0 != 0 } ?? false
             )
             v.meta = meta
             return .archiveItem(v)

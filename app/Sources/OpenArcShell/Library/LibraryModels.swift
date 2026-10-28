@@ -117,6 +117,16 @@ public enum LibraryTexts {
     public static let mediaNoMatches = "No matching media."
 
     public static let filterButton = "Filter"
+    /// Filter panel (B94). [06 §8] Filter (E24), observed, word for word.
+    public static let filterDone = "Done"
+    public static let filterDownloadsTitle = "Filter Downloads…"
+    public static let filterArchiveTitle = "Filter Archived Tabs"
+    public static let filterProfilesGroup = "Profiles"
+    public static let filterClosingGroup = "How was the tab closed?"
+    public static let filterOriginGroup = "Where was the tab?"
+    public static let filterAutoClosed = "Auto-Closed"
+    public static let filterManuallyClosed = "Manually Closed"
+    public static let filterLittleArc = "Little Arc"
 }
 
 // MARK: - Layout
@@ -162,6 +172,16 @@ enum LibraryLocalTokens {
     static let boardHeaderHeight: CGFloat = 40
     static let boardFooterHeight: CGFloat = 36
     static let boardIconSize: CGFloat = 14
+
+    /// Filter panel (B94): capsule chips on the sidebar tint (the search field's control fill),
+    /// selected ones darker; group label above each row of chips. [06 §8] observed capsules;
+    /// sizes unknown.
+    static let filterChipHeight: CGFloat = 24
+    static let filterChipHorizontalPadding: CGFloat = 10
+    static let filterChipSpacing: CGFloat = 6
+    static let filterGroupSpacing: CGFloat = 10
+    /// Darkening of a selected chip (control fill × factor), like the rail's selected block. inferred.
+    static let filterChipSelectedShade: Double = 0.85
 
     /// Media intro card. unknown.
     static let mediaCardCornerRadius: CGFloat = 10
@@ -248,10 +268,13 @@ public enum LibraryArchive {
     }
 
     /// Live archive items filtered by `query`, grouped by date (group order Today → Older),
-    /// newest first inside each group. Empty groups are left out.
-    public static func groups(in workspace: WorkspaceState, query: String, now: Date, calendar: Calendar) -> [LibraryArchiveGroup] {
+    /// newest first inside each group. Empty groups are left out. `filter`: the Filter panel's
+    /// chips (B94); an empty selection keeps everything.
+    public static func groups(in workspace: WorkspaceState, query: String, filter: LibraryFilterSelection = LibraryFilterSelection(),
+                              now: Date, calendar: Calendar) -> [LibraryArchiveGroup] {
         var buckets: [LibraryDateGroup: [ArchiveItem]] = [:]
-        for item in workspace.archiveNewestFirst where matches(item, query: query) {
+        for item in workspace.archiveNewestFirst
+        where matches(item, query: query) && filter.allows(LibraryFilter.traits(of: item)) {
             buckets[LibraryDateGroup.group(of: item.archivedAt, now: now, calendar: calendar), default: []].append(item)
         }
         return LibraryDateGroup.allCases.compactMap { group in

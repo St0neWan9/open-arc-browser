@@ -141,7 +141,9 @@ struct LibraryListColumn: View {
     var body: some View {
         let text = palette.primaryText.swiftUI
         VStack(alignment: .leading, spacing: 8) {
-            if let placeholder = section.searchPlaceholder {
+            if section.hasFilterButton, library.isFilterPanelOpen, let title = LibraryFilter.title(for: section) {
+                LibraryFilterPanel(library: library, title: title, palette: palette)
+            } else if let placeholder = section.searchPlaceholder {
                 searchRow(placeholder, text: text)
             }
             content(text: text)
@@ -169,15 +171,12 @@ struct LibraryListColumn: View {
             )
             .accessibilityIdentifier("openarc.library.search")
             if section.hasFilterButton {
-                // Placeholder: no filters exist yet. [06 §8] observed only that the button exists.
-                Menu(LibraryTexts.filterButton) {
-                    Button("No filters available") {}.disabled(true)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .font(Typography.libraryRowDetail.font)
-                .foregroundStyle(text.opacity(0.8))
-                .accessibilityIdentifier("openarc.library.filter")
+                // Opens the Filter panel (B94). [06 §8] Filter, observed.
+                Button(LibraryTexts.filterButton) { library.openFilterPanel() }
+                    .buttonStyle(.plain)
+                    .font(Typography.libraryRowDetail.font)
+                    .foregroundStyle(text.opacity(0.8))
+                    .accessibilityIdentifier("openarc.library.filter")
             }
         }
     }
