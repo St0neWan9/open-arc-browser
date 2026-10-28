@@ -472,9 +472,13 @@ final class SyncUITests: XCTestCase {
         XCTAssertEqual(SyncBackendChoice.from(environment: [:]), .disabled)
         XCTAssertEqual(SyncBackendChoice.from(environment: ["OPENARC_SYNC": "off"]), .disabled)
         XCTAssertEqual(SyncBackendChoice.from(environment: ["OPENARC_SYNC": " CloudKit "]), .cloudKit)
+        // B65: an entitled build uses CloudKit with no launch switch; `off` still forces it off.
+        XCTAssertEqual(SyncBackendChoice.from(environment: [:], isEntitled: true), .cloudKit)
+        XCTAssertEqual(SyncBackendChoice.from(environment: ["OPENARC_SYNC": "off"], isEntitled: true), .disabled)
 
         let recording = RecordingSyncStore()
         XCTAssertTrue(AppDependencies.syncStore(environment: [:], makeCloudKitStore: { recording }) is DisabledSyncStore)
+        XCTAssertTrue(AppDependencies.syncStore(environment: [:], isCloudKitEntitled: true, makeCloudKitStore: { recording }) === recording)
         XCTAssertTrue(AppDependencies.syncStore(environment: ["OPENARC_SYNC": "cloudkit"], makeCloudKitStore: { recording }) === recording)
         XCTAssertTrue(AppDependencies.syncStore(environment: ["OPENARC_SYNC": "cloudkit"], makeCloudKitStore: nil) is DisabledSyncStore)
     }

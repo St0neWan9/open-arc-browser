@@ -27,19 +27,27 @@ public enum AppDataLocation {
     }
 }
 
-/// Which sync backend the app runs with. Sync stays off unless a launch switch asks for CloudKit:
-/// the iCloud container and entitlements do not exist yet (plan D4).
+/// Which sync backend the app runs with. A build signed with the iCloud entitlement uses CloudKit
+/// (plan B65: like Arc, sync is a Settings switch, not a launch option; the store stays off until
+/// the user turns Sync Sidebar on). Builds without the entitlement (SwiftPM, ad-hoc) get the
+/// disabled store. `OPENARC_SYNC` overrides it for development: `cloudkit` forces CloudKit, `off`
+/// forces it off.
 public enum SyncBackendChoice: Hashable, Sendable {
     case disabled
     case cloudKit
 
-    /// Environment variable that selects the backend (development only).
+    /// Environment variable that overrides the choice (development only).
     public static let environmentKey = "OPENARC_SYNC"
 
-    /// `OPENARC_SYNC=cloudkit` (any case) selects CloudKit; anything else keeps sync disabled.
-    public static func from(environment: [String: String]) -> SyncBackendChoice {
+    /// `OPENARC_SYNC=cloudkit` / `off` (any case) win; otherwise CloudKit exactly when the build is
+    /// entitled for it.
+    public static func from(environment: [String: String], isEntitled: Bool = false) -> SyncBackendChoice {
         let raw = environment[environmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return raw == "cloudkit" ? .cloudKit : .disabled
+        switch raw {
+        case "cloudkit": return .cloudKit
+        case "off": return .disabled
+        default: return isEntitled ? .cloudKit : .disabled
+        }
     }
 }
 
@@ -76,12 +84,13 @@ extension AppDependencies {
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         makeCloudKitStore: (() -> any SyncStore)? = nil,
+        isCloudKitEntitled: Bool = false,
         makeChromiumEngine: ((URL) -> any BrowserEngine)? = nil
     ) -> AppDependencies {
         let dataDirectory = AppDataLocation.directory(environment: environment)
         return AppDependencies(
             engine: engine(environment: environment, dataDirectory: dataDirectory, makeChromiumEngine: makeChromiumEngine),
-            sync: syncStore(environment: environment, makeCloudKitStore: makeCloudKitStore),
+            sync: syncStore(environment: environment, isCloudKitEntitled: isCloudKitEntitled, makeCloudKitStore: makeCloudKitStore),
             persistence: WorkspaceStore(directory: dataDirectory),
             preferences: .standard,
             defaultBrowser: SystemDefaultBrowserService(),
@@ -109,10 +118,10 @@ extension AppDependencies {
         }
     }
 
-    /// The sync store for `environment`: `DisabledSyncStore` unless CloudKit is selected and a
-    /// constructor is given.
-    static func syncStore(environment: [String: String], makeCloudKitStore: (() -> any SyncStore)?) -> any SyncStore {
-        switch SyncBackendChoice.from(environment: environment) {
+    /// The sync store: CloudKit when the build is entitled (or `OPENARC_SYNC=cloudkit`) and a
+    /// constructor is given, else `DisabledSyncStore`.
+    static func syncStore(environment: [String: String], isCloudKitEntitled: Bool = false, makeCloudKitStore: (() -> any SyncStore)?) -> any SyncStore {
+        switch SyncBackendChoice.from(environment: environment, isEntitled: isCloudKitEntitled) {
         case .cloudKit: return makeCloudKitStore?() ?? DisabledSyncStore()
         case .disabled: return DisabledSyncStore()
         }
