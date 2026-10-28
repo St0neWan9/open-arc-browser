@@ -354,9 +354,10 @@ public enum ThemeDerivation {
     public static let darkCommandBarBackground = RGBAColor(hex: 0x181818)
 
     /// The gray veil over the whole browser window while a modal card (New Folder, Rename Space,
-    /// Delete Space, …) is up. [07 §12] observed that the window is dimmed by a gray veil; its
-    /// color and strength were not measured: unknown (black 25 %, placeholder).
-    public static let windowModalDim = RGBAColor(hex: 0x000000, alpha: 0.25)
+    /// Delete Space, …) is up. [07 §12] observed (2026-10-27): solving content and sidebar samples
+    /// before/after New Folder gives gray #B8B8B8 at ≈ 61 % (it lightens a dark sidebar and darkens
+    /// a light page).
+    public static let windowModalDim = RGBAColor(hex: 0xB8B8B8, alpha: 0.61)
 
     /// Settings window fill: a dark purple that does not follow the system light / dark setting
     /// or the Space theme. [07 §6] observed (≈ #241F29).
