@@ -10,9 +10,9 @@ import OpenArcPersistence
 /// name and domain are not decided yet, so `siteHost` is a placeholder on the reserved `.example`
 /// domain, which keeps a click from reaching anyone's real site. Replace `siteHost` (and only it)
 /// when the project site exists; no other file may spell out a URL to these pages
-/// (`AppLinksTests` checks the sources). The appcast (`UpdateConfiguration.placeholderFeedURL`)
-/// and the ad-block manifest (`AdBlockRulesetUpdateConfiguration`) are feeds, not pages, and keep
-/// their own static-host placeholders.
+/// (`AppLinksTests` checks the sources). The appcast (`UpdateConfiguration.hostedFeedURL`) and the
+/// ad-block manifest (`AdBlockRulesetUpdateConfiguration`) are feeds, not pages; they live on the
+/// public repository's `updates` branch (plan D14).
 public enum OpenArcLinks {
     /// The project site's host. Placeholder until the site exists.
     public static let siteHost = "openarc.example"

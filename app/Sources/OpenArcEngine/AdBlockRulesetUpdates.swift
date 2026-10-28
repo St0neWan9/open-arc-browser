@@ -218,12 +218,12 @@ public struct AdBlockRulesetTrust: Sendable {
 
 /// Where the updater looks, and when.
 public enum AdBlockRulesetUpdateConfiguration {
-    /// The manifest on our static host: GitHub Pages next to the Sparkle appcast (docs/release.md
-    /// §Choose the static host). A placeholder like the appcast's `SUFeedURL` until the host
-    /// exists; while it is, updates stay off (no request goes to a domain we do not own).
-    public static let placeholderManifestURL = "https://openarc.github.io/adblock/manifest.json"
-    /// True until the static host is set up; flip it together with the URL above.
-    public static let isHostPlaceholder = true
+    /// The manifest on our static host: raw content of the public repository's `updates` branch,
+    /// next to the Sparkle appcast (plan D14, docs/release.md §Static host). The signature is
+    /// checked against the built-in key, so the host only needs to be reachable, not trusted.
+    public static let hostedManifestURL = "https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/adblock/manifest.json"
+    /// False since D14 (2026-10-28): the host exists. True would keep updates off.
+    public static let isHostPlaceholder = false
     /// Environment override, for the local test host (chromium-bridge/README.md §Ad blocking):
     /// `OPENARC_ADBLOCK_MANIFEST_URL=http://127.0.0.1:8765/adblock/manifest.json`. The signature
     /// is still checked against the built-in key.
@@ -246,7 +246,7 @@ public enum AdBlockRulesetUpdateConfiguration {
             }
             return url
         }
-        return isHostPlaceholder ? nil : URL(string: placeholderManifestURL)
+        return isHostPlaceholder ? nil : URL(string: hostedManifestURL)
     }
 }
 

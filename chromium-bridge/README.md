@@ -250,7 +250,7 @@ Built-in ad blocking runs on Chromium's own subresource filter (`//components/su
 
 New rulesets reach users between app releases from our static host ([00 §已定的服务策略] observed: the merged filter rules are static content the project hosts; the design below is ours). **Status: done.** The Swift side and the publishing script are in the repository and tested; the Chromium side is patch 0035 (`openarc: embedder: ad-block filter-list updates`), compiled into the framework and verified end to end against the local test host (below). With a framework older than 0035 the updater sees no bridge method at run time and stays off.
 
-**Host layout** (GitHub Pages next to the Sparkle appcast, `docs/release.md` §Choose the static host; placeholder `https://openarc.github.io/adblock/manifest.json` in `AdBlockRulesetUpdateConfiguration`, which keeps updates off while `isHostPlaceholder` is true):
+**Host layout** (raw content of this repository's `updates` branch, next to the Sparkle appcast, plan D14; formerly the placeholder `https://openarc.github.io/adblock/manifest.json` in `AdBlockRulesetUpdateConfiguration`, which keeps updates off while `isHostPlaceholder` is true):
 
 ```
 adblock/manifest.json                     {"type":"org.openarc.adblock-ruleset","format":1,"serial":…,"version":"<yyyymmdd>-<hex>",
