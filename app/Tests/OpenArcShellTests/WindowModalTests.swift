@@ -76,13 +76,13 @@ final class WindowModalTests: XCTestCase {
         XCTAssertNil(cardFrame(in: host, id: "newFolder"))
     }
 
-    /// The veil is a gray translucent token; its strength is unknown in [07 §12] (not measured).
+    /// The veil is gray #B8B8B8 at ≈ 61 %. [07 §12] observed (2026-10-27 pixel samples).
     func testVeilIsAGrayTranslucentToken() {
         let dim = ThemeDerivation.windowModalDim
         XCTAssertEqual(dim.red, dim.green)
         XCTAssertEqual(dim.green, dim.blue)
-        XCTAssertGreaterThan(dim.alpha, 0)
-        XCTAssertLessThan(dim.alpha, 1)
+        XCTAssertEqual(dim.red, Double(0xB8) / 255, accuracy: 0.001)
+        XCTAssertEqual(dim.alpha, 0.61, accuracy: 0.001)
     }
 
     // MARK: Keyboard and focus
