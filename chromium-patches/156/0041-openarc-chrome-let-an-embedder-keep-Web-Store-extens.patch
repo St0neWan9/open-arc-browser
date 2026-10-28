@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 27 Oct 2026 17:50:25 -0700
+Subject: [PATCH] openarc: chrome: let an embedder keep Web Store extension
+ updates without background networking
+
+Plan C28. An embedder that runs with --disable-background-networking
+(to stop the variations fetch, the upgrade detector, Safe Browsing list
+updates and the rest) also loses extension updates:
+ChromeExtensionsBrowserClient::IsBackgroundUpdateAllowed() returns false
+for that switch, so ExtensionDownloader and UpdateService refuse every
+update check and installed extensions stay at the version first
+installed.
+
+Adds ExtensionUpdater::AllowWebStoreUpdatesWithoutBackgroundNetworking().
+Once an embedder calls it, IsBackgroundUpdateAllowed() returns true and
+the updater runs on its normal schedule (a check soon after start, then
+every 5 hours with jitter), but while the switch is on it skips every
+extension (installed or pending) whose effective update URL is not the
+Chrome Web Store's; an empty update URL means the store. The store
+checks go to clients2.google.com/service/update2/crx (ExtensionDownloader)
+or the update_client JSON endpoint (UpdateService), both store servers.
+
+Chrome never calls it and is unchanged. No upstream equivalent.
+---
+ .../chrome_extensions_browser_client.cc       |  5 ++-
+ .../extensions/updater/extension_updater.cc   | 39 +++++++++++++++++++
+ .../extensions/updater/extension_updater.h    | 13 +++++++
+ 3 files changed, 55 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/extensions/chrome_extensions_browser_client.cc b/chrome/browser/extensions/chrome_extensions_browser_client.cc
+index 982247172ea4..2b8e546d1b9d 100644
+--- a/chrome/browser/extensions/chrome_extensions_browser_client.cc
++++ b/chrome/browser/extensions/chrome_extensions_browser_client.cc
+@@ -608,8 +608,9 @@ ExtensionCache* ChromeExtensionsBrowserClient::GetExtensionCache() {
+ }
+ 
+ bool ChromeExtensionsBrowserClient::IsBackgroundUpdateAllowed() {
+-  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
+-      ::switches::kDisableBackgroundNetworking);
++  // Open Arc: an embedder may keep Web Store updates on with background
++  // networking off (ExtensionUpdater filters the other update URLs).
++  return ExtensionUpdater::IsBackgroundUpdateAllowed();
+ }
+ 
+ bool ChromeExtensionsBrowserClient::IsMinBrowserVersionSupported(
+diff --git a/chrome/browser/extensions/updater/extension_updater.cc b/chrome/browser/extensions/updater/extension_updater.cc
+index b538f65c4a37..4954a19ed22d 100644
+--- a/chrome/browser/extensions/updater/extension_updater.cc
++++ b/chrome/browser/extensions/updater/extension_updater.cc
+@@ -14,6 +14,7 @@
+ #include <vector>
+ 
+ #include "base/auto_reset.h"
++#include "base/command_line.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+@@ -32,6 +33,7 @@
+ #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+ #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/common/chrome_switches.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/update_client/update_query_params.h"
+ #include "content/public/browser/browser_context.h"
+@@ -92,6 +94,9 @@ bool g_skip_scheduled_checks_for_tests = false;
+ 
+ bool g_force_use_update_service_for_tests = false;
+ 
++// Open Arc: see AllowWebStoreUpdatesWithoutBackgroundNetworking().
++bool g_web_store_updates_without_background_networking = false;
++
+ // When we've computed a days value, we want to make sure we don't send a
+ // negative value (due to the system clock being set backwards, etc.), since -1
+ // is a special sentinel value that means "never pinged", and other negative
+@@ -344,6 +349,25 @@ base::AutoReset<bool> ExtensionUpdater::GetScopedUseUpdateServiceForTesting() {
+   return base::AutoReset<bool>(&g_force_use_update_service_for_tests, true);
+ }
+ 
++// static
++void ExtensionUpdater::AllowWebStoreUpdatesWithoutBackgroundNetworking() {
++  g_web_store_updates_without_background_networking = true;
++}
++
++// static
++bool ExtensionUpdater::WebStoreUpdatesOnly() {
++  return g_web_store_updates_without_background_networking &&
++         base::CommandLine::ForCurrentProcess()->HasSwitch(
++             ::switches::kDisableBackgroundNetworking);
++}
++
++// static
++bool ExtensionUpdater::IsBackgroundUpdateAllowed() {
++  return g_web_store_updates_without_background_networking ||
++         !base::CommandLine::ForCurrentProcess()->HasSwitch(
++             ::switches::kDisableBackgroundNetworking);
++}
++
+ void ExtensionUpdater::SetUpdatingStartedCallbackForTesting(
+     base::RepeatingClosure callback) {
+   updating_started_callback_ = callback;
+@@ -400,12 +424,27 @@ void ExtensionUpdater::EraseUnupdatableIds(std::set<ExtensionId>& ids) const {
+         &kiosk_crx_manifest_update_url_ignored);
+   }
+ #endif
++  // Open Arc: with background networking off, only the Web Store is asked
++  // (an empty update URL means the store).
++  const bool web_store_only = WebStoreUpdatesOnly();
+   std::erase_if(ids, [&](const ExtensionId& id) {
+     // Don't update blocked extensions.
+     if (registry_->blocked_extensions().Contains(id)) {
+       return true;
+     }
+     const Extension* extension = registry_->GetInstalledExtension(id);
++    if (web_store_only) {
++      const PendingExtensionInfo* info =
++          pending_extension_manager_->GetById(id);
++      // Pending info wins over the installed extension, as in CheckNow().
++      const GURL update_url =
++          info ? info->update_url()
++               : (extension ? GetEffectiveUpdateURL(*extension) : GURL());
++      if (!update_url.is_empty() &&
++          !extension_urls::IsWebstoreUpdateUrl(update_url)) {
++        return true;
++      }
++    }
+     if (extension) {
+       // Remove extensions converted from user scripts with empty update
+       // URLs.
+diff --git a/chrome/browser/extensions/updater/extension_updater.h b/chrome/browser/extensions/updater/extension_updater.h
+index c5cb7f140455..f1b2dd025ed0 100644
+--- a/chrome/browser/extensions/updater/extension_updater.h
++++ b/chrome/browser/extensions/updater/extension_updater.h
+@@ -206,6 +206,19 @@ class ExtensionUpdater : public KeyedService,
+   // Always fetch updates via update service, not the extension downloader.
+   static base::AutoReset<bool> GetScopedUseUpdateServiceForTesting();
+ 
++  // Open Arc: an embedder that runs with --disable-background-networking (no
++  // other background traffic) can still keep extensions from the Chrome Web
++  // Store up to date. Once allowed, update checks run on their normal
++  // schedule, but only for extensions whose update URL is the store's; the
++  // others are skipped. Without the switch nothing changes. Call before the
++  // first profile loads its extensions. Chrome never calls it.
++  static void AllowWebStoreUpdatesWithoutBackgroundNetworking();
++  // Whether background networking is off and only Web Store updates run.
++  static bool WebStoreUpdatesOnly();
++  // Whether update checks may run at all (ExtensionsBrowserClient's
++  // IsBackgroundUpdateAllowed()).
++  static bool IsBackgroundUpdateAllowed();
++
+   // Set a callback to invoke when updating has started.
+   void SetUpdatingStartedCallbackForTesting(base::RepeatingClosure callback);
+ 
