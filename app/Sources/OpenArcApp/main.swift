@@ -9,7 +9,7 @@ import OpenArcChromium
 
 // Executable entry point. Runs the shell with Chromium when the build has the OpenArcCore
 // xcframework (the default; `OPENARC_ENGINE=fake` selects FakeEngine for development), and keeps the workspace on disk (`WorkspaceStore`, overridable with `OPENARC_DATA_DIR`). Sync is
-// disabled unless `OPENARC_SYNC=cloudkit` is set (D5); without the iCloud entitlement (D4) the
+// CloudKit when the build carries the iCloud entitlement (B65; `OPENARC_SYNC` overrides it for development); without it (D4) the
 // CloudKit store then reports itself as not configured instead of starting. With the push
 // entitlement (B65) the app registers for CloudKit's silent pushes once sync has started, and the
 // app delegate forwards them to the sync controller. Updates use Sparkle
@@ -29,6 +29,9 @@ struct OpenArcApp: App {
         NSApplication.shared.setActivationPolicy(.regular)
         var dependencies = AppDependencies.live(
             makeCloudKitStore: { CloudKitSyncStore() },
+            // B65: a build signed for the iCloud container gets the CloudKit store; the user
+            // turns sync on in Settings ▸ Account (no launch switch, as in Arc).
+            isCloudKitEntitled: CloudKitEntitlements.allowsContainer(CloudKitSyncStore.Configuration().containerIdentifier),
             makeChromiumEngine: OpenArcApp.chromiumEngineFactory
         )
         // CloudKit pushes (B65): only a build signed with the push entitlement registers; the
