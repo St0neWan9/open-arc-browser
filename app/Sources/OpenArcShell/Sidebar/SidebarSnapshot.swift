@@ -338,6 +338,54 @@ struct SidebarTabLiveState: Equatable {
             break
         }
     }
+
+    /// The audio glyph this tab's row shows, nil for none. [05 §tab audio indicator] observed.
+    var audioIndicator: SidebarAudioIndicator? { SidebarAudioIndicator(isAudible: isAudible, isMuted: isMuted) }
+}
+
+// MARK: - Tab audio indicator
+
+/// The speaker glyph between a row's favicon and title. [05 §tab audio indicator] observed: it
+/// shows while the tab plays sound (sound waves) and stays while the tab is muted (crossed out);
+/// a click mutes or unmutes; it stays when another tab is selected.
+enum SidebarAudioIndicator: Hashable {
+    case playing
+    case muted
+
+    /// Nil when the tab is neither audible nor muted.
+    init?(isAudible: Bool, isMuted: Bool) {
+        if isMuted { self = .muted } else if isAudible { self = .playing } else { return nil }
+    }
+
+    var symbol: String {
+        switch self {
+        case .playing: "speaker.wave.2.fill"
+        case .muted: "speaker.slash.fill"
+        }
+    }
+
+    /// What a click does, as the accessibility label says it.
+    var accessibilityLabel: String {
+        switch self {
+        case .playing: "Mute tab"
+        case .muted: "Unmute tab"
+        }
+    }
+
+    static let accessibilityIdentifier = "openarc.sidebar.row.audio"
+}
+
+/// The leading parts of a tab row, left to right. [05 §tab audio indicator] observed: the speaker
+/// sits between the favicon and the title (not at the row's right end, where the hover ✕ is).
+enum SidebarTabRowPart: Hashable {
+    case icon
+    case audio(SidebarAudioIndicator)
+    case title
+
+    static func leadingParts(audio: SidebarAudioIndicator?) -> [SidebarTabRowPart] {
+        if let audio { return [.icon, .audio(audio), .title] }
+        return [.icon, .title]
+    }
 }
 
 // MARK: - Top bar and URL box derivations

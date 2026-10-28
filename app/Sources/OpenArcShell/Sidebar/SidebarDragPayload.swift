@@ -65,14 +65,25 @@ struct SidebarDragSourceItem: Equatable {
     /// Area where a press also selects the item ([06 §15.1] observed: mouse-down selects the tab).
     /// Excludes the row's trailing ✕ / — button, which acts on mouse-up. Nil = never selects.
     var selectRect: CGRect?
+    /// Parts of `selectRect` that act on click instead: the row's speaker glyph.
+    /// [05 §tab audio indicator] observed: clicking it mutes the tab.
+    var clickOnlyRects: [CGRect] = []
+
+    /// Whether a press at `point` selects the item.
+    func selects(at point: CGPoint) -> Bool {
+        guard let selectRect, selectRect.contains(point) else { return false }
+        return !clickOnlyRects.contains { $0.contains(point) }
+    }
 
     /// Pickable items: favorite slots, then the list rows inside the visible list area.
+    /// `audioGlyphFrames` are the speaker glyphs on screen (sidebar root space).
     static func make(
         snapshot: SidebarSnapshot,
         rowFrames: [UUID: CGRect],
         listViewport: CGRect,
         favoriteSlots: [CGRect],
-        accessoryWidth: CGFloat
+        accessoryWidth: CGFloat,
+        audioGlyphFrames: [CGRect] = []
     ) -> [SidebarDragSourceItem] {
         var result: [SidebarDragSourceItem] = zip(snapshot.favorites, favoriteSlots).map { tab, slot in
             SidebarDragSourceItem(item: .tab(tab.id), frame: slot, selectRect: slot)
@@ -90,7 +101,8 @@ struct SidebarDragSourceItem: Equatable {
             var select = visible
             select.size.width = max(0, visible.width - accessoryWidth)
             let selectRect: CGRect? = if case .folder = row.kind { nil } else { select }
-            result.append(SidebarDragSourceItem(item: item, frame: visible, selectRect: selectRect))
+            let glyphs = audioGlyphFrames.filter { $0.intersects(visible) }
+            result.append(SidebarDragSourceItem(item: item, frame: visible, selectRect: selectRect, clickOnlyRects: glyphs))
         }
         return result
     }

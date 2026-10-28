@@ -579,6 +579,17 @@ public final class SidebarViewModel: ObservableObject {
         engineTask { await live.setMuted(muted) }
     }
 
+    /// The speaker glyph a tab row shows between its favicon and title, nil for none.
+    /// [05 §tab audio indicator] observed.
+    func audioIndicator(for id: UUID) -> SidebarAudioIndicator? { liveState(for: id)?.audioIndicator }
+
+    /// A click on a row's speaker glyph mutes or unmutes the tab without selecting it.
+    /// [05 §tab audio indicator] observed.
+    func audioIndicatorClicked(_ id: UUID) {
+        guard audioIndicator(for: id) != nil else { return }
+        toggleMute(id)
+    }
+
     /// Edit Pinned Page ▸ Replace Pinned URL with Current. [05 §context menus] observed.
     public func replacePinnedURLWithCurrent(_ id: UUID) {
         if let live = liveState(for: id)?.url, workspace.tabs[id]?.url != live { syncContent(id) }

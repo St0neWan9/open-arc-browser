@@ -56,6 +56,14 @@ enum SidebarLocalTokens {
     static let rowAccessoryGlyphWeight: Font.Weight = .semibold
     static let rowAccessoryInkOpacity: Double = 0.7
 
+    /// The tab audio glyph between the favicon and the title. [05 §tab audio indicator] observed
+    /// its place and that it draws in the row's ink; its cell width and the gap to the title are
+    /// unknown (placeholders). The glyph uses `rowAccessoryGlyphSize` and `rowAccessoryInkOpacity`;
+    /// the gap from the favicon is the row's icon-title gap; the hit area is the cell plus the gap,
+    /// `rowAccessoryButtonSize` tall.
+    static let rowAudioGlyphCellWidth: CGFloat = 16
+    static let rowAudioGlyphTitleGap: CGFloat = 4
+
     // MARK: Selected-row jump button
 
     /// The round ↓ / ↑ button shown while the selected row is scrolled away. [06 §15.8] observed
