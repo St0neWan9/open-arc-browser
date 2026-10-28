@@ -42,7 +42,14 @@ Commits on the branch use the author `Open Arc Authors <dev@openarc.invalid>`.
 The `//openarc` targets are not referenced from Chromium's root `BUILD.gn`. Rather than patch that file, the build directory adds them through the existing `root_extra_deps` build argument:
 
 ```gn
-# out/Release/args.gn
+# out/Release/args.gn (release configuration since C29, decision Q20)
+is_debug = false
+is_component_build = false
+symbol_level = 1
+target_cpu = "arm64"
+proprietary_codecs = true                          # MP4 / MSE demuxing of H.264, HEVC, AAC
+ffmpeg_branding = "Chromium"                       # FFmpeg without H.264 / AAC decoders
+media_proprietary_decoders_platform_only = true    # decode only via VideoToolbox / AudioToolbox (patch 0009)
 root_extra_deps = [
   "//openarc:openarc_framework",
   "//openarc:openarc_shell_test",
