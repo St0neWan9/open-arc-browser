@@ -152,6 +152,7 @@ public final class ScriptingHost {
             }
         }
         if model.isBrowserWindow { ScriptingSelfTest.startIfRequested() }
+        if model.isBrowserWindow, !model.isIncognito { ImportSelfTest.startIfRequested(controller: model.controller) }
         let waiters = windowWaiters
         windowWaiters.removeAll()
         for waiter in waiters {

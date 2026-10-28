@@ -32,6 +32,12 @@ public struct ChromiumBrowser: Hashable, Sendable, Identifiable {
         ChromiumBrowser(id: "chromium", displayName: "Chromium", relativeDataPath: "Chromium"),
         ChromiumBrowser(id: "vivaldi", displayName: "Vivaldi", relativeDataPath: "Vivaldi"),
     ]
+
+    /// Arc's Chromium profiles (history and passwords; plan D15). Not in `known`: the import sheet
+    /// lists Arc as one source that also brings its sidebar (`ArcSidebarReader`). Chromium names
+    /// the password key's keychain item after the product: service "Arc Safe Storage", account
+    /// "Arc". inferred.
+    public static let arc = ChromiumBrowser(id: "arc", displayName: "Arc", relativeDataPath: "Arc/User Data")
 }
 
 /// One profile of a Chromium-family browser that has bookmarks, history or saved passwords.

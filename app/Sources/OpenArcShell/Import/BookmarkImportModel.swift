@@ -15,6 +15,9 @@ import OpenArcImport
 //   keychain key, which macOS asks the user for), Safari's history from `~/Library/Safari` when
 //   Open Arc has Full Disk Access (never requested: the sheet explains how to grant it), and
 //   Safari's passwords from its export file (File ▸ Export Browsing Data…).
+// - Arc (D15): its sidebar file becomes new Spaces with their pinned tabs, folders, Today tabs and
+//   favorites (`ArcSidebarReader`, `ForeignSidebarMapper`); its Chromium profile's history and
+//   passwords go through the engine like Chrome's.
 
 extension WorkspaceController {
     /// Imports `tree` as a new Space "Imported from <source>" in one mutation, after the active
@@ -41,6 +44,30 @@ extension WorkspaceController {
         }
         return summary
     }
+
+    /// Imports another browser's sidebar (D15: Arc) as new Spaces appended to the current
+    /// profile's dock, in one mutation. Returns the summary, or nil when there is no profile or the
+    /// mapping fails (the workspace is unchanged then).
+    @discardableResult
+    func importForeignSidebar(_ sidebar: ForeignSidebar) -> ForeignSidebarImportSummary? {
+        guard let profileID = currentProfileID else { return nil }
+        let stamp = now()
+        var summary: ForeignSidebarImportSummary?
+        do {
+            try mutate(origin: nil) { state in
+                let result = try ForeignSidebarMapper.apply(
+                    sidebar, to: state, profileID: profileID,
+                    defaultTheme: ThemeStyle(colors: [SpaceFlowLocalTokens.defaultThemeColor]),
+                    knownSymbols: Set(SpaceFlowLocalTokens.symbols), now: stamp, makeID: makeID
+                )
+                summary = result.summary
+                return result.state
+            }
+        } catch {
+            return nil
+        }
+        return summary
+    }
 }
 
 /// Values the spec does not give for the import sheet. All inferred.
@@ -52,9 +79,11 @@ enum BookmarkImportLocalTokens {
     static let cancel = "Cancel"
     static let done = "Done"
     static let importing = "Importing…"
-    static let noProfiles = "No Chrome, Brave, Edge, Chromium or Vivaldi profiles were found."
+    static let noProfiles = "No Arc, Chrome, Brave, Edge, Chromium or Vivaldi profiles were found."
     static let fileHint = "Bookmarks: an HTML export or Safari's Bookmarks.plist. History and passwords: Safari's File ▸ Export Browsing Data… (ZIP) or a passwords CSV."
     static let safari = "Safari"
+    static let arc = "Arc"
+    static let arcHint = "Arc’s Spaces, pinned tabs, folders, Today tabs and favorites become new Spaces after yours. Importing again adds them again."
     static let safariHint = "Safari’s history needs Full Disk Access for Open Arc (System Settings ▸ Privacy & Security). For Safari’s bookmarks and passwords, export them from Safari and choose the file."
     static let keychainHint = "macOS will ask to let Open Arc read the browser’s password key."
     static let fullDiskAccessURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
@@ -62,9 +91,9 @@ enum BookmarkImportLocalTokens {
     static let noEngineKinds = "History and passwords need the Chromium engine."
     static let sheetWidth: Double = 440
 
-    static func label(for kind: ImportDataKind) -> String {
+    static func label(for kind: ImportDataKind, isSidebarSource: Bool = false) -> String {
         switch kind {
-        case .bookmarks: return "Bookmarks"
+        case .bookmarks: return isSidebarSource ? "Sidebar (Spaces, tabs and favorites)" : "Bookmarks"
         case .history: return "History"
         case .passwords: return "Passwords"
         }
@@ -87,11 +116,14 @@ public final class BookmarkImportModel: ObservableObject {
         case chromium(BrowserProfile)
         /// Safari's library folder (`~/Library/Safari`).
         case safari(URL)
+        /// Arc (D15): its sidebar file and its Default Chromium profile; either may be missing.
+        case arc(sidebarFile: URL?, profile: BrowserProfile?)
 
         public var id: String {
             switch self {
             case .chromium(let profile): return profile.id
             case .safari: return "safari"
+            case .arc: return "arc"
             }
         }
     }
@@ -113,6 +145,10 @@ public final class BookmarkImportModel: ObservableObject {
     @Published public private(set) var phase: Phase = .choosing
     /// The last bookmark import's result (the new Space), for tests and the caller.
     public private(set) var lastBookmarkSummary: BookmarkImportSummary?
+    /// The last sidebar import's result (D15), for tests and the caller.
+    public private(set) var lastSidebarSummary: ForeignSidebarImportSummary?
+    /// The last engine import's result (history and passwords), for tests and the caller.
+    public private(set) var lastEngineResult: EngineImportResult?
 
     private weak var controller: WorkspaceController?
     private let home: URL
@@ -144,7 +180,7 @@ public final class BookmarkImportModel: ObservableObject {
     public var selectedSource: Source? { sources.first { $0.id == selectedSourceID } }
 
     public func reloadSources() {
-        var found = BrowserProfileDiscovery.discover(home: home, fileManager: fileManager).map(Source.chromium)
+        var found = arcSources() + BrowserProfileDiscovery.discover(home: home, fileManager: fileManager).map(Source.chromium)
         // Safari is listed when its library folder exists. Its contents are not read here: that
         // needs Full Disk Access, which the import reports if it is missing.
         let safari = home.appendingPathComponent("Library/Safari", isDirectory: true)
@@ -159,11 +195,29 @@ public final class BookmarkImportModel: ObservableObject {
         resetKindsToSource()
     }
 
+    /// Arc first (D15: people switching from Arc), when its sidebar file or a profile exists: one
+    /// source for the sidebar and the Default profile, and one per further Arc profile (history and
+    /// passwords only). Only the files' existence is checked here.
+    private func arcSources() -> [Source] {
+        let sidebar = home.appendingPathComponent(ArcSidebarReader.relativeFilePath)
+        var isDirectory: ObjCBool = false
+        let hasSidebar = fileManager.fileExists(atPath: sidebar.path, isDirectory: &isDirectory) && !isDirectory.boolValue
+        let profiles = BrowserProfileDiscovery.discover(home: home, browsers: [.arc], fileManager: fileManager)
+        let main = profiles.first { $0.directoryName == "Default" }
+        var sources: [Source] = []
+        if hasSidebar || main != nil {
+            sources.append(.arc(sidebarFile: hasSidebar ? sidebar : nil, profile: main))
+        }
+        sources += profiles.filter { $0.directoryName != "Default" }.map(Source.chromium)
+        return sources
+    }
+
     /// Label in the source list: "Chrome — Work" (the profile name is left out for a lone Default).
     public func label(for source: Source) -> String {
         switch source {
         case .chromium(let profile): return label(for: profile)
         case .safari: return BookmarkImportLocalTokens.safari
+        case .arc: return BookmarkImportLocalTokens.arc
         }
     }
 
@@ -198,6 +252,12 @@ public final class BookmarkImportModel: ObservableObject {
             }
         case .safari:
             return engineSupports(.history) ? [.history] : []
+        case .arc(let sidebarFile, let profile):
+            // The sidebar takes the bookmarks checkbox: Arc keeps no separate bookmarks.
+            var kinds: [ImportDataKind] = sidebarFile == nil ? [] : [.bookmarks]
+            if let profile, profile.hasHistory, engineSupports(.history) { kinds.append(.history) }
+            if let profile, profile.hasPasswords, engineSupports(.passwords) { kinds.append(.passwords) }
+            return kinds
         }
     }
 
@@ -233,6 +293,18 @@ public final class BookmarkImportModel: ObservableObject {
             }
         case .safari(let library):
             lines += await importEngineData(Self.engineKinds(kinds), from: .safari(libraryDirectory: library), controller: controller)
+        case .arc(let sidebarFile, let profile):
+            if kinds.contains(.bookmarks), let sidebarFile {
+                lines.append(importSidebarFile(sidebarFile, controller: controller))
+            }
+            let engineKinds = Self.engineKinds(kinds)
+            if !engineKinds.isEmpty, let profile {
+                let request = EngineImportSource.chromiumProfile(
+                    directory: profile.directory,
+                    keychainService: profile.browser.keychainService, keychainAccount: profile.browser.keychainAccount
+                )
+                lines += await importEngineData(engineKinds, from: request, controller: controller)
+            }
         }
         phase = .done(lines)
     }
@@ -254,8 +326,14 @@ public final class BookmarkImportModel: ObservableObject {
         guard let controller else { return }
         // A Safari history JSON starts like a Chromium bookmarks JSON: try the bookmark readers
         // first, then hand export files to the engine.
-        let bookmarks = Result { try BookmarkFileReader.read(contentsOf: url) }
         let ext = url.pathExtension.lowercased()
+        // Arc's sidebar file (D15) is JSON too; it is recognized by its own layout.
+        if ext == "json", let sidebar = try? ArcSidebarReader.read(contentsOf: url) {
+            let line = importSidebar(sidebar, controller: controller)
+            phase = line.isError ? .failed(line.text) : .done([line])
+            return
+        }
+        let bookmarks = Result { try BookmarkFileReader.read(contentsOf: url) }
         if case .failure = bookmarks, ["zip", "csv", "json"].contains(ext),
            engineSupports(.history) || engineSupports(.passwords) {
             let kinds: EngineImportKinds = ext == "csv" ? .passwords : ext == "json" ? .history : [.history, .passwords]
@@ -300,6 +378,52 @@ public final class BookmarkImportModel: ObservableObject {
         }
     }
 
+    private func importSidebarFile(_ url: URL, controller: WorkspaceController) -> ImportSummaryLine {
+        do {
+            return importSidebar(try ArcSidebarReader.read(contentsOf: url), controller: controller)
+        } catch let error as BookmarkImportError {
+            return ImportSummaryLine(text: Self.sidebarMessage(for: error), isError: true)
+        } catch {
+            return ImportSummaryLine(text: error.localizedDescription, isError: true)
+        }
+    }
+
+    private func importSidebar(_ sidebar: ForeignSidebar, controller: WorkspaceController) -> ImportSummaryLine {
+        guard let summary = controller.importForeignSidebar(sidebar) else {
+            return ImportSummaryLine(text: "The sidebar could not be added.", isError: true)
+        }
+        if let first = summary.spaceIDs.first { controller.activeWindow?.sidebar.selectSpace(first) }
+        lastSidebarSummary = summary
+        return ImportSummaryLine(text: Self.sidebarSummaryText(summary), isError: false)
+    }
+
+    static func sidebarMessage(for error: BookmarkImportError) -> String {
+        switch error {
+        case .unrecognizedFormat, .malformed: return "Arc’s sidebar file has a layout Open Arc cannot read."
+        case .unreadable: return "Arc’s sidebar file could not be read."
+        }
+    }
+
+    /// The summary line after a sidebar import (D15). Counts only; inferred wording.
+    static func sidebarSummaryText(_ summary: ForeignSidebarImportSummary) -> String {
+        guard summary.spaces > 0 || summary.favorites > 0 else {
+            return "Found no Spaces or favorites to import."
+        }
+        var text = "Added \(plural(summary.spaces, "Space")) with \(plural(summary.tabs, "tab")) in \(plural(summary.folders, "folder"))"
+        text += summary.favorites > 0 ? ", and \(plural(summary.favorites, "favorite"))." : "."
+        if summary.skipped > 0 {
+            text += " Skipped \(plural(summary.skipped, "item")) Open Arc cannot import."
+        }
+        if summary.existingFavorites > 0 {
+            text += " \(plural(summary.existingFavorites, "favorite")) already there."
+        }
+        if summary.spacesFromOtherProfiles > 0 {
+            text += " \(plural(summary.spacesFromOtherProfiles, "Space")) from other Arc profiles joined this profile."
+        }
+        text += " Your existing Spaces are unchanged; importing again adds new copies."
+        return text
+    }
+
     private func importBookmarkFile(_ url: URL, source: String?, controller: WorkspaceController) -> ImportSummaryLine {
         importBookmarks(Result { try BookmarkFileReader.read(contentsOf: url) }, url: url, source: source, controller: controller)
     }
@@ -333,6 +457,7 @@ public final class BookmarkImportModel: ObservableObject {
             return [ImportSummaryLine(text: "History and passwords cannot be imported into this window.", isError: true)]
         }
         let result = await importer.importData(kinds, from: source, into: profileID)
+        lastEngineResult = result
         return Self.summaryLines(result, reportNotFound: reportNotFound)
     }
 

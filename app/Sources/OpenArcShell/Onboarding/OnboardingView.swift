@@ -129,7 +129,7 @@ enum OnboardingTokens {
                         message: "Spaces keep different parts of your life apart. Give this one a name and a color.")
         case .importBookmarks:
             return Copy(symbol: "square.and.arrow.down", title: "Bring your bookmarks",
-                        message: "Import bookmarks from another browser. They arrive as pinned tabs in a new Space.")
+                        message: "Import from Arc, Chrome, Safari or another browser. Arc’s Spaces arrive as they were; bookmarks arrive as pinned tabs in a new Space.")
         case .defaultBrowser:
             return Copy(symbol: "globe", title: "Open links here",
                         message: "Make \(AppIdentity.displayName) your default browser so links from other apps open in it.")
