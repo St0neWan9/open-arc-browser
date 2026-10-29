@@ -104,6 +104,22 @@ final class ScreenshotExportTests: XCTestCase {
         model.stop()
     }
 
+    /// B100: every Settings pane (toolbar and pane, without the system title bar) for comparison
+    /// with the B100 reference captures of Arc's light Settings window.
+    func testExportSettingsPanes() throws {
+        guard let dir = outputDirectory else { throw XCTSkip("OPENARC_SCREENSHOT_DIR not set") }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let model = ShellModel(dependencies: .fake(), workspace: .demo())
+        let settings = SettingsModel(shell: model)
+        let height = SettingsToolbarLayout.height + SettingsTokens.paneMinHeight
+        for pane in SettingsPane.allCases {
+            settings.selectedPane = pane
+            try renderView(SettingsWindowView(model: settings), size: CGSize(width: SettingsTokens.windowWidth, height: height),
+                           to: dir.appendingPathComponent("b100-\(pane.rawValue).png"))
+        }
+        model.stop()
+    }
+
     private func renderView<V: View>(_ view: V, size: CGSize, to url: URL) throws {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
         host.frame = CGRect(origin: .zero, size: size)

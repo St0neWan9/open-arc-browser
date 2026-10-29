@@ -448,6 +448,8 @@ final class SettingsTests: XCTestCase {
             "profiles.searchSuggestions",
             // B85: Start with the basics opens Essential Keyboard Shortcuts (02 §其他).
             "shortcuts.basics",
+            // B100: General's update switch (03 §General "Info" row) is the D7 automatic checks.
+            "general.automaticUpdates",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {

@@ -103,19 +103,23 @@ struct UpdateSettingsSection: View {
     @ObservedObject var model: UpdatesModel
 
     var body: some View {
-        Section(UpdateStrings.sectionTitle) {
-            Toggle(UpdateStrings.automaticChecks, isOn: Binding(
-                get: { model.automaticallyChecksForUpdates }, set: { model.automaticallyChecksForUpdates = $0 }
-            ))
-            .disabled(!model.isAvailable)
-            Toggle(UpdateStrings.automaticDownloads, isOn: Binding(
-                get: { model.automaticallyDownloadsUpdates }, set: { model.automaticallyDownloadsUpdates = $0 }
-            ))
+        // Drawn like Arc's Advanced rows (B100): a tiled card. The automatic-check switch lives in
+        // General ("Automatically update Open Arc", B100); this card keeps downloads and the
+        // manual check.
+        SettingsCard {
+            SettingsToggleRow(
+                label: UpdateStrings.automaticDownloads,
+                isOn: Binding(get: { model.automaticallyDownloadsUpdates }, set: { model.automaticallyDownloadsUpdates = $0 }),
+                subtitle: model.unavailableReason,
+                tile: SettingsTile(symbol: "arrow.down.circle.fill", color: SettingsTile.gray)
+            )
             .disabled(!model.isAvailable || !model.automaticallyChecksForUpdates)
-            Button(UpdateStrings.checkForUpdates) { model.checkForUpdates() }
-                .disabled(!model.isCheckEnabled)
-            if let reason = model.unavailableReason {
-                Text(reason).foregroundStyle(.secondary)
+            SettingsDivider()
+            SettingsControlRow(label: UpdateStrings.sectionTitle,
+                               tile: SettingsTile(symbol: "arrow.triangle.2.circlepath", color: SettingsTile.gray)) {
+                Button(UpdateStrings.checkForUpdates) { model.checkForUpdates() }
+                    .buttonStyle(SettingsButtonStyle())
+                    .disabled(!model.isCheckEnabled)
             }
         }
     }
