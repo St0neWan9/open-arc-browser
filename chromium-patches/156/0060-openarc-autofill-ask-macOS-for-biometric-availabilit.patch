@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Thu, 29 Oct 2026 10:12:05 -0700
+Subject: [PATCH] openarc: autofill: ask macOS for biometric availability off
+ the UI thread
+
+Every new tab's autofill client made four blocking LocalAuthentication
+calls (3-4 ms, B105). The check now runs on a background thread, shared by
+concurrent callers, with the same histogram and preference side effects; a
+profile's first tab sees 'unknown' for a few ms, which Chrome already
+treats as keep saved passes, allow no new uses.
+---
+ .../mac/device_authenticator_mac.h            |  8 +++
+ .../mac/device_authenticator_mac.mm           | 69 ++++++++++++++++++-
+ .../ui/autofill/chrome_autofill_client.cc     | 20 ++++++
+ 3 files changed, 94 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/device_reauth/mac/device_authenticator_mac.h b/chrome/browser/device_reauth/mac/device_authenticator_mac.h
+index 265939dd22f1..4f1c1a9391bb 100644
+--- a/chrome/browser/device_reauth/mac/device_authenticator_mac.h
++++ b/chrome/browser/device_reauth/mac/device_authenticator_mac.h
+@@ -25,6 +25,14 @@ class DeviceAuthenticatorMac : public DeviceAuthenticatorCommon {
+       const device_reauth::DeviceAuthParams& params);
+   ~DeviceAuthenticatorMac() override;
+ 
++  // Open Arc: CanAuthenticateWithBiometricOrScreenLock() of the real system
++  // authenticator, without blocking the calling (UI) thread: the system is
++  // asked on a thread pool thread and `callback` runs on the UI thread with the
++  // answer, after the same side effects (histogram, kHadBiometricsAvailable).
++  // Calls made while a check is in flight share its answer. UI thread only.
++  static void CheckBiometricOrScreenLockAvailability(
++      base::OnceCallback<void(bool)> callback);
++
+   bool CanAuthenticateWithBiometrics() override;
+ 
+   bool CanAuthenticateWithBiometricOrScreenLock() override;
+diff --git a/chrome/browser/device_reauth/mac/device_authenticator_mac.mm b/chrome/browser/device_reauth/mac/device_authenticator_mac.mm
+index c3da5198edf9..9f4a15de75a7 100644
+--- a/chrome/browser/device_reauth/mac/device_authenticator_mac.mm
++++ b/chrome/browser/device_reauth/mac/device_authenticator_mac.mm
+@@ -4,11 +4,15 @@
+ 
+ #include "chrome/browser/device_reauth/mac/device_authenticator_mac.h"
+ 
++#include <vector>
++
+ #include "base/functional/bind.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/task/sequenced_task_runner.h"
++#include "base/task/thread_pool.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/device_reauth/mac/authenticator_mac.h"
+ #include "chrome/browser/password_manager/password_manager_util_mac.h"
+@@ -17,6 +21,7 @@
+ #include "components/password_manager/core/browser/features/password_features.h"
+ #include "components/password_manager/core/common/password_manager_pref_names.h"
+ #include "components/prefs/pref_service.h"
++#include "content/public/browser/browser_thread.h"
+ #include "device/fido/mac/touch_id_context.h"
+ #include "ui/base/l10n/l10n_util.h"
+ 
+@@ -31,11 +36,13 @@
+ 
+ DeviceAuthenticatorMac::~DeviceAuthenticatorMac() = default;
+ 
+-bool DeviceAuthenticatorMac::CanAuthenticateWithBiometrics() {
+-  bool is_available = authenticator_->CheckIfBiometricsAvailable();
++namespace {
++
++// Records the biometrics check's result (UI thread).
++void NoteBiometricsAvailability(bool is_available) {
+   base::UmaHistogramBoolean("PasswordManager.CanUseBiometricsMac",
+                             is_available);
+-  if (is_available) {
++  if (is_available && g_browser_process->local_state()) {
+     // If biometrics is available, we should record that at one point in time
+     // biometrics was available on this device. This will never be set to false
+     // after setting to true here as we only record this when biometrics is
+@@ -43,6 +50,62 @@
+     g_browser_process->local_state()->SetBoolean(
+         password_manager::prefs::kHadBiometricsAvailable, /*value=*/true);
+   }
++}
++
++// Open Arc: the result of one off-thread availability check.
++struct ReauthAvailability {
++  bool biometrics = false;
++  bool biometrics_or_screen_lock = false;
++};
++
++// Callers waiting for the availability check that is in flight (UI thread).
++std::vector<base::OnceCallback<void(bool)>>& PendingAvailabilityCallbacks() {
++  static base::NoDestructor<std::vector<base::OnceCallback<void(bool)>>>
++      callbacks;
++  return *callbacks;
++}
++
++void OnAvailabilityChecked(ReauthAvailability availability) {
++  NoteBiometricsAvailability(availability.biometrics);
++  std::vector<base::OnceCallback<void(bool)>> callbacks;
++  callbacks.swap(PendingAvailabilityCallbacks());
++  for (auto& callback : callbacks) {
++    std::move(callback).Run(availability.biometrics_or_screen_lock);
++  }
++}
++
++}  // namespace
++
++// static
++void DeviceAuthenticatorMac::CheckBiometricOrScreenLockAvailability(
++    base::OnceCallback<void(bool)> callback) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  auto& pending = PendingAvailabilityCallbacks();
++  pending.push_back(std::move(callback));
++  if (pending.size() > 1) {
++    // A check is in flight; its result answers this caller too.
++    return;
++  }
++  // Each LocalAuthentication query is a synchronous round trip to the system's
++  // daemon (a few milliseconds together); LAContext may be used from any
++  // thread.
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce([] {
++        AuthenticatorMac authenticator;
++        ReauthAvailability availability;
++        availability.biometrics = authenticator.CheckIfBiometricsAvailable();
++        availability.biometrics_or_screen_lock =
++            availability.biometrics ||
++            authenticator.CheckIfBiometricsOrScreenLockAvailable();
++        return availability;
++      }),
++      base::BindOnce(&OnAvailabilityChecked));
++}
++
++bool DeviceAuthenticatorMac::CanAuthenticateWithBiometrics() {
++  bool is_available = authenticator_->CheckIfBiometricsAvailable();
++  NoteBiometricsAvailability(is_available);
+   return is_available;
+ }
+ 
+diff --git a/chrome/browser/ui/autofill/chrome_autofill_client.cc b/chrome/browser/ui/autofill/chrome_autofill_client.cc
+index 3975fe4deecb..0cff0a68781c 100644
+--- a/chrome/browser/ui/autofill/chrome_autofill_client.cc
++++ b/chrome/browser/ui/autofill/chrome_autofill_client.cc
+@@ -245,6 +245,10 @@
+ #include "components/compose/core/browser/compose_manager.h"
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++#include "chrome/browser/device_reauth/mac/device_authenticator_mac.h"
++#endif
++
+ namespace autofill {
+ 
+ namespace {
+@@ -1340,7 +1344,23 @@ ChromeAutofillClient::ChromeAutofillClient(content::WebContents* web_contents)
+                                            features::kAutofillAmbientAutofill)
+                                    ? GetEntityDataManager()
+                                    : nullptr) {
++#if BUILDFLAG(IS_MAC)
++    // Open Arc: the same answer, asked of the system off the UI thread. The
++    // synchronous query made every new tab wait several milliseconds on
++    // LocalAuthentication's daemon. The data manager is per profile and keeps
++    // the last answer, so only a profile's first tab sees it unknown, for the
++    // moment the query takes (unknown keeps passes and denies new uses).
++    DeviceAuthenticatorMac::CheckBiometricOrScreenLockAvailability(
++        base::BindOnce(
++            [](base::WeakPtr<EntityDataManager> edm, bool available) {
++              if (edm) {
++                edm->SetReauthAvailability(available);
++              }
++            },
++            edm->GetWeakPtr()));
++#else
+     edm->SetReauthAvailability(SupportsDeviceReauth());
++#endif
+   }
+ }
+ 
