@@ -11,14 +11,6 @@ enum SidebarCoordinateSpace {
     static let root = "openarc.sidebar.root"
 }
 
-/// Row frames in the sidebar's root coordinate space, used to place the hover card.
-struct SidebarRowFramesKey: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
-    }
-}
-
 /// Frames of the rows' speaker glyphs in the sidebar's root space, keyed by tab id. A press on
 /// one must not select the row. [05 §tab audio indicator] observed.
 struct SidebarAudioGlyphFramesKey: PreferenceKey {
@@ -117,7 +109,8 @@ struct SidebarSpaceIconView: View {
 // MARK: - Region reporting
 
 /// Frames of the non-row regions (list viewport, divider, "+ New Tab", favorites, dock icons) in the
-/// sidebar root coordinate space. Rows report through `SidebarRowFramesKey`.
+/// sidebar root coordinate space. List rows (and the divider and "+ New Tab") do not report: their
+/// frames follow from `SidebarListGeometry` and the scroll offset.
 struct SidebarDropRegionsKey: PreferenceKey {
     static let defaultValue: [SidebarDropRegion: CGRect] = [:]
     static func reduce(value: inout [SidebarDropRegion: CGRect], nextValue: () -> [SidebarDropRegion: CGRect]) {
@@ -148,7 +141,8 @@ extension View {
 /// Accepts in-app drags (`draggingItem` set by the drag source) and links from other apps (URL).
 struct SidebarRootDropDelegate: DropDelegate {
     let viewModel: SidebarViewModel
-    let geometry: SidebarDropGeometry
+    /// Built at each callback, from the scroll offset of that moment.
+    let geometry: @MainActor () -> SidebarDropGeometry
 
     private var isInternal: Bool { viewModel.draggingItem != nil }
 
@@ -158,12 +152,12 @@ struct SidebarRootDropDelegate: DropDelegate {
 
     func dropEntered(info: DropInfo) {
         if !isInternal { viewModel.beginExternalDrag() }
-        viewModel.updateDropTarget(at: info.location, in: geometry)
+        viewModel.updateDropTarget(at: info.location, in: geometry())
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         if !isInternal { viewModel.beginExternalDrag() }
-        let accepted = viewModel.updateDropTarget(at: info.location, in: geometry)
+        let accepted = viewModel.updateDropTarget(at: info.location, in: geometry())
         return DropProposal(operation: accepted ? (isInternal ? .move : .copy) : .forbidden)
     }
 
@@ -174,7 +168,7 @@ struct SidebarRootDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let target = SidebarDropHitTester.target(at: info.location, in: geometry, allowsSplit: viewModel.dragAllowsSplit)
+        let target = SidebarDropHitTester.target(at: info.location, in: geometry(), allowsSplit: viewModel.dragAllowsSplit)
         if isInternal {
             guard let target else {
                 viewModel.endDrag()
@@ -207,7 +201,8 @@ struct SidebarRootDropDelegate: DropDelegate {
 /// working) and starts an AppKit dragging session past the threshold.
 struct SidebarDragSourceHost: NSViewRepresentable {
     let viewModel: SidebarViewModel
-    let items: [SidebarDragSourceItem]
+    /// What a press can pick up, computed at the press (rows move with the scroll offset).
+    let items: @MainActor () -> [SidebarDragSourceItem]
     /// The sidebar layout, for the drag image's shape zones (B44).
     var layout = SidebarLayout()
     /// False while something covers the sidebar (the window command bar, onboarding): presses
@@ -217,21 +212,26 @@ struct SidebarDragSourceHost: NSViewRepresentable {
     func makeNSView(context: Context) -> SidebarDragSourceView {
         let view = SidebarDragSourceView()
         view.viewModel = viewModel
-        view.items = acceptsPointer ? items : []
+        view.items = pickable
         view.layout = layout
         return view
     }
 
     func updateNSView(_ nsView: SidebarDragSourceView, context: Context) {
         nsView.viewModel = viewModel
-        nsView.items = acceptsPointer ? items : []
+        nsView.items = pickable
         nsView.layout = layout
+    }
+
+    private var pickable: @MainActor () -> [SidebarDragSourceItem] {
+        if acceptsPointer { return items }
+        return { [] }
     }
 }
 
 final class SidebarDragSourceView: NSView, NSDraggingSource {
     weak var viewModel: SidebarViewModel?
-    var items: [SidebarDragSourceItem] = []
+    var items: @MainActor () -> [SidebarDragSourceItem] = { [] }
     var layout = SidebarLayout()
     /// The lifted row that follows the pointer (B44, [06 §15.1] E17 observed).
     private let dragImage = SidebarDragImageController()
@@ -278,7 +278,7 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
             pending = nil
             guard bounds.contains(point), !isDragging,
                   flags.intersection([.command, .control, .option, .shift]).isEmpty,
-                  let hit = SidebarDragSourceItem.item(at: point, in: items),
+                  let hit = SidebarDragSourceItem.item(at: point, in: items()),
                   viewModel?.canStartDrag(hit.item) == true else { return false }
             pending = (hit.item, point)
             pendingFrame = hit.frame
@@ -398,14 +398,8 @@ struct SidebarRowInteraction: ViewModifier {
                         .allowsHitTesting(false)
                 }
             }
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: SidebarRowFramesKey.self,
-                        value: [id: proxy.frame(in: .named(SidebarCoordinateSpace.root))]
-                    )
-                }
-            )
+        // Rows do not report their frames: every row has a fixed height, so the frames follow
+        // from the list geometry and the scroll offset (`SidebarListGeometry`).
     }
 }
 

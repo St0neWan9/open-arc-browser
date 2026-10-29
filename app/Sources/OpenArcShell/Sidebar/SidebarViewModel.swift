@@ -148,6 +148,8 @@ public final class SidebarViewModel: ObservableObject {
     var autoScrollTickInterval: Double = SidebarLocalTokens.autoScrollTickInterval
     /// Scroll hook of the list on screen (set by the list view, a fake in tests). Weak: the view owns it.
     weak var listScroller: (any SidebarListScrolling)?
+    /// Scroll state of the sidebar on screen (set by `SidebarView`; tests read its row bands).
+    weak var listScrollState: SidebarListScrollState?
     /// Signed auto-scroll velocity of the last step (points per second, 0 = not scrolling).
     private(set) var autoScrollVelocity: CGFloat = 0
     /// Last pointer position of the running drag (sidebar root space), so the target can be
@@ -279,13 +281,45 @@ public final class SidebarViewModel: ObservableObject {
         return ThemeDerivation.palette(for: theme, systemAppearance: controller.systemAppearance)
     }
 
+    /// The rows of the selected Space. Memoized: views and intents read it many times per change,
+    /// and a Space with thousands of pinned items takes milliseconds to walk.
     var snapshot: SidebarSnapshot {
-        var snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: selectedSpaceID, profileID: currentProfileID)
-        snapshot.hidesPinnedArea = isIncognito
+        let key = SnapshotKey(generation: controller.workspaceGeneration, spaceID: selectedSpaceID,
+                              profileID: currentProfileID, isIncognito: isIncognito, isPinnedAreaCollapsed: isPinnedAreaCollapsed)
+        if let cached = snapshotCache, cached.key == key { return cached.value }
+        var snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: key.spaceID, profileID: key.profileID)
+        snapshot.hidesPinnedArea = key.isIncognito
         // Collapse Pinned Tabs hides the pinned rows; the area keeps its content (B72, inferred).
-        if isPinnedAreaCollapsed { snapshot.pinned = [] }
+        if key.isPinnedAreaCollapsed { snapshot.pinned = [] }
+        snapshotCache = (key, snapshot)
         return snapshot
     }
+
+    /// Everything `snapshot` depends on.
+    private struct SnapshotKey: Equatable {
+        var generation: Int
+        var spaceID: UUID?
+        var profileID: UUID?
+        var isIncognito: Bool
+        var isPinnedAreaCollapsed: Bool
+    }
+    private var snapshotCache: (key: SnapshotKey, value: SidebarSnapshot)?
+
+    /// Content positions of the list entries for `snapshot`, memoized with it.
+    var listGeometry: SidebarListGeometry { listContent.geometry }
+
+    /// The list's rows and their positions, as one immutable object. Views hold it by reference,
+    /// so SwiftUI compares one pointer instead of thousands of rows on every update. A new object
+    /// is made only when the snapshot's inputs change.
+    var listContent: SidebarListContent {
+        let snap = snapshot
+        guard let key = snapshotCache?.key else { return SidebarListContent(snapshot: snap) }
+        if let cached = listContentCache, cached.key == key { return cached.value }
+        let content = SidebarListContent(snapshot: snap)
+        listContentCache = (key, content)
+        return content
+    }
+    private var listContentCache: (key: SnapshotKey, value: SidebarListContent)?
 
     /// Spaces in dock order. The dock shows every profile's spaces. [05 §window hierarchy] observed.
     /// An incognito window's dock shows no Space icons. [06 §20.2] observed (B48).
@@ -1217,7 +1251,7 @@ public final class SidebarViewModel: ObservableObject {
         return before
     }
 
-    private var isDragActive: Bool { draggingItem != nil || isDraggingExternalURL }
+    var isDragActive: Bool { draggingItem != nil || isDraggingExternalURL }
 
     /// Whether the current drag can form a split on a tab row's middle band: a single tab that is
     /// not a favorite, or a link from outside. [06 §15.2] observed for tabs, [06 §15.7] for links.

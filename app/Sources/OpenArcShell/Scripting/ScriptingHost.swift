@@ -153,6 +153,7 @@ public final class ScriptingHost {
         }
         if model.isBrowserWindow { ScriptingSelfTest.startIfRequested() }
         if model.isBrowserWindow, !model.isIncognito { ImportSelfTest.startIfRequested(controller: model.controller) }
+        if model.isBrowserWindow, !model.isIncognito { SidebarScrollSelfTest.startIfRequested(sidebar: model.sidebar) }
         let waiters = windowWaiters
         windowWaiters.removeAll()
         for waiter in waiters {
