@@ -147,6 +147,37 @@ public final class AppPreferences: @unchecked Sendable {
         set { setValue(newValue, Self.syncFullUploadKey) }
     }
 
+    static let firstLaunchSpaceKey = "\(keyPrefix)sync.firstLaunchSpace"
+    static let droppedFirstLaunchSpaceKey = "\(keyPrefix)sync.droppedFirstLaunchSpace"
+
+    /// The Space the first-launch workspace made on this device, until sync decided whether the
+    /// account's Spaces replace it (`FirstLaunchSpaceAdoption`). Set when the workspace is created
+    /// (no workspace file); cleared once the decision ran. Per device. nil: nothing to decide.
+    public var firstLaunchSpaceID: UUID? {
+        get { uuid(Self.firstLaunchSpaceKey) }
+        set { setUUID(newValue, Self.firstLaunchSpaceKey) }
+    }
+
+    /// The first-launch Space that was dropped for the account's Spaces (or deleted before sync
+    /// ever saw it). Its tombstone (and its theme's) never goes to the server, which never had
+    /// them. Per device.
+    public var droppedFirstLaunchSpaceID: UUID? {
+        get { uuid(Self.droppedFirstLaunchSpaceKey) }
+        set { setUUID(newValue, Self.droppedFirstLaunchSpaceKey) }
+    }
+
+    private func uuid(_ key: String) -> UUID? {
+        (value(key) as? String).flatMap(UUID.init(uuidString:))
+    }
+
+    private func setUUID(_ newValue: UUID?, _ key: String) {
+        if let newValue {
+            setValue(newValue.uuidString, key)
+        } else {
+            removeValue(key)
+        }
+    }
+
     // MARK: App-level settings: General
 
     static let warnBeforeQuittingKey = "\(keyPrefix)general.warnBeforeQuitting"

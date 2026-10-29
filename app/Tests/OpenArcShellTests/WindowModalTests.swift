@@ -5,8 +5,9 @@ import OpenArcModel
 import OpenArcDesign
 @testable import OpenArcShell
 
-/// B91 (f1-review-3 P3): modal cards centered in the window over a dimmed window, the always-dark
-/// Settings window, the Little Arc size. Spec: docs/arc-spec/07-design-system.md §6, §11, §12.
+/// B91 (f1-review-3 P3): modal cards centered in the window over a dimmed window, the Settings
+/// window (always light since the user's 2026-10-28 decision), the Little Arc size. Spec:
+/// docs/arc-spec/07-design-system.md §6, §11, §12.
 @MainActor
 final class WindowModalTests: XCTestCase {
     private var windows: [NSWindow] = []
@@ -133,25 +134,30 @@ final class WindowModalTests: XCTestCase {
 
     // MARK: 07 §6 Settings window
 
-    /// [07 §6] observed: the Settings window is dark purple (≈ #241F29) and does not follow the
-    /// system light appearance.
-    func testSettingsWindowIsAlwaysDark() throws {
-        XCTAssertEqual(ThemeDerivation.settingsWindowBackground, RGBAColor(hex: 0x241F29))
-        XCTAssertEqual(ThemeDerivation.settingsAppearance, .dark)
+    /// User decision (2026-10-28), not the spec: the Settings window is always light (Arc's is
+    /// dark purple, [07 §6] observed; the user rejected it, its toolbar icons were nearly
+    /// invisible). A dark system appearance is overridden, and the title bar / toolbar is the
+    /// system's opaque one again, so the pane icons and labels draw dark on light.
+    func testSettingsWindowIsAlwaysLight() throws {
+        XCTAssertEqual(ThemeDerivation.settingsWindowBackground, RGBAColor(hex: 0xECECEC))
+        XCTAssertEqual(ThemeDerivation.settingsAppearance, .light)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 684, height: 562), styleMask: [.titled, .closable], backing: .buffered, defer: true)
-        window.appearance = NSAppearance(named: .aqua)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.titlebarAppearsTransparent = true
         XCTAssertTrue(SettingsWindowConfigurator.apply(to: window))
-        XCTAssertEqual(window.appearance?.name, .darkAqua)
+        XCTAssertEqual(window.appearance?.name, .aqua)
+        XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
+        XCTAssertFalse(window.titlebarAppearsTransparent, "the system toolbar, readable icons")
         let fill = try XCTUnwrap(window.backgroundColor.usingColorSpace(.sRGB))
-        XCTAssertEqual(fill.redComponent, 0x24 / 255, accuracy: 0.002)
-        XCTAssertEqual(fill.greenComponent, 0x1F / 255, accuracy: 0.002)
-        XCTAssertEqual(fill.blueComponent, 0x29 / 255, accuracy: 0.002)
+        XCTAssertEqual(fill.redComponent, 0xEC / 255, accuracy: 0.002)
+        XCTAssertEqual(fill.greenComponent, 0xEC / 255, accuracy: 0.002)
+        XCTAssertEqual(fill.blueComponent, 0xEC / 255, accuracy: 0.002)
         XCTAssertFalse(SettingsWindowConfigurator.apply(to: window), "writes only what differs")
     }
 
-    /// [07 §6] observed: the panes draw the dark purple and stay dark under a light system
-    /// appearance.
-    func testSettingsPanesAreDarkPurpleInLightMode() throws {
+    /// User decision (2026-10-28): the panes draw the light fill under a dark system appearance,
+    /// and text on them (the toolbar's labels use the same label color) is dark, so it reads.
+    func testSettingsPanesAreLightInDarkMode() throws {
         let shell = ShellModel(dependencies: .fake(), workspace: .demo())
         models.append(shell)
         let settings = SettingsModel(shell: shell)
@@ -159,22 +165,28 @@ final class WindowModalTests: XCTestCase {
             .frame(width: SettingsTokens.windowWidth)
             .modifier(SettingsWindowChrome())
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 684, height: 562), styleMask: [.titled], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .aqua)
+        window.appearance = NSAppearance(named: .darkAqua)
         let host = NSHostingView(rootView: view)
         window.contentView = host
         window.orderFront(nil)
         windows.append(window)
         settle(host)
-        XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
+        XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
         // Bottom-left corner, outside the grouped sections: the window fill, compared with the
         // token drawn alone through the same readback (the cached bitmap is in the display's
-        // color space, so the raw #241F29 reads slightly lighter).
+        // color space).
         let corner = try XCTUnwrap(pixel(host, at: CGPoint(x: 4, y: 556)))
         let reference = try XCTUnwrap(renderedColor(ThemeDerivation.settingsWindowBackground.swiftUI))
         XCTAssertEqual(corner.redComponent, reference.redComponent, accuracy: 0.01)
         XCTAssertEqual(corner.greenComponent, reference.greenComponent, accuracy: 0.01)
         XCTAssertEqual(corner.blueComponent, reference.blueComponent, accuracy: 0.01)
-        XCTAssertGreaterThan(corner.blueComponent, corner.greenComponent, "purple, not gray")
+        XCTAssertGreaterThan(corner.redComponent, 0.85, "light, not dark")
+        // The label color the toolbar items use resolves dark in the window's appearance.
+        var label = NSColor.labelColor
+        window.effectiveAppearance.performAsCurrentDrawingAppearance {
+            label = NSColor.labelColor.usingColorSpace(.sRGB) ?? label
+        }
+        XCTAssertLessThan(label.redComponent, 0.3, "dark labels on the light toolbar")
     }
 
     /// [07 §6] observed: 684 × 650 window, 56 pt toolbar, toggle rows 37 apart. The pane is sized

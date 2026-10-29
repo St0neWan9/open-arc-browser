@@ -22,7 +22,8 @@ public struct SettingsWindowView: View {
             }
         }
         .frame(width: SettingsTokens.windowWidth)
-        // Always dark purple, 37 pt toggle rows. [07 §6] observed (B91).
+        // Always light (user decision, 2026-10-28; Arc's is dark, [07 §6] observed), 37 pt
+        // toggle rows ([07 §6] observed, B91).
         .modifier(SettingsWindowChrome())
         .task { await model.observeSync() }
     }

@@ -166,7 +166,8 @@ public final class WorkspaceController: ObservableObject {
         allRecordIDs: { [weak self] in self?.workspace.allSyncedRecordIDs ?? [] },
         now: now,
         notificationCenter: syncNotificationCenter,
-        registerForRemoteNotifications: dependencies.registerForRemoteNotifications
+        registerForRemoteNotifications: dependencies.registerForRemoteNotifications,
+        hold: firstLaunchSpaceHold
     )
     /// Where `sidebarSync` observes app activation and forwarded pushes (B65).
     private var syncNotificationCenter: NotificationCenter = .default
@@ -221,7 +222,17 @@ public final class WorkspaceController: ObservableObject {
         }
         onboardingCompleted = OnboardingLaunch.isCompleted(persistence: persistence)
         if let persistence {
-            if persistence.loadResult.outcome != .loaded { persistence.submit(self.workspace) }
+            if persistence.loadResult.outcome != .loaded {
+                persistence.submit(self.workspace)
+                // A new install's first-launch workspace: its Space waits for the account's (see
+                // `FirstLaunchSpaceAdoption`). Only without any workspace file: after a recovered
+                // corrupt file the sync state may already be past the account's records.
+                if persistence.loadResult.outcome == .noFile {
+                    let spaces = self.workspace.allLiveSpaces
+                    dependencies.preferences.firstLaunchSpaceID = spaces.count == 1 ? spaces.first?.id : nil
+                    dependencies.preferences.droppedFirstLaunchSpaceID = nil
+                }
+            }
             if persistence.isReadOnly {
                 launchNotice = .dataNotLoaded(persistence.loadResult.outcome)
             } else {
@@ -321,6 +332,7 @@ public final class WorkspaceController: ObservableObject {
         if !isOffTheRecord { dependencies.globalHotKeys.unregisterLittleArcHotKey() }
         syncForwarding?.cancel()
         syncForwarding = nil
+        if !isOffTheRecord { sidebarSync.stopWatching() }
         terminationObserver?.invalidate()
         terminationObserver = nil
         pageRequests.stop()
@@ -1091,17 +1103,22 @@ public final class WorkspaceController: ObservableObject {
     /// back: an endless sync loop. [A19, A20]
     /// Engine tabs of tabs that were deleted remotely are closed.
     func mergeRemote(_ event: WorkspaceStoreEvent) {
+        mergeStored(event.workspace, changes: event.changes)
+    }
+
+    /// `mergeRemote` for the records `changes` names in `stored`, the persistence store's workspace.
+    func mergeStored(_ stored: WorkspaceState, changes: WorkspaceDiff.Changes) {
         guard !isStopped else { return }
         var next = workspace
-        for id in event.changes.saved {
-            guard let server = event.workspace.record(for: id) else { continue }
+        for id in changes.saved {
+            guard let server = stored.record(for: id) else { continue }
             if let local = next.record(for: id), let outcome = RecordMerge.merge(local: local, server: server) {
                 next.setRecord(outcome.needsUpload ? outcome.merged : server)
             } else {
                 next.setRecord(server)
             }
         }
-        for id in event.changes.removed { next.removeRecord(id) }
+        for id in changes.removed { next.removeRecord(id) }
         // Splits left naming tabs another device deleted or archived lose those panes; a split
         // with one live pane left ends (delete wins). The repair is a local change, so it is saved
         // and uploaded like any edit. [B67, 06 §5 / §21.6]

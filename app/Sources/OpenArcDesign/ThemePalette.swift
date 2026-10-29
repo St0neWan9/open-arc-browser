@@ -359,11 +359,14 @@ public enum ThemeDerivation {
     /// a light page).
     public static let windowModalDim = RGBAColor(hex: 0xB8B8B8, alpha: 0.61)
 
-    /// Settings window fill: a dark purple that does not follow the system light / dark setting
-    /// or the Space theme. [07 §6] observed (≈ #241F29).
-    public static let settingsWindowBackground = RGBAColor(hex: 0x241F29)
-    /// The Settings window is always dark. [07 §6] observed.
-    public static let settingsAppearance = ResolvedAppearance.dark
+    /// Settings window fill: the light macOS window gray, whatever the system light / dark setting
+    /// or the Space theme. A user decision (2026-10-28), not the spec: [07 §6] observed Arc's
+    /// Settings as a dark purple (≈ #241F29), which the user rejected ("Settings must not be
+    /// dark"; its toolbar icons were nearly invisible on it). The value is ours (the standard
+    /// light window background).
+    public static let settingsWindowBackground = RGBAColor(hex: 0xECECEC)
+    /// The Settings window is always light. User decision (2026-10-28), see above.
+    public static let settingsAppearance = ResolvedAppearance.light
 
     /// Source-over blend of `amount` white on top of `color` (sRGB, non-linear).
     public static func overlayWhite(_ color: RGBAColor, amount: Double) -> RGBAColor {
