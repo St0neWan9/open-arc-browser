@@ -243,8 +243,9 @@ final class SidebarPerformanceTests: XCTestCase {
             if toggles % 2 == 1 { vm.selectSpace(large); settle() }
             XCTAssertLessThan(back, 60, "switching back to a large Space")
             // B101: ≈ 3–5 ms in debug (was ≈ 8 ms to the small Space, and ≈ 4 ms back only because
-            // the page then had no row band yet). Loose for a busy machine.
-            XCTAssertLessThan(roundTrip, 25, "switching to a Space whose page is kept")
+            // the page then had no row band yet). B104: ≈ 1 ms (pages are hidden, not removed, and
+            // only the blocks whose values changed redraw). Under one frame, loose for a busy machine.
+            XCTAssertLessThan(roundTrip, 16, "switching to a Space whose page is kept")
             XCTAssertEqual(vm.selectedSpaceID, large)
         }
         // Regression guards, loose enough for a debug build on a busy machine (B97 fix: from
