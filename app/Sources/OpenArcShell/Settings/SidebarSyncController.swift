@@ -53,6 +53,10 @@ public final class SidebarSyncController: ObservableObject {
     private let registerForRemoteNotifications: (@MainActor @Sendable () -> Void)?
     private var didRegisterForRemoteNotifications = false
     private var observers: SyncNotificationObservers?
+    /// Records kept from the store and the pending first-launch decision (`SyncUploadHold`).
+    private let hold: SyncUploadHold
+    /// Follows the store's status until the first-launch decision ran (`watchForDecision`).
+    private var decisionWatch: Task<Void, Never>?
 
     /// - Parameters:
     ///   - database: the on-disk workspace store. nil (tests, previews, a read-only store) never
@@ -63,6 +67,7 @@ public final class SidebarSyncController: ObservableObject {
     ///     `remoteChangeNotification` are observed (tests pass their own).
     ///   - registerForRemoteNotifications: called once, after the first successful start.
     ///   - activationFetchInterval: minimum time between fetches on activation.
+    ///   - hold: records never handed to the store, and the first-launch Space decision.
     public init(
         store: any SyncStore,
         database: (any SyncLocalDatabase)?,
@@ -71,9 +76,11 @@ public final class SidebarSyncController: ObservableObject {
         now: @escaping () -> Date = Date.init,
         notificationCenter: NotificationCenter = .default,
         registerForRemoteNotifications: (@MainActor @Sendable () -> Void)? = nil,
-        activationFetchInterval: TimeInterval = SyncFetchThrottle.activationInterval
+        activationFetchInterval: TimeInterval = SyncFetchThrottle.activationInterval,
+        hold: SyncUploadHold = .none
     ) {
         self.store = store
+        self.hold = hold
         self.database = database
         self.preferences = preferences
         self.allRecordIDs = allRecordIDs
@@ -135,6 +142,7 @@ public final class SidebarSyncController: ObservableObject {
             // `stop` is safe on a store that is not running.
             perform {
                 self.isRunning = false
+                self.stopDecisionWatch()
                 await self.store.stop()
             }
         }
@@ -145,10 +153,14 @@ public final class SidebarSyncController: ObservableObject {
     public func forward(_ changes: [PendingChange]) {
         guard !changes.isEmpty else { return }
         perform {
+            // An edit can settle the first-launch decision (the Space now has content).
+            let released = self.hold.releaseIfEdited()
             // When not running, `needsFullSyncUpload` is already set: it starts true and is set
             // again whenever sync is turned off; only a successful start clears it.
             guard self.isRunning else { return }
-            await self.store.enqueue(changes)
+            let allowed = self.withoutHeld(changes + released.map(PendingChange.save))
+            guard !allowed.isEmpty else { return }
+            await self.store.enqueue(allowed)
         }
     }
 
@@ -172,7 +184,7 @@ public final class SidebarSyncController: ObservableObject {
         perform {
             self.actionError = nil
             await self.store.resetLocalSyncState()
-            await self.store.enqueue(self.allRecordIDs().map(PendingChange.save))
+            await self.store.enqueue(self.withoutHeld(self.allRecordIDs().map(PendingChange.save)))
         }
     }
 
@@ -192,10 +204,12 @@ public final class SidebarSyncController: ObservableObject {
             self.deleteError = nil
             let wasRunning = self.isRunning
             self.isRunning = false
+            self.stopDecisionWatch()
             do {
                 try await self.store.deleteServerData(database: database)
             } catch {
                 self.isRunning = wasRunning
+                if wasRunning { self.watchForDecision() }
                 self.deleteError = Self.describe(error)
                 return
             }
@@ -287,9 +301,61 @@ public final class SidebarSyncController: ObservableObject {
             registerForRemoteNotifications()
         }
         if preferences.needsFullSyncUpload {
-            await store.enqueue(allRecordIDs().map(PendingChange.save))
+            await store.enqueue(withoutHeld(allRecordIDs().map(PendingChange.save)))
             preferences.needsFullSyncUpload = false
         }
+        watchForDecision()
+    }
+
+    // MARK: First-launch Space (FirstLaunchSpaceAdoption)
+
+    /// `changes` without the records the hold keeps from the store.
+    private func withoutHeld(_ changes: [PendingChange]) -> [PendingChange] {
+        let held = hold.heldRecordIDs()
+        guard !held.isEmpty else { return changes }
+        return changes.filter { change in
+            switch change {
+            case .save(let id), .delete(let id): return !held.contains(id)
+            }
+        }
+    }
+
+    /// While the first-launch decision is pending, follows the store's status and runs the
+    /// decision on the first status that reports a completed clean sync (`.idle` with a "Last
+    /// synced" time). The store sets that time only after a fetch whose changes were all applied
+    /// locally (CloudKit: `finishConfirmedCycle`), so the workspace store then holds every Space
+    /// the account had. A time from an earlier run means such a fetch happened then, and its
+    /// Spaces are on disk too.
+    private func watchForDecision() {
+        guard decisionWatch == nil, isRunning, hold.isDecisionPending() else { return }
+        let updates = store.statusUpdates()
+        decisionWatch = Task { [weak self] in
+            for await status in updates {
+                guard let self, !Task.isCancelled else { return }
+                if status.phase == .idle, status.lastSyncedAt != nil, self.hold.isDecisionPending() {
+                    self.perform { await self.decideFirstLaunchSpace() }
+                }
+            }
+        }
+    }
+
+    private func stopDecisionWatch() {
+        decisionWatch?.cancel()
+        decisionWatch = nil
+    }
+
+    /// Stops following the store's status for the first-launch decision (the app's controller
+    /// goes away). The decision stays pending for the next start.
+    func stopWatching() { stopDecisionWatch() }
+
+    /// Runs the decision once (on the store chain) and hands the records it releases to the store.
+    private func decideFirstLaunchSpace() async {
+        guard isRunning, hold.isDecisionPending() else { return }
+        let released = await hold.decide()
+        stopDecisionWatch()
+        guard isRunning else { return }
+        let changes = withoutHeld(released.map(PendingChange.save))
+        if !changes.isEmpty { await store.enqueue(changes) }
     }
 
     private func perform(_ operation: @escaping @MainActor () async -> Void) {
@@ -302,6 +368,37 @@ public final class SidebarSyncController: ObservableObject {
 
     private static func describe(_ error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+    }
+}
+
+/// What the app keeps from the sync store (`FirstLaunchSpaceAdoption`): records that must not be
+/// uploaded, and the pending decision about the first-launch Space.
+public struct SyncUploadHold {
+    /// Records never handed to the store while they are in this set (checked on every enqueue).
+    public var heldRecordIDs: @MainActor () -> Set<SyncRecordID>
+    /// Whether the first-launch Space still waits for the first clean sync.
+    public var isDecisionPending: @MainActor () -> Bool
+    /// Called with every local change: when the pending Space was edited, settles the decision
+    /// (keep) and returns the held records, now free to upload. Otherwise returns none.
+    public var releaseIfEdited: @MainActor () -> [SyncRecordID]
+    /// Decides after a clean sync and returns the held records that may now be uploaded.
+    public var decide: @MainActor () async -> [SyncRecordID]
+
+    public init(
+        heldRecordIDs: @escaping @MainActor () -> Set<SyncRecordID>,
+        isDecisionPending: @escaping @MainActor () -> Bool,
+        releaseIfEdited: @escaping @MainActor () -> [SyncRecordID],
+        decide: @escaping @MainActor () async -> [SyncRecordID]
+    ) {
+        self.heldRecordIDs = heldRecordIDs
+        self.isDecisionPending = isDecisionPending
+        self.releaseIfEdited = releaseIfEdited
+        self.decide = decide
+    }
+
+    /// Holds nothing.
+    public static var none: SyncUploadHold {
+        SyncUploadHold(heldRecordIDs: { [] }, isDecisionPending: { false }, releaseIfEdited: { [] }, decide: { [] })
     }
 }
 

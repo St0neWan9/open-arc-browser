@@ -250,13 +250,18 @@ final class LaunchFlowTests: XCTestCase {
         let model = makeModel(makeStore(), sync: recorder)
         let ws = model.workspace
         // First launch: the default records are announced too, except the local-only Profile
-        // (plan Q13, B73; [06 §16.3] observed "Profiles are not synced between computers.").
+        // (plan Q13, B73; [06 §16.3] observed "Profiles are not synced between computers.") and the
+        // first-launch Space with its theme, which wait until the account's Spaces are known
+        // (`FirstLaunchSpaceAdoption`, user decision 2026-10-28).
         let profileID = try XCTUnwrap(ws.profiles.keys.first)
         let spaceID = try XCTUnwrap(ws.allLiveSpaces.first?.id)
-        await eventually { recorder.enqueued.contains(.save(SyncRecordID(type: .space, uuid: spaceID))) }
+        let spaceRecord = SyncRecordID(type: .space, uuid: spaceID)
+        XCTAssertFalse(recorder.enqueued.contains(.save(spaceRecord)), "held while the decision is pending")
 
+        // A folder in it makes it user content: the folder and the Space go up.
         let folder = try XCTUnwrap(model.sidebar.createFolder(title: "Synced"))
         await eventually { recorder.enqueued.contains(.save(SyncRecordID(type: .folder, uuid: folder))) }
+        XCTAssertTrue(recorder.enqueued.contains(.save(spaceRecord)))
 
         // Profile edits never reach the sync store.
         XCTAssertTrue(model.controller.updateProfileSettings(profileID, ProfileSettings(searchEngine: .bing)))

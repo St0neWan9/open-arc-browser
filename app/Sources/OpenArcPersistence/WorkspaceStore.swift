@@ -176,6 +176,12 @@ public actor WorkspaceStore: SyncLocalDatabase {
         try writeWorkspace()
     }
 
+    /// The workspace with every submission handed over so far applied: what the next save writes.
+    public func currentWorkspace() -> WorkspaceState {
+        drainInbox()
+        return workspace
+    }
+
     // MARK: - Events
 
     /// A new independent stream of workspace changes. It ends when the consumer stops iterating.

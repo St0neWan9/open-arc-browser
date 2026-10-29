@@ -22,6 +22,8 @@ public enum TreeError: Error, Equatable, Sendable {
     case invalidSplitFractions
     /// A new record's id is already taken (`archivePage`).
     case idInUse(UUID)
+    /// A theme cannot be deleted while a live space shows it (`deleteTheme`).
+    case themeInUse(UUID)
 }
 
 /// Where to put a node within its target container.
@@ -231,6 +233,19 @@ public enum TreeOps {
             id: id, appearance: style.appearance, colors: style.colors,
             grain: style.grain, brightness: style.brightness, now: now
         )
+        return s
+    }
+
+    /// Deletes (tombstones) a theme. Refused while a live space points at it. Used when a space
+    /// that owned its theme goes away for good (the first-launch Space replaced by the account's
+    /// Spaces, `FirstLaunchSpaceAdoption`); our own operation, the spec has no theme deletion.
+    public static func deleteTheme(_ state: WorkspaceState, id: UUID, now: Date) throws -> WorkspaceState {
+        var s = state
+        _ = try live(s.themes, id)
+        if s.spaces.values.contains(where: { !$0.meta.isTombstone && $0.themeID == id }) {
+            throw TreeError.themeInUse(id)
+        }
+        s.themes[id]?.meta.markDeleted(at: now)
         return s
     }
 
