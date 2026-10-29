@@ -344,9 +344,25 @@ public enum ThemeDerivation {
             : dropTargetFill(window: window, isDark: false)
     }
 
-    /// Base color when a space has no theme: "default light neutral theme" [06 §1] observed;
-    /// the exact value is unknown.
-    public static let defaultBaseColor = RGBAColor(hex: 0xE9E7EC)
+    /// Window colors of a Space with no picked color (no theme, or a theme with no color dots): a
+    /// diagonal wash from lavender at the top left to pale pink at the bottom right.
+    /// [07 §8.5] observed (2026-10-28): a Space created without picking a color stores no window
+    /// theme, and its window reads sidebar top-left #DEDEF5, mid #E6E3F1, bottom #EAE5EF, top
+    /// frame #E9E4F1, right frame #F2E6E6–#F4E9E9 (light). These stops are those window colors.
+    public static let defaultWindowStops: [RGBAColor] = [
+        RGBAColor(hex: 0xDEDEF5), RGBAColor(hex: 0xE6E3F1), RGBAColor(hex: 0xEAE5EF),
+        RGBAColor(hex: 0xF2E8EC), RGBAColor(hex: 0xF4E9E9),
+    ]
+
+    /// Theme color that the default window stops would come from under the light window rule
+    /// (`lightWindow`): the first stop solved back through mix(·, #EBEBEB, 0.37). It drives the
+    /// derived fills (controls, text, command bar selection) of a Space with no picked color.
+    /// [07 §8.5] inferred; the derived control fill lands on the observed address box #D8D8EB.
+    public static let defaultBaseColor = RGBAColor(hex: 0xD6D6FB)
+
+    /// Content area of a Space with no picked color, light: #F6F6FC at the top left to #FDF8F8 at
+    /// the bottom right, center #F9F7F9. [07 §8.5] observed; one flat color is drawn (the center).
+    public static let defaultLightContent = RGBAColor(hex: 0xF9F7F9)
 
     /// Command bar background in light. [07 §5, §10] observed (#F9F9F9).
     public static let commandBarBackground = RGBAColor(hex: 0xF9F9F9)
@@ -508,7 +524,9 @@ public enum ThemeDerivation {
                 : tone(of: theme, lightness: commandBarSelectionLightness, chromaFactor: commandBarSelectionChromaFactor),
             primaryText: primaryText,
             secondaryText: withAlpha(chromeInk, inkOpacity.spaceName),
-            backgroundGradientColors: (picked.isEmpty ? [theme] : picked).map(windowOf)
+            backgroundGradientColors: picked.isEmpty
+                ? (isDark ? defaultWindowStops.map(darkVariant) : defaultWindowStops)
+                : picked.map(windowOf)
         )
         palette.appearance = appearance
         palette.grain = min(max(style?.grain ?? 0, 0), 1)
@@ -518,7 +536,8 @@ public enum ThemeDerivation {
         palette.separator = separator
         palette.scrollEdgeLine = separator
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
-        palette.webPanelBackground = contentBackground(theme, appearance: appearance)
+        palette.webPanelBackground = picked.isEmpty && !isDark
+            ? defaultLightContent : contentBackground(theme, appearance: appearance)
         // The see-through window [07 §8.4]: content, command bar and bubbles stay opaque.
         palette.windowOpacity = WindowTranslucency.opacity(for: appearance)
         palette.windowLayers = .derived(lightInk: lightInk)

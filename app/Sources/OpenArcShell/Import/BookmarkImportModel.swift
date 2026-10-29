@@ -33,7 +33,7 @@ extension WorkspaceController {
             try mutate(origin: nil) { state in
                 let result = try BookmarkImportMapper.apply(
                     tree, to: state, source: source, profileID: profileID, afterSpaceID: anchor,
-                    theme: ThemeStyle(colors: [SpaceFlowLocalTokens.defaultThemeColor]),
+                    theme: SpaceFlowLocalTokens.defaultThemeStyle,
                     now: stamp, makeID: makeID
                 )
                 summary = result.summary
@@ -57,7 +57,7 @@ extension WorkspaceController {
             try mutate(origin: nil) { state in
                 let result = try ForeignSidebarMapper.apply(
                     sidebar, to: state, profileID: profileID,
-                    defaultTheme: ThemeStyle(colors: [SpaceFlowLocalTokens.defaultThemeColor]),
+                    defaultTheme: SpaceFlowLocalTokens.defaultThemeStyle,
                     knownSymbols: Set(SpaceFlowLocalTokens.symbols), now: stamp, makeID: makeID
                 )
                 summary = result.summary

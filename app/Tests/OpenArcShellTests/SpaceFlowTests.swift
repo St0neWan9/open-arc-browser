@@ -68,18 +68,21 @@ final class SpaceFlowTests: XCTestCase {
         model.stop()
     }
 
-    /// [06 §1] observed: a new Space gets its own Theme; the default color is a local placeholder.
+    /// [06 §1] observed: a new Space gets its own Theme. [07 §8.5] observed: with no color picked
+    /// it has no color dots and the light appearance (Arc's lavender-to-pink default).
     func testNewSpaceGetsAThemeWithTheDefaultOrChosenColor() throws {
         let model = makeModel()
         model.spaceFlow.beginCreate()
         model.spaceFlow.draftName = "A"
         let a = try XCTUnwrap(model.spaceFlow.create())
         let themeA = try XCTUnwrap(model.workspace.spaces[a]?.themeID.flatMap { model.workspace.themes[$0] })
-        XCTAssertEqual(themeA.colors, [SpaceFlowLocalTokens.defaultThemeColor])
+        XCTAssertEqual(themeA.style, SpaceFlowLocalTokens.defaultThemeStyle)
+        XCTAssertEqual(themeA.colors, [])
+        XCTAssertEqual(themeA.appearance, .light)
 
         model.spaceFlow.beginCreate()
         model.spaceFlow.draftName = "B"
-        let chosen = SpaceFlowLocalTokens.presetColors[2]
+        let chosen = ThemePresets.groups[0].colors[2]
         model.spaceFlow.draftTheme.colors = [chosen]
         model.spaceFlow.draftTheme.appearance = .dark
         let b = try XCTUnwrap(model.spaceFlow.create())

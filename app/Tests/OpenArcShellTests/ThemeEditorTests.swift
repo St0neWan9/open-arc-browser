@@ -213,7 +213,7 @@ final class ThemeEditorTests: XCTestCase {
         let (model, id) = editedModel()
         let draft = model.spaceFlow.themeDraft(of: id)
         XCTAssertTrue(draft.colors.isEmpty)
-        XCTAssertEqual(draft.appearance, .automatic)
+        XCTAssertEqual(draft.appearance, .light)
         XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(ThemeDerivation.defaultBaseColor))
         model.stop()
     }

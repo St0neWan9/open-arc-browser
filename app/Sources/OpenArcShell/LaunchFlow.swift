@@ -136,8 +136,8 @@ enum FirstLaunchDefaults {
     static let profileName = "Default"
     /// unknown: the spec does not record the name of the first Space. Our own choice.
     static let spaceName = "Home"
-    /// unknown: same placeholder color a new Space gets when no theme is picked.
-    static var themeColor: RGBAColor { SpaceFlowLocalTokens.defaultThemeColor }
+    /// The theme a new Space gets when no color is picked (Arc's default). [07 §8.5] observed.
+    static var themeStyle: ThemeStyle { SpaceFlowLocalTokens.defaultThemeStyle }
 }
 
 extension WorkspaceState {
@@ -146,7 +146,7 @@ extension WorkspaceState {
     public static func firstLaunch(now: Date = Date(), makeID: () -> UUID = UUID.init) -> WorkspaceState {
         let profileID = makeID(), themeID = makeID(), spaceID = makeID()
         var s = TreeOps.createProfile(WorkspaceState(), id: profileID, name: FirstLaunchDefaults.profileName, now: now)
-        s = TreeOps.createTheme(s, id: themeID, style: ThemeStyle(colors: [FirstLaunchDefaults.themeColor]), now: now)
+        s = TreeOps.createTheme(s, id: themeID, style: FirstLaunchDefaults.themeStyle, now: now)
         do {
             s = try TreeOps.createSpace(s, id: spaceID, profileID: profileID, name: FirstLaunchDefaults.spaceName, themeID: themeID, now: now)
         } catch {

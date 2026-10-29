@@ -195,10 +195,30 @@ final class DesignTokenTests: XCTestCase {
         let palette = ThemeDerivation.palette(for: theme)
         XCTAssertEqual(palette.backgroundGradientColors, [ThemeDerivation.lightWindow(a), ThemeDerivation.lightWindow(b)])
         XCTAssertEqual(palette.windowBackground, ThemeDerivation.lightWindow(a))
-        let base = ThemeDerivation.lightWindow(ThemeDerivation.defaultBaseColor)
-        XCTAssertEqual(ThemeDerivation.palette(for: nil).backgroundGradientColors, [base])
+        let stops = ThemeDerivation.defaultWindowStops
+        XCTAssertEqual(ThemeDerivation.palette(for: nil).backgroundGradientColors, stops)
         let empty = Theme(id: UUID(), appearance: .light, colors: [], now: Date(timeIntervalSince1970: 0))
-        XCTAssertEqual(ThemeDerivation.palette(for: empty).backgroundGradientColors, [base])
+        XCTAssertEqual(ThemeDerivation.palette(for: empty).backgroundGradientColors, stops)
+    }
+
+    /// [07 §8.5] observed: a Space with no picked color shows Arc's default, a lavender (top left)
+    /// to pale pink (bottom right) window, address box ≈ #D8D8EB, content ≈ #F9F7F9 at the center.
+    func testNoColorThemeMatchesArcDefault() {
+        func hex(_ c: RGBAColor) -> String {
+            String(format: "%02X%02X%02X", Int((c.red * 255).rounded()), Int((c.green * 255).rounded()), Int((c.blue * 255).rounded()))
+        }
+        func near(_ c: RGBAColor, _ expected: UInt32, _ tolerance: Double = 2.5) -> Bool {
+            let e = RGBAColor(hex: expected)
+            return [abs(c.red - e.red), abs(c.green - e.green), abs(c.blue - e.blue)].allSatisfy { $0 * 255 <= tolerance }
+        }
+        let style = ThemeStyle(appearance: .light, colors: [])
+        let palette = ThemeDerivation.palette(forStyle: style, systemAppearance: .light)
+        XCTAssertEqual(palette.backgroundGradientColors.first.map(hex), "DEDEF5")
+        XCTAssertEqual(palette.backgroundGradientColors.last.map(hex), "F4E9E9")
+        XCTAssertTrue(near(palette.windowBackground, 0xDEDEF5), hex(palette.windowBackground))
+        XCTAssertTrue(near(palette.controlFill, 0xD8D8EB, 3.5), hex(palette.controlFill))
+        XCTAssertEqual(hex(palette.webPanelBackground), "F9F7F9")
+        XCTAssertFalse(palette.usesLightInk)
     }
 
     /// `Theme.brightness` (the [06 §2] ring knob, inferred): 0.5 leaves the colors exactly as
