@@ -213,13 +213,11 @@ extension SidebarViewModel {
         ids.forEach(unloadPinnedTab)
     }
 
-    /// Whether Reset all tabs in this Space has anything to act on.
+    /// Whether Reset all tabs in this Space has anything to act on. The menu bar reads it on every
+    /// window update, so it comes from the memoized snapshot instead of a scan of every tab (B99).
     var canResetPinnedTabs: Bool {
-        guard let spaceID = selectedSpaceID, !isIncognito else { return false }
-        return workspace.allTabs(inSpace: spaceID).contains {
-            if case .pinned = $0.location { return true }
-            return false
-        }
+        guard selectedSpaceID != nil, !isIncognito else { return false }
+        return snapshot.hasPinnedTabs
     }
 }
 

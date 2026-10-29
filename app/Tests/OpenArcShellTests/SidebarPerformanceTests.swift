@@ -226,20 +226,23 @@ final class SidebarPerformanceTests: XCTestCase {
         }
         report("\(label) hover publish + layout", hover)
         guard sweeps else { return }
-        // Switching to the small Space and back (the large page is built again).
+        // Switching to the small Space and back (B99: the large Space's rows are reused).
         if let home = vm.dockSpaces.first(where: { $0.id != vm.selectedSpaceID })?.id, let large = vm.selectedSpaceID {
-            report("\(label) switch to small Space", benchmarkMedian(1) { vm.selectSpace(home); settle() })
-            report("\(label) switch to large Space", benchmarkMedian(1) { vm.selectSpace(large); settle() })
+            let away = benchmarkMedian(1) { vm.selectSpace(home); settle() }
+            report("\(label) switch to small Space", away)
+            let back = benchmarkMedian(1) { vm.selectSpace(large); settle() }
+            report("\(label) switch to large Space", back)
+            XCTAssertLessThan(back, 60, "switching back to a large Space")
         }
-        // Regression guards, loose enough for a debug build on a busy machine (before the fix:
-        // ≈ 357 ms and ≈ 307 ms in debug).
-        XCTAssertLessThan(select, 150, "selecting a tab in a large Space")
-        XCTAssertLessThan(hover, 60, "hovering a row in a large Space")
+        // Regression guards, loose enough for a debug build on a busy machine (B97 fix: from
+        // ≈ 357 ms and ≈ 307 ms; B99: ≈ 30 → 10 ms and ≈ 6 → 0.05 ms in debug).
+        XCTAssertLessThan(select, 60, "selecting a tab in a large Space")
+        XCTAssertLessThan(hover, 10, "hovering a row in a large Space")
 
         let spaceID = vm.selectedSpaceID!
         let topBand = vm.listScrollState?.rowBands[spaceID]
         XCTAssertEqual(topBand?.lowerBound, 0, "rows are built from the top")
-        XCTAssertLessThan(topBand?.upperBound ?? .infinity, 4_000, "only a few screens of rows exist, not \(vm.listGeometry.contentHeight) pt")
+        XCTAssertLessThan(topBand?.upperBound ?? .infinity, 2_500, "only about two screens of rows exist, not \(vm.listGeometry.contentHeight) pt")
         guard let scroller = vm.listScroller, let metrics = scroller.metrics else {
             XCTFail("no list scroller")
             return
@@ -257,7 +260,7 @@ final class SidebarPerformanceTests: XCTestCase {
             }
         }
         report("\(label) scroll step (120 pt, mean of \(steps) over \(Int(metrics.contentHeight)) pt)", sweep / Double(max(steps, 1)))
-        XCTAssertLessThan(sweep / Double(max(steps, 1)), 50, "one scroll step")
+        XCTAssertLessThan(sweep / Double(max(steps, 1)), 25, "one scroll step")
         XCTAssertEqual(scroller.metrics?.offset ?? 0, metrics.maxOffset, accuracy: 1)
         // The rows that exist moved with the scroll: the bottom of the list, not the top.
         let bottomBand = vm.listScrollState?.rowBands[spaceID]

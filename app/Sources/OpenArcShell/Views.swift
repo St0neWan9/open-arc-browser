@@ -173,7 +173,9 @@ struct MainWindowContent: View {
             }
         }
         // Modal cards: centered in the window over the dimmed window. [07 §12] observed (B91).
-        .modifier(SpaceFlowSheets(flow: model.spaceFlow, workspace: sidebar.workspace, palette: model.windowPalette))
+        .modifier(SpaceFlowSheets(flow: model.spaceFlow,
+                                   pickerSpaceIcon: model.spaceFlow.iconPickerSpaceID.flatMap { sidebar.workspace.spaces[$0]?.icon },
+                                   palette: model.windowPalette))
         .modifier(ProfileFlowSheets(flow: model.profileFlow, palette: model.windowPalette))
         .modifier(SidebarWindowModals(sidebar: sidebar))
         .overlay(alignment: .topLeading) { themeEditorAnchor }

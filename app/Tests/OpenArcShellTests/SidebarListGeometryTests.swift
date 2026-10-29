@@ -84,19 +84,20 @@ final class SidebarListGeometryTests: XCTestCase {
         XCTAssertEqual(snap.today.map(\.id), ws.today(spaceID: f.home).map(\.id))
     }
 
-    /// The row band follows the scroll offset in steps, so small scrolls do not rebuild rows.
+    /// The row band follows the scroll offset in row-pitch steps, so a scroll within a row does
+    /// not rebuild rows, and it covers the viewport plus the margin on each side.
     @MainActor
     func testRowBandMovesInSteps() {
         let window = SidebarListWindow()
         window.update(offset: 0, viewportHeight: 700)
         XCTAssertEqual(window.minY, 0)
         let firstMax = window.maxY
-        XCTAssertGreaterThanOrEqual(firstMax, 700 * 2)
-        window.update(offset: 30, viewportHeight: 700)
-        XCTAssertEqual(window.maxY, firstMax, "a small scroll keeps the band")
+        XCTAssertGreaterThanOrEqual(firstMax, 700 + SidebarListWindow.margin)
+        window.update(offset: 10, viewportHeight: 700)
+        XCTAssertEqual(window.maxY, firstMax, "a scroll within one row keeps the band")
         window.update(offset: 10_000, viewportHeight: 700)
-        XCTAssertLessThanOrEqual(window.minY, 10_000 - 700)
-        XCTAssertGreaterThanOrEqual(window.maxY, 10_000 + 2 * 700)
+        XCTAssertLessThanOrEqual(window.minY, 10_000 - SidebarListWindow.margin)
+        XCTAssertGreaterThanOrEqual(window.maxY, 10_000 + 700 + SidebarListWindow.margin)
     }
 
     /// The memoized snapshot changes with the workspace and with the window's own state.
@@ -113,5 +114,94 @@ final class SidebarListGeometryTests: XCTestCase {
         vm.toggleCollapsePinned()
         vm.selectSpace(f.work)
         XCTAssertEqual(vm.snapshot.today.map(\.id), [f.workTab], "a Space switch rebuilds it")
+    }
+
+    // MARK: B99
+
+    /// B99: the band moves one row pitch at a time with a fixed margin, so a fast fling builds a
+    /// row or two per frame instead of a burst of rows every few frames.
+    @MainActor
+    func testRowBandMovesOneRowAtATime() {
+        let window = SidebarListWindow()
+        window.update(offset: 5_000, viewportHeight: 700)
+        let (minY, maxY) = (window.minY, window.maxY)
+        XCTAssertLessThanOrEqual(minY, 5_000 - SidebarListWindow.margin)
+        XCTAssertGreaterThanOrEqual(maxY, 5_000 + 700 + SidebarListWindow.margin)
+        XCTAssertLessThan(maxY - minY, 700 + 2 * SidebarListWindow.margin + 2 * SidebarListWindow.step, "no more than the margin is built")
+        window.update(offset: 5_000 + 50, viewportHeight: 700)
+        XCTAssertLessThanOrEqual(window.maxY - maxY, 2 * SidebarListWindow.step, "one frame of a fling adds a row or two")
+    }
+
+    /// B99: selecting a tab only stamps its activity time; the list keeps the same rows object, so
+    /// no row is rebuilt. A change the rows draw (a rename) still makes a new one.
+    @MainActor
+    func testSelectingKeepsTheListRows() throws {
+        let (vm, _) = makeSidebarViewModel()
+        defer { vm.stop() }
+        let before = vm.listContent
+        vm.selectTab(f.today2)
+        XCTAssertEqual(vm.selectedTabID, f.today2)
+        XCTAssertNotEqual(vm.workspace.tabs[f.today2]?.lastActiveAt, f.now, "the activity time was stamped")
+        XCTAssertTrue(vm.listContent === before, "same rows after a selection")
+        vm.commitRename(f.today2, text: "Renamed")
+        XCTAssertFalse(vm.listContent === before, "a rename rebuilds the rows")
+        XCTAssertEqual(vm.snapshot.today.first { $0.id == f.today2 }.flatMap {
+            if case .tab(let tab) = $0.kind { return tab.displayTitle } else { return nil }
+        }, "Renamed")
+    }
+
+    /// B99: switching back to a Space reuses its rows (no walk of a large Space per switch).
+    @MainActor
+    func testSwitchingBackReusesTheSpaceRows() {
+        let (vm, _) = makeSidebarViewModel()
+        defer { vm.stop() }
+        let home = vm.listContent
+        vm.selectSpace(f.work)
+        XCTAssertEqual(vm.snapshot.today.map(\.id), [f.workTab])
+        vm.selectSpace(f.home)
+        XCTAssertTrue(vm.listContent === home, "the Home rows are reused")
+    }
+
+    /// B99: the selected row (own row or split-group row) is an index lookup.
+    @MainActor
+    func testSelectedListRowIDLookup() throws {
+        let (vm, _) = makeSidebarViewModel()
+        defer { vm.stop() }
+        vm.selectTab(f.pinnedTab)
+        XCTAssertEqual(vm.selectedListRowID, f.pinnedTab)
+        vm.selectTab(f.fav1)
+        XCTAssertNil(vm.selectedListRowID, "a favorite has no list row")
+        let geometry = SidebarListGeometry(snapshot: snapshot())
+        XCTAssertEqual(geometry.rowID(showingTab: f.today1), f.today1)
+        let collapsed = try TreeOps.setFolderExpanded(f.ws, id: f.folderA, isExpanded: false, now: f.now)
+        XCTAssertNil(SidebarListGeometry(snapshot: snapshot(collapsed)).rowID(showingTab: f.inFolderTab), "hidden in a collapsed folder")
+    }
+
+    /// B99: rows get their state by value. Hovering publishes nothing, selecting changes only the
+    /// two rows involved.
+    @MainActor
+    func testRowStatesChangeOnlyForTheRowsInvolved() {
+        let (vm, _) = makeSidebarViewModel()
+        defer { vm.stop() }
+        vm.selectTab(f.today1)
+        let palette = vm.palette
+        func states() -> [UUID: SidebarTabRowState] {
+            var result: [UUID: SidebarTabRowState] = [:]
+            for item in vm.snapshot.pinned + vm.snapshot.today {
+                if case .tab(let tab) = item.kind { result[tab.id] = vm.tabRowState(tab, depth: item.depth, area: item.area, palette: palette) }
+            }
+            return result
+        }
+        let before = states()
+        var publishes = 0
+        let watch = vm.objectWillChange.sink { publishes += 1 }
+        vm.hoverBegan(f.today2)
+        vm.hoverEnded(f.today2)
+        XCTAssertEqual(publishes, 0, "hovering a row publishes nothing")
+        watch.cancel()
+        vm.selectTab(f.today2)
+        let after = states()
+        let changed = Set(before.keys.filter { before[$0] != after[$0] })
+        XCTAssertEqual(changed, [f.today1, f.today2], "only the old and new selection change")
     }
 }

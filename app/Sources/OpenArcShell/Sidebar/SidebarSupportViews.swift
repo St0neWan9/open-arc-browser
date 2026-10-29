@@ -11,12 +11,17 @@ enum SidebarCoordinateSpace {
     static let root = "openarc.sidebar.root"
 }
 
-/// Frames of the rows' speaker glyphs in the sidebar's root space, keyed by tab id. A press on
-/// one must not select the row. [05 §tab audio indicator] observed.
-struct SidebarAudioGlyphFramesKey: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
+/// Where the rows' speaker glyphs report their frames (sidebar root space): the sidebar's scroll
+/// state, set by `SidebarView`. A press on a glyph must not select the row. [05 §tab audio
+/// indicator] observed.
+private struct SidebarAudioGlyphSinkKey: EnvironmentKey {
+    static var defaultValue: SidebarListScrollState? { nil }
+}
+
+extension EnvironmentValues {
+    var sidebarAudioGlyphSink: SidebarListScrollState? {
+        get { self[SidebarAudioGlyphSinkKey.self] }
+        set { self[SidebarAudioGlyphSinkKey.self] = newValue }
     }
 }
 
@@ -378,9 +383,10 @@ private final class SidebarEventMonitorToken {
 
 /// Common behavior of tab, group and folder rows. Drags start in `SidebarDragSourceView`; drops are
 /// handled by the root delegate; the insertion line is drawn once by `SidebarDropIndicatorView`.
+/// Takes the row's drop state as a value: rows do not observe the view model (B99).
 struct SidebarRowInteraction: ViewModifier {
-    @ObservedObject var viewModel: SidebarViewModel
-    let id: UUID
+    /// The row is the target of a drop *into* it (a folder receiving the dragged item).
+    let isDropInto: Bool
 
     func body(content: Content) -> some View {
         let radius = CGFloat(Metrics.Sidebar.selectedRowCornerRadius)
@@ -388,7 +394,7 @@ struct SidebarRowInteraction: ViewModifier {
         content
             // The source row stays as it is (not dimmed, no gap). [06 §15.1] observed.
             .background(alignment: .topLeading) {
-                if viewModel.dropTarget == .row(id, .into) {
+                if isDropInto {
                     // Folder that would receive the drop: a light gray-violet fill, no stroke.
                     // [06 §15.3] observed.
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -404,8 +410,8 @@ struct SidebarRowInteraction: ViewModifier {
 }
 
 extension View {
-    func sidebarRowInteraction(viewModel: SidebarViewModel, id: UUID) -> some View {
-        modifier(SidebarRowInteraction(viewModel: viewModel, id: id))
+    func sidebarRowInteraction(isDropInto: Bool) -> some View {
+        modifier(SidebarRowInteraction(isDropInto: isDropInto))
     }
 }
 
