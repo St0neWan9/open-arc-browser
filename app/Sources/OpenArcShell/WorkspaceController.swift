@@ -38,11 +38,20 @@ public final class WorkspaceController: ObservableObject {
 
     /// The workspace every window shows. Changed only through `mutate`, `commit` and `replaceWorkspace`.
     @Published public private(set) var workspace: WorkspaceState {
-        didSet { workspaceGeneration &+= 1 }
+        didSet {
+            workspaceGeneration &+= 1
+            if !isActivityOnlyChange { sidebarRowsGeneration &+= 1 }
+        }
     }
     /// Bumped on every assignment of `workspace`, so derived values (the sidebar snapshot) can be
     /// cached without comparing two large workspaces.
     private(set) var workspaceGeneration = 0
+    /// Like `workspaceGeneration`, but not bumped by a change that only stamps a tab's last-active
+    /// time (`markTabActive`, every tab selection): nothing the sidebar list draws changes then, so
+    /// a Space of thousands of rows is not walked again (B99).
+    private(set) var sidebarRowsGeneration = 0
+    /// Set while `commitActivity` assigns the workspace.
+    private var isActivityOnlyChange = false
     /// Live engine state per tab id (only for tabs that have an engine tab).
     @Published private(set) var liveStates: [UUID: SidebarTabLiveState] = [:]
     /// Library flags shared by every window (B22).
@@ -359,11 +368,23 @@ public final class WorkspaceController: ObservableObject {
         commit(new, origin: origin)
     }
 
+    /// Stamps tab `id` as active now (`TreeOps.markTabActive`) and commits it like `mutate`. The
+    /// sidebar rows do not show the time, so their snapshot is kept (`sidebarRowsGeneration`).
+    func markTabActive(_ id: UUID, origin: SidebarViewModel?) throws {
+        commit(try TreeOps.markTabActive(workspace, id: id, now: now()), origin: origin, activityOnly: true)
+    }
+
     /// Stores a new workspace value made by the app: persists it and lets every window except
     /// `origin` repair its selection.
     func commit(_ new: WorkspaceState, origin: SidebarViewModel?) {
+        commit(new, origin: origin, activityOnly: false)
+    }
+
+    private func commit(_ new: WorkspaceState, origin: SidebarViewModel?, activityOnly: Bool) {
         let old = workspace
+        isActivityOnlyChange = activityOnly
         workspace = new
+        isActivityOnlyChange = false
         // Only the records this change touched: a remote batch the store applied after `old` was
         // read (and not yet merged here, see `mergeRemote`) must not be reverted or purged. [A19]
         dependencies.persistence?.submit(changesFrom: old, to: new)

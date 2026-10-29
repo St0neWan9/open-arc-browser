@@ -281,19 +281,10 @@ public final class SidebarViewModel: ObservableObject {
         return ThemeDerivation.palette(for: theme, systemAppearance: controller.systemAppearance)
     }
 
-    /// The rows of the selected Space. Memoized: views and intents read it many times per change,
-    /// and a Space with thousands of pinned items takes milliseconds to walk.
-    var snapshot: SidebarSnapshot {
-        let key = SnapshotKey(generation: controller.workspaceGeneration, spaceID: selectedSpaceID,
-                              profileID: currentProfileID, isIncognito: isIncognito, isPinnedAreaCollapsed: isPinnedAreaCollapsed)
-        if let cached = snapshotCache, cached.key == key { return cached.value }
-        var snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: key.spaceID, profileID: key.profileID)
-        snapshot.hidesPinnedArea = key.isIncognito
-        // Collapse Pinned Tabs hides the pinned rows; the area keeps its content (B72, inferred).
-        if key.isPinnedAreaCollapsed { snapshot.pinned = [] }
-        snapshotCache = (key, snapshot)
-        return snapshot
-    }
+    /// The rows of the selected Space. Memoized per Space (the last few, `listContentCacheSize`):
+    /// views and intents read it many times per change, a Space with thousands of pinned items
+    /// takes milliseconds to walk, and switching back to a Space must not walk it again (B99).
+    var snapshot: SidebarSnapshot { listContent.snapshot }
 
     /// Everything `snapshot` depends on.
     private struct SnapshotKey: Equatable {
@@ -303,23 +294,49 @@ public final class SidebarViewModel: ObservableObject {
         var isIncognito: Bool
         var isPinnedAreaCollapsed: Bool
     }
-    private var snapshotCache: (key: SnapshotKey, value: SidebarSnapshot)?
+
+    private var snapshotKey: SnapshotKey {
+        SnapshotKey(generation: controller.sidebarRowsGeneration, spaceID: selectedSpaceID,
+                    profileID: currentProfileID, isIncognito: isIncognito, isPinnedAreaCollapsed: isPinnedAreaCollapsed)
+    }
+
+    private func makeSnapshot(_ key: SnapshotKey) -> SidebarSnapshot {
+        var snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: key.spaceID, profileID: key.profileID)
+        snapshot.hidesPinnedArea = key.isIncognito
+        // Collapse Pinned Tabs hides the pinned rows; the area keeps its content (B72, inferred).
+        if key.isPinnedAreaCollapsed { snapshot.pinned = [] }
+        return snapshot
+    }
 
     /// Content positions of the list entries for `snapshot`, memoized with it.
     var listGeometry: SidebarListGeometry { listContent.geometry }
 
     /// The list's rows and their positions, as one immutable object. Views hold it by reference,
     /// so SwiftUI compares one pointer instead of thousands of rows on every update. A new object
-    /// is made only when the snapshot's inputs change.
+    /// is made only when the rows change: a workspace change that leaves the rows as they were
+    /// (a page title of another Space arrives) keeps the object, so the list and its rows are not
+    /// updated at all (B99).
     var listContent: SidebarListContent {
-        let snap = snapshot
-        guard let key = snapshotCache?.key else { return SidebarListContent(snapshot: snap) }
-        if let cached = listContentCache, cached.key == key { return cached.value }
-        let content = SidebarListContent(snapshot: snap)
-        listContentCache = (key, content)
+        let key = snapshotKey
+        if let index = listContentCache.firstIndex(where: { $0.key == key }) {
+            let hit = listContentCache.remove(at: index)
+            listContentCache.append(hit)
+            return hit.value
+        }
+        let snap = makeSnapshot(key)
+        // The newest entry of the same Space, from before this change.
+        let previous = listContentCache.last { $0.key.spaceID == key.spaceID }
+        listContentCache.removeAll { $0.key.spaceID == key.spaceID }
+        let content = previous.flatMap { $0.value.snapshot.hasSameRows(as: snap) ? $0.value : nil }
+            ?? SidebarListContent(snapshot: snap)
+        listContentCache.append((key, content))
+        if listContentCache.count > Self.listContentCacheSize { listContentCache.removeFirst() }
         return content
     }
-    private var listContentCache: (key: SnapshotKey, value: SidebarListContent)?
+    /// Least recently used first, one entry per Space.
+    private var listContentCache: [(key: SnapshotKey, value: SidebarListContent)] = []
+    /// Spaces whose rows stay memoized: the selected one and the last few shown. Own value.
+    private static let listContentCacheSize = 4
 
     /// Spaces in dock order. The dock shows every profile's spaces. [05 §window hierarchy] observed.
     /// An incognito window's dock shows no Space icons. [06 §20.2] observed (B48).
@@ -404,8 +421,14 @@ public final class SidebarViewModel: ObservableObject {
 
     @discardableResult
     private func mutate(_ body: (WorkspaceState) throws -> WorkspaceState) -> Bool {
+        commitChange { try controller.mutate(origin: self, body) }
+    }
+
+    /// Runs a controller commit made by this window, with the error and change bookkeeping of `mutate`.
+    @discardableResult
+    private func commitChange(_ change: () throws -> Void) -> Bool {
         do {
-            try controller.mutate(origin: self, body)
+            try change()
             lastError = nil
             onWorkspaceChange?(workspace)
             return true
@@ -453,7 +476,8 @@ public final class SidebarViewModel: ObservableObject {
         selectedTabID = id
         if let spaceID = tab.location.spaceID ?? selectedSpaceID { lastSelectedTab[spaceID] = id }
         if let layout = SplitPaneLayout.activeLayout(in: workspace, containing: id) { lastFocusedPane[layout.id] = id }
-        mutate { try TreeOps.markTabActive($0, id: id, now: now()) }
+        // Only the activity time changes: the list keeps its rows (B99).
+        commitChange { try self.controller.markTabActive(id, origin: self) }
         let controller = self.controller, fallback = currentProfileID
         engineTask { [weak self] in
             do { try await controller.ensureLive(id, fallbackProfileID: fallback) } catch { self?.lastError = error }
@@ -616,6 +640,42 @@ public final class SidebarViewModel: ObservableObject {
     /// The speaker glyph a tab row shows between its favicon and title, nil for none.
     /// [05 §tab audio indicator] observed.
     func audioIndicator(for id: UUID) -> SidebarAudioIndicator? { liveState(for: id)?.audioIndicator }
+
+    // MARK: Row states
+
+    /// What tab row `tab` draws now. The list passes it to the row by value (B99).
+    func tabRowState(_ tab: TabNode, depth: Int, area: SidebarArea, palette: ThemePalette) -> SidebarTabRowState {
+        let live = liveState(for: tab.id)
+        return SidebarTabRowState(
+            tab: tab, depth: depth, area: area, palette: palette,
+            isSelected: isSelected(tab.id), isPressed: pressedItemID == tab.id,
+            isLoading: live?.isLoading == true, audio: live?.audioIndicator,
+            isEasel: isEaselRow(tab.id),
+            // The favicon only shows without a custom icon.
+            favicon: tab.icon == nil ? faviconImage(for: tab.id) : nil,
+            splitPreview: splitPreviewSide(for: tab.id),
+            isRenaming: renamingItemID == tab.id, showsRenameHint: showsPinRenameHint(tab.id),
+            isDropInto: dropTarget == .row(tab.id, .into), isIncognito: isIncognito)
+    }
+
+    /// What folder row `folder` draws now.
+    func folderRowState(_ folder: Folder, depth: Int, palette: ThemePalette) -> SidebarFolderRowView.State {
+        SidebarFolderRowView.State(folder: folder, depth: depth, palette: palette,
+                                   isRenaming: renamingItemID == folder.id, isDropInto: dropTarget == .row(folder.id, .into))
+    }
+
+    /// What split-group row `group` draws now.
+    func splitGroupRowState(_ group: SidebarSplitGroup, depth: Int, area: SidebarArea, palette: ThemePalette) -> SidebarSplitGroupRowView.State {
+        SidebarSplitGroupRowView.State(
+            group: group, depth: depth, area: area, palette: palette, layout: splitLayout(group.layoutID),
+            members: group.members.map { member in
+                let live = liveState(for: member.id)
+                return .init(isLoading: live?.isLoading == true, audio: live?.audioIndicator,
+                             favicon: member.icon == nil ? faviconImage(for: member.id) : nil)
+            },
+            isSelected: isGroupSelected(group), isPressed: pressedItemID == group.layoutID,
+            isRenaming: renamingItemID == group.layoutID, isDropInto: dropTarget == .row(group.layoutID, .into))
+    }
 
     /// A click on a row's speaker glyph mutes or unmutes the tab without selecting it.
     /// [05 §tab audio indicator] observed.
@@ -1097,7 +1157,7 @@ public final class SidebarViewModel: ObservableObject {
     func hoverBegan(_ id: UUID) {
         hoverTask?.cancel()
         hoveredTabID = id
-        hoverCardTabID = nil
+        if hoverCardTabID != nil { hoverCardTabID = nil }
         guard draggingItem == nil, renamingItemID == nil, workspace.tabs[id] != nil else { return }
         let delay = hoverDelay
         hoverTask = Task { [weak self] in
@@ -1111,7 +1171,7 @@ public final class SidebarViewModel: ObservableObject {
         guard hoveredTabID == id else { return }
         hoveredTabID = nil
         hoverTask?.cancel()
-        hoverCardTabID = nil
+        if hoverCardTabID != nil { hoverCardTabID = nil }
     }
 
     /// The pointer entered a favorite block: its hover card shows after the delay, unless a drag
@@ -1119,7 +1179,7 @@ public final class SidebarViewModel: ObservableObject {
     func favoriteHoverBegan(_ id: UUID) {
         favoriteTooltipTask?.cancel()
         hoveredFavoriteID = id
-        favoriteTooltipTabID = nil
+        if favoriteTooltipTabID != nil { favoriteTooltipTabID = nil }
         guard draggingItem == nil, renamingItemID == nil, workspace.tabs[id] != nil else { return }
         let delay = favoriteTooltipDelay
         favoriteTooltipTask = Task { [weak self] in
@@ -1133,7 +1193,7 @@ public final class SidebarViewModel: ObservableObject {
         guard hoveredFavoriteID == id else { return }
         hoveredFavoriteID = nil
         favoriteTooltipTask?.cancel()
-        favoriteTooltipTabID = nil
+        if favoriteTooltipTabID != nil { favoriteTooltipTabID = nil }
     }
 
     // MARK: - Drag and drop
@@ -1198,7 +1258,8 @@ public final class SidebarViewModel: ObservableObject {
         case .splitGroup(let id): wasSelected = snapshot.splitGroup(layoutID: id).map(isGroupSelected) ?? false
         case .folder: wasSelected = false
         }
-        pressedItemID = wasSelected ? item.id : nil
+        let pressed = wasSelected ? item.id : nil
+        if pressedItemID != pressed { pressedItemID = pressed }
     }
 
     /// The mouse button went up, or the press became a drag.
@@ -1594,9 +1655,8 @@ extension SidebarViewModel {
     /// holds it. Nil for a favorite, a tab hidden in a collapsed folder, or no selection.
     var selectedListRowID: UUID? {
         guard let id = selectedTabID else { return nil }
-        let snap = snapshot
-        if let group = snap.splitGroup(containing: id) { return group.layoutID }
-        return (snap.pinned + snap.today).contains { $0.id == id } ? id : nil
+        // An index lookup: the jump button reads this on every scroll step and selection.
+        return listGeometry.rowID(showingTab: id)
     }
 
     /// The ↓ / ↑ button: scrolls the list so the selected row (at `rowFrame`, sidebar root space)
@@ -1689,8 +1749,10 @@ extension SidebarViewModel {
         quickListTask = nil
         isPointerInQuickList = false
         isQuickListFocused = false
-        quickListQuery = ""
-        quickListFolderID = nil
+        // Only real changes: a published assignment re-evaluates every view of the window, and a
+        // Space switch or folder click calls this with no quick list open.
+        if !quickListQuery.isEmpty { quickListQuery = "" }
+        if quickListFolderID != nil { quickListFolderID = nil }
     }
 
     /// Opens a tab picked in the quick list and closes the list.

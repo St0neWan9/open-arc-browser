@@ -131,7 +131,10 @@ struct IconPickerCard: View {
 /// [07 §12] observed (Rename Space; the icon picker follows it, inferred). B91.
 struct SpaceFlowSheets: ViewModifier {
     @ObservedObject var flow: SpaceFlowModel
-    let workspace: WorkspaceState
+    /// Icon of the Space whose icon picker is open. Only this, not the workspace: SwiftUI compares
+    /// a modifier's stored values on every window update, and comparing a workspace of thousands
+    /// of tabs cost milliseconds per update (B99 profile).
+    let pickerSpaceIcon: String?
     let palette: ThemePalette
 
     func body(content: Content) -> some View {
@@ -140,8 +143,7 @@ struct SpaceFlowSheets: ViewModifier {
                 RenameSpaceSheet(flow: flow, palette: palette)
             }
             .windowModal(id: "changeSpaceIcon", isPresented: flow.iconPickerSpaceID != nil, size: SpaceFlowLocalTokens.iconSheetSize) {
-                ChangeSpaceIconSheet(flow: flow, currentIcon: flow.iconPickerSpaceID.flatMap { workspace.spaces[$0]?.icon },
-                                     palette: palette)
+                ChangeSpaceIconSheet(flow: flow, currentIcon: pickerSpaceIcon, palette: palette)
             }
     }
 }

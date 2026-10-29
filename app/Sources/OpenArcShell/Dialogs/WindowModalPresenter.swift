@@ -83,6 +83,17 @@ extension View {
     func windowModalHost() -> some View {
         modifier(WindowModalHost())
     }
+
+    /// For a large subtree that declares no window modal card (the sidebar: its cards are declared
+    /// at the window root, `SidebarWindowModals`): the window modal preferences stop here, so
+    /// SwiftUI does not combine the empty values of every view inside on each update. With a few
+    /// thousand row views that combining was a large part of each scroll step (B99 profile).
+    func declaresNoWindowModals() -> some View {
+        // A written value replaces whatever the views inside would produce, so the key is not
+        // collected from them at all.
+        preference(key: WindowModalPreferenceKey.self, value: [])
+            .preference(key: WindowModalSummaryKey.self, value: [])
+    }
 }
 
 /// Where a card sits. Pure, for tests.

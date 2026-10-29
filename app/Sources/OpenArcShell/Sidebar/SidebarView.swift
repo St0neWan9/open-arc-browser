@@ -111,9 +111,7 @@ public struct SidebarView: View {
         }
         .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
         .coordinateSpace(name: SidebarCoordinateSpace.root)
-        .onPreferenceChange(SidebarAudioGlyphFramesKey.self) { [listScroll] frames in
-            MainActor.assumeIsolated { listScroll.audioGlyphFrames = frames }
-        }
+        .environment(\.sidebarAudioGlyphSink, listScroll)
         .onPreferenceChange(SidebarDropRegionsKey.self) { [listScroll] regions in
             MainActor.assumeIsolated { listScroll.setRegions(regions) }
         }
@@ -128,6 +126,8 @@ public struct SidebarView: View {
         // are window cards (`SidebarWindowModals`, B91).
         .modifier(SidebarItemEditSheets(viewModel: viewModel))
         .onAppear { [listScroll] in viewModel.listScrollState = listScroll }
+        // The sidebar's cards are declared at the window root (`SidebarWindowModals`). B99.
+        .declaresNoWindowModals()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar")
     }
@@ -214,6 +214,9 @@ struct SidebarListView: View {
             SidebarListRows(viewModel: viewModel, content: content, window: window,
                             isSidebarHovered: isSidebarHovered, layout: layout)
                 .frame(width: layout.width, height: content.geometry.contentHeight, alignment: .topLeading)
+                // Rows report no drop regions (their frames follow from the list geometry): the key
+                // stops here, so it is not combined through every row on each update. B99.
+                .preference(key: SidebarDropRegionsKey.self, value: [:])
                 // Gives the view model a handle on the backing scroll view for drag auto-scroll
                 // (B20), and reports every scroll step (the clip view's bounds).
                 .background(SidebarListScrollProbe(viewModel: viewModel, onScroll: { metrics in scrolled(metrics) }))
@@ -242,27 +245,33 @@ private struct SidebarListRows: View {
     var body: some View {
         let geometry = content.geometry
         let range = geometry.range(overlapping: window.minY, window.maxY)
-        ZStack(alignment: .topLeading) {
+        // Read once for all rows: each row gets its state by value and is re-evaluated only when
+        // that state changed (B99).
+        let palette = viewModel.palette
+        SidebarListRowsLayout(size: CGSize(width: layout.width, height: geometry.contentHeight)) {
             ForEach(geometry.entries[range]) { entry in
-                entryView(entry)
+                entryView(entry, palette: palette)
                     .frame(width: layout.width, height: entry.height, alignment: .topLeading)
-                    .offset(y: entry.top)
+                    .layoutValue(key: SidebarListEntryTop.self, value: entry.top)
             }
         }
-        .frame(width: layout.width, height: geometry.contentHeight, alignment: .topLeading)
     }
 
     @ViewBuilder
-    private func entryView(_ entry: SidebarListEntry) -> some View {
+    private func entryView(_ entry: SidebarListEntry, palette: ThemePalette) -> some View {
         switch entry.content {
         case .row(let item):
             switch item.kind {
             case .folder(let folder):
-                SidebarFolderRowView(viewModel: viewModel, folder: folder, depth: item.depth)
+                SidebarFolderRowView(viewModel: viewModel, row: viewModel.folderRowState(folder, depth: item.depth, palette: palette))
+                    .equatable()
             case .tab(let tab):
-                SidebarTabRowView(viewModel: viewModel, tab: tab, depth: item.depth, area: item.area)
+                SidebarTabRowView(viewModel: viewModel, row: viewModel.tabRowState(tab, depth: item.depth, area: item.area, palette: palette))
+                    .equatable()
             case .splitGroup(let group):
-                SidebarSplitGroupRowView(viewModel: viewModel, group: group, depth: item.depth, area: item.area)
+                SidebarSplitGroupRowView(viewModel: viewModel,
+                                         row: viewModel.splitGroupRowState(group, depth: item.depth, area: item.area, palette: palette))
+                    .equatable()
             }
         case .divider:
             SidebarDividerRowView(viewModel: viewModel, canClear: content.snapshot.canClear, isSidebarHovered: isSidebarHovered)
@@ -272,20 +281,74 @@ private struct SidebarListRows: View {
     }
 }
 
-/// Which content-space band of the list has views: the viewport widened by one viewport height
-/// on each side, its edges snapped to `step`. Published only when the band changes.
+/// Places each list entry at its fixed top (`SidebarListEntryTop`), full width. Its size is given,
+/// never measured, and it reports no alignment guides of its own: a `ZStack` of offset rows made
+/// every scroll step and every frame of the Space slide walk the alignment guides of all built rows
+/// (B99 profile), because the scroll view and the views around the content ask for them.
+struct SidebarListRowsLayout: Layout {
+    var size: CGSize
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize { size }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: CGPoint(x: bounds.minX, y: bounds.minY + subview[SidebarListEntryTop.self]),
+                          anchor: .topLeading, proposal: ProposedViewSize(width: size.width, height: nil))
+        }
+    }
+
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+}
+
+/// Top edge of a list entry in content coordinates, for `SidebarListRowsLayout`.
+struct SidebarListEntryTop: LayoutValueKey {
+    static let defaultValue: CGFloat = 0
+}
+
+/// A view of a known, fixed size: proposes exactly that size to its content, never measures it,
+/// and reports no alignment guides. Wrapping a list row in it keeps SwiftUI's geometry queries
+/// (hover regions, scroll geometry) from re-measuring the row's text on every frame (B99).
+struct SidebarFixedFrameLayout: Layout {
+    var size: CGSize
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize { size }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(size))
+        }
+    }
+
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+}
+
+/// Which content-space band of the list has views: the viewport widened by `margin` on each side,
+/// its edges snapped to `step`. Published only when the band changes.
+///
+/// The step is one row pitch: each scroll frame then builds and drops about the rows it uncovers,
+/// instead of a burst of ten rows every few frames (a 400 pt step made those frames miss their
+/// deadline during a fast fling, B99 profile). The margin keeps rows ready well beyond the edge.
 @MainActor
 final class SidebarListWindow: ObservableObject {
-    /// Band edges snap to this many points.
-    static let step: CGFloat = 400
+    /// Band edges snap to this many points: one row pitch (41 pt row + 0 spacing).
+    static let step: CGFloat = 41
+    /// Rows built beyond each edge of the viewport. Own value: half a typical list height.
+    static let margin: CGFloat = 300
 
     @Published private(set) var minY: CGFloat = 0
-    @Published private(set) var maxY: CGFloat = 3 * SidebarListWindow.step
+    @Published private(set) var maxY: CGFloat = 1_200
 
     func update(offset: CGFloat, viewportHeight: CGFloat) {
-        let height = max(viewportHeight, Self.step)
-        let low = max(0, ((offset - height) / Self.step).rounded(.down) * Self.step)
-        let high = ((offset + 2 * height) / Self.step).rounded(.up) * Self.step
+        let low = max(0, ((offset - Self.margin) / Self.step).rounded(.down) * Self.step)
+        let high = ((offset + viewportHeight + Self.margin) / Self.step).rounded(.up) * Self.step
         if low != minY { minY = low }
         if high != maxY { maxY = high }
     }

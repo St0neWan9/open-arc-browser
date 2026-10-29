@@ -100,6 +100,34 @@ struct SidebarItemModel: Identifiable, Hashable {
         case .splitGroup(let g): return g.layoutID
         }
     }
+
+    /// Equal as drawn: see `SidebarSnapshot.hasSameRows(as:)`.
+    func drawsSame(as other: SidebarItemModel) -> Bool {
+        guard depth == other.depth, area == other.area else { return false }
+        switch (kind, other.kind) {
+        case (.folder(let a), .folder(let b)):
+            return a.id == b.id && a.spaceID == b.spaceID && a.parentFolderID == b.parentFolderID && a.title == b.title
+                && a.icon == b.icon && a.isExpanded == b.isExpanded && a.sortKey == b.sortKey
+                && a.meta.isTombstone == b.meta.isTombstone
+        case (.tab(let a), .tab(let b)):
+            return a.drawsSame(as: b)
+        case (.splitGroup(let a), .splitGroup(let b)):
+            return a.layoutID == b.layoutID && a.sidebarOrder == b.sidebarOrder && a.members.count == b.members.count
+                && zip(a.members, b.members).allSatisfy { $0.drawsSame(as: $1) }
+        default:
+            return false
+        }
+    }
+}
+
+extension TabNode {
+    /// Equal except for the last-active time and the sync metadata (the tombstone flag counts).
+    func drawsSame(as other: TabNode) -> Bool {
+        id == other.id && location == other.location && sortKey == other.sortKey && url == other.url
+            && title == other.title && customTitle == other.customTitle && icon == other.icon
+            && pinnedURL == other.pinnedURL && faviconURL == other.faviconURL
+            && meta.isTombstone == other.meta.isTombstone
+    }
 }
 
 /// Everything the list needs for one space, computed from the workspace.
@@ -111,6 +139,8 @@ struct SidebarSnapshot: Equatable {
     var today: [SidebarItemModel]
     /// Whether the pinned area has any content (folders or tabs, visible or collapsed).
     var hasPinnedContent: Bool
+    /// Whether the Space has a pinned tab anywhere (inside collapsed folders too).
+    var hasPinnedTabs = false
     /// An incognito window: no pinned area and no divider, only "+ New Tab" and the tab rows.
     /// [06 §20.2] observed (B48).
     var hidesPinnedArea = false
@@ -192,6 +222,19 @@ struct SidebarSnapshot: Equatable {
         return nil
     }
 
+    /// Whether the list draws the same rows as `other`: every field equal except the ones no row,
+    /// menu or drag image shows (a tab's last-active time and the records' sync metadata). Selecting
+    /// a tab only stamps its activity time; the list then keeps its rows as they are (B99).
+    func hasSameRows(as other: SidebarSnapshot) -> Bool {
+        guard spaceID == other.spaceID, hidesPinnedArea == other.hidesPinnedArea,
+              hasPinnedContent == other.hasPinnedContent, hasPinnedTabs == other.hasPinnedTabs,
+              pinned.count == other.pinned.count, today.count == other.today.count,
+              favorites.count == other.favorites.count else { return false }
+        return zip(pinned, other.pinned).allSatisfy { $0.drawsSame(as: $1) }
+            && zip(today, other.today).allSatisfy { $0.drawsSame(as: $1) }
+            && zip(favorites, other.favorites).allSatisfy { $0.drawsSame(as: $1) }
+    }
+
     static func make(workspace: WorkspaceState, spaceID: UUID?, profileID: UUID?) -> SidebarSnapshot {
         guard let spaceID else {
             return SidebarSnapshot(spaceID: nil, favorites: [], pinned: [], today: [], hasPinnedContent: false)
@@ -209,12 +252,14 @@ struct SidebarSnapshot: Equatable {
         func ordered(_ a: Ref, _ b: Ref) -> Bool { SortKey.order((a.sortKey, a.id), (b.sortKey, b.id)) }
         var children: [UUID?: [Ref]] = [:]
         var todayRefs: [Ref] = []
+        var hasPinnedTabs = false
         for folder in workspace.folders.values where !folder.meta.isTombstone && folder.spaceID == spaceID {
             children[folder.parentFolderID, default: []].append(Ref(sortKey: folder.sortKey, id: folder.id, isFolder: true))
         }
         for tab in workspace.tabs.values where !tab.meta.isTombstone {
             switch tab.location {
             case .pinned(let space, let folderID) where space == spaceID:
+                hasPinnedTabs = true
                 children[folderID, default: []].append(Ref(sortKey: tab.sortKey, id: tab.id, isFolder: false))
             case .today(let space) where space == spaceID:
                 todayRefs.append(Ref(sortKey: tab.sortKey, id: tab.id, isFolder: false))
@@ -243,7 +288,8 @@ struct SidebarSnapshot: Equatable {
         }
         // [06 §5] observed: the tabs of a split are treated as one group in the sidebar.
         SidebarSplitGroup.apply(workspace: workspace, pinned: &pinned, today: &today)
-        return SidebarSnapshot(spaceID: spaceID, favorites: favorites, pinned: pinned, today: today, hasPinnedContent: hasPinned)
+        return SidebarSnapshot(spaceID: spaceID, favorites: favorites, pinned: pinned, today: today, hasPinnedContent: hasPinned,
+                               hasPinnedTabs: hasPinnedTabs)
     }
 }
 

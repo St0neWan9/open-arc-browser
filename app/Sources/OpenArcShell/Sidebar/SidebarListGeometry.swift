@@ -47,8 +47,17 @@ struct SidebarListGeometry: Equatable {
     var contentHeight: CGFloat
     /// Index in `entries` of each row id (tab, folder or split-group row).
     var rowIndex: [UUID: Int]
+    /// The split-group row id of each tab shown inside a split-group row.
+    var groupRowOfTab: [UUID: UUID] = [:]
 
     static let empty = SidebarListGeometry(entries: [], contentHeight: 0, rowIndex: [:])
+
+    /// The row that shows tab `tabID`: its own row, or the split-group row that holds it. Nil for
+    /// a tab with no row (favorite, inside a collapsed folder, another Space).
+    func rowID(showingTab tabID: UUID) -> UUID? {
+        if let group = groupRowOfTab[tabID] { return group }
+        return rowIndex[tabID] != nil ? tabID : nil
+    }
 
     /// Same order and heights as the list draws: pinned rows, the divider (when shown), "+ New
     /// Tab", Today rows; a `listTopSpacer` before them and `listTrailingSpace` after. [07 §1, §4]
@@ -56,10 +65,18 @@ struct SidebarListGeometry: Equatable {
     init(snapshot: SidebarSnapshot, layout: SidebarLayout = SidebarLayout()) {
         var entries: [SidebarListEntry] = []
         var rowIndex: [UUID: Int] = [:]
+        var groupRowOfTab: [UUID: UUID] = [:]
         entries.reserveCapacity(snapshot.pinned.count + snapshot.today.count + 2)
+        rowIndex.reserveCapacity(snapshot.pinned.count + snapshot.today.count)
         var y = CGFloat(Metrics.Sidebar.listTopSpacer)
         func add(_ content: SidebarListEntry.Content, height: CGFloat) {
-            if case .row(let item) = content { rowIndex[item.id] = entries.count }
+            if case .row(let item) = content {
+                rowIndex[item.id] = entries.count
+                if case .splitGroup(let group) = item.kind {
+                    // A tab in two groups is damaged data: the first row wins, as in a list scan.
+                    for tabID in group.sidebarOrder where groupRowOfTab[tabID] == nil { groupRowOfTab[tabID] = group.layoutID }
+                }
+            }
             entries.append(SidebarListEntry(content: content, top: y, height: height))
             y += height + layout.rowSpacing
         }
@@ -68,6 +85,7 @@ struct SidebarListGeometry: Equatable {
         add(.newTabRow, height: layout.rowHeight)
         for item in snapshot.today { add(.row(item), height: layout.rowHeight) }
         self.init(entries: entries, contentHeight: y + SidebarLocalTokens.listTrailingSpace, rowIndex: rowIndex)
+        self.groupRowOfTab = groupRowOfTab
     }
 
     init(entries: [SidebarListEntry], contentHeight: CGFloat, rowIndex: [UUID: Int]) {
