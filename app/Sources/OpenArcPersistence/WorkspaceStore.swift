@@ -154,18 +154,25 @@ public actor WorkspaceStore: SyncLocalDatabase {
     /// The value replaces the store's workspace as a whole. A caller that keeps its own copy of the
     /// workspace, while `apply` may change the store's, uses `submit(changesFrom:to:)` instead.
     public nonisolated func submit(_ new: WorkspaceState) {
-        inbox.put(new)
-        Task { await self.drainInbox() }
+        if inbox.put(new) {
+            Task { await self.drainInbox() }
+        }
     }
 
     /// Hands the records that differ between two locally made values to the store, from any
     /// context without awaiting. Only those records are written: every other record keeps the
     /// store's copy. So a value built before a remote batch reached the caller cannot revert or
     /// purge what `apply` stored meanwhile. Submissions are applied in order.
+    ///
+    /// Both values must come from `TreeOps` (directly, or records taken from this store): which
+    /// records changed is decided by their sync metadata (`WorkspaceDiff.stampedChanges`), not by
+    /// comparing contents. The caller's thread does no comparing at all; the store diffs on its
+    /// own executor, and only the records whose stamps changed (B102: a tab select stamps one tab
+    /// of thousands, and this runs on the main thread).
     public nonisolated func submit(changesFrom old: WorkspaceState, to new: WorkspaceState) {
-        guard old != new else { return }
-        inbox.put(changesFrom: old, to: new)
-        Task { await self.drainInbox() }
+        if inbox.put(changesFrom: old, to: new) {
+            Task { await self.drainInbox() }
+        }
     }
 
     /// Writes unsaved changes now and cancels the pending autosave. Call on app termination.
@@ -270,8 +277,37 @@ public actor WorkspaceStore: SyncLocalDatabase {
     // MARK: - Internals
 
     private func drainInbox() {
-        guard let latest = inbox.take(applyingTo: workspace) else { return }
-        update(latest)
+        let (base, steps) = inbox.take()
+        if let base { update(base) }
+        guard !steps.isEmpty else { return }
+        // Fold every step's stamped records onto the store's copy in place, remembering each
+        // touched record as it was, then announce exactly the records that ended up different
+        // (what `update` would find with a full compare: nothing else changed).
+        var previous: [SyncRecordID: SyncRecord?] = [:]
+        for step in steps {
+            let diff = WorkspaceDiff.stampedChanges(from: step.old, to: step.new)
+            for id in diff.saved {
+                guard let record = step.new.record(for: id) else { continue }
+                if previous.index(forKey: id) == nil { previous[id] = .some(workspace.record(for: id)) }
+                workspace.setRecord(record)
+            }
+            for id in diff.removed {
+                if previous.index(forKey: id) == nil { previous[id] = .some(workspace.record(for: id)) }
+                workspace.removeRecord(id)
+            }
+        }
+        var changes = WorkspaceDiff.Changes()
+        for (id, before) in previous {
+            let after = workspace.record(for: id)
+            guard after != before else { continue }
+            if after == nil { changes.removed.append(id) } else { changes.saved.append(id) }
+        }
+        guard !changes.isEmpty else { return }
+        changes.saved.sort { $0.recordName < $1.recordName }
+        changes.removed.sort { $0.recordName < $1.recordName }
+        hasUnsavedChanges = true
+        emit(WorkspaceStoreEvent(origin: .local, workspace: workspace, changes: changes, pendingChanges: changes.pendingChanges))
+        scheduleAutosave()
     }
 
     private func scheduleAutosave() {
@@ -374,47 +410,49 @@ public actor WorkspaceStore: SyncLocalDatabase {
 }
 
 /// Pending submissions: the newest whole value (`put(_:)`) plus the record changes submitted after
-/// it (`put(changesFrom:to:)`), in order. `take` folds them onto the store's workspace and empties
-/// the box.
+/// it (`put(changesFrom:to:)`), in order. `take` empties the box; the store applies the whole value
+/// first, then the changes. Putting is O(1) (two references kept, no copying or comparing), so the
+/// submitting thread pays nothing for the size of the workspace.
 // @unchecked: every mutable stored property is read and written only under `lock` (`Mutex` needs macOS 15).
 private final class SubmissionInbox: @unchecked Sendable {
+    struct Step {
+        var old: WorkspaceState
+        var new: WorkspaceState
+    }
+
     private let lock = NSLock()
     private var latest: WorkspaceState?
-    private var changes: [(old: WorkspaceState, new: WorkspaceState)] = []
+    private var steps: [Step] = []
 
-    /// A whole value: replaces everything still pending.
-    func put(_ value: WorkspaceState) {
+    /// A whole value: replaces everything still pending. Returns true when the box was empty, so
+    /// the caller schedules one drain per batch instead of one per submission.
+    func put(_ value: WorkspaceState) -> Bool {
         lock.lock()
+        defer { lock.unlock() }
+        let wasEmpty = latest == nil && steps.isEmpty
         latest = value
-        changes.removeAll()
-        lock.unlock()
+        steps.removeAll()
+        return wasEmpty
     }
 
     /// The records that differ between `old` and `new`, applied after what is already pending.
-    /// The diff itself is computed in `take`, off the caller's thread.
-    func put(changesFrom old: WorkspaceState, to new: WorkspaceState) {
+    /// The diff itself is computed by the store, off the caller's thread. Returns true when the box
+    /// was empty (see `put(_:)`).
+    func put(changesFrom old: WorkspaceState, to new: WorkspaceState) -> Bool {
         lock.lock()
-        changes.append((old, new))
-        lock.unlock()
+        defer { lock.unlock() }
+        let wasEmpty = latest == nil && steps.isEmpty
+        steps.append(Step(old: old, new: new))
+        return wasEmpty
     }
 
-    /// The pending value folded onto `current`, or nil when nothing is pending.
-    func take(applyingTo current: WorkspaceState) -> WorkspaceState? {
+    /// Everything pending, in order, and an empty box.
+    func take() -> (base: WorkspaceState?, steps: [Step]) {
         lock.lock()
-        let base = latest
-        let pending = changes
+        defer { lock.unlock() }
+        let pending = (latest, steps)
         latest = nil
-        changes.removeAll()
-        lock.unlock()
-        guard base != nil || !pending.isEmpty else { return nil }
-        var result = base ?? current
-        for (old, new) in pending {
-            let diff = WorkspaceDiff.changes(from: old, to: new)
-            for id in diff.saved {
-                if let record = new.record(for: id) { result.setRecord(record) }
-            }
-            for id in diff.removed { result.removeRecord(id) }
-        }
-        return result
+        steps.removeAll()
+        return pending
     }
 }

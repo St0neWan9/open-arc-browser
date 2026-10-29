@@ -90,6 +90,14 @@ struct BrowserWindowObserver: NSViewRepresentable {
         if window.title != title { window.title = title }
     }
 
+    /// How long a model change waits before the window title follows it. Own value (B102): setting
+    /// an `NSWindow` title costs a few milliseconds on the main thread (AppKit lays the title bar
+    /// out again, updates the window server and rebuilds the Window menu's window list), so it
+    /// runs in its own turn after the change has drawn, and a burst of changes (selecting through
+    /// tabs, a page loading) costs one title update. The title bar is hidden; the title shows in
+    /// the Window menu, Mission Control and AppleScript, where this delay is not noticeable.
+    static let titleCoalescingDelay: TimeInterval = 0.1
+
     /// Brings `window` to the front and makes it key, also from the Dock (minimized). B29.
     @MainActor
     static func bringToFront(_ window: NSWindow) {
@@ -102,6 +110,8 @@ struct BrowserWindowObserver: NSViewRepresentable {
         private let model: ShellModel
         private weak var window: NSWindow?
         private var titleChanges: AnyCancellable?
+        /// True while a title update is scheduled (`scheduleTitleUpdate`).
+        private var isTitleUpdateScheduled = false
 
         init(model: ShellModel) {
             self.model = model
@@ -117,13 +127,14 @@ struct BrowserWindowObserver: NSViewRepresentable {
             // its palette like any window (`WindowAppearanceApplier`). [06 §20.1] observed (B48).
             model.focusWindow = { [weak window] in window.map(BrowserWindowObserver.bringToFront) }
             // The title follows the Space, then the page. [06 §1, §20.1] observed (B74).
-            // `objectWillChange` fires before the change lands: read the title on the next turn.
+            // `objectWillChange` fires before the change lands: the title is read later, once per
+            // burst of changes (`scheduleTitleUpdate`). The window stays in the Window menu's
+            // window list, as in Arc ([01 §Window] observed).
             BrowserWindowObserver.applyTitle(of: model, to: window)
             titleChanges = model.objectWillChange
-                .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in
-                    guard let self, let window = self.window else { return }
-                    BrowserWindowObserver.applyTitle(of: self.model, to: window)
+                    // The model is main-actor isolated and publishes on the main thread.
+                    MainActor.assumeIsolated { self?.scheduleTitleUpdate() }
                 }
             // Window ▸ Stay On Top (B72): floating above other apps' windows while on.
             model.applyWindowLevel = { [weak window] floating in window?.level = floating ? .floating : .normal }
@@ -138,6 +149,20 @@ struct BrowserWindowObserver: NSViewRepresentable {
             let center = NotificationCenter.default
             center.addObserver(self, selector: #selector(didBecomeKey(_:)), name: NSWindow.didBecomeKeyNotification, object: window)
             center.addObserver(self, selector: #selector(willClose(_:)), name: NSWindow.willCloseNotification, object: window)
+        }
+
+        /// Applies the model's title `titleCoalescingDelay` after the first change of a burst; the
+        /// changes that follow within that time ride along.
+        private func scheduleTitleUpdate() {
+            guard !isTitleUpdateScheduled else { return }
+            isTitleUpdateScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + BrowserWindowObserver.titleCoalescingDelay) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isTitleUpdateScheduled = false
+                    if let window = self.window { BrowserWindowObserver.applyTitle(of: self.model, to: window) }
+                }
+            }
         }
 
         @objc private func didBecomeKey(_ notification: Notification) {
