@@ -40,7 +40,19 @@ public final class WorkspaceController: ObservableObject {
     @Published public private(set) var workspace: WorkspaceState {
         didSet {
             workspaceGeneration &+= 1
-            if !isActivityOnlyChange { sidebarRowsGeneration &+= 1 }
+            switch changeKind {
+            case .activity:
+                break
+            case .tabContent(let ids):
+                sidebarRowsGeneration &+= 1
+                tabContentLog.append((sidebarRowsGeneration, ids))
+                if tabContentLog.count > Self.tabContentLogSize { tabContentLog.removeFirst() }
+            case .any:
+                sidebarRowsGeneration &+= 1
+                sidebarStructureGeneration &+= 1
+                // The log answers only for runs of content changes (`tabsWithContentChanges`).
+                tabContentLog.removeAll(keepingCapacity: true)
+            }
         }
     }
     /// Bumped on every assignment of `workspace`, so derived values (the sidebar snapshot) can be
@@ -50,8 +62,39 @@ public final class WorkspaceController: ObservableObject {
     /// time (`markTabActive`, every tab selection): nothing the sidebar list draws changes then, so
     /// a Space of thousands of rows is not walked again (B99).
     private(set) var sidebarRowsGeneration = 0
-    /// Set while `commitActivity` assigns the workspace.
-    private var isActivityOnlyChange = false
+    /// Like `sidebarRowsGeneration`, but not bumped by a change that only mirrors pages' URLs,
+    /// titles and favicons into their tab records (`syncContent`): the rows stay where they are, so
+    /// a sidebar replaces those tabs in its rows instead of walking the Space again (B107).
+    private(set) var sidebarStructureGeneration = 0
+    /// What the change being assigned touches (`commit`).
+    private var changeKind = ChangeKind.any
+    /// The tabs of each recent tab-content change, with the `sidebarRowsGeneration` it made.
+    private var tabContentLog: [(generation: Int, tabIDs: Set<UUID>)] = []
+    /// Content changes remembered for `tabsWithContentChanges(afterRowsGeneration:)`. Own value: a
+    /// sidebar that fell further behind walks its rows again.
+    private static let tabContentLogSize = 64
+
+    /// What a workspace change touches, for the generations above and the work `commit` does.
+    enum ChangeKind: Equatable {
+        /// Only tabs' last-active times.
+        case activity
+        /// Only these tabs' URL, title and favicon URL (`TreeOps.updateTabContent`).
+        case tabContent(Set<UUID>)
+        /// Anything else.
+        case any
+    }
+
+    /// The tabs whose content (URL, title, favicon URL) changed since `generation` of
+    /// `sidebarRowsGeneration`, when every change since then was such a content change; nil
+    /// otherwise, or when the log does not reach back that far.
+    func tabsWithContentChanges(afterRowsGeneration generation: Int) -> Set<UUID>? {
+        guard generation <= sidebarRowsGeneration else { return nil }
+        guard generation < sidebarRowsGeneration else { return [] }
+        guard let oldest = tabContentLog.first, oldest.generation <= generation + 1 else { return nil }
+        return tabContentLog.reduce(into: Set<UUID>()) { ids, entry in
+            if entry.generation > generation { ids.formUnion(entry.tabIDs) }
+        }
+    }
     /// Live engine state per tab id (only for tabs that have an engine tab).
     @Published private(set) var liveStates: [UUID: SidebarTabLiveState] = [:]
     /// Library flags shared by every window (B22).
@@ -346,6 +389,7 @@ public final class WorkspaceController: ObservableObject {
     /// controller also closes every engine tab it made: closing the window discards them.
     public func stop() {
         isStopped = true
+        selectionLoads.stop()
         autoArchiveScheduler?.stop()
         autoArchiveScheduler = nil
         littleArcArchive.stop()
@@ -375,24 +419,28 @@ public final class WorkspaceController: ObservableObject {
     /// Stamps tab `id` as active now (`TreeOps.markTabActive`) and commits it like `mutate`. The
     /// sidebar rows do not show the time, so their snapshot is kept (`sidebarRowsGeneration`).
     func markTabActive(_ id: UUID, origin: SidebarViewModel?) throws {
-        commit(try TreeOps.markTabActive(workspace, id: id, now: now()), origin: origin, activityOnly: true)
+        commit(try TreeOps.markTabActive(workspace, id: id, now: now()), origin: origin, kind: .activity)
     }
 
     /// Stores a new workspace value made by the app: persists it and lets every window except
     /// `origin` repair its selection.
     func commit(_ new: WorkspaceState, origin: SidebarViewModel?) {
-        commit(new, origin: origin, activityOnly: false)
+        commit(new, origin: origin, kind: .any)
     }
 
-    private func commit(_ new: WorkspaceState, origin: SidebarViewModel?, activityOnly: Bool) {
+    private func commit(_ new: WorkspaceState, origin: SidebarViewModel?, kind: ChangeKind) {
         let old = workspace
-        isActivityOnlyChange = activityOnly
+        changeKind = kind
         workspace = new
-        isActivityOnlyChange = false
+        changeKind = .any
         // Only the records this change touched: a remote batch the store applied after `old` was
         // read (and not yet merged here, see `mergeRemote`) must not be reverted or purged. [A19]
         dependencies.persistence?.submit(changesFrom: old, to: new)
         for sidebar in liveSidebars where sidebar !== origin { sidebar.workspaceDidChange() }
+        // A page's color scheme, its link preview triggers and its engine profile follow from the
+        // tab's place and its Space, which last-active times and page content never change. These
+        // walk every live tab, so the commits of each selection and each page load skip them (B107).
+        guard kind == .any else { return }
         syncWebColorSchemes()
         syncLinkPreviewTriggers()
         reconcileLiveTabProfiles()
@@ -577,6 +625,33 @@ public final class WorkspaceController: ObservableObject {
         try await making.value
     }
 
+    /// Paces the engine tabs of quick successive selections (B107).
+    private(set) lazy var selectionLoads: SelectionLoadGate = {
+        let gate = SelectionLoadGate()
+        gate.isOnScreen = { [weak self] id in
+            self?.liveSidebars.contains { $0.onScreenTabIDs.contains(id) } ?? false
+        }
+        return gate
+    }()
+
+    /// Notes a tab selection made now; returns whether it is part of a burst of quick selections
+    /// (`SelectionLoadGate`). Called in the selection's own pass.
+    func noteTabSelection() -> Bool {
+        selectionLoads.noteSelection()
+    }
+
+    /// `ensureLive` for a tab just selected. A selection that is part of a burst (`inBurst`) gets
+    /// its engine tab once selections are quiet, so a quick run of clicks or Next Tab presses does
+    /// not carry the previous tabs' engine work in each click's frame (B107).
+    func ensureLiveForSelection(_ id: UUID, inBurst: Bool, fallbackProfileID: UUID?) async throws {
+        guard liveTabs[id] == nil else { return }
+        if inBurst, makingLive[id] == nil, !isStopped {
+            await selectionLoads.admit(id, inBurst: true)
+        }
+        defer { selectionLoads.finished(id) }
+        try await ensureLive(id, fallbackProfileID: fallbackProfileID)
+    }
+
     /// `ensureLive`'s work, once per model tab at a time.
     private func makeLive(_ id: UUID, fallbackProfileID: UUID?) async throws {
         await MainRunLoopTurn.next()
@@ -667,19 +742,33 @@ public final class WorkspaceController: ObservableObject {
             guard let self else { return }
             let ids = self.pendingContentSyncs
             self.pendingContentSyncs.removeAll()
-            for id in ids { self.syncContent(id) }
+            self.syncContent(ids)
         }
     }
 
     /// Mirrors the live page's URL, title and favicon into the tab record (`TreeOps.updateTabContent`).
     func syncContent(_ id: UUID) {
-        guard let live = liveStates[id], let node = workspace.tabs[id], !node.meta.isTombstone else { return }
-        let title = live.title.isEmpty ? node.title : live.title
-        let url = live.url ?? node.url
-        let favicon = Self.faviconURLToStore(live: live, storedURL: node.url, storedFaviconURL: node.faviconURL)
-        guard url != node.url || title != node.title || favicon != node.faviconURL else { return }
+        syncContent([id])
+    }
+
+    /// `syncContent` for several tabs, as one change. It touches only those records' content, so
+    /// every sidebar updates just their rows (`ChangeKind.tabContent`, B107).
+    private func syncContent(_ ids: Set<UUID>) {
+        var next = workspace
+        var changed: Set<UUID> = []
         let stamp = now()
-        try? mutate(origin: nil) { try TreeOps.updateTabContent($0, id: id, url: url, title: title, faviconURL: favicon, now: stamp) }
+        for id in ids {
+            guard let live = liveStates[id], let node = next.tabs[id], !node.meta.isTombstone else { continue }
+            let title = live.title.isEmpty ? node.title : live.title
+            let url = live.url ?? node.url
+            let favicon = Self.faviconURLToStore(live: live, storedURL: node.url, storedFaviconURL: node.faviconURL)
+            guard url != node.url || title != node.title || favicon != node.faviconURL else { continue }
+            guard let updated = try? TreeOps.updateTabContent(next, id: id, url: url, title: title, faviconURL: favicon, now: stamp) else { continue }
+            next = updated
+            changed.insert(id)
+        }
+        guard !changed.isEmpty else { return }
+        commit(next, origin: nil, kind: .tabContent(changed))
     }
 
     /// A live engine tab belongs to one engine profile for good: its cookies, storage and history

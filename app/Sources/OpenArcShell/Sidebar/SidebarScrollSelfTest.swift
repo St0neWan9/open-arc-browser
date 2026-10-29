@@ -179,7 +179,8 @@ enum SidebarScrollSelfTest {
     /// With `firstSelectGapEnvironmentKey` set to N the next row is selected N ms after the
     /// previous tab's engine tab is attached (clicks spaced like a person's); without it the rows
     /// are selected back to back, as in `select`. Also reports the main thread's CPU per display
-    /// frame over the run (`firstselect.frames…`): work moved to a later turn shows there.
+    /// frame over the run (`firstselect.frames…`), until every selected tab has its engine tab
+    /// (`firstselect.settleMs` after the last selection): work moved to a later turn shows there.
     private static func firstSelect(sidebar: SidebarViewModel, windowView: NSView?) async -> [String] {
         let tabs = sidebar.snapshot.pinned.compactMap { item -> UUID? in
             if case .tab(let tab) = item.kind { return tab.id } else { return nil }
@@ -192,11 +193,13 @@ enum SidebarScrollSelfTest {
         frames?.start()
         let times = Recorder("firstselect", windowView: windowView)
         var index = offset
+        var selected: [UUID] = []
         while index < tabs.count {
             let id = tabs[index]
             index += stride
             guard sidebar.liveTab(for: id) == nil else { continue }
             await times.time { sidebar.selectTab(id) }
+            selected.append(id)
             guard let gap else { continue }
             // Until the engine tab is attached (bounded: an engine that never answers ends the wait).
             var waited = 0
@@ -206,9 +209,18 @@ enum SidebarScrollSelfTest {
             }
             try? await Task.sleep(for: .milliseconds(gap))
         }
-        // The last tab's engine work and drawing.
+        // Until every selected tab has its engine tab (quick selections get theirs after the run,
+        // B107; bounded), then the last tab's engine work and drawing: the frame lines cover it.
+        let settleStart = CACurrentMediaTime()
+        var settleWaits = 0
+        while selected.contains(where: { sidebar.liveTab(for: $0) == nil }), settleWaits < 10_000 {
+            try? await Task.sleep(for: .milliseconds(1))
+            settleWaits += 1
+        }
+        let settle = (CACurrentMediaTime() - settleStart) * 1000
         try? await Task.sleep(for: .milliseconds(200))
-        let lines = times.lines()
+        let live = selected.filter { sidebar.liveTab(for: $0) != nil }.count
+        let lines = times.lines() + [String(format: "firstselect.settleMs=%.0f", settle), "firstselect.live=\(live)/\(selected.count)"]
         guard let result = frames?.stop() else { return lines }
         return lines + result.lines("firstselect.frames")
     }

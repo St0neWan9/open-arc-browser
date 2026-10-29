@@ -101,6 +101,27 @@ struct SidebarItemModel: Identifiable, Hashable {
         }
     }
 
+    /// This row with `tab` as its new record (a split-group row: as one of its members), for a
+    /// change of the tab's content only (`SidebarListContent.replacingTabs`, B107). Nil when the
+    /// row does not show `tab` or the tab moved (the rows must be derived again).
+    func replacingTab(_ tab: TabNode) -> SidebarItemModel? {
+        var copy = self
+        switch kind {
+        case .tab(let old):
+            guard old.id == tab.id, old.location == tab.location, old.sortKey == tab.sortKey, !tab.meta.isTombstone else { return nil }
+            copy.kind = .tab(tab)
+        case .splitGroup(var group):
+            guard let index = group.members.firstIndex(where: { $0.id == tab.id }),
+                  group.members[index].location == tab.location, group.members[index].sortKey == tab.sortKey,
+                  !tab.meta.isTombstone else { return nil }
+            group.members[index] = tab
+            copy.kind = .splitGroup(group)
+        case .folder:
+            return nil
+        }
+        return copy
+    }
+
     /// Equal as drawn: see `SidebarSnapshot.hasSameRows(as:)`.
     func drawsSame(as other: SidebarItemModel) -> Bool {
         guard depth == other.depth, area == other.area else { return false }
