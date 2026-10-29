@@ -195,11 +195,29 @@ final class SidebarListScrollState: ObservableObject {
         if contentFrames[spaceID] != contentFrame { contentFrames[spaceID] = contentFrame }
     }
 
-    /// A list left the screen: the next list of that Space starts at the top.
+    /// A Space's page was dropped (`SidebarSpacePagerView`): its list starts at the top when the
+    /// page is built again.
     func forget(_ spaceID: UUID?) {
         guard let spaceID else { return }
         viewportSizes[spaceID] = nil
+        scrollHooks[spaceID] = nil
         if contentFrames[spaceID] != nil { contentFrames[spaceID] = nil }
+    }
+
+    /// The scroll hook of each kept Space page's list (weak: the list owns it). B101.
+    private var scrollHooks: [UUID: WeakScrollHook] = [:]
+
+    private struct WeakScrollHook {
+        weak var hook: SidebarNSScrollHook?
+    }
+
+    func setScrollHook(_ hook: SidebarNSScrollHook, for spaceID: UUID?) {
+        guard let spaceID, scrollHooks[spaceID]?.hook !== hook else { return }
+        scrollHooks[spaceID] = WeakScrollHook(hook: hook)
+    }
+
+    func scrollHook(for spaceID: UUID?) -> SidebarNSScrollHook? {
+        spaceID.flatMap { scrollHooks[$0]?.hook }
     }
 
     // MARK: Regions
@@ -207,10 +225,26 @@ final class SidebarListScrollState: ObservableObject {
     /// Frames of the non-row regions (list viewport, Space name, favorites, dock icons) in the
     /// sidebar root space. The divider and "+ New Tab" come from the list geometry instead.
     @Published private(set) var regions: [SidebarDropRegion: CGRect] = [:]
+    /// Regions reported by the sidebar itself (favorites, dock) and by the Space pages (list,
+    /// Space name). The pages are hosted apart (`SidebarSpacePagerView`), so their preferences
+    /// do not reach the sidebar's: each side reports here and `regions` is their union (B101).
+    private var sidebarRegions: [SidebarDropRegion: CGRect] = [:]
+    private var pageRegions: [SidebarDropRegion: CGRect] = [:]
 
     func setRegions(_ new: [SidebarDropRegion: CGRect]) {
+        sidebarRegions = new
+        publishRegions()
+    }
+
+    /// The regions a Space page reports. Every page has the same list and Space-name frames.
+    func setPageRegions(_ new: [SidebarDropRegion: CGRect]) {
+        pageRegions = new
+        publishRegions()
+    }
+
+    private func publishRegions() {
         // The divider and "+ New Tab" scroll with the list: computed, never stored.
-        let fixed = new.filter { $0.key != .divider && $0.key != .newTabRow }
+        let fixed = sidebarRegions.merging(pageRegions) { _, page in page }.filter { $0.key != .divider && $0.key != .newTabRow }
         if fixed != regions { regions = fixed }
     }
 

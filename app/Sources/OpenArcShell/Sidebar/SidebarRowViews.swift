@@ -558,12 +558,13 @@ struct SidebarFolderRowView: View, Equatable {
 /// is hovered ([07 §3] inferred: not visible in E11; [06 §12] observed "gray → darker while hovering").
 struct SidebarDividerRowView: View {
     @ObservedObject var viewModel: SidebarViewModel
+    /// Its page's Space colors (B101).
+    let palette: ThemePalette
     let canClear: Bool
     let isSidebarHovered: Bool
     @Environment(\.windowSurface) private var surface
 
     var body: some View {
-        let palette = viewModel.palette
         let s = Metrics.Sidebar.self
         let layout = SidebarLayout()
         let lineWidth = CGFloat(s.dividerLineTrailing - s.dividerLineLeading)
@@ -600,11 +601,12 @@ struct SidebarDividerRowView: View {
 /// white ≈ 50 % with light ink (B32 round-1 PX, inferred).
 struct SidebarNewTabRowView: View {
     @ObservedObject var viewModel: SidebarViewModel
+    /// Its page's Space colors (B101).
+    let palette: ThemePalette
     let isEmptySpace: Bool
     @State private var isHovering = false
 
     var body: some View {
-        let palette = viewModel.palette
         let ink = palette.ink(\.newTabRow).swiftUI
         let style = Typography.newTabRow
         SidebarRowFrame(fill: isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear) {

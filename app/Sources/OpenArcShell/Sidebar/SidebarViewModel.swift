@@ -275,10 +275,27 @@ public final class SidebarViewModel: ObservableObject {
     var theme: Theme? { selectedSpace?.themeID.flatMap { workspace.themes[$0] } }
 
     /// The selected Space's palette; Automatic themes follow the system appearance (B21).
-    var palette: ThemePalette {
+    var palette: ThemePalette { palette(forSpace: selectedSpaceID) }
+
+    /// Space `id`'s palette. Each page of the Space pager draws in its own Space's colors (B101).
+    func palette(forSpace id: UUID?) -> ThemePalette {
         // An incognito window has no Space theme: fixed neutral colors. [06 §20.1] observed (B48).
         if isIncognito { return incognitoPalette }
+        let theme = liveSpace(id)?.themeID.flatMap { workspace.themes[$0] }
         return ThemeDerivation.palette(for: theme, systemAppearance: controller.systemAppearance)
+    }
+
+    /// Space `id`, unless it is missing or deleted.
+    func liveSpace(_ id: UUID?) -> Space? {
+        id.flatMap { workspace.spaces[$0] }.flatMap { $0.meta.isTombstone ? nil : $0 }
+    }
+
+    /// The tab a Space page shows selected: the window's selection on the selected Space's page,
+    /// the tab remembered for that Space on the other pages (the one selected again on switching
+    /// back), so a page that slides in already shows its selection. B101.
+    func pageSelectedTabID(for spaceID: UUID?) -> UUID? {
+        guard let spaceID, spaceID != selectedSpaceID else { return selectedTabID }
+        return lastSelectedTab[spaceID]
     }
 
     /// The rows of the selected Space. Memoized per Space (the last few, `listContentCacheSize`):
@@ -295,9 +312,13 @@ public final class SidebarViewModel: ObservableObject {
         var isPinnedAreaCollapsed: Bool
     }
 
-    private var snapshotKey: SnapshotKey {
-        SnapshotKey(generation: controller.sidebarRowsGeneration, spaceID: selectedSpaceID,
-                    profileID: currentProfileID, isIncognito: isIncognito, isPinnedAreaCollapsed: isPinnedAreaCollapsed)
+    /// The key of Space `spaceID`'s rows: its profile (the Default profile for a Space whose
+    /// profile is unknown here, as `currentProfileID`) and this window's Collapse Pinned Tabs.
+    private func snapshotKey(for spaceID: UUID?) -> SnapshotKey {
+        let profileID = liveSpace(spaceID).flatMap { workspace.localProfileID(for: $0.profileID) } ?? workspace.defaultProfileID
+        return SnapshotKey(generation: controller.sidebarRowsGeneration, spaceID: spaceID, profileID: profileID,
+                           isIncognito: isIncognito,
+                           isPinnedAreaCollapsed: spaceID.map(collapsedPinnedSpaceIDs.contains) ?? false)
     }
 
     private func makeSnapshot(_ key: SnapshotKey) -> SidebarSnapshot {
@@ -316,8 +337,12 @@ public final class SidebarViewModel: ObservableObject {
     /// is made only when the rows change: a workspace change that leaves the rows as they were
     /// (a page title of another Space arrives) keeps the object, so the list and its rows are not
     /// updated at all (B99).
-    var listContent: SidebarListContent {
-        let key = snapshotKey
+    var listContent: SidebarListContent { listContent(for: selectedSpaceID) }
+
+    /// The rows of Space `spaceID`, memoized like `listContent`: each page of the Space pager
+    /// draws its own Space's rows (B101).
+    func listContent(for spaceID: UUID?) -> SidebarListContent {
+        let key = snapshotKey(for: spaceID)
         if let index = listContentCache.firstIndex(where: { $0.key == key }) {
             let hit = listContentCache.remove(at: index)
             listContentCache.append(hit)
@@ -335,8 +360,8 @@ public final class SidebarViewModel: ObservableObject {
     }
     /// Least recently used first, one entry per Space.
     private var listContentCache: [(key: SnapshotKey, value: SidebarListContent)] = []
-    /// Spaces whose rows stay memoized: the selected one and the last few shown. Own value.
-    private static let listContentCacheSize = 4
+    /// Spaces whose rows stay memoized: one per page the Space pager keeps, and one more. Own value.
+    private static let listContentCacheSize = SidebarSpacePager.maxPages + 1
 
     /// Spaces in dock order. The dock shows every profile's spaces. [05 §window hierarchy] observed.
     /// An incognito window's dock shows no Space icons. [06 §20.2] observed (B48).
@@ -645,10 +670,17 @@ public final class SidebarViewModel: ObservableObject {
 
     /// What tab row `tab` draws now. The list passes it to the row by value (B99).
     func tabRowState(_ tab: TabNode, depth: Int, area: SidebarArea, palette: ThemePalette) -> SidebarTabRowState {
+        tabRowState(tab, depth: depth, area: area, palette: palette, selectedTabID: selectedTabID)
+    }
+
+    /// `tabRowState` for a Space page that shows `selectedTabID` as its selection
+    /// (`pageSelectedTabID(for:)`, B101).
+    func tabRowState(_ tab: TabNode, depth: Int, area: SidebarArea, palette: ThemePalette,
+                     selectedTabID: UUID?) -> SidebarTabRowState {
         let live = liveState(for: tab.id)
         return SidebarTabRowState(
             tab: tab, depth: depth, area: area, palette: palette,
-            isSelected: isSelected(tab.id), isPressed: pressedItemID == tab.id,
+            isSelected: selectedTabID == tab.id, isPressed: pressedItemID == tab.id,
             isLoading: live?.isLoading == true, audio: live?.audioIndicator,
             isEasel: isEaselRow(tab.id),
             // The favicon only shows without a custom icon.
@@ -665,15 +697,17 @@ public final class SidebarViewModel: ObservableObject {
     }
 
     /// What split-group row `group` draws now.
-    func splitGroupRowState(_ group: SidebarSplitGroup, depth: Int, area: SidebarArea, palette: ThemePalette) -> SidebarSplitGroupRowView.State {
-        SidebarSplitGroupRowView.State(
+    func splitGroupRowState(_ group: SidebarSplitGroup, depth: Int, area: SidebarArea, palette: ThemePalette,
+                            selectedTabID: UUID? = nil) -> SidebarSplitGroupRowView.State {
+        let selected = selectedTabID ?? self.selectedTabID
+        return SidebarSplitGroupRowView.State(
             group: group, depth: depth, area: area, palette: palette, layout: splitLayout(group.layoutID),
             members: group.members.map { member in
                 let live = liveState(for: member.id)
                 return .init(isLoading: live?.isLoading == true, audio: live?.audioIndicator,
                              favicon: member.icon == nil ? faviconImage(for: member.id) : nil)
             },
-            isSelected: isGroupSelected(group), isPressed: pressedItemID == group.layoutID,
+            isSelected: selected.map(group.contains) ?? false, isPressed: pressedItemID == group.layoutID,
             isRenaming: renamingItemID == group.layoutID, isDropInto: dropTarget == .row(group.layoutID, .into))
     }
 

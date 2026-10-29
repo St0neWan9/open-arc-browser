@@ -226,13 +226,26 @@ final class SidebarPerformanceTests: XCTestCase {
         }
         report("\(label) hover publish + layout", hover)
         guard sweeps else { return }
-        // Switching to the small Space and back (B99: the large Space's rows are reused).
+        // Switching to the small Space and back (B99: the large Space's rows are reused; B101: its
+        // page is kept built, so switching back only moves it).
         if let home = vm.dockSpaces.first(where: { $0.id != vm.selectedSpaceID })?.id, let large = vm.selectedSpaceID {
             let away = benchmarkMedian(1) { vm.selectSpace(home); settle() }
             report("\(label) switch to small Space", away)
             let back = benchmarkMedian(1) { vm.selectSpace(large); settle() }
             report("\(label) switch to large Space", back)
+            // Kept pages: the median of further round trips, the slide's layer animation excluded.
+            var toggles = 0
+            let roundTrip = benchmarkMedian(9) {
+                vm.selectSpace(toggles % 2 == 0 ? home : large); toggles += 1
+                settle()
+            }
+            report("\(label) switch between kept Space pages", roundTrip)
+            if toggles % 2 == 1 { vm.selectSpace(large); settle() }
             XCTAssertLessThan(back, 60, "switching back to a large Space")
+            // B101: ≈ 3–5 ms in debug (was ≈ 8 ms to the small Space, and ≈ 4 ms back only because
+            // the page then had no row band yet). Loose for a busy machine.
+            XCTAssertLessThan(roundTrip, 25, "switching to a Space whose page is kept")
+            XCTAssertEqual(vm.selectedSpaceID, large)
         }
         // Regression guards, loose enough for a debug build on a busy machine (B97 fix: from
         // ≈ 357 ms and ≈ 307 ms; B99: ≈ 30 → 10 ms and ≈ 6 → 0.05 ms in debug).

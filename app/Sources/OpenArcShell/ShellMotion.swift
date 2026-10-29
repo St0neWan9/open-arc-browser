@@ -64,21 +64,29 @@ enum ShellMotion {
     /// The new empty Space's illustration fading away ([06 §1] observed that it goes away; the
     /// ease-out over `NewSpaceIllustrationTrigger.fadeDuration` is inferred). B75.
     static var newSpaceIllustrationFade: Animation { .easeOut(duration: NewSpaceIllustrationTrigger.fadeDuration) }
+}
 
-    /// Transition of the Space page: the new page comes in from the side it lies on in the dock
-    /// order and pushes the old one out the other side, by one page width, with no fade.
-    /// [07 §11] observed: the page container's x moves by one sidebar width (276 pt).
-    /// The direction is read from `pager` when the transition runs, not when the old page was
-    /// last drawn: SwiftUI keeps a removed view's modifiers as they were, so a direction stored
-    /// by value would send the outgoing page the wrong way after a reversal.
-    @MainActor
-    static func spacePageTransition(_ pager: SpacePagerState) -> AnyTransition {
-        .asymmetric(
-            insertion: .modifier(active: SpacePageOffset(pager: pager, role: .insertion, isActive: true),
-                                 identity: SpacePageOffset(pager: pager, role: .insertion, isActive: false)),
-            removal: .modifier(active: SpacePageOffset(pager: pager, role: .removal, isActive: true),
-                               identity: SpacePageOffset(pager: pager, role: .removal, isActive: false))
-        )
+/// The Space pages' slide as a Core Animation spring on each page's layer (B101): the pages are
+/// kept as built views (`SidebarSpacePager`) and only their layers move, so no SwiftUI work runs
+/// per frame. Same spring as `ShellMotion.spaceSwitch`: `Motion.spaceSwitch`, [07 §11] observed
+/// (critically damped, response 0.2 s, the page moves by one sidebar width, no fade).
+enum SpacePagerMotion {
+    /// Animation key on a page's layer.
+    static let key = "openarc.spacePager.slide"
+
+    /// A spring of the layer's horizontal translation from `offset` (points, relative to the
+    /// layer's final place) to 0, running until it settles. SwiftUI's spring definition (unit
+    /// mass, stiffness (2π / response)², damping 4π · fraction / response).
+    static func slide(from offset: CGFloat) -> CASpringAnimation {
+        let animation = CASpringAnimation(keyPath: "transform.translation.x")
+        let constants = Motion.spaceSwitch.curve.springConstants ?? (stiffness: 987, damping: 62.8)
+        animation.mass = 1
+        animation.stiffness = constants.stiffness
+        animation.damping = constants.damping
+        animation.fromValue = offset
+        animation.toValue = 0
+        animation.duration = animation.settlingDuration
+        return animation
     }
 }
 
@@ -98,7 +106,7 @@ enum SpaceSwitchDirection: Equatable, Sendable {
 }
 
 /// The sidebar's Space pager: the Space shown last and the direction of the latest switch.
-/// A reference, so page transitions read the current direction (see `spacePageTransition`).
+/// `SidebarSpacePager` reads the direction when it slides the pages.
 @MainActor
 final class SpacePagerState {
     private(set) var spaceID: UUID?
@@ -118,8 +126,9 @@ final class SpacePagerState {
         spaceID = newID
     }
 
-    /// Horizontal offset of a page at the inactive end of its transition.
-    func offset(for role: SpacePageOffset.Role) -> CGFloat {
+    /// Horizontal offset of a page at the inactive end of its slide: where the incoming page
+    /// starts, where the outgoing page ends.
+    func offset(for role: SpacePageRole) -> CGFloat {
         switch (role, direction) {
         case (.insertion, .forward), (.removal, .backward): return pageWidth
         case (.insertion, .backward), (.removal, .forward): return -pageWidth
@@ -127,17 +136,8 @@ final class SpacePagerState {
     }
 }
 
-/// Moves a Space page sideways by one page while it is inserted or removed.
-struct SpacePageOffset: ViewModifier {
-    enum Role: Sendable { case insertion, removal }
-    let pager: SpacePagerState
-    let role: Role
-    let isActive: Bool
-
-    func body(content: Content) -> some View {
-        content.offset(x: isActive ? pager.offset(for: role) : 0)
-    }
-}
+/// The incoming (`insertion`) or outgoing (`removal`) page of a Space switch.
+enum SpacePageRole: Sendable { case insertion, removal }
 
 // MARK: - Theme bubble
 
