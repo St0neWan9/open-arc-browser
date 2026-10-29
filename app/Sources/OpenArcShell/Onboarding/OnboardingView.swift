@@ -980,7 +980,9 @@ struct OnboardingWindowConfigurator: NSViewRepresentable {
 /// system "<App> Help" item (`MenuBarExtrasCommands`; [01 §Help] observed no such item). B62, B72.
 struct OnboardingCommands: Commands {
     let controller: WorkspaceController
-    @FocusedObject private var focused: ShellModel?
+    /// The key window's menu state, not its model (B103, see `BrowserCommands`).
+    @FocusedObject private var focusedMenuBar: MenuBarState?
+    private var focused: ShellModel? { focusedMenuBar?.model }
 
     var body: some Commands {
         CommandGroup(after: .help) {

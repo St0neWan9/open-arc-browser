@@ -159,10 +159,12 @@ extension SidebarViewModel {
         if collapsedPinnedSpaceIDs.contains(spaceID) { collapsedPinnedSpaceIDs.remove(spaceID) } else { collapsedPinnedSpaceIDs.insert(spaceID) }
     }
 
-    /// Whether the window's Space has pinned rows to collapse.
+    /// Whether the window's Space has pinned rows to collapse. The menu bar reads it after every
+    /// burst of changes, so it comes from the memoized snapshot (kept while the area is
+    /// collapsed) instead of a scan of every tab (B103).
     var canCollapsePinned: Bool {
-        guard let spaceID = selectedSpaceID, !isIncognito else { return false }
-        return !workspace.pinnedChildren(spaceID: spaceID, folderID: nil).isEmpty
+        guard selectedSpaceID != nil, !isIncognito else { return false }
+        return snapshot.hasPinnedContent
     }
 
     /// Reveal Tab in Sidebar: expands the collapsed pinned area and the folders around `id`, then

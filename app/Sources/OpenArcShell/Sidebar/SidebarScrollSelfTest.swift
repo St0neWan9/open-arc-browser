@@ -22,10 +22,13 @@ enum SidebarScrollSelfTest {
     static let environmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST"
     /// Set to 1 to quit the app once the report is written (unattended runs).
     static let quitEnvironmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST_QUIT"
-    /// Set to one phase name (scroll, hover, select, folder, space, fling) to run only that phase,
-    /// `repeatEnvironmentKey` times (default 1): a steady load for a profiler.
+    /// Set to one phase name (scroll, hover, select, firstselect, folder, space, fling) to run only
+    /// that phase, `repeatEnvironmentKey` times (default 1): a steady load for a profiler.
     static let phaseEnvironmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST_PHASE"
     static let repeatEnvironmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST_REPEAT"
+    /// `firstselect` only: milliseconds between one tab's engine tab attaching and the next
+    /// selection. Unset: back to back.
+    static let firstSelectGapEnvironmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST_GAP_MS"
     /// Wait after the first window registers, so the window is on screen and laid out. Own value.
     static let startDelay: Duration = .seconds(3)
     /// Points per scroll step (a trackpad flick moves about this much per frame). Own value.
@@ -35,6 +38,8 @@ enum SidebarScrollSelfTest {
     static let flingDuration: Double = 5
 
     private static var didStart = false
+    /// Rounds of the `firstselect` phase run so far (each picks other rows).
+    private static var firstSelectRound = 0
 
     /// The output file, or nil (release build, or no variable set).
     static func outputURL(
@@ -84,6 +89,7 @@ enum SidebarScrollSelfTest {
             ("scroll", { await scroll(sidebar: sidebar, windowView: windowView) }),
             ("hover", { await hover(sidebar: sidebar, windowView: windowView) }),
             ("select", { await select(sidebar: sidebar, windowView: windowView) }),
+            ("firstselect", { await firstSelect(sidebar: sidebar, windowView: windowView) }),
             ("folder", { await folders(sidebar: sidebar, windowView: windowView) }),
             ("space", { await spaceSwitch(sidebar: sidebar, windowView: windowView) }),
             ("fling", { await fling(sidebar: sidebar, windowView: windowView) }),
@@ -157,6 +163,45 @@ enum SidebarScrollSelfTest {
             await again.time { sidebar.selectTab(id) }
         }
         return firstLines + again.lines()
+    }
+
+    /// First selections only: every round selects up to 40 rows far apart whose tabs are not live
+    /// yet (round n starts n rows further down), so a repeated run is a steady first-select load.
+    /// With `firstSelectGapEnvironmentKey` set to N the next row is selected N ms after the
+    /// previous tab's engine tab is attached (clicks spaced like a person's); without it the rows
+    /// are selected back to back, as in `select`. Also reports the main thread's CPU per display
+    /// frame over the run (`firstselect.frames…`): work moved to a later turn shows there.
+    private static func firstSelect(sidebar: SidebarViewModel, windowView: NSView?) async -> [String] {
+        let tabs = sidebar.snapshot.pinned.compactMap { item -> UUID? in
+            if case .tab(let tab) = item.kind { return tab.id } else { return nil }
+        }
+        let gap = Int(ProcessInfo.processInfo.environment[firstSelectGapEnvironmentKey] ?? "")
+        let stride = max(1, tabs.count / 40)
+        let offset = firstSelectRound % stride
+        firstSelectRound += 1
+        let frames = SidebarFrameMonitor(view: windowView)
+        frames?.start()
+        let times = Recorder("firstselect", windowView: windowView)
+        var index = offset
+        while index < tabs.count {
+            let id = tabs[index]
+            index += stride
+            guard sidebar.liveTab(for: id) == nil else { continue }
+            await times.time { sidebar.selectTab(id) }
+            guard let gap else { continue }
+            // Until the engine tab is attached (bounded: an engine that never answers ends the wait).
+            var waited = 0
+            while sidebar.liveTab(for: id) == nil, waited < 500 {
+                try? await Task.sleep(for: .milliseconds(1))
+                waited += 1
+            }
+            try? await Task.sleep(for: .milliseconds(gap))
+        }
+        // The last tab's engine work and drawing.
+        try? await Task.sleep(for: .milliseconds(200))
+        let lines = times.lines()
+        guard let result = frames?.stop() else { return lines }
+        return lines + result.lines("firstselect.frames")
     }
 
     /// Pointer entering a row and leaving it again, for rows across the visible list.

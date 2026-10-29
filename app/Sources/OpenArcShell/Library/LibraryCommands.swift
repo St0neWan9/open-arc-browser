@@ -4,7 +4,7 @@ import SwiftUI
 /// "View Library" [02] observed, the others have no recorded key. Kept apart from `ShellCommands`
 /// so the scene only lists it.
 struct LibraryCommands: Commands {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
     /// A browser window is key; without one the items are disabled.
     let hasWindow: Bool
 
@@ -24,8 +24,16 @@ struct LibraryCommands: Commands {
 
 /// Window ▸ Open Library… … View Boosts… ([01 §Window] observed). A view so tests can render it.
 struct WindowLibraryMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Group {
@@ -45,8 +53,16 @@ struct WindowLibraryMenuItems: View {
 /// [02 §页面与导航] observed, the other items have no key in [02]. Go Back / Go Forward act on the
 /// key window's current tab. B69.
 struct ArchiveMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Group {

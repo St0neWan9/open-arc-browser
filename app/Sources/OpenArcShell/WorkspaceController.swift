@@ -135,6 +135,10 @@ public final class WorkspaceController: ObservableObject {
     /// Open Little Arc windows and their idle-archive timer (B82, LittleArc/LittleArcArchive.swift).
     let littleArcArchive = LittleArcArchiveState()
     private var engineWork: [Task<Void, Never>] = []
+    /// Tabs whose live content waits to be mirrored into their records (`scheduleContentSync`).
+    private var pendingContentSyncs: Set<UUID> = []
+    /// Engine tabs `ensureLive` is making, by model tab id: a second call waits for the first.
+    private var makingLive: [UUID: Task<Void, any Error>] = [:]
     /// Last queued command per engine tab: the next one waits for it, so commands reach each
     /// engine tab in the order they were issued (`enqueueTabCommand`).
     private var tabCommandTails: [EngineTabID: Task<Void, Never>] = [:]
@@ -555,8 +559,29 @@ public final class WorkspaceController: ObservableObject {
 
     /// Creates the engine tab for `id` if needed and starts observing it. The profile is the tab's
     /// Space's profile (or the favorite's profile), else `fallbackProfileID`.
+    ///
+    /// The engine tab is made in a later pass of the main run loop than the call: the pass that
+    /// selected the tab draws the selection and the empty panel in the theme color first ([07
+    /// §8.1]), and making the engine tab (most of a frame for Chromium), attaching its page and
+    /// mirroring its content each get a pass of their own (B103). Nothing is made ahead of a
+    /// selection.
     func ensureLive(_ id: UUID, fallbackProfileID: UUID?) async throws {
-        guard liveTabs[id] == nil, !pageRequests.adopting.contains(id), let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
+        guard liveTabs[id] == nil else { return }
+        if let making = makingLive[id] {
+            try await making.value
+            return
+        }
+        let making = Task { try await self.makeLive(id, fallbackProfileID: fallbackProfileID) }
+        makingLive[id] = making
+        defer { if makingLive[id] == making { makingLive[id] = nil } }
+        try await making.value
+    }
+
+    /// `ensureLive`'s work, once per model tab at a time.
+    private func makeLive(_ id: UUID, fallbackProfileID: UUID?) async throws {
+        await MainRunLoopTurn.next()
+        // The workspace may have changed while the selection was drawn: read the tab again.
+        guard liveTabs[id] == nil, !isStopped, !pageRequests.adopting.contains(id), let tab = workspace.tabs[id], !tab.meta.isTombstone else { return }
         // An Easel's row shows the canvas, never an engine page (B56).
         guard workspace.easelID(ofTab: id) == nil else { return }
         guard let profileID = engineProfileID(forTab: tab) ?? fallbackProfileID else { return }
@@ -572,6 +597,9 @@ public final class WorkspaceController: ObservableObject {
             sessionHistory: savedHistory(of: id, url: initialURL)
         )
         let live = try await engine.makeTab(configuration)
+        // Making a Chromium tab takes most of a frame on the main thread; the new page goes on
+        // screen in a frame of its own (B103).
+        await MainRunLoopTurn.next()
         await attachLive(id, live, initialColorScheme: scheme)
     }
 
@@ -596,7 +624,8 @@ public final class WorkspaceController: ObservableObject {
         dialogs.observe(live)
         liveStates[id] = SidebarTabLiveState(snapshot: await live.currentState())
         rememberFavicon(of: id)
-        syncContent(id)
+        // The record follows in a later frame: the new page and its row go on screen first (B103).
+        scheduleContentSync(id)
         let stream = live.events()
         eventTasks[id] = Task { [weak self] in
             for await event in stream {
@@ -610,16 +639,35 @@ public final class WorkspaceController: ObservableObject {
     func apply(_ event: TabEvent, to id: UUID) {
         var state = liveStates[id] ?? SidebarTabLiveState()
         state.apply(event)
-        liveStates[id] = state
+        // An event that changes nothing shown (a repeated URL, the same security level) does not
+        // publish: every publish updates each window's views (B103).
+        if liveStates[id] != state { liveStates[id] = state }
         switch event {
         case .faviconChanged, .snapshot:
             rememberFavicon(of: id)
-            syncContent(id)
-        case .urlChanged, .titleChanged: syncContent(id)
+            scheduleContentSync(id)
+        case .urlChanged, .titleChanged: scheduleContentSync(id)
         case .closeRequested: pageRequestedClose(id)
         case .activationRequested: pageRequestedActivation(id)
         case .linkPreviewRequested(let request): linkPreviewRequested(request, from: id)
         default: break
+        }
+    }
+
+    /// Mirrors `id`'s live URL, title and favicon into its record (`syncContent`) once the current
+    /// pass of the main run loop has drawn. A page load reports its URL, title and favicon as
+    /// separate events, often in one burst; each record change makes every window's sidebar
+    /// derive its rows again (a few milliseconds with thousands of tabs), so a burst costs one
+    /// change, outside the frame that shows the page (B103). Queued as engine work, so
+    /// `settleEngineWork` waits for it.
+    func scheduleContentSync(_ id: UUID) {
+        guard pendingContentSyncs.insert(id).inserted, pendingContentSyncs.count == 1 else { return }
+        enqueueEngineWork { [weak self] in
+            await MainRunLoopTurn.next()
+            guard let self else { return }
+            let ids = self.pendingContentSyncs
+            self.pendingContentSyncs.removeAll()
+            for id in ids { self.syncContent(id) }
         }
     }
 

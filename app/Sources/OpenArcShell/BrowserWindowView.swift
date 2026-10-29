@@ -30,6 +30,8 @@ struct BrowserWindowRoot: View {
             .installsLittleArcOpener(model)
             .installsSettingsOpener(model)
             .focusedSceneObject(model)
+            // The menu bar observes this, not the model (B103).
+            .focusedSceneObject(model.menuBar)
             .background(BrowserWindowObserver(model: model))
             .background(MainWindowChromeConfigurator(placement: model.windowButtonPlacement))
             .frame(minWidth: 800, minHeight: 500)

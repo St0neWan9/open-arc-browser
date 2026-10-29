@@ -43,7 +43,9 @@ struct SettingsGroupCommands: Commands {
 /// used last when no browser window is key (Settings in front, inferred), and bring it forward.
 struct MenuBarExtrasCommands: Commands {
     let controller: WorkspaceController
-    @FocusedObject private var focused: ShellModel?
+    /// The key window's menu state, not its model (B103, see `BrowserCommands`).
+    @FocusedObject private var focusedMenuBar: MenuBarState?
+    private var focused: ShellModel? { focusedMenuBar?.model }
 
     var body: some Commands {
         let pageWindow = focused ?? controller.activeWindow
