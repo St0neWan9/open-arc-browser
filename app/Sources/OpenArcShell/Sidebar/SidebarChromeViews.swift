@@ -505,6 +505,22 @@ struct SidebarFavoriteCell: View {
 /// black 45 %) from x 41 (13 without an icon) to 259, its 18 pt text line at y 154; the "More"
 /// button is an invisible 2 × 26 strip at (261, 150) that is always in the accessibility tree and
 /// widens to show "…" while the header is hovered. [07 §3, §4] observed; the hovered look unknown.
+/// What a Space page's header draws for its Space: name, icon and colors. B106 compares it to
+/// tell whether a hidden page still draws its Space's current state.
+struct SidebarSpaceHeaderLook: Equatable {
+    var name: String
+    var icon: String?
+    var palette: ThemePalette
+}
+
+extension SidebarViewModel {
+    /// What the header of Space `spaceID`'s page draws now.
+    func spaceHeaderLook(for spaceID: UUID?) -> SidebarSpaceHeaderLook {
+        let space = liveSpace(spaceID)
+        return SidebarSpaceHeaderLook(name: space?.name ?? "", icon: space?.icon, palette: palette(forSpace: spaceID))
+    }
+}
+
 struct SidebarSpaceNameRowView: View {
     /// Read, not observed: its page's `changes` relay says when to update (B104).
     let viewModel: SidebarViewModel
@@ -521,10 +537,13 @@ struct SidebarSpaceNameRowView: View {
     }
 
     var body: some View {
-        let palette = viewModel.palette(forSpace: spaceID)
+        let look = viewModel.spaceHeaderLook(for: spaceID)
+        // What this page drew, so a hidden page can tell whether it is still current (B106).
+        // A plain record: never published.
+        let _ = changes.noteDrawn(header: look)
+        let palette = look.palette
         let s = Metrics.Sidebar.self
-        let space = viewModel.liveSpace(spaceID)
-        let icon = space?.icon
+        let icon = look.icon
         let style = Typography.spaceName
         let nameLeading = CGFloat(icon == nil ? s.spaceNameLeadingWithoutIcon : s.spaceNameLeadingWithIcon)
         let more = s.spaceMoreButtonFrame
@@ -547,14 +566,14 @@ struct SidebarSpaceNameRowView: View {
                     .accessibilityBox(label: "Space icon", identifier: "openarc.sidebar.spaceIcon", traits: .isImage)
                     .offset(x: CGFloat(s.spaceIconFrame.x), y: CGFloat(s.spaceIconFrame.y) - layout.contentShift)
             }
-            Text(space?.name ?? "")
+            Text(look.name)
                 .font(style.font)
                 .foregroundStyle(palette.ink(\.spaceName).swiftUI)
                 .lineLimit(1)
                 .padding(.leading, SidebarLocalTokens.textInkInset)
                 .frame(width: CGFloat(s.spaceNameTrailing) - nameLeading, height: CGFloat(style.lineHeight), alignment: .leading)
                 // The element spans the name line (x to 259, 18 tall), like the reference.
-                .accessibilityBox(label: space?.name ?? "", identifier: "openarc.sidebar.spaceName")
+                .accessibilityBox(label: look.name, identifier: "openarc.sidebar.spaceName")
                 .offset(x: nameLeading, y: CGFloat(s.spaceNameTop) - layout.contentShift)
             Menu {
                 SidebarSpaceMenu(viewModel: viewModel)

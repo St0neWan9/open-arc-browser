@@ -331,42 +331,105 @@ private struct SidebarListRows: View {
 
     var body: some View {
         let geometry = content.geometry
-        let range = geometry.range(overlapping: window.minY, window.maxY)
-        // Read once for all rows: each row gets its state by value and is re-evaluated only when
-        // that state changed (B99). A page draws its own Space's colors and selection (B101).
-        let palette = viewModel.palette(forSpace: spaceID)
-        let selected = viewModel.pageSelectedTabID(for: spaceID)
+        // Each row gets its state by value and is re-evaluated only when that state changed (B99).
+        // A page draws its own Space's colors and selection (B101).
+        let rows = viewModel.listRowsLook(content: content, spaceID: spaceID, minY: window.minY, maxY: window.maxY)
+        // What this page drew, so a hidden page can tell whether it is still current (B106).
+        // A plain record: never published.
+        let _ = changes.noteDrawn(rows: rows)
         SidebarListRowsLayout(size: CGSize(width: layout.width, height: geometry.contentHeight)) {
-            ForEach(geometry.entries[range]) { entry in
-                entryView(entry, palette: palette, selected: selected)
-                    .frame(width: layout.width, height: entry.height, alignment: .topLeading)
-                    .layoutValue(key: SidebarListEntryTop.self, value: entry.top)
+            ForEach(rows.entries) { entry in
+                entryView(entry.look)
+                    .frame(width: layout.width, height: entry.entry.height, alignment: .topLeading)
+                    .layoutValue(key: SidebarListEntryTop.self, value: entry.entry.top)
             }
         }
     }
 
     @ViewBuilder
-    private func entryView(_ entry: SidebarListEntry, palette: ThemePalette, selected: UUID?) -> some View {
+    private func entryView(_ look: SidebarListEntryLook) -> some View {
+        switch look {
+        case .folder(let row):
+            SidebarFolderRowView(viewModel: viewModel, row: row)
+                .equatable()
+        case .tab(let row):
+            SidebarTabRowView(viewModel: viewModel, row: row)
+                .equatable()
+        case .splitGroup(let row):
+            SidebarSplitGroupRowView(viewModel: viewModel, row: row)
+                .equatable()
+        case .divider(let palette, let canClear):
+            SidebarDividerRowView(viewModel: viewModel, palette: palette, canClear: canClear, isSidebarHovered: isSidebarHovered)
+        case .newTabRow(let palette, let isEmptySpace):
+            SidebarNewTabRowView(viewModel: viewModel, palette: palette, isEmptySpace: isEmptySpace)
+        }
+    }
+}
+
+/// What one list entry draws: the value its row view is given. B106 compares these to tell
+/// whether a hidden Space page still draws its Space's current state.
+enum SidebarListEntryLook: Equatable {
+    case folder(SidebarFolderRowView.State)
+    case tab(SidebarTabRowState)
+    case splitGroup(SidebarSplitGroupRowView.State)
+    case divider(palette: ThemePalette, canClear: Bool)
+    case newTabRow(palette: ThemePalette, isEmptySpace: Bool)
+}
+
+/// One built list entry and what it draws.
+struct SidebarDrawnListEntry: Identifiable {
+    let entry: SidebarListEntry
+    let look: SidebarListEntryLook
+    var id: SidebarListEntry.ID { entry.id }
+}
+
+/// The entries a page's list builds for one row band (`SidebarListWindow`), and what each draws.
+struct SidebarListRowsLook {
+    /// The rows the list draws from (compared by reference, see `SidebarListContent`).
+    let content: SidebarListContent
+    /// The band the entries were built for.
+    let minY: CGFloat
+    let maxY: CGFloat
+    let entries: [SidebarDrawnListEntry]
+
+    /// Same rows, same band and every built entry draws the same.
+    func drawsSame(as other: SidebarListRowsLook) -> Bool {
+        content === other.content && minY == other.minY && maxY == other.maxY
+            && entries.count == other.entries.count
+            && zip(entries, other.entries).allSatisfy { $0.look == $1.look }
+    }
+}
+
+extension SidebarViewModel {
+    /// What Space `spaceID`'s list draws for the band `minY..<maxY` of `content`, now.
+    func listRowsLook(content: SidebarListContent, spaceID: UUID?, minY: CGFloat, maxY: CGFloat) -> SidebarListRowsLook {
+        let geometry = content.geometry
+        let range = geometry.range(overlapping: minY, maxY)
+        // Read once for all rows.
+        let palette = palette(forSpace: spaceID)
+        let selected = pageSelectedTabID(for: spaceID)
+        let entries = geometry.entries[range].map { entry in
+            SidebarDrawnListEntry(entry: entry, look: listEntryLook(entry, snapshot: content.snapshot, palette: palette, selected: selected))
+        }
+        return SidebarListRowsLook(content: content, minY: minY, maxY: maxY, entries: entries)
+    }
+
+    private func listEntryLook(_ entry: SidebarListEntry, snapshot: SidebarSnapshot, palette: ThemePalette,
+                               selected: UUID?) -> SidebarListEntryLook {
         switch entry.content {
         case .row(let item):
             switch item.kind {
             case .folder(let folder):
-                SidebarFolderRowView(viewModel: viewModel, row: viewModel.folderRowState(folder, depth: item.depth, palette: palette))
-                    .equatable()
+                return .folder(folderRowState(folder, depth: item.depth, palette: palette))
             case .tab(let tab):
-                SidebarTabRowView(viewModel: viewModel, row: viewModel.tabRowState(tab, depth: item.depth, area: item.area, palette: palette,
-                                                                                   selectedTabID: selected))
-                    .equatable()
+                return .tab(tabRowState(tab, depth: item.depth, area: item.area, palette: palette, selectedTabID: selected))
             case .splitGroup(let group):
-                SidebarSplitGroupRowView(viewModel: viewModel,
-                                         row: viewModel.splitGroupRowState(group, depth: item.depth, area: item.area, palette: palette,
-                                                                           selectedTabID: selected))
-                    .equatable()
+                return .splitGroup(splitGroupRowState(group, depth: item.depth, area: item.area, palette: palette, selectedTabID: selected))
             }
         case .divider:
-            SidebarDividerRowView(viewModel: viewModel, palette: palette, canClear: content.snapshot.canClear, isSidebarHovered: isSidebarHovered)
+            return .divider(palette: palette, canClear: snapshot.canClear)
         case .newTabRow:
-            SidebarNewTabRowView(viewModel: viewModel, palette: palette, isEmptySpace: content.snapshot.isEmptySpace)
+            return .newTabRow(palette: palette, isEmptySpace: snapshot.isEmptySpace)
         }
     }
 }
