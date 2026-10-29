@@ -141,6 +141,24 @@ final class PageContentRowsTests: XCTestCase {
         XCTAssertTrue(sidebar.snapshot.hasSameRows(as: freshRows(sidebar)))
     }
 
+    /// A URL loaded in a live tab (⌘L, Reset to Pinned URL) is in the tab's record once engine
+    /// work settles, even right after a quick run of selections (B107 merge check: the record lagged
+    /// behind the event stream, so an Add Split pane that had loaded a page still looked empty).
+    func testLoadInLiveTabReachesTheRecordWhenEngineWorkSettles() async throws {
+        let model = window()
+        let sidebar = model.sidebar
+        for _ in 0..<20 {
+            sidebar.selectTab(f.today1)
+            await sidebar.settleEngineWork()
+            sidebar.selectTab(f.today2)
+            sidebar.selectTab(f.today1)
+            let next = try url("https://loaded.example/\(Int.random(in: 0..<1_000_000))")
+            sidebar.navigateSelectedTab(to: next)
+            await sidebar.settleEngineWork()
+            XCTAssertEqual(controller.workspace.tabs[f.today1]?.url, next, "the record shows the loaded page")
+        }
+    }
+
     /// The content log answers only as far back as it reaches.
     func testContentLogAnswersOnlyWithinItsReach() async throws {
         let model = window()
