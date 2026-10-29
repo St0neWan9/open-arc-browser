@@ -60,8 +60,10 @@ struct SettingsWindowConfigurator: NSViewRepresentable {
         }
     }
 
-    /// Light appearance, the white fill, the system title bar without a separator, the title.
-    /// Returns whether anything changed. Exposed for tests.
+    /// Light appearance, the white fill, a see-through title bar without a separator, the title.
+    /// The title bar is transparent so the white fill shows behind the title, as in Arc
+    /// (B100 capture, observed: #FFFFFF up to the top edge; an opaque system title bar paints its
+    /// own #F6F6F8 band). Returns whether anything changed. Exposed for tests.
     @discardableResult
     @MainActor
     static func apply(to window: NSWindow, title: String? = nil) -> Bool {
@@ -70,7 +72,7 @@ struct SettingsWindowConfigurator: NSViewRepresentable {
         let fill = SettingsPalette.window
         let color = NSColor(srgbRed: fill.red, green: fill.green, blue: fill.blue, alpha: fill.alpha)
         if window.backgroundColor != color { window.backgroundColor = color; changed = true }
-        if window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = false; changed = true }
+        if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true; changed = true }
         if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none; changed = true }
         if let title, window.title != title { window.title = title; changed = true }
         return changed

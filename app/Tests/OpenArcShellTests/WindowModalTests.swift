@@ -150,11 +150,11 @@ final class WindowModalTests: XCTestCase {
         XCTAssertEqual(ThemeDerivation.settingsAppearance, .light)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 684, height: 562), styleMask: [.titled, .closable], backing: .buffered, defer: true)
         window.appearance = NSAppearance(named: .darkAqua)
-        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
         XCTAssertTrue(SettingsWindowConfigurator.apply(to: window, title: "General"))
         XCTAssertEqual(window.appearance?.name, .aqua)
         XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
-        XCTAssertFalse(window.titlebarAppearsTransparent, "the system title bar")
+        XCTAssertTrue(window.titlebarAppearsTransparent, "the white fill shows behind the title, B100 capture")
         XCTAssertEqual(window.titlebarSeparatorStyle, .none, "the toolbar draws its own hairline")
         XCTAssertEqual(window.title, "General", "the title follows the pane [03]")
         let fill = try XCTUnwrap(window.backgroundColor.usingColorSpace(.sRGB))
