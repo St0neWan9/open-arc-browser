@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import Combine
 import OpenArcDesign
+import OpenArcModel
 
 // The scrolling list's exact vertical layout. Every list entry has a fixed height (a 41 pt row,
 // the 17 pt divider, the 41 pt "+ New Tab" row; [07 §1, §4] observed), so the frame of any entry
@@ -157,6 +158,45 @@ final class SidebarListContent: Sendable {
     init(snapshot: SidebarSnapshot) {
         self.snapshot = snapshot
         self.geometry = SidebarListGeometry(snapshot: snapshot)
+    }
+
+    private init(snapshot: SidebarSnapshot, geometry: SidebarListGeometry) {
+        self.snapshot = snapshot
+        self.geometry = geometry
+    }
+
+    /// These rows with tabs `ids` taken again from `workspace`, for a change that touched only
+    /// those tabs' content (URL, title, favicon URL): no row moves, appears or goes away, so each
+    /// one is replaced in place (B107). Returns `self` when none of them is drawn differently, and
+    /// nil when a tab is no longer where the rows have it (the caller walks the Space again).
+    func replacingTabs(_ ids: Set<UUID>, from workspace: WorkspaceState) -> SidebarListContent? {
+        var snapshot = self.snapshot
+        var geometry = self.geometry
+        var changed = false
+        // Where Today's rows start in `entries`: after the pinned rows, the divider and "+ New Tab".
+        let todayStart = snapshot.pinned.count + (snapshot.showsDivider ? 1 : 0) + 1
+        for id in ids {
+            guard let tab = workspace.tabs[id] else { return nil }
+            if let index = snapshot.favorites.firstIndex(where: { $0.id == id }), !snapshot.favorites[index].drawsSame(as: tab) {
+                guard tab.location == snapshot.favorites[index].location else { return nil }
+                snapshot.favorites[index] = tab
+                changed = true
+            }
+            guard let rowID = geometry.rowID(showingTab: id), let index = geometry.rowIndex[rowID],
+                  case .row(let item) = geometry.entries[index].content else { continue }
+            guard let replaced = item.replacingTab(tab) else { return nil }
+            guard !replaced.drawsSame(as: item) else { continue }
+            geometry.entries[index].content = .row(replaced)
+            if index < snapshot.pinned.count {
+                snapshot.pinned[index] = replaced
+            } else if index >= todayStart, index - todayStart < snapshot.today.count {
+                snapshot.today[index - todayStart] = replaced
+            } else {
+                return nil
+            }
+            changed = true
+        }
+        return changed ? SidebarListContent(snapshot: snapshot, geometry: geometry) : self
     }
 }
 

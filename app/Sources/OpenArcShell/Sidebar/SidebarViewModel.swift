@@ -356,18 +356,39 @@ public final class SidebarViewModel: ObservableObject {
             listContentCache.append(hit)
             return hit.value
         }
-        let snap = makeSnapshot(key)
         // The newest entry of the same Space, from before this change.
         let previous = listContentCache.last { $0.key.spaceID == key.spaceID }
         listContentCache.removeAll { $0.key.spaceID == key.spaceID }
-        let content = previous.flatMap { $0.value.snapshot.hasSameRows(as: snap) ? $0.value : nil }
-            ?? SidebarListContent(snapshot: snap)
-        listContentCache.append((key, content))
+        let structure = controller.sidebarStructureGeneration
+        let content: SidebarListContent
+        if let previous, let patched = Self.patched(previous, key: key, structure: structure, controller: controller) {
+            content = patched
+        } else {
+            let snap = makeSnapshot(key)
+            content = previous.flatMap { $0.value.snapshot.hasSameRows(as: snap) ? $0.value : nil }
+                ?? SidebarListContent(snapshot: snap)
+        }
+        listContentCache.append((key, structure, content))
         if listContentCache.count > Self.listContentCacheSize { listContentCache.removeFirst() }
         return content
     }
-    /// Least recently used first, one entry per Space.
-    private var listContentCache: [(key: SnapshotKey, value: SidebarListContent)] = []
+
+    /// `previous` brought up to date without walking the Space again, when every change since it
+    /// was made only mirrored pages' URLs, titles and favicons into tab records (each page load
+    /// does, B107): the rows stay in place and only those tabs are replaced. Nil otherwise.
+    private static func patched(_ previous: ListContentCacheEntry, key: SnapshotKey, structure: Int,
+                                controller: WorkspaceController) -> SidebarListContent? {
+        var sameExceptRows = previous.key
+        sameExceptRows.generation = key.generation
+        guard sameExceptRows == key, previous.structure == structure,
+              let changed = controller.tabsWithContentChanges(afterRowsGeneration: previous.key.generation) else { return nil }
+        return previous.value.replacingTabs(changed, from: controller.workspace)
+    }
+
+    private typealias ListContentCacheEntry = (key: SnapshotKey, structure: Int, value: SidebarListContent)
+    /// Least recently used first, one entry per Space. `structure` is the controller's
+    /// `sidebarStructureGeneration` the entry was made at.
+    private var listContentCache: [ListContentCacheEntry] = []
     /// Spaces whose rows stay memoized: one per page the Space pager keeps, and one more. Own value.
     private static let listContentCacheSize = SidebarSpacePager.maxPages + 1
 
@@ -512,8 +533,10 @@ public final class SidebarViewModel: ObservableObject {
         // Only the activity time changes: the list keeps its rows (B99).
         commitChange { try self.controller.markTabActive(id, origin: self) }
         let controller = self.controller, fallback = currentProfileID
+        // Quick successive selections make their engine tabs once the run of selections ends (B107).
+        let inBurst = controller.noteTabSelection() && controller.liveTab(for: id) == nil
         engineTask { [weak self] in
-            do { try await controller.ensureLive(id, fallbackProfileID: fallback) } catch { self?.lastError = error }
+            do { try await controller.ensureLiveForSelection(id, inBurst: inBurst, fallbackProfileID: fallback) } catch { self?.lastError = error }
         }
         return true
     }
