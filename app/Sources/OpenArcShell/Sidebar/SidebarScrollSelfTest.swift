@@ -13,7 +13,9 @@ import OpenArcPersistence
 //   fill is local to that row);
 // - select / reselect: rows far apart, first while their tabs are not live, then again;
 // - folder: expanding and collapsing top-level folders;
-// - space: switching to another Space and back, the slide animation's frames included;
+// - space: switching to another Space and back, the slide animation's frames included; with
+//   `awayEditEnvironmentKey` a tab title of the Space left behind changes while it is away, so
+//   each switch back shows a page that missed a change (B106);
 // - fling: five seconds of display-synchronized scrolling, counting late frames.
 // Run it with OPENARC_DATA_DIR pointing at a throwaway folder. Our own tool; not in the spec.
 
@@ -29,6 +31,13 @@ enum SidebarScrollSelfTest {
     /// `firstselect` only: milliseconds between one tab's engine tab attaching and the next
     /// selection. Unset: back to back.
     static let firstSelectGapEnvironmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST_GAP_MS"
+    /// `space` only: set to 1 to rename a visible tab of the Space left behind while it is away,
+    /// every round (the title is put back at the end). B106.
+    static let awayEditEnvironmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST_AWAY_EDIT"
+    /// `space` with `awayEditEnvironmentKey`: milliseconds between the rename and the switch back
+    /// (default 500). Below `SidebarSpacePager.hiddenPagePrepareDelay` the page is brought up to
+    /// date by the switch itself, the worst case.
+    static let awayEditGapEnvironmentKey = "OPENARC_SIDEBAR_SCROLL_SELFTEST_AWAY_EDIT_GAP_MS"
     /// Wait after the first window registers, so the window is on screen and laid out. Own value.
     static let startDelay: Duration = .seconds(3)
     /// Points per scroll step (a trackpad flick moves about this much per frame). Own value.
@@ -231,19 +240,49 @@ enum SidebarScrollSelfTest {
     }
 
     /// Switches to another Space and back a few times. Each recorder's late-frame count covers
-    /// its switches and their slides (≈ 0.3 s on the observed spring).
+    /// its switches and their slides (≈ 0.3 s on the observed spring). With
+    /// `awayEditEnvironmentKey` the first visible tab of the large Space is renamed while that
+    /// Space is away (untimed), `awayEditGapEnvironmentKey` ms before the switch back, so every
+    /// switch back brings a page that missed a change.
     private static func spaceSwitch(sidebar: SidebarViewModel, windowView: NSView?) async -> [String] {
         guard let large = sidebar.selectedSpaceID,
               let other = sidebar.dockSpaces.first(where: { $0.id != large })?.id else { return ["space.count=0"] }
+        let editsAway = ProcessInfo.processInfo.environment[awayEditEnvironmentKey] == "1"
+        let edited = editsAway ? sidebar.snapshot.pinned.lazy.compactMap { item -> UUID? in
+            if case .tab(let tab) = item.kind { return tab.id } else { return nil }
+        }.first : nil
+        let original = edited.flatMap { sidebar.workspace.tabs[$0]?.customTitle }
+        let gap = Int(ProcessInfo.processInfo.environment[awayEditGapEnvironmentKey] ?? "") ?? 500
+        let pager = windowView.flatMap(findPager)
+        let caughtUpBefore = pager?.pagesBroughtUpToDate ?? 0
+        let preparedBefore = pager?.pagesPreparedWhileHidden ?? 0
         let away = Recorder("spaceAway", windowView: windowView)
         let back = Recorder("spaceBack", windowView: windowView)
-        for _ in 0..<5 {
+        for round in 0..<5 {
             await away.time { sidebar.selectSpace(other) }
             try? await Task.sleep(for: .milliseconds(500))
+            if let edited {
+                sidebar.commitRename(edited, text: "Self test \(round) \(Int.random(in: 0..<1_000_000))")
+                try? await Task.sleep(for: .milliseconds(gap))
+            }
             await back.time { sidebar.selectSpace(large) }
             try? await Task.sleep(for: .milliseconds(500))
         }
-        return away.lines() + back.lines()
+        if let edited { sidebar.commitRename(edited, text: original ?? "") }
+        var lines = away.lines() + back.lines()
+        if editsAway { lines.append("spaceBack.awayEdits=\(edited == nil ? 0 : 5)") }
+        if let pager {
+            lines.append("spaceBack.pagesBroughtUpToDate=\(pager.pagesBroughtUpToDate - caughtUpBefore)")
+            lines.append("spaceBack.pagesPreparedWhileHidden=\(pager.pagesPreparedWhileHidden - preparedBefore)")
+        }
+        return lines
+    }
+
+    /// The window's Space pager, for its counters.
+    private static func findPager(_ view: NSView) -> SidebarSpacePagerView? {
+        if let pager = view as? SidebarSpacePagerView { return pager }
+        for subview in view.subviews { if let found = findPager(subview) { return found } }
+        return nil
     }
 
     /// Scrolls at `flingSpeed` once per display frame for `flingDuration` seconds, bouncing at the
