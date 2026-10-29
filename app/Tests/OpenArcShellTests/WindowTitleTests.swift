@@ -121,6 +121,36 @@ final class WindowTitleTests: XCTestCase {
         withExtendedLifetime(coordinator) {}
     }
 
+    /// B102: setting an `NSWindow` title makes AppKit lay out the title bar and rebuild the Window
+    /// menu's window list, so a selection never sets it in its own turn, and a burst of selections
+    /// sets it once, when the burst is over, and only to a new string. The window stays in the
+    /// Window menu ([01 §Window] observed window list).
+    func testTitleUpdatesAreCoalescedAndSkippedWhenUnchanged() async throws {
+        let model = window(tab: f.today1)
+        let nsWindow = TitleCountingWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500), styleMask: [.titled, .closable], backing: .buffered, defer: true)
+        nsWindow.isReleasedWhenClosed = false
+        let coordinator = BrowserWindowObserver.Coordinator(model: model)
+        coordinator.attach(to: nsWindow)
+        XCTAssertEqual(nsWindow.title, "today1")
+        XCTAssertFalse(nsWindow.isExcludedFromWindowsMenu, "[01 §Window] the window is listed")
+        nsWindow.titleSets = 0
+        for tab in [f.today2, f.today3, f.today2, f.today3, f.today2, f.today3] { model.sidebar.selectTab(tab) }
+        XCTAssertEqual(nsWindow.titleSets, 0, "not set in the turn of the change")
+        try await waitUntil { nsWindow.title == model.windowTitle && nsWindow.title != "today1" }
+        // Let any update still scheduled run, then count.
+        try await Task.sleep(nanoseconds: UInt64(BrowserWindowObserver.titleCoalescingDelay * 3 * 1_000_000_000))
+        await controller.settleEngineWork()
+        try await waitUntil { nsWindow.title == model.windowTitle }
+        let afterBurst = nsWindow.titleSets
+        XCTAssertGreaterThanOrEqual(afterBurst, 1)
+        XCTAssertLessThanOrEqual(afterBurst, 2, "six selections set the title at most once (plus a later page title)")
+        // A change that leaves the title as it is never sets it.
+        model.sidebar.toggleFolder(f.folderA)
+        try await Task.sleep(nanoseconds: UInt64(BrowserWindowObserver.titleCoalescingDelay * 3 * 1_000_000_000))
+        XCTAssertEqual(nsWindow.titleSets, afterBurst, "an unchanged title is not set again")
+        withExtendedLifetime(coordinator) {}
+    }
+
     /// [06 §29.2] observed: AppleScript window `name` is the full window title (Space, then page).
     func testScriptingNameMatchesWindowTitleSpec06Section29_2() async throws {
         var next = 7_000
@@ -134,5 +164,14 @@ final class WindowTitleTests: XCTestCase {
         try await waitUntil { model.sidebar.liveState(for: id)?.title == "script.example" }
         XCTAssertEqual(host.windowName(windowID), "script.example")
         XCTAssertEqual(host.windowName(SidebarFixture.id(9_999)), "", "unknown window")
+    }
+}
+
+/// Counts title sets (B102).
+private final class TitleCountingWindow: NSWindow {
+    var titleSets = 0
+
+    override var title: String {
+        didSet { titleSets += 1 }
     }
 }

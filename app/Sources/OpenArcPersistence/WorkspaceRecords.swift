@@ -127,9 +127,58 @@ public enum WorkspaceDiff {
         return result
     }
 
+    /// Which records differ between two values whose changes were all made by `TreeOps`, decided
+    /// from the sync metadata alone: a record differs when it was added or removed, or when its
+    /// `meta.version` or tombstone flag changed. `TreeOps` bumps the version on every change it
+    /// stamps (`SyncMetadata.stamp`, `markDeleted`), so this finds the same records as `changes`
+    /// without comparing record contents: a few integer compares per record instead of a deep
+    /// compare of every field (B102: a tab select on a 2000-tab workspace).
+    ///
+    /// Use it only for values one local change produced. A record whose content differs at the
+    /// same version (a server copy taken in a merge, backend fields) is not reported: the caller
+    /// compares candidates against its own copy where that matters (`WorkspaceStore`).
+    public static func stampedChanges(from old: WorkspaceState, to new: WorkspaceState) -> Changes {
+        var result = Changes()
+        compareStamps(old.profiles, new.profiles, .profile, &result)
+        compareStamps(old.themes, new.themes, .theme, &result)
+        compareStamps(old.spaces, new.spaces, .space, &result)
+        compareStamps(old.folders, new.folders, .folder, &result)
+        compareStamps(old.tabs, new.tabs, .tab, &result)
+        compareStamps(old.archive, new.archive, .archiveItem, &result)
+        compareStamps(old.splits, new.splits, .splitLayout, &result)
+        compareStamps(old.easels, new.easels, .easel, &result)
+        compareStamps(old.easelElements, new.easelElements, .easelElement, &result)
+        result.saved.sort { $0.recordName < $1.recordName }
+        result.removed.sort { $0.recordName < $1.recordName }
+        return result
+    }
+
     /// Shortcut for `changes(from:to:).pendingChanges`.
     public static func pendingChanges(from old: WorkspaceState, to new: WorkspaceState) -> [PendingChange] {
         changes(from: old, to: new).pendingChanges
+    }
+
+    private static func compareStamps<T: SyncableEntity>(
+        _ old: [UUID: T],
+        _ new: [UUID: T],
+        _ type: SyncRecordType,
+        _ result: inout Changes
+    ) {
+        // Ids of `new` that `old` has too: when that is all of `old`, nothing was purged.
+        var kept = 0
+        for (id, value) in new {
+            if let before = old[id] {
+                kept += 1
+                if before.meta.version == value.meta.version,
+                   before.meta.isTombstone == value.meta.isTombstone { continue }
+            }
+            result.saved.append(SyncRecordID(type: type, uuid: id))
+        }
+        if old.count > kept {
+            for id in old.keys where new[id] == nil {
+                result.removed.append(SyncRecordID(type: type, uuid: id))
+            }
+        }
     }
 
     private static func compare<T: Equatable>(
