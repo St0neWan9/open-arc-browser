@@ -197,21 +197,50 @@ struct SidebarSnapshot: Equatable {
             return SidebarSnapshot(spaceID: nil, favorites: [], pinned: [], today: [], hasPinnedContent: false)
         }
         let favorites = profileID.map { workspace.favorites(profileID: $0) } ?? []
+        // The Space's pinned items grouped by container in one pass over the workspace, so a Space
+        // with thousands of items costs O(n log n), not one full scan per folder. Same contents
+        // and order as `WorkspaceState.pinnedChildren` (`SortKey.order`). Small key records are
+        // sorted, not the model values: copying thousands of tabs while sorting dominated.
+        struct Ref {
+            var sortKey: SortKey
+            var id: UUID
+            var isFolder: Bool
+        }
+        func ordered(_ a: Ref, _ b: Ref) -> Bool { SortKey.order((a.sortKey, a.id), (b.sortKey, b.id)) }
+        var children: [UUID?: [Ref]] = [:]
+        var todayRefs: [Ref] = []
+        for folder in workspace.folders.values where !folder.meta.isTombstone && folder.spaceID == spaceID {
+            children[folder.parentFolderID, default: []].append(Ref(sortKey: folder.sortKey, id: folder.id, isFolder: true))
+        }
+        for tab in workspace.tabs.values where !tab.meta.isTombstone {
+            switch tab.location {
+            case .pinned(let space, let folderID) where space == spaceID:
+                children[folderID, default: []].append(Ref(sortKey: tab.sortKey, id: tab.id, isFolder: false))
+            case .today(let space) where space == spaceID:
+                todayRefs.append(Ref(sortKey: tab.sortKey, id: tab.id, isFolder: false))
+            default:
+                break
+            }
+        }
         var pinned: [SidebarItemModel] = []
+        var visiting: Set<UUID> = []
         func walk(_ folderID: UUID?, depth: Int) {
-            for child in workspace.pinnedChildren(spaceID: spaceID, folderID: folderID) {
-                switch child {
-                case .folder(let f):
+            for ref in (children[folderID] ?? []).sorted(by: ordered) {
+                if ref.isFolder {
+                    guard let f = workspace.folders[ref.id] else { continue }
                     pinned.append(SidebarItemModel(kind: .folder(f), depth: depth, area: .pinned))
-                    if f.isExpanded { walk(f.id, depth: depth + 1) }
-                case .tab(let t):
+                    // A parent cycle in damaged data must not recurse forever.
+                    if f.isExpanded, visiting.insert(f.id).inserted { walk(f.id, depth: depth + 1) }
+                } else if let t = workspace.tabs[ref.id] {
                     pinned.append(SidebarItemModel(kind: .tab(t), depth: depth, area: .pinned))
                 }
             }
         }
         walk(nil, depth: 0)
-        let hasPinned = !workspace.pinnedChildren(spaceID: spaceID, folderID: nil).isEmpty
-        var today = workspace.today(spaceID: spaceID).map { SidebarItemModel(kind: .tab($0), depth: 0, area: .today) }
+        let hasPinned = !(children[nil] ?? []).isEmpty
+        var today = todayRefs.sorted(by: ordered).compactMap { ref in
+            workspace.tabs[ref.id].map { SidebarItemModel(kind: .tab($0), depth: 0, area: .today) }
+        }
         // [06 §5] observed: the tabs of a split are treated as one group in the sidebar.
         SidebarSplitGroup.apply(workspace: workspace, pinned: &pinned, today: &today)
         return SidebarSnapshot(spaceID: spaceID, favorites: favorites, pinned: pinned, today: today, hasPinnedContent: hasPinned)

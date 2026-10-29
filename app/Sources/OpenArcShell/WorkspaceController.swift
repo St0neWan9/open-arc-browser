@@ -37,7 +37,12 @@ public final class WorkspaceController: ObservableObject {
     public let dependencies: AppDependencies
 
     /// The workspace every window shows. Changed only through `mutate`, `commit` and `replaceWorkspace`.
-    @Published public private(set) var workspace: WorkspaceState
+    @Published public private(set) var workspace: WorkspaceState {
+        didSet { workspaceGeneration &+= 1 }
+    }
+    /// Bumped on every assignment of `workspace`, so derived values (the sidebar snapshot) can be
+    /// cached without comparing two large workspaces.
+    private(set) var workspaceGeneration = 0
     /// Live engine state per tab id (only for tabs that have an engine tab).
     @Published private(set) var liveStates: [UUID: SidebarTabLiveState] = [:]
     /// Library flags shared by every window (B22).
