@@ -251,6 +251,8 @@ public final class WorkspaceController: ObservableObject {
         }
         // Profile settings from older per-device preferences, before the first auto-archive run. [A18]
         migrateLegacyProfileSettings()
+        // Spaces made with the old blue placeholder get Arc's default look (B98).
+        migratePlaceholderThemes()
         // New tabs the pages ask for (window.open, ⌘-click). C7b.
         observeEngineEvents()
         // "Sync Sidebar" decides whether the sync store starts. [03 §账号卡] observed toggle (D5).
@@ -435,6 +437,27 @@ public final class WorkspaceController: ObservableObject {
     /// `Profile.settings`. For each live profile with legacy keys, the stored values replace the
     /// matching settings and the keys are removed, so it never runs twice. Skipped for a read-only
     /// store: nothing would be saved, and the keys must survive until a build that can save runs.
+    /// Moves themes that still carry the pre-B98 placeholder color (never picked by the user) to
+    /// Arc's no-color default ([07 §8.5]). Keeps grain and brightness. The pending first-launch
+    /// Space's theme is left alone until `FirstLaunchSpaceAdoption` decides, because an edit would
+    /// count as the user touching it; a later launch migrates it.
+    func migratePlaceholderThemes() {
+        if dependencies.persistence?.isReadOnly == true { return }
+        let pendingThemeID = dependencies.preferences.firstLaunchSpaceID.flatMap { workspace.spaces[$0]?.themeID }
+        let legacy = [SpaceFlowLocalTokens.legacyPlaceholderColor]
+        let stale = workspace.themes.values.filter { !$0.meta.isTombstone && $0.colors == legacy && $0.id != pendingThemeID }
+        guard !stale.isEmpty else { return }
+        let stamp = now()
+        try? mutate(origin: nil) { state in
+            try stale.reduce(state) { s, theme in
+                var style = theme.style
+                style.colors = []
+                if style.appearance == .automatic { style.appearance = SpaceFlowLocalTokens.defaultThemeStyle.appearance }
+                return try TreeOps.editTheme(s, id: theme.id, style: style, now: stamp)
+            }
+        }
+    }
+
     func migrateLegacyProfileSettings() {
         if dependencies.persistence?.isReadOnly == true { return }
         let preferences = dependencies.preferences

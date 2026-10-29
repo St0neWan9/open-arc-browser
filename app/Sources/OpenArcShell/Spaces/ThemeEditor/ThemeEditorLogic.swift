@@ -150,22 +150,29 @@ extension SpaceThemeDraft {
 // MARK: - Presets
 
 /// A named page of nine round swatches. [06 §2] observed: nine per page, several named groups
-/// ("Brand", "Pastel", "Drab", …). The colors and the group order are our own picks (not Arc's).
+/// ("Brand", "Pastel", "Drab", …).
 struct ThemePresetGroup: Equatable {
     let name: String
     let colors: [RGBAColor]
 }
 
+/// The preset pages. Colors are the swatch centers measured on Arc's bubble [07 §8.1] (E12,
+/// 2026-10-25, pages 1, 3, 4 and 5) and re-read on 2026-10-28 ([07 §8.5]), observed. Arc's
+/// page 2 holds multi-dot Brand themes [07 §8.4]; their dot layout is unknown, so it is left out.
+/// The group names follow [06 §2]; which name belongs to which page is inferred.
 enum ThemePresets {
     static let groups: [ThemePresetGroup] = [
         ThemePresetGroup(name: "Brand", colors: hexes([
-            0x3D6FE0, 0x6B4FD8, 0xC2478F, 0xE0533F, 0xEE8A2B, 0xE6BE2E, 0x3FAE6A, 0x1F9E9A, 0x4A5568,
+            0xF1EBE5, 0xF19CBB, 0xA5729C, 0xF25E6C, 0xFF8557, 0xF8D55A, 0x35E896, 0x6CBAD9, 0x666789,
         ])),
         ThemePresetGroup(name: "Pastel", colors: hexes([
-            0xBFD4F6, 0xD3C8F3, 0xF2C6DD, 0xF6CBC4, 0xF8DCBB, 0xF5EBB9, 0xC9E8CF, 0xBDE6E3, 0xDADDE3,
+            0xFFFBFA, 0xFEE9F3, 0xF1D2ED, 0xFFCBD0, 0xFFE1D3, 0xFFF9E4, 0xDEFDEC, 0xDBF3FB, 0xC5C6E5,
         ])),
         ThemePresetGroup(name: "Drab", colors: hexes([
-            0x8A94A6, 0x8D8AA3, 0xA3868F, 0xA58C84, 0xA89A82, 0xA8A585, 0x8B9F8C, 0x829C9B, 0x9A9A96,
+            0x4E3A5A, 0x683557, 0x8F4144, 0xAF6D40, 0xD7B35F, 0xCDCCA3, 0x79AA82, 0x226148, 0x27476C,
+        ])),
+        ThemePresetGroup(name: "Grayscale", colors: hexes([
+            0xFFFFFF, 0xE6E6E6, 0xCCCCCC, 0xB2B2B2, 0x7F7F7F, 0x666666, 0x333333, 0x191919, 0x010101,
         ])),
     ]
 

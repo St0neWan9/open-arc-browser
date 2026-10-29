@@ -135,7 +135,7 @@ struct NewSpaceView: View {
             HStack(spacing: 6) {
                 Image(systemName: "paintbrush").font(.system(size: 12))
                 Text("Choose a Theme").font(Typography.settingsBody.font)
-                Circle().fill((flow.draftTheme.colors.first ?? T.defaultThemeColor).swiftUI)
+                Circle().fill((flow.draftTheme.colors.first ?? ThemeDerivation.defaultWindowStops[0]).swiftUI)
                     .frame(width: 10, height: 10)
             }
             .foregroundStyle(palette.primaryText.swiftUI)

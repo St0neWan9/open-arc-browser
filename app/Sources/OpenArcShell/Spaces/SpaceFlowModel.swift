@@ -9,17 +9,16 @@ import OpenArcDesign
 
 /// Values the spec does not pin down for these flows. Each carries its evidence level.
 enum SpaceFlowLocalTokens {
-    /// Primary color of a new Space's Theme when the user does not pick one. unknown: the spec
-    /// only says the creation view itself is drawn in the default light neutral theme
-    /// [06 §1] observed, not which color a new Space gets. A soft blue is a placeholder.
-    static let defaultThemeColor = RGBAColor(hex: 0x7FA6E8)
+    /// Theme of a new Space when the user picks no color: no color dots, light. [07 §8.5] observed
+    /// (2026-10-28): Arc stores no window theme for such a Space and draws its fixed lavender-to-pink
+    /// default (`ThemeDerivation.defaultWindowStops`); its theme bubble opens with "Tap to pick a
+    /// color for this space" and the light (sun) segment selected.
+    static var defaultThemeStyle: ThemeStyle { SpaceThemeDraft().style }
 
-    /// One page of nine swatches for "Choose a Theme". [06 §2] observed: a row of nine round
-    /// swatches per page; the colors are our own placeholders (unknown). The full theme editor
-    /// (B8) replaces this.
-    static let presetColors: [RGBAColor] = [
-        0x7FA6E8, 0x6E5BD6, 0xD66BA0, 0xE8736B, 0xF0A35E, 0xE9C95B, 0x74C28A, 0x4FB5B0, 0x8E8E93,
-    ].map { RGBAColor(hex: $0) }
+    /// The placeholder color new Spaces got before B98 (a soft blue, never Arc's). A theme whose
+    /// only color is this one was never picked by the user and is moved to `defaultThemeStyle`'s
+    /// colors at launch (`WorkspaceController.migratePlaceholderThemes`).
+    static let legacyPlaceholderColor = RGBAColor(hex: 0x7FA6E8)
 
     /// Generic emoji for the icon picker. The icon set of Arc is not ours to copy. inferred.
     static let emoji: [String] = [
@@ -50,8 +49,9 @@ enum SpaceFlowLocalTokens {
 /// The theme bubble's working copy of a theme's `style` group. Becomes a `Theme` record through
 /// `TreeOps.createTheme` / `TreeOps.editSpaceTheme`.
 struct SpaceThemeDraft: Equatable {
-    var appearance: ThemeAppearance = .automatic
-    var colors: [RGBAColor] = [SpaceFlowLocalTokens.defaultThemeColor]
+    /// [07 §8.5] observed: the bubble of a Space with no picked color shows the light segment.
+    var appearance: ThemeAppearance = .light
+    var colors: [RGBAColor] = []
     var grain: Double = 0
     /// Ring knob value, stored as `Theme.brightness`. [06 §2] inferred ("brightness/contrast").
     var brightness: Double = Theme.defaultBrightness
@@ -230,7 +230,7 @@ public final class SpaceFlowModel: ObservableObject {
     func themeDraft(of spaceID: UUID) -> SpaceThemeDraft {
         guard let themeID = liveSpace(spaceID)?.themeID, let theme = sidebar.workspace.themes[themeID],
               !theme.meta.isTombstone
-        else { return SpaceThemeDraft(appearance: .automatic, colors: [], grain: 0) }
+        else { return SpaceThemeDraft() }
         return SpaceThemeDraft(theme.style)
     }
 
