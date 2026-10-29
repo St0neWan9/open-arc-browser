@@ -566,8 +566,8 @@ public final class SidebarViewModel: ObservableObject {
             newTab(url: url, title: url.host ?? url.absoluteString)
             return
         }
-        if let live = liveTab(for: id) {
-            engineTask { try? await live.load(url) }
+        if liveTab(for: id) != nil {
+            controller.load(url, inLiveTab: id)
         } else {
             mutate { ws in
                 let title = ws.tabs[id]?.title ?? ""
@@ -759,7 +759,7 @@ public final class SidebarViewModel: ObservableObject {
     public func resetTabToPinnedURL(_ id: UUID) {
         guard let pinned = workspace.tabs[id]?.pinnedURL else { return }
         guard mutate({ try TreeOps.resetTabToPinnedURL($0, id: id, now: now()) }) else { return }
-        if let live = liveTab(for: id) { engineTask { try? await live.load(pinned) } }
+        if liveTab(for: id) != nil { controller.load(pinned, inLiveTab: id) }
     }
 
     /// New Profile… (Set Profile ▸ / Move to ▸ Profile). Returns the new profile id.

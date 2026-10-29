@@ -751,14 +751,30 @@ public final class WorkspaceController: ObservableObject {
         syncContent([id])
     }
 
+    /// Loads `url` in tab `id`'s engine tab (queued after its earlier commands), then writes the
+    /// page the engine now shows into the record. The page's events bring the same values later,
+    /// on the tab's event stream; reading the engine's state here means the record follows the load
+    /// as soon as the load call returns, so engine work that waits for this command (and
+    /// `settleEngineWork`) sees it. B107.
+    func load(_ url: URL, inLiveTab id: UUID) {
+        guard let live = liveTabs[id] else { return }
+        enqueueTabCommand(live) { [weak self] tab in
+            do { try await tab.load(url) } catch { return }
+            let state = await tab.currentState()
+            guard let self, self.liveTabs[id]?.id == tab.id else { return }
+            self.syncContent([id], sources: [id: SidebarTabLiveState(snapshot: state)])
+        }
+    }
+
     /// `syncContent` for several tabs, as one change. It touches only those records' content, so
-    /// every sidebar updates just their rows (`ChangeKind.tabContent`, B107).
-    private func syncContent(_ ids: Set<UUID>) {
+    /// every sidebar updates just their rows (`ChangeKind.tabContent`, B107). `sources` replaces
+    /// the live state a tab's values are read from (the engine's own state, read after a load).
+    private func syncContent(_ ids: Set<UUID>, sources: [UUID: SidebarTabLiveState] = [:]) {
         var next = workspace
         var changed: Set<UUID> = []
         let stamp = now()
         for id in ids {
-            guard let live = liveStates[id], let node = next.tabs[id], !node.meta.isTombstone else { continue }
+            guard let live = sources[id] ?? liveStates[id], let node = next.tabs[id], !node.meta.isTombstone else { continue }
             let title = live.title.isEmpty ? node.title : live.title
             let url = live.url ?? node.url
             let favicon = Self.faviconURLToStore(live: live, storedURL: node.url, storedFaviconURL: node.faviconURL)
