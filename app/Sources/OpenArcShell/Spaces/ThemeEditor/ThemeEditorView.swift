@@ -202,11 +202,28 @@ struct ThemeEditorView: View {
     }
 
     /// A plain swatch is one color; a gradient swatch runs from its first color at the top left
-    /// to its last at the bottom right (inferred from [07 §8.5]).
+    /// to its last at the bottom right. The three colors of a page-2 swatch were read at the center
+    /// and 4.8 pt up-left / down-right of it ([07 §8.5] observed), so they sit at those points of
+    /// the gradient (0.3 / 0.5 / 0.7) and the ends hold the outer colors.
     @ViewBuilder
     private func swatchFill(_ swatch: [RGBAColor]) -> some View {
         if swatch.count > 1 {
-            Circle().fill(LinearGradient(colors: swatch.map(\.swiftUI), startPoint: .topLeading, endPoint: .bottomTrailing))
+            // Core Graphics in sRGB, so each stop lands on its exact color (SwiftUI's gradient
+            // drifted by up to 26/255 at the stops on the display).
+            Canvas { context, size in
+                let step = M.gradientSwatchSampleSpread / Double(swatch.count - 1)
+                let start = 0.5 - M.gradientSwatchSampleSpread / 2
+                let locations = swatch.indices.map { CGFloat(start + Double($0) * step) }
+                let colors = swatch.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) } as CFArray
+                guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                      let gradient = CGGradient(colorsSpace: space, colors: colors, locations: locations) else { return }
+                context.withCGContext { cg in
+                    cg.addEllipse(in: CGRect(origin: .zero, size: size))
+                    cg.clip()
+                    cg.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height),
+                                          options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+                }
+            }
         } else {
             Circle().fill((swatch.first ?? RGBAColor(hex: 0xFFFFFF)).swiftUI)
         }
@@ -256,6 +273,10 @@ enum ThemeEditorMetrics {
     static var swatchSize: CGFloat { CGFloat(Metrics.ThemePicker.swatchSize) }
     static var swatchPitch: CGFloat { CGFloat(Metrics.ThemePicker.swatchPitch) }
     static let knobSize: CGFloat = 36
+    /// Span of the gradient (0...1, top left to bottom right) between the first and last color of
+    /// a gradient swatch: the read points sat 6.8 pt either side of the center along the 33.9 pt
+    /// diagonal of a 24 pt swatch. [07 §8.5] inferred.
+    static let gradientSwatchSampleSpread = 0.40
 }
 
 // MARK: - Pad background
