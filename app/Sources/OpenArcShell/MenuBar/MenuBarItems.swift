@@ -9,9 +9,18 @@ import OpenArcModel
 
 /// File ▸, from New Tab… to Close Window. [01 §File] observed order; keys [02 §窗口与应用] observed.
 struct FileMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
     let openWindow: OpenWindowAction
+
+    init(model: ShellModel, hasWindow: Bool, openWindow: OpenWindowAction) {
+        self.model = model
+        self.hasWindow = hasWindow
+        self.openWindow = openWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Button("New Tab…") { model.presentCommandBar(.newTab) }
@@ -62,8 +71,16 @@ struct FileMenuItems: View {
 /// Only Save Page As has an icon (the system's download tray, set by `MenuBarAdjuster`), which
 /// indents the group ([01 §菜单项图标与缩进] observed).
 struct FilePageMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         // The system share picker with the page's address (B72).
@@ -90,8 +107,16 @@ struct FilePageMenuItems: View {
 /// `MenuBarAdjuster` moves the copy items right after Copy and Paste and Match Style right after
 /// Paste, as in Arc (`MenuBarCatalog.itemsAfter`).
 struct EditCopyURLMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Button("Copy URL") { model.copySelectedURL() }
@@ -114,8 +139,16 @@ struct EditCopyURLMenuItems: View {
 /// View ▸, from Appearance to Developer; Enter Full Screen is the system item after it.
 /// [01 §View] observed order, groups from view-crop.png ([01 §菜单项图标与缩进] observed).
 struct ViewMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         // A per-device setting: works with or without a window. B21.
@@ -188,8 +221,16 @@ struct ViewMenuItems: View {
 /// Rename Space, ⌥⌘→ / ⌥⌘← for Next / Previous Space and ⌃1…⌃9 for the Space items. An incognito
 /// window disables the whole menu ([06 §20.2] observed).
 struct SpacesMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Group {
@@ -226,8 +267,16 @@ struct SpacesMenuItems: View {
 
 /// Tabs ▸. [01 §Tabs] observed order, groups from tabs-crop.png ([01 §菜单项图标与缩进] observed).
 struct TabsMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Group {
@@ -310,8 +359,16 @@ enum SpaceMenuIcon {
 /// Window ▸ Stay On Top, first in the system window group ([01 §Window] observed). A toggle with
 /// a check while on (inferred).
 struct WindowMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Toggle("Stay On Top", isOn: Binding(get: { model.staysOnTop }, set: { _ in model.toggleStayOnTop() }))
@@ -323,8 +380,16 @@ struct WindowMenuItems: View {
 /// are ours (not recorded). Restore Data and Export Arc Notes are omitted
 /// (`MenuBarCatalog.omittedItems`). Items that open a page need a browser window.
 struct HelpMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Group {
@@ -354,8 +419,16 @@ struct ShareOpenArcMenuItem: View {
 
 /// Arc ▸ Privacy Policy, after Services ([01 §Arc] observed). Opens a tab, so it needs a window.
 struct PrivacyPolicyMenuItem: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Button("Privacy Policy") { model.openPrivacyPolicy() }
@@ -368,8 +441,16 @@ struct PrivacyPolicyMenuItem: View {
 /// ⌘} / ⌘{ Next / Previous Tab, ⌘← / ⌘→ Go Back / Go Forward, F12 Developer Tools. They sit in a
 /// menu the menu bar hides (`MenuBarAdjuster`); the keys still work. Keys from `ShortcutCatalog`.
 struct KeyOnlyMenuItems: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Group {

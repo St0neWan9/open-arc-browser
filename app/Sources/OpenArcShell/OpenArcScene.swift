@@ -12,7 +12,11 @@ public struct OpenArcScene: Scene {
     private let dependencies: AppDependencies
     /// Links and files from other apps, from the app delegate (D2). nil: none are received.
     private let externalOpenInbox: ExternalOpenInbox?
-    @StateObject private var controller: WorkspaceController
+    /// Made once per launch. A holder, not the controller itself: a scene that observed the
+    /// controller would rebuild every scene and the whole main menu on each change of the
+    /// workspace or of a page's live state (B103). The windows and menus observe what they show.
+    @StateObject private var holder: WorkspaceControllerHolder
+    private var controller: WorkspaceController { holder.controller }
 
     /// - Parameters:
     ///   - dependencies: engine + sync store. Defaults to FakeEngine with sync disabled.
@@ -30,10 +34,10 @@ public struct OpenArcScene: Scene {
         self.dependencies = dependencies
         self.externalOpenInbox = externalOpenInbox
         // Evaluated once, when SwiftUI creates the state object.
-        _controller = StateObject(wrappedValue: {
+        _holder = StateObject(wrappedValue: {
             let controller = WorkspaceController(dependencies: dependencies, workspace: workspace)
             termination?.attach(controller)
-            return controller
+            return WorkspaceControllerHolder(controller)
         }())
     }
 
@@ -85,6 +89,18 @@ public struct OpenArcScene: Scene {
     }
 }
 
+/// Keeps the app's `WorkspaceController` alive for the scene without observing it: it publishes
+/// nothing itself, so the scene body (and with it the main menu) is not evaluated again when the
+/// controller changes. B103.
+@MainActor
+final class WorkspaceControllerHolder: ObservableObject {
+    let controller: WorkspaceController
+
+    init(_ controller: WorkspaceController) {
+        self.controller = controller
+    }
+}
+
 /// Empties the system save group. Its File ▸ Close (⌘W) and Close All (⌥⌘W) come before
 /// Tabs ▸ Archive Tab in the menu bar, so ⌘W closed the whole window instead of archiving the
 /// tab. [01 §File] observed has neither item; [02 §tabs] observed: ⌘W is Archive Tab. SwiftUI
@@ -101,7 +117,10 @@ struct NoSystemCloseCommands: Commands {
 /// disabled, and only the items that open windows stay available.
 struct BrowserCommands: Commands {
     let controller: WorkspaceController
-    @FocusedObject private var focused: ShellModel?
+    /// The key window's menu state, not its model: the menus are rebuilt only when a value they
+    /// show changed (B103).
+    @FocusedObject private var focusedMenuBar: MenuBarState?
+    private var focused: ShellModel? { focusedMenuBar?.model }
 
     var body: some Commands {
         let model = focused ?? controller.appHost()
@@ -118,7 +137,7 @@ struct BrowserCommands: Commands {
 /// macOS adds its standard ones by action, and a group is indented only when one of its items has
 /// one ([01 §菜单项图标与缩进] observed), so groups are split exactly as in Arc.
 struct ShellCommands: Commands {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
     /// A browser window is key; without one the window-bound items are disabled.
     let hasWindow: Bool
     @Environment(\.openWindow) private var openWindow
@@ -166,7 +185,7 @@ struct ShellCommands: Commands {
 /// shortcuts that no [01] menu lists (`MenuBarAdjuster` hides it). Apart from `ShellCommands`
 /// because a `Commands` body takes at most ten groups.
 struct SpacesAndTabsCommands: Commands {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
     let hasWindow: Bool
 
     var body: some Commands {
@@ -182,14 +201,23 @@ struct SpacesAndTabsCommands: Commands {
     }
 }
 
-/// Edit ▸ Find ▸. Observes the find bar so Find Next / Previous follow its state. B25. Items
-/// [01 §Edit] observed; keys [02 §页面与导航] observed: ⌘F, ⌥⌘F (Find and Replace), ⌘G, ⇧⌘G,
+/// Edit ▸ Find ▸. B25. Items [01 §Edit] observed; keys [02 §页面与导航] observed: ⌘F, ⌥⌘F (Find and Replace), ⌘G, ⇧⌘G,
 /// ⌘J (Jump to Selection). Find and Replace opens the find bar: a page cannot be edited by
 /// replacing its text, so there is no replace field (inferred; B72).
 struct FindMenu: View {
-    @ObservedObject var model: ShellModel
-    @ObservedObject var findBar: FindBarModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
+    /// Read by the actions only: the items show nothing of the find bar's state.
+    let findBar: FindBarModel
     let hasWindow: Bool
+
+    init(model: ShellModel, findBar: FindBarModel, hasWindow: Bool) {
+        self.model = model
+        self.findBar = findBar
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Menu("Find") {
@@ -213,7 +241,14 @@ struct FindMenu: View {
 /// the current choice. [01 §View] observed title, line and items. Works with or without a window
 /// (a per-device setting). B21.
 struct AppearanceMenu: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
+
+    init(model: ShellModel) {
+        self.model = model
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Menu(WebAppearance.menuTitle) {
@@ -233,8 +268,16 @@ struct AppearanceMenu: View {
 /// ⌥⌘C, ⌥⌘J; Network Inspector has none. [02] also lists F12 for Developer Tools; a menu item
 /// carries one key, so F12 is a hidden alias in `KeyOnlyMenuItems` (B85). B25.
 struct DeveloperMenu: View {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some View {
         Menu("Developer") {

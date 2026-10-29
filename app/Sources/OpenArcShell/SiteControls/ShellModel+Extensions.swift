@@ -47,8 +47,16 @@ extension ShellModel {
 /// Manage Extensions…, nothing else. Open Extensions (⌘E, [02] observed) is in no menu; its key
 /// lives in `KeyOnlyMenuItems`. B62.
 struct ExtensionCommands: Commands {
-    @ObservedObject var model: ShellModel
+    let model: ShellModel
+    /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
+    @ObservedObject private var menuBar: MenuBarState
     let hasWindow: Bool
+
+    init(model: ShellModel, hasWindow: Bool) {
+        self.model = model
+        self.hasWindow = hasWindow
+        _menuBar = ObservedObject(wrappedValue: model.menuBar)
+    }
 
     var body: some Commands {
         CommandMenu("Extensions") {

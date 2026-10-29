@@ -10,7 +10,9 @@ import OpenArcImport
 /// Open Arc ▸ Import from Another Browser…, first of its group. [01 §Arc] observed order;
 /// placed by `AppMenuCommands`.
 struct BookmarkImportMenuItem: View {
-    @ObservedObject var controller: WorkspaceController
+    /// Not observed: the item reads only `isOffTheRecord`, which never changes, and observing the
+    /// controller would rebuild the menu on every workspace change (B103).
+    let controller: WorkspaceController
 
     var body: some View {
         Button("Import from Another Browser…") { BookmarkImportPresenter.present(controller: controller) }

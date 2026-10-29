@@ -83,6 +83,10 @@ public final class ShellModel: ObservableObject {
     /// `revealTab` ran before the window's view installed `focusWindow`.
     private var wantsFocusOnAttach = false
 
+    /// When this window's menu bar items must be rebuilt (B103): they observe it instead of this
+    /// model, which publishes on every change of the workspace and of its pages.
+    public private(set) lazy var menuBar = MenuBarState(model: self)
+
     /// Saved in `ui-state.json` and counted as an open window (false for the hidden host Little
     /// Arc uses when no window is open).
     let isBrowserWindow: Bool
