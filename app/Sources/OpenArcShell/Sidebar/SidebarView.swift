@@ -36,10 +36,8 @@ public struct SidebarView: View {
 
     private func content(layout: SidebarLayout) -> some View {
         let palette = viewModel.palette
-        let listContent = viewModel.listContent
-        let snapshot = listContent.snapshot
+        let snapshot = viewModel.snapshot
         let url = layout.urlBoxFrame, favorites = layout.favoritesTilesFrame
-        let listHeight = max(0, layout.dockFrame.minY - layout.listTop)
 
         return ZStack(alignment: .topLeading) {
             fillOverride.map(\.swiftUI) ?? palette.sidebarBackground(on: surface)
@@ -75,7 +73,7 @@ public struct SidebarView: View {
                         .offset(x: favorites.minX, y: favorites.minY)
                 }
 
-                spacePage(layout: layout, content: listContent, listHeight: listHeight)
+                spacePager(layout: layout)
 
                 // "Clear" at the right of the "Incognito Tabs" row. [06 §20.2] observed (B48).
                 if viewModel.isIncognito {
@@ -119,9 +117,8 @@ public struct SidebarView: View {
             listScroll.dropGeometry(viewModel: viewModel, layout: layout)
         }))
         .onHover { isSidebarHovered = $0 }
-        // Space switch: the page slides by one sidebar width on a critically damped spring, no
-        // fade. [07 §11] observed (response 0.2 s, dampingFraction 1.0). B40.
-        .animation(ShellMotion.spaceSwitch, value: viewModel.selectedSpaceID)
+        // Space switch: the pages slide on a Core Animation spring in `SidebarSpacePager`
+        // ([07 §11] observed, B101). The rest of the sidebar switches at once.
         // The tab Share picker (B77). New Folder, Delete Space, Change Icon… and Edit Pinned Page
         // are window cards (`SidebarWindowModals`, B91).
         .modifier(SidebarItemEditSheets(viewModel: viewModel))
@@ -132,26 +129,16 @@ public struct SidebarView: View {
         .accessibilityIdentifier("openarc.sidebar")
     }
 
-    /// The Space page: the Space name row and the tab list, one page per Space. Switching Spaces
-    /// pages it sideways ([07 §11] observed: the page container's x moves by 276 pt; [05] the URL
-    /// box, favorites and dock are outside the page and stay). Clipped to the sidebar so the
-    /// outgoing page never draws over the web panel.
-    private func spacePage(layout: SidebarLayout, content: SidebarListContent, listHeight: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            ZStack(alignment: .topLeading) {
-                SidebarSpaceNameRowView(viewModel: viewModel, layout: layout)
-
-                SidebarListView(viewModel: viewModel, content: content,
-                                scroll: listScroll, isSidebarHovered: isSidebarHovered, layout: layout)
-                    .frame(width: layout.width, height: listHeight)
-                    .offset(y: layout.listTop)
-            }
-            .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
-            .id(viewModel.selectedSpaceID)
-            .transition(ShellMotion.spacePageTransition(viewModel.spacePager))
-        }
-        .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
-        .clipped()
+    /// The Space pages: the Space name row and the tab list, one page per Space. Switching Spaces
+    /// pages them sideways ([07 §11] observed: the page container's x moves by 276 pt; [05] the URL
+    /// box, favorites and dock are outside the page and stay). The pager keeps recent pages built
+    /// and clips them to the sidebar, so the outgoing page never draws over the web panel (B101).
+    private func spacePager(layout: SidebarLayout) -> some View {
+        let top = SidebarSpacePager.bandTop(layout)
+        return SidebarSpacePager(viewModel: viewModel, selectedSpaceID: viewModel.selectedSpaceID, scroll: listScroll,
+                                 isSidebarHovered: isSidebarHovered, layout: layout, surface: surface)
+            .frame(width: layout.width, height: max(0, layout.dockFrame.minY - top))
+            .offset(y: top)
     }
 
     /// The hover card: its own floating panel at the pointer. [07 §12] observed.
@@ -178,6 +165,8 @@ struct SidebarListView: View {
     @ObservedObject var viewModel: SidebarViewModel
     /// Rows and positions; held by reference so a view update compares one pointer.
     let content: SidebarListContent
+    /// The Space this list belongs to (its page's Space).
+    let spaceID: UUID?
     /// Not observed here: only `SidebarListDecorations` and `SidebarListOverlays` follow the offset.
     let scroll: SidebarListScrollState
     let isSidebarHovered: Bool
@@ -185,9 +174,7 @@ struct SidebarListView: View {
     @StateObject private var window = SidebarListWindow()
 
     var body: some View {
-        let spaceID = content.snapshot.spaceID
         list
-            .onDisappear { [scroll] in scroll.forget(spaceID) }
             .overlay(alignment: .topLeading) {
                 SidebarListDecorations(viewModel: viewModel, scroll: scroll, spaceID: spaceID,
                                        isSidebarHovered: isSidebarHovered, layout: layout)
@@ -197,21 +184,20 @@ struct SidebarListView: View {
     /// The clip view scrolled or resized. Called by AppKit for every scroll step, outside any
     /// SwiftUI update: it only touches the scroll state and the row band.
     private func scrolled(_ metrics: SidebarScrollMetrics) {
-        let spaceID = content.snapshot.spaceID
         let contentFrame = CGRect(x: 0, y: -metrics.offset, width: layout.width, height: metrics.contentHeight)
         scroll.update(spaceID, contentFrame: contentFrame, viewportSize: CGSize(width: layout.width, height: metrics.viewportHeight))
         window.update(offset: metrics.offset, viewportHeight: metrics.viewportHeight)
         scroll.noteRowBand(spaceID, minY: window.minY, maxY: window.maxY)
         // Auto-scroll moves rows under a pointer that may not move: re-hit-test with the new
         // frames so the indicator stays on the row actually under the pointer. inferred (B20).
-        if viewModel.isDragActive {
+        if viewModel.isDragActive, spaceID == viewModel.selectedSpaceID {
             viewModel.refreshDropTarget(in: scroll.dropGeometry(viewModel: viewModel, layout: layout))
         }
     }
 
     private var list: some View {
         ScrollView(.vertical) {
-            SidebarListRows(viewModel: viewModel, content: content, window: window,
+            SidebarListRows(viewModel: viewModel, content: content, spaceID: spaceID, window: window,
                             isSidebarHovered: isSidebarHovered, layout: layout)
                 .frame(width: layout.width, height: content.geometry.contentHeight, alignment: .topLeading)
                 // Rows report no drop regions (their frames follow from the list geometry): the key
@@ -219,7 +205,8 @@ struct SidebarListView: View {
                 .preference(key: SidebarDropRegionsKey.self, value: [:])
                 // Gives the view model a handle on the backing scroll view for drag auto-scroll
                 // (B20), and reports every scroll step (the clip view's bounds).
-                .background(SidebarListScrollProbe(viewModel: viewModel, onScroll: { metrics in scrolled(metrics) }))
+                .background(SidebarListScrollProbe(viewModel: viewModel, spaceID: spaceID, scroll: scroll,
+                                                   onScroll: { metrics in scrolled(metrics) }))
         }
         // The system scroller is replaced by the thin hover-revealed knob drawn in
         // `SidebarListDecorations` ([04 §sidebar] observed); AppKit's overlay scroller follows
@@ -238,6 +225,7 @@ struct SidebarListView: View {
 private struct SidebarListRows: View {
     @ObservedObject var viewModel: SidebarViewModel
     let content: SidebarListContent
+    let spaceID: UUID?
     @ObservedObject var window: SidebarListWindow
     let isSidebarHovered: Bool
     let layout: SidebarLayout
@@ -246,11 +234,12 @@ private struct SidebarListRows: View {
         let geometry = content.geometry
         let range = geometry.range(overlapping: window.minY, window.maxY)
         // Read once for all rows: each row gets its state by value and is re-evaluated only when
-        // that state changed (B99).
-        let palette = viewModel.palette
+        // that state changed (B99). A page draws its own Space's colors and selection (B101).
+        let palette = viewModel.palette(forSpace: spaceID)
+        let selected = viewModel.pageSelectedTabID(for: spaceID)
         SidebarListRowsLayout(size: CGSize(width: layout.width, height: geometry.contentHeight)) {
             ForEach(geometry.entries[range]) { entry in
-                entryView(entry, palette: palette)
+                entryView(entry, palette: palette, selected: selected)
                     .frame(width: layout.width, height: entry.height, alignment: .topLeading)
                     .layoutValue(key: SidebarListEntryTop.self, value: entry.top)
             }
@@ -258,7 +247,7 @@ private struct SidebarListRows: View {
     }
 
     @ViewBuilder
-    private func entryView(_ entry: SidebarListEntry, palette: ThemePalette) -> some View {
+    private func entryView(_ entry: SidebarListEntry, palette: ThemePalette, selected: UUID?) -> some View {
         switch entry.content {
         case .row(let item):
             switch item.kind {
@@ -266,17 +255,19 @@ private struct SidebarListRows: View {
                 SidebarFolderRowView(viewModel: viewModel, row: viewModel.folderRowState(folder, depth: item.depth, palette: palette))
                     .equatable()
             case .tab(let tab):
-                SidebarTabRowView(viewModel: viewModel, row: viewModel.tabRowState(tab, depth: item.depth, area: item.area, palette: palette))
+                SidebarTabRowView(viewModel: viewModel, row: viewModel.tabRowState(tab, depth: item.depth, area: item.area, palette: palette,
+                                                                                   selectedTabID: selected))
                     .equatable()
             case .splitGroup(let group):
                 SidebarSplitGroupRowView(viewModel: viewModel,
-                                         row: viewModel.splitGroupRowState(group, depth: item.depth, area: item.area, palette: palette))
+                                         row: viewModel.splitGroupRowState(group, depth: item.depth, area: item.area, palette: palette,
+                                                                           selectedTabID: selected))
                     .equatable()
             }
         case .divider:
-            SidebarDividerRowView(viewModel: viewModel, canClear: content.snapshot.canClear, isSidebarHovered: isSidebarHovered)
+            SidebarDividerRowView(viewModel: viewModel, palette: palette, canClear: content.snapshot.canClear, isSidebarHovered: isSidebarHovered)
         case .newTabRow:
-            SidebarNewTabRowView(viewModel: viewModel, isEmptySpace: content.snapshot.isEmptySpace)
+            SidebarNewTabRowView(viewModel: viewModel, palette: palette, isEmptySpace: content.snapshot.isEmptySpace)
         }
     }
 }
@@ -384,7 +375,7 @@ private struct SidebarListDecorations: View {
     @ViewBuilder
     private func scroller(contentFrame: CGRect, viewport: CGSize) -> some View {
         let knob = SidebarScrollerGeometry.knobFrame(contentFrame: contentFrame, viewport: viewport)
-        let palette = viewModel.palette
+        let palette = viewModel.palette(forSpace: spaceID)
         let ink: Color = palette.isDark || palette.usesLightInk ? .white : .black
         let visible = isSidebarHovered && knob != nil
         Capsule(style: .continuous)
@@ -403,7 +394,7 @@ private struct SidebarListDecorations: View {
     private func edgeLine(visible: Bool) -> some View {
         if visible {
             Rectangle()
-                .fill(viewModel.palette.windowFills(on: surface).scrollEdgeLine.swiftUI)
+                .fill(viewModel.palette(forSpace: spaceID).windowFills(on: surface).scrollEdgeLine.swiftUI)
                 .frame(width: layout.width, height: SidebarLocalTokens.scrollEdgeLineThickness)
                 .accessibilityHidden(true)
         }
@@ -530,6 +521,9 @@ struct SidebarScrollEdges: Equatable {
 /// SwiftUI, but they need macOS 15 and the minimum is macOS 14.
 private struct SidebarListScrollProbe: NSViewRepresentable {
     let viewModel: SidebarViewModel
+    /// The Space of the list: each kept Space page has its own scroll view (B101).
+    let spaceID: UUID?
+    let scroll: SidebarListScrollState
     /// Called with the scroll metrics whenever the clip view scrolls or resizes.
     var onScroll: @MainActor (SidebarScrollMetrics) -> Void = { _ in }
 
@@ -539,8 +533,11 @@ private struct SidebarListScrollProbe: NSViewRepresentable {
         let view = ProbeView()
         let hook = context.coordinator
         hook.onScroll = onScroll
-        view.onMoveToWindow = { [weak hook] probe in hook?.scrollView = probe.enclosingScrollView }
-        viewModel.listScroller = hook
+        view.onMoveToWindow = { [weak hook] probe in
+            guard let hook, let scrollView = probe.enclosingScrollView else { return }
+            hook.scrollView = scrollView
+        }
+        register(hook)
         return view
     }
 
@@ -548,8 +545,14 @@ private struct SidebarListScrollProbe: NSViewRepresentable {
         let hook = context.coordinator
         hook.onScroll = onScroll
         if hook.scrollView == nil { hook.scrollView = nsView.enclosingScrollView }
-        // The list is rebuilt per Space (`.id`): the probe on screen is the one that counts.
-        viewModel.listScroller = hook
+        register(hook)
+    }
+
+    /// Records the hook as its Space's list; the shown Space's list is the one the view model
+    /// scrolls (drag auto-scroll, the jump button).
+    private func register(_ hook: SidebarNSScrollHook) {
+        scroll.setScrollHook(hook, for: spaceID)
+        if spaceID == viewModel.selectedSpaceID { viewModel.listScroller = hook }
     }
 
     final class ProbeView: NSView {

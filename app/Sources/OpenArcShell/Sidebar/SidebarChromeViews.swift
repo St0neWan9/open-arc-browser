@@ -442,6 +442,8 @@ struct SidebarFavoriteCell: View {
 /// widens to show "…" while the header is hovered. [07 §3, §4] observed; the hovered look unknown.
 struct SidebarSpaceNameRowView: View {
     @ObservedObject var viewModel: SidebarViewModel
+    /// The Space of the page this header heads (B101).
+    let spaceID: UUID?
     let layout: SidebarLayout
     @State private var isHovering = false
 
@@ -452,14 +454,15 @@ struct SidebarSpaceNameRowView: View {
     }
 
     var body: some View {
-        let palette = viewModel.palette
+        let palette = viewModel.palette(forSpace: spaceID)
         let s = Metrics.Sidebar.self
-        let icon = viewModel.selectedSpace?.icon
+        let space = viewModel.liveSpace(spaceID)
+        let icon = space?.icon
         let style = Typography.spaceName
         let nameLeading = CGFloat(icon == nil ? s.spaceNameLeadingWithoutIcon : s.spaceNameLeadingWithIcon)
         let more = s.spaceMoreButtonFrame
         let moreWidth = isHovering ? SidebarLocalTokens.spaceMoreHoverWidth : CGFloat(more.width)
-        let isDropTarget = viewModel.dropTarget == .pinnedAreaTop
+        let isDropTarget = viewModel.dropTarget == .pinnedAreaTop && spaceID == viewModel.selectedSpaceID
         ZStack(alignment: .topLeading) {
             // Hover / context menu area: the whole header (y 145–181). It is also a drop target
             // that pins the dragged tab first, shown as a full-width saturated blue band.
@@ -477,14 +480,14 @@ struct SidebarSpaceNameRowView: View {
                     .accessibilityBox(label: "Space icon", identifier: "openarc.sidebar.spaceIcon", traits: .isImage)
                     .offset(x: CGFloat(s.spaceIconFrame.x), y: CGFloat(s.spaceIconFrame.y) - layout.contentShift)
             }
-            Text(viewModel.selectedSpace?.name ?? "")
+            Text(space?.name ?? "")
                 .font(style.font)
                 .foregroundStyle(palette.ink(\.spaceName).swiftUI)
                 .lineLimit(1)
                 .padding(.leading, SidebarLocalTokens.textInkInset)
                 .frame(width: CGFloat(s.spaceNameTrailing) - nameLeading, height: CGFloat(style.lineHeight), alignment: .leading)
                 // The element spans the name line (x to 259, 18 tall), like the reference.
-                .accessibilityBox(label: viewModel.selectedSpace?.name ?? "", identifier: "openarc.sidebar.spaceName")
+                .accessibilityBox(label: space?.name ?? "", identifier: "openarc.sidebar.spaceName")
                 .offset(x: nameLeading, y: CGFloat(s.spaceNameTop) - layout.contentShift)
             Menu {
                 SidebarSpaceMenu(viewModel: viewModel)
