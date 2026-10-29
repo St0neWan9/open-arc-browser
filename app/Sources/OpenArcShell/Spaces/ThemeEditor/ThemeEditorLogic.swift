@@ -141,6 +141,11 @@ extension SpaceThemeDraft {
         colors = [color]
     }
 
+    /// Tapping a swatch replaces the theme's colors with the swatch's (one, or a gradient's).
+    mutating func applyPreset(_ swatch: [RGBAColor]) {
+        colors = swatch
+    }
+
     private func distance(from position: CGPoint, to color: RGBAColor) -> Double {
         let p = ThemePad.position(of: color)
         return hypot(Double(p.x - position.x), Double(p.y - position.y))
@@ -149,30 +154,50 @@ extension SpaceThemeDraft {
 
 // MARK: - Presets
 
-/// A named page of nine round swatches. [06 §2] observed: nine per page, several named groups
-/// ("Brand", "Pastel", "Drab", …).
+/// A named page of nine round swatches. [06 §2] observed: nine per page, five pages. A swatch is
+/// one color, or several for a gradient theme (page 2).
 struct ThemePresetGroup: Equatable {
     let name: String
-    let colors: [RGBAColor]
+    /// The colors each swatch applies, in order (one for a plain color, several for a gradient).
+    let swatches: [[RGBAColor]]
+
+    init(name: String, colors: [RGBAColor]) {
+        self.name = name
+        self.swatches = colors.map { [$0] }
+    }
+
+    init(name: String, gradients: [[RGBAColor]]) {
+        self.name = name
+        self.swatches = gradients
+    }
+
+    /// The first color of each swatch (what a plain swatch shows).
+    var colors: [RGBAColor] { swatches.compactMap(\.first) }
 }
 
-/// The preset pages. Colors are the swatch centers measured on Arc's bubble [07 §8.1] (E12,
-/// 2026-10-25, pages 1, 3, 4 and 5) and re-read on 2026-10-28 ([07 §8.5]), observed. Arc's
-/// page 2 holds multi-dot Brand themes [07 §8.4]; their dot layout is unknown, so it is left out.
-/// The group names follow [06 §2]; which name belongs to which page is inferred.
+/// The preset pages, in Arc's order. [07 §8.5] observed (2026-10-28): pages 1, 3, 4 and 5 are
+/// single colors; their values are Arc's catalog colors converted to sRGB (they match the swatch
+/// centers of [07 §8.1] within 2/255). Page 2 holds gradient themes; each swatch here is the three
+/// colors read at its top left, center and bottom right (JPEG, inferred). The names are the
+/// swatch groups of [06 §2] ("Brand", "Pastel", "Drab", grayscale); Arc shows no name under the row.
 enum ThemePresets {
     static let groups: [ThemePresetGroup] = [
         ThemePresetGroup(name: "Brand", colors: hexes([
-            0xF1EBE5, 0xF19CBB, 0xA5729C, 0xF25E6C, 0xFF8557, 0xF8D55A, 0x35E896, 0x6CBAD9, 0x666789,
+            0xF2EAE4, 0xF29BBB, 0xA6729D, 0xF25E6B, 0xFF8558, 0xF8D558, 0x34E895, 0x6CBAD9, 0x666789,
         ])),
+        ThemePresetGroup(name: "Brand Gradient", gradients: [
+            [0xF3F0E9, 0xF1F3EA, 0xF3F1EC], [0xEBBEBD, 0xECC3B5, 0xEABFC7], [0xB294A2, 0xB2929A, 0xAD93A4],
+            [0xE8AA8B, 0xE8C08A, 0xE7AFA8], [0xF2CC84, 0xF1E984, 0xF7CC9A], [0xD9E98C, 0xC8EF8B, 0xDDD58A],
+            [0x8BE7D2, 0x8DE6E8, 0x97E6CD], [0x99AEDD, 0x999EDE, 0x99B6D5], [0x8F889F, 0x96879F, 0x948EA1],
+        ].map(hexes)),
         ThemePresetGroup(name: "Pastel", colors: hexes([
-            0xFFFBFA, 0xFEE9F3, 0xF1D2ED, 0xFFCBD0, 0xFFE1D3, 0xFFF9E4, 0xDEFDEC, 0xDBF3FB, 0xC5C6E5,
+            0xFEFBFA, 0xFFE9F3, 0xF1D1EC, 0xFFCBD1, 0xFFE0D3, 0xFFF9E5, 0xDEFDEB, 0xDCF3FC, 0xC5C6E5,
         ])),
         ThemePresetGroup(name: "Drab", colors: hexes([
-            0x4E3A5A, 0x683557, 0x8F4144, 0xAF6D40, 0xD7B35F, 0xCDCCA3, 0x79AA82, 0x226148, 0x27476C,
+            0x4E3A5A, 0x693558, 0x8F4042, 0xB16D40, 0xD7B35D, 0xCDCCA4, 0x7AA982, 0x226149, 0x26456B,
         ])),
         ThemePresetGroup(name: "Grayscale", colors: hexes([
-            0xFFFFFF, 0xE6E6E6, 0xCCCCCC, 0xB2B2B2, 0x7F7F7F, 0x666666, 0x333333, 0x191919, 0x010101,
+            0xFFFFFF, 0xE5E6E5, 0xCCCCCC, 0xB2B3B2, 0x7F807F, 0x666666, 0x333333, 0x191A19, 0x000000,
         ])),
     ]
 
@@ -186,7 +211,7 @@ enum ThemePresets {
     /// Page whose swatches contain `color`, so the editor opens on the page of the current theme.
     static func pageContaining(_ color: RGBAColor?) -> Int {
         guard let color else { return 0 }
-        return groups.firstIndex { $0.colors.contains(color) } ?? 0
+        return groups.firstIndex { $0.swatches.contains { $0.first == color } } ?? 0
     }
 }
 

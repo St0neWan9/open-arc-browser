@@ -184,25 +184,31 @@ struct ThemeEditorView: View {
 
     private var presetRow: some View {
         let group = ThemePresets.groups[presetPage]
-        return VStack(spacing: 6) {
-            HStack(spacing: M.swatchPitch - M.swatchSize) {
-                pageArrow("chevron.left", step: -1)
-                ForEach(Array(group.colors.enumerated()), id: \.offset) { _, color in
-                    Button { theme.applyPreset(color) } label: {
-                        Circle().fill(color.swiftUI)
-                            .frame(width: M.swatchSize, height: M.swatchSize)
-                            .overlay(Circle().strokeBorder(ink.opacity(0.12), lineWidth: 0.5))
-                            .overlay(Circle().strokeBorder(ink.opacity(theme.colors == [color] ? 0.8 : 0), lineWidth: 1.5).padding(-2))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(group.name) color")
+        // [07 §8.5] observed: one row of nine swatches between two arrows, no group name under it.
+        return HStack(spacing: M.swatchPitch - M.swatchSize) {
+            pageArrow("chevron.left", step: -1)
+            ForEach(Array(group.swatches.enumerated()), id: \.offset) { _, swatch in
+                Button { theme.applyPreset(swatch) } label: {
+                    swatchFill(swatch)
+                        .frame(width: M.swatchSize, height: M.swatchSize)
+                        .overlay(Circle().strokeBorder(ink.opacity(0.12), lineWidth: 0.5))
+                        .overlay(Circle().strokeBorder(ink.opacity(theme.colors == swatch ? 0.8 : 0), lineWidth: 1.5).padding(-2))
                 }
-                pageArrow("chevron.right", step: 1)
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(group.name) color")
             }
-            Text(group.name)
-                .font(Typography.panelHeader.font)
-                .foregroundStyle(ink.opacity(0.45))
-                .accessibilityIdentifier("openarc.themeEditor.groupName")
+            pageArrow("chevron.right", step: 1)
+        }
+    }
+
+    /// A plain swatch is one color; a gradient swatch runs from its first color at the top left
+    /// to its last at the bottom right (inferred from [07 §8.5]).
+    @ViewBuilder
+    private func swatchFill(_ swatch: [RGBAColor]) -> some View {
+        if swatch.count > 1 {
+            Circle().fill(LinearGradient(colors: swatch.map(\.swiftUI), startPoint: .topLeading, endPoint: .bottomTrailing))
+        } else {
+            Circle().fill((swatch.first ?? RGBAColor(hex: 0xFFFFFF)).swiftUI)
         }
     }
 
