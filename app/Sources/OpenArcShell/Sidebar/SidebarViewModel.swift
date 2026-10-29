@@ -61,6 +61,11 @@ public final class SidebarViewModel: ObservableObject {
     /// observers through the controller.
     public var workspace: WorkspaceState { controller.workspace }
     @Published public private(set) var selectedSpaceID: UUID? {
+        // Before `objectWillChange` goes out: the Space pager stops the outgoing page from
+        // following this change (B104).
+        willSet {
+            if newValue != selectedSpaceID { selectedSpaceWillChange.send(newValue) }
+        }
         // Favorites follow the window's Space for their pages' color scheme (B21).
         didSet {
             guard oldValue != selectedSpaceID else { return }
@@ -70,6 +75,9 @@ public final class SidebarViewModel: ObservableObject {
     }
     /// Direction of the latest Space switch, for the sidebar's paging transition. [07 §11] B40.
     let spacePager = SpacePagerState()
+    /// The Space about to be selected, sent before `selectedSpaceID` changes and before this view
+    /// model's `objectWillChange` for that change. B104.
+    let selectedSpaceWillChange = PassthroughSubject<UUID?, Never>()
     @Published public private(set) var selectedTabID: UUID?
     /// The open Peek page's URL and its source tab (B49, set by `LinkPeekModel`).
     @Published var linkPeekURL: URL?

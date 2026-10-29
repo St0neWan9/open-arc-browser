@@ -9,15 +9,14 @@ import OpenArcDesign
 /// (46–82), favorites (90–137), Space header (145–181), the scrolling list (181 to H − 50) and
 /// the dock (H − 50 to H).
 public struct SidebarView: View {
+    /// Observed for the layout inputs only (favorites height, incognito). Every block below
+    /// observes the view model on its own and redraws only when what it shows changed (B104): a
+    /// Space switch no longer re-evaluates the whole sidebar.
     @ObservedObject private var viewModel: SidebarViewModel
     @State private var isSidebarHovered = false
     /// Scroll offsets and reported regions. Only the small views that depend on them observe it,
     /// so scrolling never re-evaluates this body.
     @StateObject private var listScroll = SidebarListScrollState()
-    /// The floating peek panel's deeper fill instead of the window color. [06 §14] B34.
-    @Environment(\.sidebarFillOverride) private var fillOverride
-    /// See-through window: no own background, controls as layers. [07 §8.4] B64.
-    @Environment(\.windowSurface) private var surface
     /// View ▸ Show Toolbar: no URL box or navigation buttons here, content 46 pt higher. [06 §17.1] B43.
     @Environment(\.isWebToolbarShown) private var isWebToolbarShown
 
@@ -26,21 +25,42 @@ public struct SidebarView: View {
     }
 
     public var body: some View {
+        let isIncognito = viewModel.isIncognito
+        let tilesHeight = viewModel.favoritesTilesHeight
         GeometryReader { proxy in
-            content(layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height),
-                                          isWebToolbarShown: isWebToolbarShown, hidesFavorites: viewModel.isIncognito,
-                                          favoritesTilesHeight: viewModel.favoritesTilesHeight))
+            SidebarContent(viewModel: viewModel, listScroll: listScroll, isSidebarHovered: isSidebarHovered,
+                           layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height),
+                                                 isWebToolbarShown: isWebToolbarShown, hidesFavorites: isIncognito,
+                                                 favoritesTilesHeight: tilesHeight),
+                           onHover: { isSidebarHovered = $0 })
+                .equatable()
         }
         .frame(width: CGFloat(Metrics.Sidebar.width))
     }
+}
 
-    private func content(layout: SidebarLayout) -> some View {
-        let palette = viewModel.palette
-        let snapshot = viewModel.snapshot
+/// The sidebar's blocks at their measured positions. Equatable on its layout and hover: the view
+/// model's changes reach the blocks that observe it, not this body (B104).
+private struct SidebarContent: View, Equatable {
+    let viewModel: SidebarViewModel
+    let listScroll: SidebarListScrollState
+    let isSidebarHovered: Bool
+    let layout: SidebarLayout
+    let onHover: (Bool) -> Void
+    /// See-through window: no own background, controls as layers. [07 §8.4] B64.
+    @Environment(\.windowSurface) private var surface
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.viewModel === rhs.viewModel && lhs.listScroll === rhs.listScroll
+            && lhs.isSidebarHovered == rhs.isSidebarHovered && lhs.layout == rhs.layout
+    }
+
+    var body: some View {
         let url = layout.urlBoxFrame, favorites = layout.favoritesTilesFrame
+        let viewModel = self.viewModel, listScroll = self.listScroll, layout = self.layout
 
-        return ZStack(alignment: .topLeading) {
-            fillOverride.map(\.swiftUI) ?? palette.sidebarBackground(on: surface)
+        ZStack(alignment: .topLeading) {
+            SidebarBackgroundFill(viewModel: viewModel)
 
             // Right-click anywhere on the sidebar top (traffic-light row, URL box) opens the current
             // Space's menu, the same as the Space name's "⋯". [06 §28] observed.
@@ -50,38 +70,31 @@ public struct SidebarView: View {
                 .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
                 .accessibilityHidden(true)
 
-            SidebarTopBarView(viewModel: viewModel, layout: layout)
+            SidebarTopBarHost(viewModel: viewModel, layout: layout)
 
             ZStack(alignment: .topLeading) {
                 if layout.showsAddressControls {
-                    if viewModel.selectedEaselID != nil {
-                        // An Easel's URL box is a locked "Share" button. [06 §4, §9] observed. B56.
-                        EaselShareURLBox(viewModel: viewModel)
-                            .frame(width: url.width, height: url.height)
-                            .offset(x: url.minX, y: url.minY)
-                    } else {
-                        SidebarURLBoxView(viewModel: viewModel)
-                            .frame(width: url.width, height: url.height)
-                            .offset(x: url.minX, y: url.minY)
-                    }
+                    SidebarURLBoxHost(viewModel: viewModel)
+                        .frame(width: url.width, height: url.height)
+                        .offset(x: url.minX, y: url.minY)
                 }
 
                 // An incognito window has no favorites; the rows below move up (`hidesFavorites`). [06 §20.2] observed.
-                if !viewModel.isIncognito {
-                    SidebarFavoritesView(viewModel: viewModel, favorites: snapshot.favorites, layout: layout)
+                if !layout.hidesFavorites {
+                    SidebarFavoritesHost(viewModel: viewModel, layout: layout)
                         .frame(width: favorites.width, height: favorites.height)
                         .offset(x: favorites.minX, y: favorites.minY)
                 }
 
-                spacePager(layout: layout)
+                spacePager
 
                 // "Clear" at the right of the "Incognito Tabs" row. [06 §20.2] observed (B48).
-                if viewModel.isIncognito {
+                if layout.hidesFavorites {
                     IncognitoClearButton(viewModel: viewModel, layout: layout)
                 }
 
                 // An incognito window's dock has Home and "+" but no Space icons. [06 §20.2] observed (B48).
-                SidebarDockView(viewModel: viewModel, layout: layout)
+                SidebarDockHost(viewModel: viewModel, layout: layout)
                     .frame(width: layout.width, height: layout.dockFrame.height)
                     .offset(y: layout.dockFrame.minY)
             }
@@ -90,7 +103,7 @@ public struct SidebarView: View {
             // Drop line, ↓ / ↑ jump button and folder quick list: they follow the scroll offset.
             SidebarListOverlays(viewModel: viewModel, scroll: listScroll, layout: layout)
 
-            hoverCard(layout: layout)
+            SidebarHoverCardHost(viewModel: viewModel)
 
             // Two-finger horizontal swipes page between Spaces. [05 §window hierarchy] observed.
             // Transparent to clicks and scrolls (it only watches them). B76.
@@ -101,7 +114,7 @@ public struct SidebarView: View {
             // Starts drags past the per-axis threshold and selects on press. [06 §15.1] observed.
             // Transparent to clicks (it only watches the mouse events).
             // The pickable items are computed at the press, from the scroll offset of that moment.
-            SidebarDragSourceHost(viewModel: viewModel, items: { [viewModel, listScroll] in
+            SidebarDragSourceHost(viewModel: viewModel, items: {
                 listScroll.dragSourceItems(viewModel: viewModel, layout: layout)
             }, layout: layout)
                 .frame(width: layout.width, height: layout.windowSize.height)
@@ -110,19 +123,19 @@ public struct SidebarView: View {
         .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
         .coordinateSpace(name: SidebarCoordinateSpace.root)
         .environment(\.sidebarAudioGlyphSink, listScroll)
-        .onPreferenceChange(SidebarDropRegionsKey.self) { [listScroll] regions in
+        .onPreferenceChange(SidebarDropRegionsKey.self) { regions in
             MainActor.assumeIsolated { listScroll.setRegions(regions) }
         }
-        .onDrop(of: [SidebarDragPayload.itemType, .url], delegate: SidebarRootDropDelegate(viewModel: viewModel, geometry: { [viewModel, listScroll] in
+        .onDrop(of: [SidebarDragPayload.itemType, .url], delegate: SidebarRootDropDelegate(viewModel: viewModel, geometry: {
             listScroll.dropGeometry(viewModel: viewModel, layout: layout)
         }))
-        .onHover { isSidebarHovered = $0 }
+        .onHover(perform: onHover)
         // Space switch: the pages slide on a Core Animation spring in `SidebarSpacePager`
         // ([07 §11] observed, B101). The rest of the sidebar switches at once.
         // The tab Share picker (B77). New Folder, Delete Space, Change Icon… and Edit Pinned Page
         // are window cards (`SidebarWindowModals`, B91).
         .modifier(SidebarItemEditSheets(viewModel: viewModel))
-        .onAppear { [listScroll] in viewModel.listScrollState = listScroll }
+        .onAppear { viewModel.listScrollState = listScroll }
         // The sidebar's cards are declared at the window root (`SidebarWindowModals`). B99.
         .declaresNoWindowModals()
         .accessibilityElement(children: .contain)
@@ -133,24 +146,102 @@ public struct SidebarView: View {
     /// pages them sideways ([07 §11] observed: the page container's x moves by 276 pt; [05] the URL
     /// box, favorites and dock are outside the page and stay). The pager keeps recent pages built
     /// and clips them to the sidebar, so the outgoing page never draws over the web panel (B101).
-    private func spacePager(layout: SidebarLayout) -> some View {
+    private var spacePager: some View {
         let top = SidebarSpacePager.bandTop(layout)
-        return SidebarSpacePager(viewModel: viewModel, selectedSpaceID: viewModel.selectedSpaceID, scroll: listScroll,
-                                 isSidebarHovered: isSidebarHovered, layout: layout, surface: surface)
+        return SidebarSpacePagerHost(viewModel: viewModel, scroll: listScroll, isSidebarHovered: isSidebarHovered,
+                                     layout: layout, surface: surface)
             .frame(width: layout.width, height: max(0, layout.dockFrame.minY - top))
             .offset(y: top)
     }
+}
 
-    /// The hover card: its own floating panel at the pointer. [07 §12] observed.
-    private func hoverCard(layout: SidebarLayout) -> some View {
+// MARK: - Block hosts (B104)
+//
+// Each host observes the sidebar view model and hands its block a plain value; the block is
+// Equatable and redraws only when that value changed. A host's body is a few property reads.
+
+/// The sidebar fill: the window color, or the peek panel's deeper fill. [06 §14] B34.
+private struct SidebarBackgroundFill: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    /// The floating peek panel's deeper fill instead of the window color. [06 §14] B34.
+    @Environment(\.sidebarFillOverride) private var fillOverride
+    @Environment(\.windowSurface) private var surface
+
+    var body: some View {
+        fillOverride.map(\.swiftUI) ?? viewModel.palette.sidebarBackground(on: surface)
+    }
+}
+
+private struct SidebarTopBarHost: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let layout: SidebarLayout
+
+    var body: some View {
+        SidebarTopBarView(viewModel: viewModel, state: viewModel.topBarState, layout: layout)
+            .equatable()
+    }
+}
+
+private struct SidebarURLBoxHost: View {
+    @ObservedObject var viewModel: SidebarViewModel
+
+    var body: some View {
+        if viewModel.selectedEaselID != nil {
+            // An Easel's URL box is a locked "Share" button. [06 §4, §9] observed. B56.
+            EaselShareURLBox(viewModel: viewModel)
+        } else {
+            SidebarURLBoxView(viewModel: viewModel, state: viewModel.urlBoxState)
+                .equatable()
+        }
+    }
+}
+
+private struct SidebarFavoritesHost: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let layout: SidebarLayout
+
+    var body: some View {
+        SidebarFavoritesView(viewModel: viewModel, state: viewModel.favoritesState(viewModel.snapshot.favorites), layout: layout)
+            .equatable()
+    }
+}
+
+private struct SidebarDockHost: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let layout: SidebarLayout
+
+    var body: some View {
+        SidebarDockView(viewModel: viewModel, state: viewModel.dockState, layout: layout)
+            .equatable()
+    }
+}
+
+/// Hands the pager the selected Space; the pages follow the view model through their own relays.
+private struct SidebarSpacePagerHost: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let scroll: SidebarListScrollState
+    let isSidebarHovered: Bool
+    let layout: SidebarLayout
+    let surface: WindowSurface
+
+    var body: some View {
+        SidebarSpacePager(viewModel: viewModel, selectedSpaceID: viewModel.selectedSpaceID, scroll: scroll,
+                          isSidebarHovered: isSidebarHovered, layout: layout, surface: surface)
+    }
+}
+
+/// The hover card: its own floating panel at the pointer. [07 §12] observed.
+private struct SidebarHoverCardHost: View {
+    @ObservedObject var viewModel: SidebarViewModel
+
+    var body: some View {
         let id = viewModel.hoverCardTabID
         let tab = id.flatMap { viewModel.workspace.tabs[$0] }
-        return SidebarHoverCardPresenter(tabID: tab == nil ? nil : id, title: tab?.displayTitle ?? "",
-                                         fill: viewModel.palette.selectedTabFill)
+        SidebarHoverCardPresenter(tabID: tab == nil ? nil : id, title: tab?.displayTitle ?? "",
+                                  fill: viewModel.palette.selectedTabFill)
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
     }
-
 }
 
 /// Scrolling list: pinned area (folders and tabs), the divider, "+ New Tab" right under it at the
@@ -162,7 +253,13 @@ public struct SidebarView: View {
 /// only the entries near the visible area exist as views (`SidebarListRows`). A Space with
 /// thousands of pinned items scrolls and updates at the cost of a few screenfuls of rows.
 struct SidebarListView: View {
-    @ObservedObject var viewModel: SidebarViewModel
+    /// Not observed: the list itself draws nothing from the view model; its rows and decorations
+    /// observe their page's `changes` relay. The list's body runs only when its inputs change
+    /// (B104: re-running it on every sidebar change rebuilt the scroll view's content each time).
+    let viewModel: SidebarViewModel
+    let changes: SidebarSpacePageChanges
+    /// The scroll state's changes, relayed while the page is shown.
+    let scrollChanges: SidebarSpacePageChanges
     /// Rows and positions; held by reference so a view update compares one pointer.
     let content: SidebarListContent
     /// The Space this list belongs to (its page's Space).
@@ -176,7 +273,8 @@ struct SidebarListView: View {
     var body: some View {
         list
             .overlay(alignment: .topLeading) {
-                SidebarListDecorations(viewModel: viewModel, scroll: scroll, spaceID: spaceID,
+                SidebarListDecorations(viewModel: viewModel, changes: changes, scrollChanges: scrollChanges,
+                                       scroll: scroll, spaceID: spaceID,
                                        isSidebarHovered: isSidebarHovered, layout: layout)
             }
     }
@@ -197,7 +295,7 @@ struct SidebarListView: View {
 
     private var list: some View {
         ScrollView(.vertical) {
-            SidebarListRows(viewModel: viewModel, content: content, spaceID: spaceID, window: window,
+            SidebarListRows(viewModel: viewModel, changes: changes, content: content, spaceID: spaceID, window: window,
                             isSidebarHovered: isSidebarHovered, layout: layout)
                 .frame(width: layout.width, height: content.geometry.contentHeight, alignment: .topLeading)
                 // Rows report no drop regions (their frames follow from the list geometry): the key
@@ -223,7 +321,8 @@ struct SidebarListView: View {
 /// The part of the list around the visible area (`SidebarListWindow`), each entry placed at its
 /// fixed position. A scroll of a few points does not change which rows exist.
 private struct SidebarListRows: View {
-    @ObservedObject var viewModel: SidebarViewModel
+    let viewModel: SidebarViewModel
+    @ObservedObject var changes: SidebarSpacePageChanges
     let content: SidebarListContent
     let spaceID: UUID?
     @ObservedObject var window: SidebarListWindow
@@ -347,8 +446,11 @@ final class SidebarListWindow: ObservableObject {
 
 /// The scroll-edge lines and the overlay scroller knob of one list: they follow the offset.
 private struct SidebarListDecorations: View {
-    @ObservedObject var viewModel: SidebarViewModel
-    @ObservedObject var scroll: SidebarListScrollState
+    let viewModel: SidebarViewModel
+    @ObservedObject var changes: SidebarSpacePageChanges
+    /// Relays `scroll`'s changes while the page is shown: the offset is read from `scroll`.
+    @ObservedObject var scrollChanges: SidebarSpacePageChanges
+    let scroll: SidebarListScrollState
     let spaceID: UUID?
     let isSidebarHovered: Bool
     let layout: SidebarLayout

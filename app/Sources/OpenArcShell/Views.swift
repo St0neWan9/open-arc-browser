@@ -213,7 +213,7 @@ struct MainWindowContent: View {
             ZStack(alignment: .topLeading) {
                 NewSpaceView(flow: model.spaceFlow, palette: palette)
                     .frame(width: sidebarSize.width, height: max(0, dockLayout.dockFrame.minY))
-                SidebarDockView(viewModel: sidebar, layout: dockLayout, isCreatingSpace: true, paletteOverride: palette)
+                SidebarDockView(viewModel: sidebar, state: sidebar.dockState, layout: dockLayout, isCreatingSpace: true, paletteOverride: palette)
                     .frame(width: dockLayout.width, height: dockLayout.dockFrame.height)
                     .offset(y: dockLayout.dockFrame.minY)
             }

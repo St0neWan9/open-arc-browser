@@ -61,8 +61,8 @@ final class SidebarSpacePagerTests: XCTestCase {
     }
 
     /// A switch keeps the shown page and slides the new one in from the side it lies on in the dock
-    /// order; the outgoing page leaves the other way and is taken out of the view tree once the
-    /// slide ended, but kept, so switching back reuses it. [07 §11], [05 §window hierarchy].
+    /// order; the outgoing page leaves the other way and is hidden once the slide ended, but kept,
+    /// so switching back reuses it. [07 §11], [05 §window hierarchy].
     func testSwitchKeepsPagesAndSlidesThem() throws {
         let f = SidebarFixture()
         let (vm, _) = makeSidebarViewModel(f)
@@ -84,7 +84,8 @@ final class SidebarSpacePagerTests: XCTestCase {
         XCTAssertEqual((outgoing.toValue as? NSNumber)?.doubleValue, -276)
 
         pager.finishSlideForTesting()
-        XCTAssertEqual(pager.attachedSpaceIDs, [f.work], "the outgoing page leaves the view tree")
+        XCTAssertEqual(pager.attachedSpaceIDs, [f.work], "the outgoing page is hidden")
+        XCTAssertTrue(pager.pageHost(for: f.home)?.superview === pager, "B104: hidden, not removed from the view tree")
         let workHost = pager.pageHost(for: f.work)
         let homeHost = pager.pageHost(for: f.home)
 

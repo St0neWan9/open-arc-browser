@@ -51,16 +51,30 @@ struct SidebarToolbarButton: View {
 /// Top row: the window draws the traffic lights (moved to their measured spot by
 /// `MainWindowChromeConfigurator`); hide sidebar, back, forward and reload sit at their measured
 /// x positions, 32 × 32 each, centered on y 23.5. [07 §2] observed. Disabled back/forward are dimmed.
-struct SidebarTopBarView: View {
-    @ObservedObject var viewModel: SidebarViewModel
+struct SidebarTopBarView: View, Equatable {
+    /// What the top bar draws. The sidebar computes it on each of its updates; the bar is
+    /// re-evaluated only when it changed (B104: a Space switch with the same tab state redraws nothing here).
+    struct State: Equatable {
+        var palette: ThemePalette
+        var canGoBack = false
+        var canGoForward = false
+        var reloadMode: SidebarReloadMode = .reload
+        var hasSelectedTab = false
+    }
+
+    /// For actions only: the bar does not observe the view model (see `State`).
+    let viewModel: SidebarViewModel
+    let state: State
     let layout: SidebarLayout
     /// "Hide sidebar" when pinned, "Lock sidebar" in the floating peek. [06 §14] observed.
     @Environment(\.sidebarPresentation) private var presentation
 
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.state == rhs.state && lhs.layout == rhs.layout }
+
     var body: some View {
-        let tint = viewModel.palette.primaryText.swiftUI
-        let ink = viewModel.palette.inkOpacity
-        let isStop = viewModel.reloadMode == .stop
+        let tint = state.palette.primaryText.swiftUI
+        let ink = state.palette.inkOpacity
+        let isStop = state.reloadMode == .stop
         ZStack(alignment: .topLeading) {
             // Glyph sizes and weight chosen so the SF Symbol ink matches [07 §2] (sidebar 18 × 14.5
             // for 18.5 × 14.5, arrows 15 × 12 for 14.5 × 12, reload 14 × 17) and the stroke weight
@@ -83,14 +97,14 @@ struct SidebarTopBarView: View {
     private func navigationButtons(tint: Color, ink: ChromeInkOpacities, isStop: Bool) -> some View {
             place(layout.backButtonFrame) {
                 SidebarToolbarButton(symbol: "arrow.left", glyphSize: SidebarLocalTokens.toolbarArrowGlyphSize,
-                                     glyphWeight: SidebarLocalTokens.toolbarGlyphWeight, label: "Back", tint: tint, isEnabled: viewModel.canGoBack,
+                                     glyphWeight: SidebarLocalTokens.toolbarGlyphWeight, label: "Back", tint: tint, isEnabled: state.canGoBack,
                                      enabledOpacity: ink.toolbarEnabled, disabledOpacity: ink.toolbarDisabled, identifier: "openarc.sidebar.backButton") {
                     viewModel.goBack()
                 }
             }
             place(layout.forwardButtonFrame) {
                 SidebarToolbarButton(symbol: "arrow.right", glyphSize: SidebarLocalTokens.toolbarArrowGlyphSize,
-                                     glyphWeight: SidebarLocalTokens.toolbarGlyphWeight, label: "Forward", tint: tint, isEnabled: viewModel.canGoForward,
+                                     glyphWeight: SidebarLocalTokens.toolbarGlyphWeight, label: "Forward", tint: tint, isEnabled: state.canGoForward,
                                      enabledOpacity: ink.toolbarEnabled, disabledOpacity: ink.toolbarDisabled, identifier: "openarc.sidebar.forwardButton") {
                     viewModel.goForward()
                 }
@@ -103,7 +117,7 @@ struct SidebarTopBarView: View {
                     glyphWeight: SidebarLocalTokens.toolbarGlyphWeight,
                     label: isStop ? "Stop loading" : "Reload",
                     tint: tint,
-                    isEnabled: viewModel.selectedTabID != nil,
+                    isEnabled: state.hasSelectedTab,
                     enabledOpacity: ink.toolbarEnabled,
                     disabledOpacity: ink.toolbarDisabled,
                     identifier: "openarc.sidebar.reloadButton"
@@ -127,22 +141,37 @@ struct SidebarTopBarView: View {
 /// hovering a loaded page shows copy-link and site-controls icons [06 §12] observed. On plain http
 /// pages the red struck-through lock (the toolbar's) takes the same 24 pt cell at x 14 and the
 /// domain starts at x 41; a click opens the Site Control Center [06 §17.7, §17.3] observed.
-struct SidebarURLBoxView: View {
-    @ObservedObject var viewModel: SidebarViewModel
+struct SidebarURLBoxView: View, Equatable {
+    /// What the URL box draws. The sidebar computes it on each of its updates; the box is
+    /// re-evaluated only when it changed (B104).
+    struct State: Equatable {
+        var palette: ThemePalette
+        var content: SidebarURLBoxContent
+        var showsInsecureLock = false
+        var selectedTabID: UUID?
+        /// The selected page's translation entry label (`TranslationEntryLabel`), nil without one.
+        var translationLabel: TranslationEntryLabel?
+    }
+
+    /// For actions only: the box does not observe the view model (see `State`).
+    let viewModel: SidebarViewModel
+    let state: State
     @Environment(\.siteControlsModel) private var siteControls
     @Environment(\.translationModel) private var translation
     @Environment(\.windowSurface) private var surface
-    @State private var isHovering = false
+    @SwiftUI.State private var isHovering = false
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.state == rhs.state }
 
     var body: some View {
-        let palette = viewModel.palette
-        let content = viewModel.urlBoxContent
+        let palette = state.palette
+        let content = state.content
         // B47: "Translation Available" / "Translated" as a second line; the domain moves to the
         // box's top half. [06 §19.1] observed.
         let translationShift = translationLineShift(content)
         let s = Metrics.Sidebar.self
         let showsMagnifier = content == .placeholder
-        let showsLock = viewModel.urlBoxShowsInsecureLock
+        let showsLock = state.showsInsecureLock
         let textStart = showsMagnifier || showsLock ? s.addressFieldTextLeadingAfterIcon : s.addressFieldTextLeading
         let textLeading = CGFloat(textStart - s.addressFieldHorizontalInset)
         let textWidth = CGFloat(s.addressFieldTextTrailing - textStart)
@@ -181,7 +210,7 @@ struct SidebarURLBoxView: View {
                 .padding(.leading, textLeading)
                 .offset(y: -translationShift)
             if translationShift > 0, let translation {
-                TranslationURLBoxLine(model: translation, tabID: viewModel.selectedTabID,
+                TranslationURLBoxLine(model: translation, tabID: state.selectedTabID,
                                       ink: palette.ink(\.addressText).swiftUI, palette: palette)
                     .padding(.leading, textLeading + SidebarLocalTokens.textInkInset)
                     .offset(y: TranslationLocalTokens.entryLineHeight - translationShift)
@@ -230,8 +259,7 @@ struct SidebarURLBoxView: View {
     /// from its top ([06 §19.1] observed: domain row at the box top, the line 17 below). 0 without
     /// the line.
     private func translationLineShift(_ content: SidebarURLBoxContent) -> CGFloat {
-        guard translation != nil, case .domain = content,
-              let live = viewModel.selectedLiveState, TranslationEntryLabel.make(live.translation) != nil else { return 0 }
+        guard translation != nil, case .domain = content, state.translationLabel != nil else { return 0 }
         return CGFloat(Metrics.Sidebar.addressFieldHeight) / 2 - TranslationLocalTokens.entryLineHeight / 2
     }
 
@@ -249,11 +277,33 @@ struct SidebarURLBoxView: View {
 /// observed. With no favorites the empty-state card shows ([06 §21.2] observed); after it was
 /// dismissed an empty block keeps the drop target (inferred). The gaps between tiles open the
 /// Space menu ([06 §21.5] observed).
-struct SidebarFavoritesView: View {
-    @ObservedObject var viewModel: SidebarViewModel
-    let favorites: [TabNode]
+struct SidebarFavoritesView: View, Equatable {
+    /// What the favorites block draws. The sidebar computes it on each of its updates; the block
+    /// is re-evaluated only when it changed (B104: favorites belong to the profile, so a switch
+    /// between Spaces of one profile with the same theme leaves them as they were).
+    struct State: Equatable {
+        var palette: ThemePalette
+        var cells: [SidebarFavoriteCell.State]
+        var showsEmptyCard = false
+        /// The gap a dragged tab hovers (`SidebarDropTarget.favoriteGap`), and the dragged
+        /// favorite's index when it is one of these.
+        var dropGap: Int?
+        var draggedIndex: Int?
+        /// The favorite whose hover card shows, and the card's second line.
+        var tooltipTabID: UUID?
+        var tooltipDetail: String?
+        var favorites: [TabNode] { cells.map(\.tab) }
+    }
+
+    /// For actions only: the block does not observe the view model (see `State`).
+    let viewModel: SidebarViewModel
+    let state: State
     let layout: SidebarLayout
     @Environment(\.windowSurface) private var surface
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.state == rhs.state && lhs.layout == rhs.layout }
+
+    private var favorites: [TabNode] { state.favorites }
 
     /// Tile frames, relative to the block. While a tab hovers the block the other tiles give way
     /// live: a new tile opens an empty slot at the gap (no line, no placeholder fill, [06 §15.5]
@@ -262,10 +312,10 @@ struct SidebarFavoritesView: View {
     private var slots: [CGRect] {
         let block = layout.favoritesTilesFrame
         let width = block.width
-        guard case .favoriteGap(let gap) = viewModel.dropTarget, !favorites.isEmpty else {
+        guard let gap = state.dropGap, !favorites.isEmpty else {
             return SidebarFavoritesGrid.slotFrames(count: favorites.count, width: width)
         }
-        if let dragged = viewModel.draggedFavoriteIndex {
+        if let dragged = state.draggedIndex {
             var order = Array(favorites.indices)
             order.remove(at: dragged)
             order.insert(dragged, at: min(SidebarFavoritesGrid.targetIndex(gap: gap, draggedIndex: dragged), order.count))
@@ -281,20 +331,20 @@ struct SidebarFavoritesView: View {
 
     /// The hovered favorite's card, right of its block. [07 §12] observed (B89).
     private var tooltip: some View {
-        let id = viewModel.favoriteTooltipTabID
+        let id = state.tooltipTabID
         let index = id.flatMap { id in favorites.firstIndex { $0.id == id } }
         let slots = self.slots
         let tab = index.map { favorites[$0] }
         return SidebarFavoritesTooltipPresenter(block: index.flatMap { slots.indices.contains($0) ? slots[$0] : nil },
                                                 title: tab?.displayTitle ?? "",
-                                                detail: id.flatMap { viewModel.favoriteHoverTip($0) })
+                                                detail: state.tooltipDetail)
             .frame(width: layout.favoritesTilesFrame.width, height: layout.favoritesTilesFrame.height)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
 
     var body: some View {
-        let palette = viewModel.palette
+        let palette = state.palette
         let block = layout.favoritesTilesFrame
         let radius = CGFloat(Metrics.Sidebar.favoritesCornerRadius)
         ZStack(alignment: .topLeading) {
@@ -303,21 +353,21 @@ struct SidebarFavoritesView: View {
                 .contentShape(Rectangle())
                 .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
             if favorites.isEmpty {
-                if viewModel.showsFavoritesEmptyCard {
-                    SidebarFavoritesEmptyCard(viewModel: viewModel)
+                if state.showsEmptyCard {
+                    SidebarFavoritesEmptyCard(viewModel: viewModel, palette: palette)
                 } else {
                     RoundedRectangle(cornerRadius: radius, style: .continuous).fill(palette.windowFills(on: surface).controlFill.swiftUI)
                 }
             }
-            ForEach(Array(zip(favorites, slots)), id: \.0.id) { fav, slot in
-                SidebarFavoriteCell(viewModel: viewModel, tab: fav)
+            ForEach(Array(zip(state.cells, slots)), id: \.0.tab.id) { cell, slot in
+                SidebarFavoriteCell(viewModel: viewModel, state: cell)
                     .frame(width: slot.width, height: slot.height)
                     .offset(x: slot.minX, y: slot.minY)
             }
             tooltip
         }
         .frame(width: block.width, height: block.height, alignment: .topLeading)
-        .animation(ShellMotion.favoriteMakeRoom, value: viewModel.dropTarget)
+        .animation(ShellMotion.favoriteMakeRoom, value: state.dropGap)
         .sidebarDropRegion(.favorites)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.favorites")
@@ -329,14 +379,15 @@ struct SidebarFavoritesView: View {
 /// and apps close", and a 14 pt ✕ ("Dismiss") 8 pt from the top-right corner. [06 §21.2] observed;
 /// font sizes and the dash pattern are inferred.
 struct SidebarFavoritesEmptyCard: View {
-    @ObservedObject var viewModel: SidebarViewModel
+    /// For the dismiss action only.
+    let viewModel: SidebarViewModel
+    let palette: ThemePalette
 
     static let title = "Drag to add Favorites"
     static let detail = "Favorites keep your most used sites and apps close"
 
     var body: some View {
         let g = Metrics.FavoritesGrid.self
-        let palette = viewModel.palette
         let ink = palette.primaryText.swiftUI
         ZStack(alignment: .topTrailing) {
             RoundedRectangle(cornerRadius: CGFloat(g.emptyStateCornerRadius), style: .continuous)
@@ -374,20 +425,34 @@ struct SidebarFavoritesEmptyCard: View {
 }
 
 struct SidebarFavoriteCell: View {
-    @ObservedObject var viewModel: SidebarViewModel
-    let tab: TabNode
+    /// What one favorite tile draws (B104, see `SidebarFavoritesView.State`).
+    struct State: Equatable {
+        var tab: TabNode
+        var palette: ThemePalette
+        var isSelected = false
+        /// PNG bytes of the favicon (when the tab has no custom icon), nil for the placeholder.
+        var favicon: Data?
+        /// The favorite whose Peek is open. [06 §22.2] observed (B49).
+        var isPeekSource = false
+        var unreadCount: Int?
+    }
+
+    /// For actions only.
+    let viewModel: SidebarViewModel
+    let state: State
     @Environment(\.windowSurface) private var surface
+    private var tab: TabNode { state.tab }
 
     var body: some View {
-        let palette = viewModel.palette
-        let isSelected = viewModel.isSelected(tab.id)
+        let palette = state.palette
+        let isSelected = state.isSelected
         let radius = CGFloat(Metrics.Sidebar.favoritesCornerRadius)
         Group {
             if let icon = tab.icon {
                 // Change Icon… replaces the favicon. [06 §21.5] observed item (B77).
                 SidebarCustomIconView(icon: icon, size: SidebarLocalTokens.favoriteIconSize, tint: palette.primaryText.swiftUI)
             } else {
-                SidebarFaviconView(pngData: viewModel.faviconImage(for: tab.id), size: SidebarLocalTokens.favoriteIconSize,
+                SidebarFaviconView(pngData: state.favicon, size: SidebarLocalTokens.favoriteIconSize,
                                    tint: palette.ink(\.faviconPlaceholder).swiftUI, placeholder: .roundedSquare)
             }
         }
@@ -404,9 +469,9 @@ struct SidebarFavoriteCell: View {
             }
             // The favorite whose Peek is open carries a small corner badge. [06 §22.2] observed (B49).
             .overlay(alignment: .topTrailing) {
-                if viewModel.linkPeekSourceTabID == tab.id {
+                if state.isPeekSource {
                     LinkPeekSourceBadge()
-                } else if let count = viewModel.unreadCount(tab.id), count > 0 {
+                } else if let count = state.unreadCount, count > 0 {
                     // Show Unread Badge. [05 §context menus] observed item; look inferred (B77).
                     FavoriteUnreadBadge(count: count)
                 }
@@ -441,7 +506,9 @@ struct SidebarFavoriteCell: View {
 /// button is an invisible 2 × 26 strip at (261, 150) that is always in the accessibility tree and
 /// widens to show "…" while the header is hovered. [07 §3, §4] observed; the hovered look unknown.
 struct SidebarSpaceNameRowView: View {
-    @ObservedObject var viewModel: SidebarViewModel
+    /// Read, not observed: its page's `changes` relay says when to update (B104).
+    let viewModel: SidebarViewModel
+    @ObservedObject var changes: SidebarSpacePageChanges
     /// The Space of the page this header heads (B101).
     let spaceID: UUID?
     let layout: SidebarLayout
@@ -551,8 +618,21 @@ enum SidebarDockEntry: Equatable {
 /// incognito window's "+" opens the command bar, [06 §20.2] observed).
 /// While a Space is being created the dock stays under the creation view with a "Create Space"
 /// placeholder as the current item ([06 §1] observed); it ignores clicks then (inferred).
-struct SidebarDockView: View {
-    @ObservedObject var viewModel: SidebarViewModel
+struct SidebarDockView: View, Equatable {
+    /// What the dock draws. The sidebar computes it on each of its updates; the dock is
+    /// re-evaluated only when it changed (B104).
+    struct State: Equatable {
+        var palette: ThemePalette
+        var spaces: [Space]
+        var selectedSpaceID: UUID?
+        var isIncognito = false
+        /// The dock Space a drag hovers (`SidebarDropTarget.dockSpace`).
+        var dropSpaceID: UUID?
+    }
+
+    /// For actions only: the dock does not observe the view model (see `State`).
+    let viewModel: SidebarViewModel
+    let state: State
     let layout: SidebarLayout
     /// The creation view is up: show the placeholder item. [06 §1] observed.
     var isCreatingSpace = false
@@ -560,13 +640,18 @@ struct SidebarDockView: View {
     var paletteOverride: ThemePalette? = nil
     /// The window whose New menu rows run. nil (previews) draws them disabled.
     @Environment(\.sidebarNewMenuTarget) private var newMenuTarget
-    @State private var isNewMenuShown = false
+    @SwiftUI.State private var isNewMenuShown = false
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.state == rhs.state && lhs.layout == rhs.layout && lhs.isCreatingSpace == rhs.isCreatingSpace
+            && lhs.paletteOverride == rhs.paletteOverride
+    }
 
     var body: some View {
-        let palette = paletteOverride ?? viewModel.palette
+        let palette = paletteOverride ?? state.palette
         let tint = palette.primaryText.swiftUI.opacity(palette.inkOpacity.dockButton)
         let top = layout.dockFrame.minY
-        let entries = SidebarDockEntry.entries(spaces: viewModel.dockSpaces, selectedSpaceID: viewModel.selectedSpaceID,
+        let entries = SidebarDockEntry.entries(spaces: state.spaces, selectedSpaceID: state.selectedSpaceID,
                                                isCreatingSpace: isCreatingSpace)
         ZStack(alignment: .topLeading) {
             dockButton(layout.dockHomeFrame, top: top, symbol: SidebarLocalTokens.dockHomeSymbol,
@@ -582,7 +667,7 @@ struct SidebarDockView: View {
             }
             dockButton(layout.dockPlusFrame, top: top, symbol: "plus", glyphSize: SidebarLocalTokens.dockPlusGlyphSize,
                        glyphWeight: SidebarLocalTokens.dockPlusGlyphWeight, tint: tint,
-                       label: viewModel.isIncognito ? "New Tab" : "New", id: "openarc.sidebar.dock.plus",
+                       label: state.isIncognito ? "New Tab" : "New", id: "openarc.sidebar.dock.plus",
                        presenter: AnyView(newMenuPresenter(palette: palette))) {
                 if viewModel.dockPlusClicked() == .toggleNewMenu { isNewMenuShown.toggle() }
             }
@@ -649,7 +734,7 @@ struct SidebarDockView: View {
 
     private func dockItem(_ space: Space, frame: CGRect, top: CGFloat, palette: ThemePalette) -> some View {
         // The placeholder is the current item while a Space is being created. inferred.
-        let isCurrent = space.id == viewModel.selectedSpaceID && !isCreatingSpace
+        let isCurrent = space.id == state.selectedSpaceID && !isCreatingSpace
         let radius = CGFloat(Metrics.Sidebar.addressFieldCornerRadius)
         return Button {
             viewModel.selectSpace(space.id)
@@ -669,7 +754,7 @@ struct SidebarDockView: View {
             .overlay {
                 // Hovering a dot only switches the Space after a moment ([06 §15.6] observed); the
                 // hover look is unknown, so the dot gets the light "drop into" fill of folders.
-                if viewModel.dropTarget == .dockSpace(space.id) {
+                if state.dropSpaceID == space.id {
                     RoundedRectangle(cornerRadius: radius)
                         .fill(RGBAColor(hex: SidebarLocalTokens.dropIntoRGB).swiftUI.opacity(SidebarLocalTokens.dockDropFillOpacity))
                 }

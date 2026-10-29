@@ -268,7 +268,8 @@ struct SidebarTabRowView: View, Equatable {
 /// alone. Reported directly, not as a preference: a preference key is combined through every row
 /// view of the list on each update, glyph or not (B99 profile).
 struct SidebarAudioGlyphButton: View {
-    @ObservedObject var viewModel: SidebarViewModel
+    /// Used by the action only: the row passes everything it draws (B104).
+    let viewModel: SidebarViewModel
     let tabID: UUID
     let indicator: SidebarAudioIndicator
     let textColor: Color
@@ -557,7 +558,8 @@ struct SidebarFolderRowView: View, Equatable {
 /// across x 18.5–257.5. [07 §1, §4] observed. "Clear" shows at the right end only while the sidebar
 /// is hovered ([07 §3] inferred: not visible in E11; [06 §12] observed "gray → darker while hovering").
 struct SidebarDividerRowView: View {
-    @ObservedObject var viewModel: SidebarViewModel
+    /// Used by the action only: the list passes everything it draws (B104).
+    let viewModel: SidebarViewModel
     /// Its page's Space colors (B101).
     let palette: ThemePalette
     let canClear: Bool
@@ -600,7 +602,8 @@ struct SidebarDividerRowView: View {
 /// (ink ≈ 11.5 × 12 at x 20) in the icon cell, SF Regular 14 in black 30 % [07 §3, §4] observed;
 /// white ≈ 50 % with light ink (B32 round-1 PX, inferred).
 struct SidebarNewTabRowView: View {
-    @ObservedObject var viewModel: SidebarViewModel
+    /// Used by the action only: the list passes everything it draws (B104).
+    let viewModel: SidebarViewModel
     /// Its page's Space colors (B101).
     let palette: ThemePalette
     let isEmptySpace: Bool
