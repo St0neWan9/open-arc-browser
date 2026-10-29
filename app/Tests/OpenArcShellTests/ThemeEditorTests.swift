@@ -131,9 +131,9 @@ final class ThemeEditorTests: XCTestCase {
 
     /// [06 §2] observed: nine round swatches per page, several named groups.
     func testPresetPagesHoldNineSwatchesAndAreNamed() {
-        XCTAssertGreaterThanOrEqual(ThemePresets.groups.count, 3)
-        XCTAssertTrue(ThemePresets.groups.allSatisfy { $0.colors.count == 9 })
-        XCTAssertEqual(ThemePresets.groups.map(\.name).prefix(3), ["Brand", "Pastel", "Drab"])
+        XCTAssertEqual(ThemePresets.groups.count, 5)
+        XCTAssertTrue(ThemePresets.groups.allSatisfy { $0.swatches.count == 9 })
+        XCTAssertEqual(ThemePresets.groups.map(\.name), ["Brand", "Brand Gradient", "Pastel", "Drab", "Grayscale"])
         XCTAssertEqual(Set(ThemePresets.groups.flatMap(\.colors)).count, ThemePresets.groups.count * 9, "no duplicate swatches")
     }
 
@@ -145,6 +145,26 @@ final class ThemeEditorTests: XCTestCase {
         XCTAssertEqual(ThemePresets.page(after: last, step: 1), last)
         XCTAssertEqual(ThemePresets.pageContaining(ThemePresets.groups[1].colors[4]), 1)
         XCTAssertEqual(ThemePresets.pageContaining(nil), 0)
+    }
+
+    /// [07 §8.5] observed: Arc's swatches, page by page (catalog colors in sRGB).
+    func testPresetSwatchesAreArcs() {
+        let hex = { (c: RGBAColor) in String(format: "%02X%02X%02X", Int((c.red * 255).rounded()), Int((c.green * 255).rounded()), Int((c.blue * 255).rounded())) }
+        XCTAssertEqual(ThemePresets.groups[0].colors.map(hex),
+                       ["F2EAE4", "F29BBB", "A6729D", "F25E6B", "FF8558", "F8D558", "34E895", "6CBAD9", "666789"])
+        XCTAssertTrue(ThemePresets.groups[1].swatches.allSatisfy { $0.count == 3 }, "page 2 is gradients")
+        XCTAssertEqual(ThemePresets.groups[2].colors.first.map(hex), "FEFBFA")
+        XCTAssertEqual(ThemePresets.groups[3].colors.first.map(hex), "4E3A5A")
+        XCTAssertEqual(ThemePresets.groups[4].colors.map(hex).first, "FFFFFF")
+        XCTAssertEqual(ThemePresets.groups[4].colors.map(hex).last, "000000")
+    }
+
+    func testApplyingAGradientSwatchUsesAllItsColors() {
+        var draft = SpaceThemeDraft()
+        let swatch = ThemePresets.groups[1].swatches[1]
+        draft.applyPreset(swatch)
+        XCTAssertEqual(draft.colors, swatch)
+        XCTAssertEqual(ThemePresets.pageContaining(draft.colors.first), 1)
     }
 
     func testApplyingAPresetReplacesAllPoints() {
