@@ -8,6 +8,12 @@ import OpenArcDesign
 /// B91 (f1-review-3 P3): modal cards centered in the window over a dimmed window, the Settings
 /// window (always light since the user's 2026-10-28 decision), the Little Arc size. Spec:
 /// docs/arc-spec/07-design-system.md §6, §11, §12.
+/// Collects the top edges of rows in a laid-out view.
+private struct RowTopsKey: PreferenceKey {
+    static let defaultValue: [CGFloat] = []
+    static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) { value += nextValue() }
+}
+
 @MainActor
 final class WindowModalTests: XCTestCase {
     private var windows: [NSWindow] = []
@@ -134,29 +140,32 @@ final class WindowModalTests: XCTestCase {
 
     // MARK: 07 §6 Settings window
 
-    /// User decision (2026-10-28), not the spec: the Settings window is always light (Arc's is
-    /// dark purple, [07 §6] observed; the user rejected it, its toolbar icons were nearly
-    /// invisible). A dark system appearance is overridden, and the title bar / toolbar is the
-    /// system's opaque one again, so the pane icons and labels draw dark on light.
+    /// User decision (2026-10-28), not the spec: the Settings window is always light (Arc's was
+    /// measured dark purple in [07 §6]; the user rejected it). B100: Arc's light Settings window is
+    /// white (B100 capture, observed), so a dark system appearance is overridden, the window fill is
+    /// white and the title bar is the system's opaque one without a separator (our toolbar draws
+    /// its own hairline).
     func testSettingsWindowIsAlwaysLight() throws {
-        XCTAssertEqual(ThemeDerivation.settingsWindowBackground, RGBAColor(hex: 0xECECEC))
+        XCTAssertEqual(SettingsPalette.window, RGBAColor(hex: 0xFFFFFF))
         XCTAssertEqual(ThemeDerivation.settingsAppearance, .light)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 684, height: 562), styleMask: [.titled, .closable], backing: .buffered, defer: true)
         window.appearance = NSAppearance(named: .darkAqua)
         window.titlebarAppearsTransparent = true
-        XCTAssertTrue(SettingsWindowConfigurator.apply(to: window))
+        XCTAssertTrue(SettingsWindowConfigurator.apply(to: window, title: "General"))
         XCTAssertEqual(window.appearance?.name, .aqua)
         XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
-        XCTAssertFalse(window.titlebarAppearsTransparent, "the system toolbar, readable icons")
+        XCTAssertFalse(window.titlebarAppearsTransparent, "the system title bar")
+        XCTAssertEqual(window.titlebarSeparatorStyle, .none, "the toolbar draws its own hairline")
+        XCTAssertEqual(window.title, "General", "the title follows the pane [03]")
         let fill = try XCTUnwrap(window.backgroundColor.usingColorSpace(.sRGB))
-        XCTAssertEqual(fill.redComponent, 0xEC / 255, accuracy: 0.002)
-        XCTAssertEqual(fill.greenComponent, 0xEC / 255, accuracy: 0.002)
-        XCTAssertEqual(fill.blueComponent, 0xEC / 255, accuracy: 0.002)
-        XCTAssertFalse(SettingsWindowConfigurator.apply(to: window), "writes only what differs")
+        XCTAssertEqual(fill.redComponent, 1, accuracy: 0.002)
+        XCTAssertEqual(fill.greenComponent, 1, accuracy: 0.002)
+        XCTAssertEqual(fill.blueComponent, 1, accuracy: 0.002)
+        XCTAssertFalse(SettingsWindowConfigurator.apply(to: window, title: "General"), "writes only what differs")
     }
 
-    /// User decision (2026-10-28): the panes draw the light fill under a dark system appearance,
-    /// and text on them (the toolbar's labels use the same label color) is dark, so it reads.
+    /// User decision (2026-10-28): the panes draw white under a dark system appearance, and the
+    /// row text is Arc's dark gray (B100 capture, observed #4E4E4E), so it reads.
     func testSettingsPanesAreLightInDarkMode() throws {
         let shell = ShellModel(dependencies: .fake(), workspace: .demo())
         models.append(shell)
@@ -172,48 +181,43 @@ final class WindowModalTests: XCTestCase {
         windows.append(window)
         settle(host)
         XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
-        // Bottom-left corner, outside the grouped sections: the window fill, compared with the
-        // token drawn alone through the same readback (the cached bitmap is in the display's
-        // color space).
+        // Bottom-left corner, outside the cards: the window fill.
         let corner = try XCTUnwrap(pixel(host, at: CGPoint(x: 4, y: 556)))
-        let reference = try XCTUnwrap(renderedColor(ThemeDerivation.settingsWindowBackground.swiftUI))
-        XCTAssertEqual(corner.redComponent, reference.redComponent, accuracy: 0.01)
-        XCTAssertEqual(corner.greenComponent, reference.greenComponent, accuracy: 0.01)
-        XCTAssertEqual(corner.blueComponent, reference.blueComponent, accuracy: 0.01)
-        XCTAssertGreaterThan(corner.redComponent, 0.85, "light, not dark")
-        // The label color the toolbar items use resolves dark in the window's appearance.
-        var label = NSColor.labelColor
-        window.effectiveAppearance.performAsCurrentDrawingAppearance {
-            label = NSColor.labelColor.usingColorSpace(.sRGB) ?? label
-        }
-        XCTAssertLessThan(label.redComponent, 0.3, "dark labels on the light toolbar")
+        XCTAssertGreaterThan(corner.redComponent, 0.98, "white, not dark")
+        XCTAssertGreaterThan(corner.blueComponent, 0.98)
+        XCTAssertLessThan(SettingsPalette.bodyText.red, 0.35, "dark row text on the white pane")
     }
 
     /// [07 §6] observed: 684 × 650 window, 56 pt toolbar, toggle rows 37 apart. The pane is sized
-    /// under the title bar and toolbar, and the toggles of a grouped pane repeat at 37 pt.
+    /// under the title bar and toolbar, and a card of switch rows repeats at 37 pt.
     func testSettingsToolbarAndToggleRowPitch() {
         XCTAssertEqual(Metrics.Settings.toolbarHeight, 56)
         XCTAssertEqual(Metrics.Settings.toggleRowPitch, 37)
+        XCTAssertEqual(SettingsToolbarLayout.height, 56)
         XCTAssertEqual(SettingsTokens.chromeHeight, CGFloat(Metrics.Settings.titleBarHeight) + 56)
         XCTAssertEqual(SettingsTokens.paneMinHeight, 650 - SettingsTokens.chromeHeight)
 
-        let view = Form {
-            Section {
-                ForEach(0..<4, id: \.self) { i in Toggle("Toggle \(i)", isOn: .constant(i.isMultiple(of: 2))) }
+        let rows = (0..<4).map { i in SettingsToggleRow(label: "Toggle \(i)", isOn: .constant(i.isMultiple(of: 2))) }
+        let view = SettingsCard {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                if index > 0 { SettingsDivider() }
+                row.background(GeometryReader { proxy in
+                    Color.clear.preference(key: RowTopsKey.self, value: [proxy.frame(in: .global).minY])
+                })
             }
         }
-        .formStyle(.grouped)
-        .frame(width: SettingsTokens.windowWidth)
+        .frame(width: SettingsLayout.columnWidth)
         .modifier(SettingsWindowChrome())
+        var tops: [CGFloat] = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 684, height: 562), styleMask: [.titled], backing: .buffered, defer: false)
-        let host = NSHostingView(rootView: view)
+        let host = NSHostingView(rootView: view.onPreferenceChange(RowTopsKey.self) { tops = $0 })
         window.contentView = host
         window.orderFront(nil)
         windows.append(window)
         settle(host)
-        let tops = switchTops(in: host)
         XCTAssertEqual(tops.count, 4)
-        for (lower, upper) in zip(tops, tops.dropFirst()) { XCTAssertEqual(upper - lower, 37, accuracy: 0.25) }
+        let sorted = tops.sorted()
+        for (lower, upper) in zip(sorted, sorted.dropFirst()) { XCTAssertEqual(upper - lower, 37, accuracy: 0.25) }
     }
 
     // MARK: 07 §11, §12 Little Arc
@@ -264,13 +268,6 @@ final class WindowModalTests: XCTestCase {
         }
         walk(root)
         return found
-    }
-
-    /// Top edges of the switches (window coordinates), top to bottom.
-    private func switchTops(in host: NSView) -> [CGFloat] {
-        subviews(of: host) { String(describing: type(of: $0)) == "PlatformSwitch" || $0 is NSSwitch }
-            .map { -$0.convert($0.bounds, to: nil).maxY }
-            .sorted()
     }
 
     /// The card's frame in window coordinates, top-left origin: the frame of the view the

@@ -31,15 +31,17 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// SF Symbol for the toolbar. Our own choice (icons may differ from Arc, see CLAUDE.md).
+    /// SF Symbol for the toolbar: gray outline glyphs, the closest system symbols to Arc's
+    /// (B100 capture, observed: a person card, a gear, one person, stacked windows, a keyboard, a
+    /// stroked letter, sliders). Our own choice of symbols; no Arc artwork.
     public var systemImage: String {
         switch self {
-        case .account: return "person.crop.circle"
+        case .account: return "person.text.rectangle"
         case .general: return "gearshape"
-        case .profiles: return "person.2"
-        case .links: return "link"
-        case .shortcuts: return "command"
-        case .icon: return "app"
+        case .profiles: return "person"
+        case .links: return "macwindow.on.rectangle"
+        case .shortcuts: return "keyboard"
+        case .icon: return "scribble.variable"
         case .advanced: return "slider.horizontal.3"
         }
     }
@@ -116,9 +118,11 @@ public enum SettingsCatalog {
     // MARK: General [03 §General]
 
     static let general: [SettingsControl] = [
-        // Observed: a toggle whose row starts with "Info"; what it controls was not recorded
-        // (unknown). No plan task covers it yet.
-        SettingsControl("general.info", "Info", .toggle(defaultValue: false), .pending(task: "unknown (spec gap)")),
+        // [03 §General] records a toggle whose row starts with "Info"; the B100 capture shows it
+        // is Arc's automatic-update switch with an ⓘ after the label ("Info" was the ⓘ button's
+        // name). Ours: our own wording, backed by the D7 updater's automatic checks
+        // (`UpdatesModel.automaticallyChecksForUpdates`, default on, inferred).
+        SettingsControl("general.automaticUpdates", "Automatically update Open Arc", .toggle(defaultValue: true), .live),
         // Observed, default on. Live (B68): ⌘Q asks first (`AppTermination`, `QuitConfirmationAlert`).
         SettingsControl("general.warnBeforeQuitting", "Warn before quitting", .toggle(defaultValue: true), .live),
         // Live (B84): Previews are Peek link previews; the button opens Links, where the Peek

@@ -296,6 +296,16 @@ public final class SettingsModel: ObservableObject {
         return id
     }
 
+    /// Renames a profile through `TreeOps.renameProfile` (the profile list's edit button, B100).
+    /// Blank names are ignored. Returns false if nothing changed.
+    @discardableResult
+    public func renameProfile(_ id: UUID, to name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, shell.workspace.profiles[id]?.name != trimmed else { return false }
+        let controller = shell.controller
+        return (try? controller.mutate(origin: nil) { try TreeOps.renameProfile($0, id: id, name: trimmed, now: controller.now()) }) != nil
+    }
+
     /// "Previews Settings…" in General jumps to the Links pane, where the Peek switches are.
     /// [03 §General] observed button; the target is inferred (Previews = Peek link previews,
     /// [03 §Links] observed Peek section). B84.
