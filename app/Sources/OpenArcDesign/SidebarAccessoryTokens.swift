@@ -67,18 +67,27 @@ public enum UpdatePillTokens {
     /// Height the list gives up while the pill shows.
     public static var bandHeight: Double { topGap + height + bottomGap }
 
-    /// Text: white, ≈ 12 pt medium. [07 §8.6] observed.
+    /// Text: ≈ 12 pt medium. [07 §8.6] observed.
     public static let titleStyle = TextStyle(size: 12, weight: .medium)
-    public static let titleColor = RGBAColor(hex: 0xFFFFFF)
+    /// Text color: white on a light-ink (dark) sidebar, black on a dark-ink (light) one. [07 §8.6]
+    /// observed: white on the dark sage Space; black on a pale violet Space (E27 follow-up).
+    public static func titleColor(lightInk: Bool) -> RGBAColor {
+        RGBAColor(hex: lightInk ? 0xFFFFFF : 0x000000)
+    }
 
-    /// The fill is the sidebar color with this much white over it. [07 §8.6] observed sample
-    /// (sage sidebar #6C9174 → pill #7D9C84); the rule is inferred: 11 % white gives #7C9D83,
-    /// ≤ 1.1/255 per channel. Drawn as a white layer at this opacity, so a see-through window
-    /// lightens whatever shows through the sidebar the same way.
+    /// On a light-ink (dark) sidebar the fill is the sidebar color with this much white over it.
+    /// [07 §8.6] observed sample (sage sidebar #6C9174 → pill #7D9C84); the rule is inferred: 11 %
+    /// white gives #7C9D83, ≤ 1.1/255 per channel. Drawn as a white layer at this opacity, so a
+    /// see-through window lightens whatever shows through the sidebar the same way.
     public static let whiteOverlay: Double = 0.11
+    /// On a dark-ink (light) sidebar the pill is a little darker: black at this opacity. [07 §8.6]
+    /// observed sample (pale violet sidebar #DBDBEE → pill #D6D5E9); 2.5 % black gives #D6D6E8,
+    /// ≤ 1/255 (rule inferred from one sample).
+    public static let blackOverlay: Double = 0.025
 
     /// The opaque pill color over an opaque sidebar color.
-    public static func fill(over sidebar: RGBAColor) -> RGBAColor {
-        ThemeDerivation.overlayWhite(sidebar, amount: whiteOverlay)
+    public static func fill(over sidebar: RGBAColor, lightInk: Bool = true) -> RGBAColor {
+        lightInk ? ThemeDerivation.overlayWhite(sidebar, amount: whiteOverlay)
+            : ThemeDerivation.mix(sidebar, RGBAColor(hex: 0x000000), amount: blackOverlay)
     }
 }

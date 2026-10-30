@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import OpenArcPersistence
 
 /// Update state and actions shared by the app menu and the Settings window (plan D7).
 ///
@@ -30,6 +31,7 @@ public final class UpdatesModel: ObservableObject {
             }
         }
         checker.start()
+        if Self.previewsUpdatePill() { isUpdateReady = true }
         canCheckForUpdates = checker.canCheckForUpdates
     }
 
@@ -76,6 +78,19 @@ public final class UpdatesModel: ObservableObject {
     @Published public private(set) var isUpdateReady = false
     /// Installs the downloaded update and relaunches, when the updater offered a direct way.
     private var installNow: (@MainActor () -> Void)?
+
+    /// Development builds only: `OPENARC_PREVIEW_UPDATE_PILL=1` shows the update pill at launch, to
+    /// check its look without a real downloaded update (B111). Clicking it then opens the updater's
+    /// own prompt. Never in the release bundle id. Our tool; not in the spec.
+    static let previewUpdatePillEnvironmentKey = "OPENARC_PREVIEW_UPDATE_PILL"
+
+    static func previewsUpdatePill(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleIdentifier: String = PersistenceDefaults.bundleIdentifier
+    ) -> Bool {
+        bundleIdentifier != PersistenceDefaults.releaseBundleIdentifier
+            && environment[previewUpdatePillEnvironmentKey] == "1"
+    }
 
     /// The updater finished downloading an update. `installNow` installs it and relaunches (with
     /// Sparkle, the immediate-installation block it hands over for an update it would install on
