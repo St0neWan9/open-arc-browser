@@ -16,6 +16,7 @@ private final class FakeUpdateChecker: UpdateChecker {
     var automaticallyChecksForUpdates = false
     var automaticallyDownloadsUpdates = false
     var canCheckForUpdatesDidChange: (@MainActor (Bool) -> Void)?
+    var updateReadinessDidChange: (@MainActor (UpdateReadiness) -> Void)?
 
     private(set) var startCount = 0
     private(set) var checkCount = 0

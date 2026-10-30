@@ -11,13 +11,19 @@ import Sparkle
 @MainActor
 final class SparkleUpdateChecker: UpdateChecker {
     private let controller: SPUStandardUpdaterController
+    /// Held here: Sparkle keeps only a weak reference to its delegate.
+    private let delegate = SparkleUpdaterDelegate()
     private var canCheckObservation: NSKeyValueObservation?
 
     var canCheckForUpdatesDidChange: (@MainActor (Bool) -> Void)?
+    var updateReadinessDidChange: (@MainActor (UpdateReadiness) -> Void)? {
+        get { delegate.readinessDidChange }
+        set { delegate.readinessDidChange = newValue }
+    }
 
     init() {
         // Not started yet: `UpdatesModel` applies the stored settings first, then calls `start()`.
-        controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
+        controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: delegate, userDriverDelegate: nil)
         canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.new]) { [weak self] updater, _ in
             // Sparkle changes this property on the main thread only.
             MainActor.assumeIsolated {
@@ -46,6 +52,28 @@ final class SparkleUpdateChecker: UpdateChecker {
 
     func checkForUpdates() {
         controller.checkForUpdates(nil)
+    }
+}
+
+/// Tells the shell when Sparkle has downloaded an update that waits for the app to quit, so the
+/// sidebar shows its update pill (B111, [07 §8.6]); clicking it installs and relaunches at once.
+@MainActor
+private final class SparkleUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    var readinessDidChange: (@MainActor (UpdateReadiness) -> Void)?
+
+    nonisolated func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        // Sparkle calls its delegate on the main thread. The handler may run more than once
+        // (Sparkle 2.3+), e.g. after a quit the user cancelled.
+        nonisolated(unsafe) let install = immediateInstallHandler // called on the main thread only, as Sparkle requires
+        MainActor.assumeIsolated {
+            readinessDidChange?(.ready(installNow: { install() }))
+        }
+        // We offer the install (the pill); Sparkle still installs on quit.
+        return true
+    }
+
+    nonisolated func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        MainActor.assumeIsolated { readinessDidChange?(.none) }
     }
 }
 
