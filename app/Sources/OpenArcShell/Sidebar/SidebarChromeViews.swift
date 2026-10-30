@@ -796,9 +796,12 @@ struct SidebarDockView: View, Equatable {
 
 /// "New Open Arc Version Available": a full-width capsule right above the dock while a downloaded
 /// update waits. [07 §8.6] observed (E27): x 8–268, ≈ 22 pt tall, fully rounded, the sidebar
-/// color lightened, white ≈ 12 pt medium text centered, no border or shadow. A click installs the
+/// color lightened with white text on a dark sidebar, darkened slightly with black text on a light one, ≈ 12 pt medium text centered, no border or shadow. A click installs the
 /// update and relaunches (Arc's click behavior unknown; ours inferred).
 struct SidebarUpdatePill: View {
+    /// The sidebar uses light ink (a dark theme color): white text on a lighter pill; otherwise
+    /// black text on a slightly darker pill. [07 §8.6] observed.
+    let lightInk: Bool
     let action: @MainActor () -> Void
 
     var body: some View {
@@ -806,12 +809,14 @@ struct SidebarUpdatePill: View {
         Button(action: action) {
             Text(SidebarUpdatePill.title)
                 .font(t.titleStyle.font)
-                .foregroundStyle(t.titleColor.swiftUI)
+                .foregroundStyle(t.titleColor(lightInk: lightInk).swiftUI)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // White over whatever the sidebar shows, so a see-through window lightens the same
-                // way as an opaque one.
-                .background(Capsule(style: .continuous).fill(Color.white.opacity(t.whiteOverlay)))
+                // A white (or black) layer over whatever the sidebar shows, so a see-through window
+                // changes the same way as an opaque one.
+                .background(Capsule(style: .continuous).fill(
+                    lightInk ? Color.white.opacity(t.whiteOverlay) : Color.black.opacity(t.blackOverlay)
+                ))
                 .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)

@@ -119,7 +119,7 @@ private struct SidebarContent: View, Equatable {
 
                 // A downloaded update waits: the pill right above the dock. [07 §8.6] observed (B111).
                 if let pill = layout.updatePillFrame {
-                    SidebarUpdatePill { viewModel.controller.updates.installReadyUpdate() }
+                    SidebarUpdatePill(lightInk: viewModel.palette.usesLightInk) { viewModel.controller.updates.installReadyUpdate() }
                         .frame(width: pill.width, height: pill.height)
                         .offset(x: pill.minX, y: pill.minY)
                 }

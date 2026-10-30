@@ -28,5 +28,7 @@ final class SidebarAccessoryTokenTests: XCTestCase {
         XCTAssertEqual(UpdatePillTokens.height, 22)
         XCTAssertEqual(UpdatePillTokens.horizontalInset, 8)
         XCTAssertLessThanOrEqual(distance(UpdatePillTokens.fill(over: RGBAColor(hex: 0x6C9174)), RGBAColor(hex: 0x7D9C84)), 1.5)
+        // [07 §8.6] observed on a pale violet Space: #DBDBEE → #D6D5E9 with black text.
+        XCTAssertLessThanOrEqual(distance(UpdatePillTokens.fill(over: RGBAColor(hex: 0xDBDBEE), lightInk: false), RGBAColor(hex: 0xD6D5E9)), 1.5)
     }
 }

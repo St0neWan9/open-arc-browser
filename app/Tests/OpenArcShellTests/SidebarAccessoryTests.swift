@@ -3,6 +3,7 @@ import CoreGraphics
 import OpenArcModel
 import OpenArcEngine
 import OpenArcDesign
+import OpenArcPersistence
 @testable import OpenArcShell
 
 /// B111 (update-ready pill above the dock) and B112 (Create Space button colors).
@@ -40,7 +41,8 @@ final class SidebarAccessoryTests: XCTestCase {
         XCTAssertLessThanOrEqual(distance(pill, RGBAColor(hex: 0x7D9C84)), 1.5)
         XCTAssertEqual(UpdatePillTokens.titleStyle.size, 12)
         XCTAssertEqual(UpdatePillTokens.titleStyle.weight, .medium)
-        XCTAssertEqual(UpdatePillTokens.titleColor, RGBAColor(hex: 0xFFFFFF))
+        XCTAssertEqual(UpdatePillTokens.titleColor(lightInk: true), RGBAColor(hex: 0xFFFFFF))
+        XCTAssertEqual(UpdatePillTokens.titleColor(lightInk: false), RGBAColor(hex: 0x000000))
         XCTAssertEqual(SidebarUpdatePill.title, "New Open Arc Version Available")
     }
 
@@ -141,4 +143,12 @@ private final class RecordingUpdateChecker: UpdateChecker {
 
     func start() {}
     func checkForUpdates() { checkCount += 1 }
+
+    /// B111 dev aid: the pill preview switch works only outside the release bundle id.
+    func testUpdatePillPreviewSwitchIsDevelopmentOnly() {
+        let on = [UpdatesModel.previewUpdatePillEnvironmentKey: "1"]
+        XCTAssertTrue(UpdatesModel.previewsUpdatePill(environment: on, bundleIdentifier: "org.openarc.browser.dev"))
+        XCTAssertFalse(UpdatesModel.previewsUpdatePill(environment: on, bundleIdentifier: PersistenceDefaults.releaseBundleIdentifier))
+        XCTAssertFalse(UpdatesModel.previewsUpdatePill(environment: [:], bundleIdentifier: "org.openarc.browser.dev"))
+    }
 }
