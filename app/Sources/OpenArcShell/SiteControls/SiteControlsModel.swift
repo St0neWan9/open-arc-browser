@@ -196,6 +196,8 @@ public final class SiteControlsModel: ObservableObject {
 
     private let sidebar: SidebarViewModel
     private var work: [Task<Void, Never>] = []
+    /// Counts started refreshes; only the latest one writes `settings`.
+    private var refreshGeneration = 0
     private var copiedTask: Task<Void, Never>?
     private var leaveTask: Task<Void, Never>?
     private var selectionChanges: AnyCancellable?
@@ -603,13 +605,17 @@ public final class SiteControlsModel: ObservableObject {
     }
 
     private func refresh(site: SiteOrigin, profileID: UUID?) async {
+        // Refreshes overlap (two quick toggles each refresh after their change); the one started
+        // last read the newest state, so an earlier one that finishes later is dropped.
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
         var state = await provider.settings(for: site, profileID: profileID)
         if let id = tabID, let actions = await provider.extensionActions(tabID: id, profileID: profileID) {
             state.extensions = actions
         }
         var installed: [EngineExtensionInfo] = []
         if let profileID, let engineExtensions { installed = await engineExtensions.installed(profileID: profileID) }
-        guard self.site == site else { return }
+        guard self.site == site, generation == refreshGeneration else { return }
         settings = state
         hasInstalledExtensions = !installed.isEmpty
     }
