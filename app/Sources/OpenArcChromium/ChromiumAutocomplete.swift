@@ -55,6 +55,16 @@ final class ChromiumAutocomplete: EngineAutocomplete {
     }
 
     func searchSuggestions(_ request: SearchSuggestionRequest) async -> [String] {
+        await searchCompletionEntries(request).filter { !$0.isNavigation }.map(\.text)
+    }
+
+    /// Plan B128: the service's answer including its navigation rows. The bridge hands over the
+    /// body unparsed (OACAutocomplete.h), so navigation rows need no bridge change.
+    func searchCompletions(_ request: SearchSuggestionRequest) async -> [SearchSuggestion] {
+        await searchCompletionEntries(request)
+    }
+
+    private func searchCompletionEntries(_ request: SearchSuggestionRequest) async -> [SearchSuggestion] {
         guard capabilities.contains(.searchSuggestions), let url = request.url, !Task.isCancelled,
               let onDisk = await core.onDiskProfile(request.profileID) else { return [] }
         let body: Data? = await Self.cancellable { finish in
@@ -65,7 +75,7 @@ final class ChromiumAutocomplete: EngineAutocomplete {
             return Self.fetchSuggestions(profile, url: url) { data in finish(data.map { Data($0) }) }
         } ?? nil
         guard let body else { return [] }
-        return SearchSuggestionParser.suggestions(from: body, query: request.query)
+        return SearchSuggestionParser.completions(from: body, query: request.query)
     }
 
     /// Plan B123: the history service's most visited pages (Chromium's top sites query), most

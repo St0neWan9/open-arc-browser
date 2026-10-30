@@ -105,9 +105,7 @@ public struct CommandBarView: View {
         let c = Metrics.CommandBar.self
         let iconBox = CGFloat(c.inputFieldLeading - c.inputIconCenter) * 2
         return ZStack(alignment: .topLeading) {
-            Image(systemName: inputGlyphSymbol)
-                .font(.system(size: CommandBarStyle.inputIconPointSize, weight: .medium))
-                .foregroundStyle(palette.commandBarSecondaryText.commandBarColor)
+            inputGlyph
                 .frame(width: CommandBarStyle.inputIconInk, height: CommandBarStyle.inputIconInk)
                 .accessibilityBox(label: "Search", identifier: "openarc.commandbar.icon", traits: .isImage)
                 .frame(width: iconBox, height: iconBox)
@@ -125,10 +123,27 @@ public struct CommandBarView: View {
         .frame(width: layout.panelWidth, height: c.inputRowHeight, alignment: .topLeading)
     }
 
-    /// The first result's command glyph, else the magnifier (`CommandBarInputGlyph`, [07 §5] E27
+    /// The first result's command glyph, the completed site's favicon while the field completes
+    /// inline (B128, [05 §命令栏] observed), else the magnifier (`CommandBarInputGlyph`, [07 §5] E27
     /// observed). The unedited ⌘L prefill lists the empty-query rows, so it counts as empty.
-    private var inputGlyphSymbol: String {
-        CommandBarInputGlyph.forField(text: viewModel.effectiveQuery, firstResult: viewModel.results.first).symbolName
+    private var inputGlyphValue: CommandBarInputGlyph {
+        CommandBarInputGlyph.forField(
+            text: viewModel.effectiveQuery,
+            firstResult: viewModel.results.first,
+            inlineCompletion: viewModel.inlineCompletion
+        )
+    }
+
+    @ViewBuilder
+    private var inputGlyph: some View {
+        let glyph = inputGlyphValue
+        if case .site(let row) = glyph, let image = SidebarFaviconView.image(viewModel.faviconProvider?(row)) {
+            Image(nsImage: image).resizable().interpolation(.high)
+        } else {
+            Image(systemName: glyph.symbolName)
+                .font(.system(size: CommandBarStyle.inputIconPointSize, weight: .medium))
+                .foregroundStyle(palette.commandBarSecondaryText.commandBarColor)
+        }
     }
 
     /// ⓘ in the main window, ✕ in Little Arc. [06 §6] observed; panes show ⓘ (inferred).

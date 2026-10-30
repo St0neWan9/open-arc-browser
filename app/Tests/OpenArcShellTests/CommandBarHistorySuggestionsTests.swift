@@ -108,7 +108,12 @@ final class CommandBarHistorySuggestionsTests: XCTestCase {
         XCTAssertTrue(kinds.first?.isTab == true, "open tabs first: \(kinds)")
         let history = try XCTUnwrap(kinds.firstIndex(of: .historyItem))
         let suggestions = results.indices.filter { results[$0].kind == .searchSuggestion }
-        XCTAssertEqual(suggestions.map { results[$0].title }, ["today weather", "today news"], "engine order")
+        // B128: the visited host "today9.example.net" also completes "today" (a site row after the
+        // tabs), so the eight-row list may cut the last suggestion; the shown ones keep the order.
+        XCTAssertEqual(results.first { $0.kind == .siteCompletion }?.subtitle, "today9.example.net")
+        let shown = suggestions.map { results[$0].title }
+        XCTAssertFalse(shown.isEmpty)
+        XCTAssertEqual(shown, Array(["today weather", "today news"].prefix(shown.count)), "engine order")
         XCTAssertTrue(suggestions.allSatisfy { $0 > history }, "history before suggestions: \(kinds)")
         XCTAssertTrue(results.suffix(suggestions.count).allSatisfy { $0.kind == .searchSuggestion }, "suggestions last")
         let lastTab = try XCTUnwrap(kinds.lastIndex { $0.isTab })
@@ -185,7 +190,8 @@ final class CommandBarHistorySuggestionsTests: XCTestCase {
         shell.presentCommandBar(.newTab)
         await type("swift")
         XCTAssertFalse(shell.commandBar.results.contains { $0.kind == .searchSuggestion })
-        XCTAssertTrue(shell.commandBar.results.contains { $0.kind == .historyItem })
+        // B128: the visited swift.org is the completing site row (one row per page).
+        XCTAssertTrue(shell.commandBar.results.contains { [.historyItem, .siteCompletion].contains($0.kind) && $0.url?.host == "swift.org" })
         XCTAssertTrue(autocomplete.suggestionRequests.isEmpty)
     }
 
@@ -245,7 +251,8 @@ final class CommandBarHistorySuggestionsTests: XCTestCase {
         autocomplete.addVisit(url: try XCTUnwrap(URL(string: "https://swift.org/")), title: "Swift", profileID: f.profile)
         let little = LittleArcModel(shell: shell)
         await type("swift", in: little.commandBar)
-        XCTAssertTrue(little.commandBar.results.contains { $0.kind == .historyItem })
+        // B128: the visited swift.org shows as the completing site row (one row per page).
+        XCTAssertTrue(little.commandBar.results.contains { [.historyItem, .siteCompletion].contains($0.kind) && $0.url?.host == "swift.org" })
         XCTAssertTrue(little.commandBar.results.contains { $0.kind == .searchSuggestion })
     }
 }

@@ -31,6 +31,14 @@ public enum CommandBarRanker {
         static let titlePrefix: Double = 800
         static let urlPrefix: Double = 750
         static let webSearch: Double = 700
+        /// A site suggestion whose host starts with the typed text (plan B128): above the plain
+        /// search row and the query suggestions, below a matching open tab or a typed URL. Arc
+        /// observed the completed site as the first row with the plain search second
+        /// ([05 §命令栏] observed); the score itself is inferred.
+        static let sitePrefix: Double = 780
+        /// Site completion rows rise with how well the site is known (frecency 0...1), staying
+        /// below a title-prefix match of an open tab. inferred.
+        static let siteStrengthWeight: Double = 10
         static let titleWordPrefix: Double = 600
         static let keywordCap: Double = 500
         static let titleSubstring: Double = 400
@@ -66,7 +74,7 @@ public enum CommandBarRanker {
             var score: Double
         }
         var scored: [Scored] = []
-        for candidate in candidates {
+        for candidate in singleSiteCompletion(candidates) {
             if let score = score(candidate, query: query, context: context) {
                 scored.append(Scored(result: candidate, score: score))
             }
@@ -79,6 +87,30 @@ public enum CommandBarRanker {
         return Array(deduped.prefix(max(0, limit)))
     }
 
+    /// Keeps one completing site row (plan B128): the best known one (strength, then a known site
+    /// before a suggested one, then source order); every other completing row becomes a plain site
+    /// suggestion. Arc listed "National Weather Service — weather.gov" as a site row below
+    /// "Weather.com — weather.com", though "weather" starts both hosts ([05 §命令栏] observed); the
+    /// choice is inferred.
+    static func singleSiteCompletion(_ candidates: [CommandBarResult]) -> [CommandBarResult] {
+        let completing = candidates.indices.filter { candidates[$0].kind == .siteCompletion }
+        guard completing.count > 1 else { return candidates }
+        let keep = completing.min { l, r in
+            let a = candidates[l], b = candidates[r]
+            if a.frecency != b.frecency { return a.frecency > b.frecency }
+            let aKnown = a.id.hasPrefix("site:"), bKnown = b.id.hasPrefix("site:")
+            if aKnown != bKnown { return aKnown }
+            if a.sourceOrder != b.sourceOrder { return a.sourceOrder < b.sourceOrder }
+            return a.id < b.id
+        }
+        var out = candidates
+        for index in completing where index != keep {
+            out[index].kind = .siteSuggestion
+            if let url = out[index].url { out[index].completion = url.absoluteString }
+        }
+        return out
+    }
+
     /// Score of one candidate for a non-empty query; nil drops the candidate.
     static func score(_ result: CommandBarResult, query: String, context: CommandBarQueryContext) -> Double? {
         switch result.kind {
@@ -87,6 +119,17 @@ public enum CommandBarRanker {
         case .webSearch:
             return Score.webSearch
         case .searchSuggestion:
+            return Score.suggestionBase - Double(min(result.sourceOrder, 50))
+        case .siteCompletion:
+            // A typed text that already reads as an address ("weather.co") completes to the site
+            // ahead of opening it as typed. inferred.
+            let base: Double
+            if case .url = CommandBarInputClassifier.classify(query) { base = Score.typedURL + 5 } else { base = Score.sitePrefix }
+            return base + Score.siteStrengthWeight * min(max(result.frecency, 0), 1)
+        case .siteSuggestion:
+            // A navigation suggestion sits among the query suggestions in the service's order
+            // (Arc: "National Weather Service — weather.gov" among "weather radar" and "weather
+            // tomorrow", [05 §命令栏] observed); keeping the service's order is inferred.
             return Score.suggestionBase - Double(min(result.sourceOrder, 50))
         case .todayTab, .pinnedTab, .favoriteTab:
             guard var value = textScore(query: query, title: result.title, url: result.url) else { return nil }
@@ -183,16 +226,21 @@ public enum CommandBarRanker {
         var archivedKeys = Set<String>()
         var typedKeys = Set<String>()
         var historyKeys = Set<String>()
+        var siteKeys = Set<String>()
         for result in sorted {
             guard let url = result.url else { continue }
             if result.kind.isTab { tabKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .archivedItem { archivedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .typedURL { typedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .historyItem { historyKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
+            if result.kind == .siteCompletion || result.kind == .siteSuggestion {
+                siteKeys.insert(CommandBarTextNormalizer.urlKey(url))
+            }
         }
         let foldedQuery = CommandBarTextNormalizer.fold(query)
         var seenSuggestions = Set<String>()
         var seenTopSites = Set<String>()
+        var seenSiteKeys = Set<String>()
         var out: [CommandBarResult] = []
         for result in sorted {
             let key = result.url.map(CommandBarTextNormalizer.urlKey)
@@ -200,11 +248,14 @@ public enum CommandBarRanker {
             case .archivedItem:
                 if let key, tabKeys.contains(key) { continue }
             case .historyItem:
-                // A visited page that is open, archived or exactly what was typed has its row
-                // already (switch / restore / open). inferred (B66).
-                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) { continue }
+                // A visited page that is open, archived, exactly what was typed or already shown as
+                // a site row has its row already (switch / restore / open). inferred (B66, B128).
+                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) || siteKeys.contains(key) { continue }
+            case .siteCompletion, .siteSuggestion:
+                // An open or archived page has its tab row; one site row per page (B128).
+                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || !seenSiteKeys.insert(key).inserted { continue }
             case .topSite:
-                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) || historyKeys.contains(key) { continue }
+                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) || historyKeys.contains(key) || siteKeys.contains(key) { continue }
                 if let key, !seenTopSites.insert(key).inserted { continue }
             case .typedURL:
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) { continue }
