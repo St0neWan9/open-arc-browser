@@ -21,6 +21,9 @@ final class ChromiumExtensions: EngineExtensions, @unchecked Sendable {
         self.core = core
     }
 
+    /// The engine core, for ChromiumContextMenu.swift's action menu items.
+    var engineCore: ChromiumEngineCore { core }
+
     func installed(profileID: Profile.ID) async -> [EngineExtensionInfo] {
         await installedOnMain(profileID)
     }

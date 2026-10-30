@@ -429,7 +429,8 @@ struct SidebarTabLiveState: Equatable {
         case .closed:
             isLoading = false
             isAudible = false
-        case .hoveredLinkChanged, .closeRequested, .activationRequested, .dialogCancelled, .linkPreviewRequested:
+        case .hoveredLinkChanged, .closeRequested, .activationRequested, .dialogCancelled, .linkPreviewRequested,
+             .contextMenuRequested:
             // Requests, handled by `WorkspaceController` / `DialogQueue`, not state.
             break
         }

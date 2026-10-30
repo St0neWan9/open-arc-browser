@@ -252,6 +252,10 @@ public enum TabEvent: Hashable, Sendable {
     /// The tab dropped a link click for the shell to preview (Peek, plan B49, LinkPreview.swift).
     /// Only for the triggers set with `BrowserTab.setLinkPreviewTriggers`.
     case linkPreviewRequested(LinkPreviewRequest)
+    /// The user right-clicked the page (plan B124, PageContextMenu.swift): the engine's items and
+    /// what was clicked. The shell shows a menu with `PageContextMenu.session`, or closes the
+    /// session to show none. [05 §右键菜单] observed menus (E29).
+    case contextMenuRequested(PageContextMenu)
     /// Find-in-page results for the current search (`BrowserTab.find`).
     case findResultChanged(FindResult)
     case renderProcessGone

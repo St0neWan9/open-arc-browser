@@ -205,6 +205,12 @@ public protocol EngineExtensions: AnyObject, Sendable {
     /// Popups the extensions' `_execute_action` shortcuts opened, in every profile (plan C26).
     /// Every call returns a new stream; a popup nobody shows is closed by the engine.
     func popupsOpenedFromKeyboard() -> AsyncStream<ExtensionPopupOpenedFromKeyboard>
+    /// The `chrome.contextMenus` items `extensionID` added for its toolbar action
+    /// (`contexts: ["action"]`) while `tabID` shows, in the extension's order (plan B124, for the
+    /// action's right-click menu of B116). Default: none (PageContextMenu.swift).
+    func actionMenuItems(extensionID: String, tabID: EngineTabID) async -> [PageContextMenuItem]
+    /// Runs one of those items: the extension's `contextMenus.onClicked` fires with the tab.
+    func performActionMenuItem(_ itemID: Int, extensionID: String, tabID: EngineTabID) async
 }
 
 extension EngineExtensions {

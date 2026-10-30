@@ -7,8 +7,8 @@
 // Maps to: `TabEvent` (one callback per case) and the tab-originated `EngineEvent`s
 // (`newTabRequested`, `tabClosed`) in app/Sources/OpenArcEngine/BrowserEngine.swift. Plan task C9.
 // The Chromium side is a `content::WebContentsObserver` (URL, title, load, navigation, audio,
-// crash) plus a `content::WebContentsDelegate` (new tabs, close requests, fullscreen) plus the
-// favicon driver observer, all owned by the `OACTab`.
+// crash) plus a `content::WebContentsDelegate` (new tabs, close requests, fullscreen, the page's
+// context menu) plus the favicon driver observer, all owned by the `OACTab`.
 //
 // Delivery rules (README §Threading):
 // - On the main thread, from a posted task, in the order Chromium produced the changes.
@@ -26,10 +26,13 @@
 //   tab:renderProcessDidTerminate:        -> TabEvent.renderProcessGone
 //   tabDidClose:                          -> TabEvent.closed + EngineEvent.tabClosed
 //   tab:didRequestNewTab:                 -> EngineEvent.newTabRequested
+//   tab:showContextMenu:                  -> TabEvent.contextMenuRequested (plan B124)
 //   everything else                       -> proposed events, SWIFT_PROTOCOL_CHANGES.md
 
 #import <OpenArcCore/OACDefines.h>
 #import <OpenArcCore/OACTab.h>
+
+@class OACContextMenu;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -176,10 +179,13 @@ NS_SWIFT_UI_ACTOR
 /// `NSEvent`, typed `id` so this header stays free of AppKit.
 - (BOOL)tab:(OACTab *)tab handleUnhandledKeyEvent:(id)event;
 
-/// A context menu is about to show. The bridge draws Chromium's own menu items in an `NSMenu`;
-/// the shell may add items (Open Link in Split View, Open in Little Arc). inferred: the web page
-/// context menu is not in the spec. `menu` is the `NSMenu`, typed `id` for the same reason.
-- (void)tab:(OACTab *)tab willShowContextMenu:(id)menu forLinkURL:(nullable NSURL *)linkURL;
+/// The user right-clicked the page (plan B124). The bridge draws no menu itself: `menu` holds
+/// Chromium's items for the click (extension `chrome.contextMenus` items included) and what was
+/// clicked; the shell builds its own `NSMenu` (Arc's items and order, docs/arc-spec/05-surfaces.md
+/// §右键菜单 E29), shows it with `-[OACContextMenu popUpMenu:]` and runs Chromium's items with
+/// `-performItemWithIdentifier:`. Return YES to take the menu (the page then holds further
+/// right-clicks until it closes); NO, or no implementation, shows no menu. See OACContextMenu.h.
+- (BOOL)tab:(OACTab *)tab showContextMenu:(OACContextMenu *)menu NS_SWIFT_NAME(tab(_:showContextMenu:));
 
 // MARK: Find in page (C12)
 

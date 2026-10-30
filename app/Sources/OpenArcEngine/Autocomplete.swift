@@ -135,8 +135,8 @@ public protocol EngineAutocomplete: AnyObject, Sendable {
 }
 
 extension EngineAutocomplete {
-    /// Engines whose bridge has no most-visited query yet (the Chromium bridge as of B121) answer
-    /// nothing, so the command bar simply shows no most-visited rows.
+    /// Engines without a most-visited query answer nothing, so the command bar simply shows no
+    /// most-visited rows. (The Chromium engine has one since B123.)
     public func topSites(profileID: Profile.ID, maxCount: Int) async -> [HistoryMatch] { [] }
 }
 

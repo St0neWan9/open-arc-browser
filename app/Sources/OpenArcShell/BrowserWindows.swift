@@ -33,12 +33,16 @@ public struct BrowserWindowRequest: Codable, Hashable, Sendable {
     /// Tab a `.newWindow` window shows (a page asked for a new window, C7b); nil picks the Space's
     /// most recent tab.
     public var tabID: UUID?
+    /// Page an `.incognito` window opens with instead of its command bar (the page context
+    /// menu's "Open Link in Incognito Window", B124); nil for the usual empty window.
+    public var url: URL?
 
-    public init(id: UUID = UUID(), kind: Kind, spaceID: UUID? = nil, tabID: UUID? = nil) {
+    public init(id: UUID = UUID(), kind: Kind, spaceID: UUID? = nil, tabID: UUID? = nil, url: URL? = nil) {
         self.id = id
         self.kind = kind
         self.spaceID = spaceID
         self.tabID = tabID
+        self.url = url
     }
 }
 

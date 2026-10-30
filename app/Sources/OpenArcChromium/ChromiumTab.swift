@@ -222,6 +222,9 @@ final class TabChannel: @unchecked Sendable {
         }
     }
 
+    /// Someone reads this tab's events.
+    var hasSubscribers: Bool { broadcaster.subscriberCount > 0 }
+
     /// Delivers an event that is not a state field (hovered link, find result, crash, close request).
     func send(_ event: TabEvent) {
         lock.withLock {
@@ -479,6 +482,14 @@ final class ChromiumTabCore: NSObject, OACTabDelegate, OACDialogDelegate {
         activeMatchOrdinal: Int, isFinal: Bool
     ) {
         channel.send(.findResultChanged(FindResult(matches: numberOfMatches, activeOrdinal: activeMatchOrdinal, isFinal: isFinal)))
+    }
+
+    /// Plan B124: the page's right-click menu goes to the shell as an event. Taken (YES) only
+    /// while someone listens; the session closes the bridge menu when nobody shows it.
+    func tab(_ tab: OACTab, showContextMenu menu: OACContextMenu) -> Bool {
+        guard channel.hasSubscribers else { return false }
+        channel.send(.contextMenuRequested(PageContextMenu.bridged(menu)))
+        return true
     }
 
     func tabDidRequestClose(_ tab: OACTab) {

@@ -184,8 +184,13 @@ public final class ShellModel: ObservableObject {
         case .incognito:
             let incognito = controller.makeIncognito()
             let model = ShellModel(controller: incognito, window: WindowUIState(), ownsController: true)
-            // The window opens with the command bar showing its help rows. [06 §20.1] observed (B61).
-            model.presentCommandBar(.newTab)
+            if let url = request.url {
+                // Open Link in Incognito Window (B124): the window shows the link.
+                model.sidebar.newTab(url: url, title: url.host ?? url.absoluteString)
+            } else {
+                // The window opens with the command bar showing its help rows. [06 §20.1] observed (B61).
+                model.presentCommandBar(.newTab)
+            }
             return model
         case .restore:
             let saved = controller.takePendingRestore() ?? controller.reopenState()

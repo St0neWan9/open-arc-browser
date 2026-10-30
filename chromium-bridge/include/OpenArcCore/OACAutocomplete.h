@@ -18,6 +18,8 @@
 // - History: the profile's `history::HistoryService::QueryHistory` (title and URL word match,
 //   one row per URL, newest visit first), with each row's visit and typed counts. An
 //   off-the-record profile records no history, so it always answers an empty list.
+// - Most visited (plan B123): `history::HistoryService::QueryMostVisitedURLs`, for an empty or
+//   short command bar.
 // - Suggestions: one GET of a suggestion URL the shell built from the profile's search engine,
 //   through the profile's own network context (the off-the-record one for an incognito profile),
 //   without cookies (none sent, none stored), without the HTTP cache, a 1.5 s timeout and a
@@ -69,6 +71,16 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
                                         maximumCount:(NSInteger)maximumCount
                                    completionHandler:(void (^)(NSArray<OACHistoryEntry *> *entries))completionHandler
     NS_SWIFT_NAME(queryHistory(matching:maximumCount:completionHandler:));
+
+/// The profile's most visited pages (plan B123): Chromium's history "most visited" query (the
+/// data behind Chrome's new-tab tiles: pages reached by typing or from bookmarks, and the visits
+/// that followed them, ranked by visit frequency and recency), at most `maximumCount` (1...100;
+/// other values are clamped), best first, one per URL, http and https only. `visitCount` is the
+/// page's visit count; `typedCount` is 0 (the query does not report it). An off-the-record or
+/// invalid profile answers an empty array.
+- (OACAutocompleteRequest *)queryMostVisitedWithMaximumCount:(NSInteger)maximumCount
+                                           completionHandler:(void (^)(NSArray<OACHistoryEntry *> *entries))completionHandler
+    NS_SWIFT_NAME(queryMostVisited(maximumCount:completionHandler:));
 
 /// GETs `suggestionURL` (https only) through this profile's network context and answers the body,
 /// or nil on any failure: not https, network error, non-2xx status, timeout (1.5 s), a body over

@@ -19,9 +19,12 @@ final class ChromiumAutocomplete: EngineAutocomplete {
     static let historySelector = NSSelectorFromString("queryHistoryMatchingText:maximumCount:completionHandler:")
     static let suggestionsSelector = NSSelectorFromString("fetchSearchSuggestionsFromURL:completionHandler:")
     static let cancelSelector = NSSelectorFromString("cancel")
+    /// Plan B123: `-[OACProfile queryMostVisitedWithMaximumCount:completionHandler:]`.
+    static let mostVisitedSelector = NSSelectorFromString("queryMostVisitedWithMaximumCount:completionHandler:")
 
     private typealias HistoryHandler = @convention(block) (NSArray) -> Void
     private typealias HistoryFunction = @convention(c) (AnyObject, Selector, NSString, Int, HistoryHandler) -> AnyObject
+    private typealias MostVisitedFunction = @convention(c) (AnyObject, Selector, Int, HistoryHandler) -> AnyObject
     private typealias SuggestionsHandler = @convention(block) (NSData?) -> Void
     private typealias SuggestionsFunction = @convention(c) (AnyObject, Selector, NSURL, SuggestionsHandler) -> AnyObject
 
@@ -65,7 +68,32 @@ final class ChromiumAutocomplete: EngineAutocomplete {
         return SearchSuggestionParser.suggestions(from: body, query: request.query)
     }
 
+    /// Plan B123: the history service's most visited pages (Chromium's top sites query), most
+    /// visited first. A framework without the query (before B123) answers nothing.
+    func topSites(profileID: Profile.ID, maxCount: Int) async -> [HistoryMatch] {
+        guard capabilities.contains(.history), maxCount > 0, !Task.isCancelled,
+              OACProfile.instancesRespond(to: Self.mostVisitedSelector),
+              let profile = await core.onDiskProfile(profileID) else { return [] }
+        let entries: [HistoryMatch] = await Self.cancellable { finish in
+            Self.queryMostVisited(profile, maxCount: maxCount) { array in
+                finish(array.compactMap(Self.historyMatch))
+            }
+        } ?? []
+        return HistoryMatch.sortedByVisits(entries)
+    }
+
     // MARK: Bridge calls by selector
+
+    @MainActor
+    private static func queryMostVisited(_ profile: OACProfile, maxCount: Int, handler: @escaping (NSArray) -> Void) -> AnyObject? {
+        guard let implementation = profile.method(for: mostVisitedSelector) else {
+            handler([])
+            return nil
+        }
+        let call = unsafeBitCast(implementation, to: MostVisitedFunction.self)
+        let block: HistoryHandler = { array in handler(array) }
+        return call(profile, mostVisitedSelector, maxCount, block)
+    }
 
     @MainActor
     private static func queryHistory(_ profile: OACProfile, text: String, maxCount: Int, handler: @escaping (NSArray) -> Void) -> AnyObject? {
