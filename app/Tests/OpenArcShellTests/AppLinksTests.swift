@@ -5,8 +5,8 @@ import XCTest
 /// Plan B88 (D13 follow-up, docs/release.md §Network use "Help / homepage links"): every shipped
 /// link to the project's pages comes from the one constant set in `MenuBar/AppLinks.swift`.
 /// Items: [01 §Arc] Share Arc, Privacy Policy and [01 §Help] Contact the Team, Visit Help Center
-/// (observed); Settings ▸ Profiles "Learn more" (B83, inferred target). The host is still a
-/// placeholder; that is allowed here, a second spelling of it elsewhere is not.
+/// (observed); Settings ▸ Profiles "Learn more" (B83, inferred target). The pages are the public
+/// repository's (B113); a second spelling of a page URL elsewhere is not allowed.
 final class AppLinksTests: XCTestCase {
     /// The worktree root (`app/..`).
     private var repositoryRoot: URL {
@@ -22,18 +22,17 @@ final class AppLinksTests: XCTestCase {
         ])
         XCTAssertEqual(Set(OpenArcLinks.all).count, OpenArcLinks.all.count)
         for url in OpenArcLinks.all {
-            if url.scheme == "mailto" {
-                XCTAssertTrue(url.absoluteString.hasSuffix("@" + OpenArcLinks.siteHost), "\(url)")
-            } else {
-                XCTAssertEqual(url.scheme, "https", "\(url)")
-                XCTAssertEqual(url.host, OpenArcLinks.siteHost, "\(url)")
-                XCTAssertTrue(url.absoluteString.hasPrefix(OpenArcLinks.site.absoluteString), "\(url)")
-            }
+            XCTAssertEqual(url.scheme, "https", "\(url)")
+            XCTAssertEqual(url.host, OpenArcLinks.siteHost, "\(url)")
+            XCTAssertTrue(url.absoluteString.hasPrefix(OpenArcLinks.site.absoluteString), "\(url)")
+            XCTAssertFalse(url.absoluteString.contains(".example"), "no placeholder host: \(url)")
         }
-        XCTAssertEqual(OpenArcLinks.homepage, OpenArcLinks.site)
-        XCTAssertEqual(OpenArcLinks.privacyPolicy.path, "/privacy")
-        XCTAssertEqual(OpenArcLinks.helpCenter.path, "/help")
-        XCTAssertEqual(OpenArcLinks.profilesHelp.path, "/help/profiles")
+        let pages = "/\(OpenArcLinks.repository)/blob/updates/pages/"
+        XCTAssertEqual(OpenArcLinks.homepage.path, pages + "README.md")
+        XCTAssertEqual(OpenArcLinks.privacyPolicy.path, pages + "privacy.md")
+        XCTAssertEqual(OpenArcLinks.helpCenter.path, pages + "help/README.md")
+        XCTAssertEqual(OpenArcLinks.profilesHelp.path, pages + "help/profiles.md")
+        XCTAssertEqual(OpenArcLinks.contactTheTeam.path, "/\(OpenArcLinks.repository)/issues")
     }
 
     /// No shipped file other than AppLinks.swift spells out the site host or a URL to the
@@ -56,8 +55,9 @@ final class AppLinksTests: XCTestCase {
                       file.standardizedFileURL != linksFile,
                       let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
                 scanned += 1
-                if text.contains(OpenArcLinks.siteHost) {
-                    offenders.append("\(file.path): spells out \(OpenArcLinks.siteHost)")
+                if text.contains(OpenArcLinks.site.absoluteString + "/blob/updates/pages")
+                    || text.contains(OpenArcLinks.site.absoluteString + "/issues") {
+                    offenders.append("\(file.path): spells out a project page URL")
                 }
                 let range = NSRange(text.startIndex..., in: text)
                 for match in pattern.matches(in: text, range: range) {

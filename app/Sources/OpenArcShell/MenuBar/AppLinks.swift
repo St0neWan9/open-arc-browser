@@ -6,35 +6,38 @@ import OpenArcPersistence
 // B72). [01 §Arc] observed: Share Arc, Privacy Policy; [01 §Help] observed: Getting Started,
 // Essential Keyboard Shortcuts, Contact the Team, Visit Help Center, Troubleshooting ▸.
 
-/// The project's public pages, all built from one site address (plan B88). The product's final
-/// name and domain are not decided yet, so `siteHost` is a placeholder on the reserved `.example`
-/// domain, which keeps a click from reaching anyone's real site. Replace `siteHost` (and only it)
-/// when the project site exists; no other file may spell out a URL to these pages
+/// The project's public pages, all built from one site address (plan B88, B113). The site is the
+/// public repository on GitHub: the pages live on its `updates` branch under `pages/` (rendered by
+/// GitHub), and Contact the Team opens the repository's issues. Change `siteHost` / `repository`
+/// (and only them) if the project moves; no other file may spell out a URL to these pages
 /// (`AppLinksTests` checks the sources). The appcast (`UpdateConfiguration.hostedFeedURL`) and the
 /// ad-block manifest (`AdBlockRulesetUpdateConfiguration`) are feeds, not pages; they live on the
-/// public repository's `updates` branch (plan D14).
+/// same branch as raw content (plan D14).
 public enum OpenArcLinks {
-    /// The project site's host. Placeholder until the site exists.
-    public static let siteHost = "openarc.example"
-    /// The site's root.
-    public static let site = URL(string: "https://\(siteHost)/")!
+    /// The project site's host.
+    public static let siteHost = "github.com"
+    /// The repository path on the site.
+    public static let repository = "St0neWan9/open-arc-browser"
+    /// The repository's root page.
+    public static let site = URL(string: "https://\(siteHost)/\(repository)")!
 
-    /// What Arc ▸ Share Open Arc shares ([01 §Arc] observed item "Share Arc").
-    public static let homepage = site
+    /// What Arc ▸ Share Open Arc shares ([01 §Arc] observed item "Share Arc"): the project home page.
+    public static let homepage = page("README.md")
     /// Arc ▸ Privacy Policy ([01 §Arc] observed item).
-    public static let privacyPolicy = page("privacy")
+    public static let privacyPolicy = page("privacy.md")
     /// Help ▸ Visit Help Center ([01 §Help] observed item).
-    public static let helpCenter = page("help")
+    public static let helpCenter = page("help/README.md")
     /// Settings ▸ Profiles "Learn more" (plan B83; inferred target: our help page on profiles).
-    public static let profilesHelp = page("help/profiles")
-    /// Help ▸ Contact the Team ([01 §Help] observed item) and the command bar row of that name.
-    public static let contactTheTeam = URL(string: "mailto:team@\(siteHost)")!
+    public static let profilesHelp = page("help/profiles.md")
+    /// Help ▸ Contact the Team ([01 §Help] observed item) and the command bar row of that name: the
+    /// repository's issues (we publish no email address).
+    public static let contactTheTeam = URL(string: "https://\(siteHost)/\(repository)/issues")!
 
     /// Every link above, for checks that all shipped links come from here.
     public static let all: [URL] = [homepage, privacyPolicy, helpCenter, profilesHelp, contactTheTeam]
 
     private static func page(_ path: String) -> URL {
-        site.appendingPathComponent(path, isDirectory: false)
+        URL(string: "https://\(siteHost)/\(repository)/blob/updates/pages/\(path)")!
     }
 }
 

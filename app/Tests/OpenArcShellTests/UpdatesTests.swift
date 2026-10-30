@@ -212,14 +212,15 @@ final class UpdatesTests: XCTestCase {
         return try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     }
 
-    /// The template carries Sparkle's keys: the hosted feed (D14) and the placeholder public key,
-    /// so the app does not start Sparkle until a release key replaces it (docs/release.md).
+    /// The template carries Sparkle's keys: the hosted feed (D14) and the release public key
+    /// (B108), so a release build starts Sparkle (docs/release.md). Pinned on purpose: changing the
+    /// key strands every install signed against the old one.
     func testInfoPlistTemplateHasSparkleKeys() throws {
         let plist = try bundleInfoPlist()
         XCTAssertEqual(plist[UpdateConfiguration.feedURLKey] as? String, UpdateConfiguration.hostedFeedURL.absoluteString)
-        XCTAssertEqual(plist[UpdateConfiguration.publicKeyKey] as? String, UpdateConfiguration.placeholderPublicKey)
+        XCTAssertEqual(plist[UpdateConfiguration.publicKeyKey] as? String, "W8mu5CaK9nzI4tBi8jqF4qlmMpdUtA4ECqJyWhniJrQ=")
         XCTAssertEqual(plist["SUEnableAutomaticChecks"] as? Bool, true)
-        XCTAssertEqual(UpdateConfiguration(infoDictionary: plist), .unavailable(.missingPublicKey))
+        XCTAssertEqual(UpdateConfiguration(infoDictionary: plist), .ready(feedURL: UpdateConfiguration.hostedFeedURL))
     }
 
     /// The template is the release build: its id, and exported drag types named `<id>.<name>`,
