@@ -25,6 +25,10 @@ public final class CommandBarViewModel: ObservableObject {
         didSet { if results != oldValue { requestMissingIcons() } }
     }
     @Published public private(set) var selectedIndex: Int = 0
+    /// True once the user moved the selection (arrow keys, click) on the current list. Late rows
+    /// keep such a row selected; otherwise the selection stays on the first row. B128 rule
+    /// "建议晚到时不抢走用户已选中的行" ([05 §命令栏] inferred, F5-34).
+    private var isSelectionUserChosen = false
     @Published public private(set) var mode: CommandBarMode
     /// Increments whenever the field should select its whole text (⌘L prefill).
     @Published public private(set) var selectAllRequestID: Int = 0
@@ -155,6 +159,7 @@ public final class CommandBarViewModel: ObservableObject {
         results = []
         resultsQuery = nil
         selectedIndex = 0
+        isSelectionUserChosen = false
         inlineCompletion = nil
         isInlineCompletionSuppressed = false
         siteSearch = nil
@@ -177,6 +182,7 @@ public final class CommandBarViewModel: ObservableObject {
         results = []
         resultsQuery = nil
         selectedIndex = 0
+        isSelectionUserChosen = false
         inlineCompletion = nil
         isInlineCompletionSuppressed = false
         siteSearch = nil
@@ -209,15 +215,20 @@ public final class CommandBarViewModel: ObservableObject {
         results = presented(CommandBarRanker.rank(first.flatMap(\.1), context: context, limit: maxResults))
         resultsQuery = context.text
         selectedIndex = 0
+        isSelectionUserChosen = false
         updateInlineCompletion()
         guard !deferred.isEmpty, !context.trimmedText.isEmpty else { return }
         let late = await Self.collect(deferred, context: context)
         guard ticket == generation, !Task.isCancelled, siteSearch == nil,
               late.contains(where: { !$0.1.isEmpty }) else { return }
         let all = (first + late).sorted { $0.0 < $1.0 }.flatMap(\.1)
-        let selectedID = selectedResult?.id
+        // A row the user moved to stays selected wherever the late rows put it; an untouched
+        // selection stays on the first row, so the highlight never jumps without a key press.
+        let chosenID = isSelectionUserChosen ? selectedResult?.id : nil
         results = presented(CommandBarRanker.rank(all, context: context, limit: maxResults))
-        selectedIndex = selectedID.flatMap { id in results.firstIndex { $0.id == id } } ?? 0
+        let kept = chosenID.flatMap { id in results.firstIndex { $0.id == id } }
+        selectedIndex = kept ?? 0
+        isSelectionUserChosen = kept != nil
         updateInlineCompletion()
     }
 
@@ -294,6 +305,7 @@ public final class CommandBarViewModel: ObservableObject {
         guard !isSettingTextProgrammatically else { return }
         isPrefillUnedited = false
         selectedIndex = 0
+        isSelectionUserChosen = false
         // A site search only collects the query. [05 §命令栏] E30 observed: no rows.
         guard siteSearch == nil else { return }
         // Deleting never brings a completion back; typing does. inferred.
@@ -324,6 +336,7 @@ public final class CommandBarViewModel: ObservableObject {
         guard !results.isEmpty else { return }
         let count = results.count
         selectedIndex = ((selectedIndex + delta) % count + count) % count
+        isSelectionUserChosen = true
         updateInlineCompletion()
     }
 
@@ -331,6 +344,7 @@ public final class CommandBarViewModel: ObservableObject {
     public func select(index: Int) {
         guard results.indices.contains(index) else { return }
         selectedIndex = index
+        isSelectionUserChosen = true
         updateInlineCompletion()
     }
 
@@ -362,6 +376,7 @@ public final class CommandBarViewModel: ObservableObject {
             // still opens the site. [05 §命令栏] E30 observed (plan B133).
             results = presented(results)
             selectedIndex = 0
+            isSelectionUserChosen = false
             return .handled
         case .tab:
             // "Tab to Search": with a site on offer, Tab turns the field into that site's search.
@@ -398,6 +413,7 @@ public final class CommandBarViewModel: ObservableObject {
         results = []
         resultsQuery = nil
         selectedIndex = 0
+        isSelectionUserChosen = false
     }
 
     /// Back to the plain bar, listing the rows for what the field holds. inferred.

@@ -87,19 +87,21 @@ public enum CommandBarRanker {
         return Array(deduped.prefix(max(0, limit)))
     }
 
-    /// Keeps one completing site row (plan B128): the best known one (strength, then a known site
-    /// before a suggested one, then source order); every other completing row becomes a plain site
+    /// Keeps one completing site row (plan B128): a site the profile visited (history or most
+    /// visited pages) before any site the search service suggests, whatever their strengths; then
+    /// the stronger, then source order. Every other completing row becomes a plain site
     /// suggestion. Arc listed "National Weather Service — weather.gov" as a site row below
-    /// "Weather.com — weather.com", though "weather" starts both hosts ([05 §命令栏] observed); the
-    /// choice is inferred.
+    /// "Weather.com — weather.com", though "weather" starts both hosts ([05 §命令栏] observed);
+    /// "frequently visited first" is our B128 rule ([05 §命令栏] inferred, F5-34): a site seen
+    /// once days ago still beats a suggestion's fixed strength.
     static func singleSiteCompletion(_ candidates: [CommandBarResult]) -> [CommandBarResult] {
         let completing = candidates.indices.filter { candidates[$0].kind == .siteCompletion }
         guard completing.count > 1 else { return candidates }
         let keep = completing.min { l, r in
             let a = candidates[l], b = candidates[r]
-            if a.frecency != b.frecency { return a.frecency > b.frecency }
-            let aKnown = a.id.hasPrefix("site:"), bKnown = b.id.hasPrefix("site:")
+            let aKnown = CommandBarSiteRows.isVisitedSite(a), bKnown = CommandBarSiteRows.isVisitedSite(b)
             if aKnown != bKnown { return aKnown }
+            if a.frecency != b.frecency { return a.frecency > b.frecency }
             if a.sourceOrder != b.sourceOrder { return a.sourceOrder < b.sourceOrder }
             return a.id < b.id
         }
@@ -219,6 +221,7 @@ public enum CommandBarRanker {
     /// - a history page with the URL of an open tab, an archived item or the typed URL;
     /// - a most visited page with the URL of an open tab, an archived item, the typed URL, a
     ///   history row or a better ranked most visited row (B121);
+    /// - a site row whose host has an open tab (any page of the site), or whose page is archived;
     /// - a typed-URL row when a tab or archived item has the same URL (switch to it instead);
     /// - a suggestion equal to the typed text (the search row covers it).
     static func deduplicate(_ sorted: [CommandBarResult], query: String) -> [CommandBarResult] {
@@ -226,10 +229,14 @@ public enum CommandBarRanker {
         var archivedKeys = Set<String>()
         var typedKeys = Set<String>()
         var historyKeys = Set<String>()
+        var tabHosts = Set<String>()
         var siteKeys = Set<String>()
         for result in sorted {
             guard let url = result.url else { continue }
-            if result.kind.isTab { tabKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
+            if result.kind.isTab {
+                tabKeys.insert(CommandBarTextNormalizer.urlKey(url))
+                if let host = CommandBarTextNormalizer.host(url) { tabHosts.insert(host) }
+            }
             if result.kind == .archivedItem { archivedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .typedURL { typedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .historyItem { historyKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
@@ -252,7 +259,10 @@ public enum CommandBarRanker {
                 // a site row has its row already (switch / restore / open). inferred (B66, B128).
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) || siteKeys.contains(key) { continue }
             case .siteCompletion, .siteSuggestion:
-                // An open or archived page has its tab row; one site row per page (B128).
+                // An open tab on any page of the site keeps its "Switch to Tab" row and the site
+                // gets no row of its own (B128 rule "已打开的同站标签", [05 §命令栏] inferred,
+                // F5-35); an archived page has its row; one site row per page (B128).
+                if let host = result.url.flatMap(CommandBarTextNormalizer.host), tabHosts.contains(host) { continue }
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) || !seenSiteKeys.insert(key).inserted { continue }
             case .topSite:
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) || historyKeys.contains(key) || siteKeys.contains(key) { continue }

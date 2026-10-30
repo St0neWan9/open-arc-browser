@@ -539,8 +539,9 @@ public struct CommandBarWebSuggestionsSource: CommandBarSource {
         }
     }
 
-    /// How well a navigation suggestion's site counts as known, against a visited site's frecency
-    /// (0...1), when both complete the typed text. inferred.
+    /// How well a navigation suggestion's site counts as known (0...1); it orders the completing
+    /// row's score. A visited site wins the completion over a suggestion whatever its frecency
+    /// (`CommandBarRanker.singleSiteCompletion`, F5-34). inferred.
     public static let navigationStrength = 0.5
 }
 
@@ -577,6 +578,16 @@ enum CommandBarSiteRows {
         row.frecency = min(max(strength, 0), 1)
         return row
     }
+
+    /// Id prefix of a site row built from the profile's visited pages (history and most visited
+    /// pages, `CommandBarKnownSitesSource`); navigation suggestions use another prefix.
+    static let visitedIDPrefix = "site:"
+
+    /// True for a site row of a site the profile visited, false for a search service's
+    /// navigation suggestion. A visited site always wins the completion (F5-34, inferred).
+    static func isVisitedSite(_ row: CommandBarResult) -> Bool {
+        row.id.hasPrefix(visitedIDPrefix)
+    }
 }
 
 /// Sites the profile knows (its most visited pages and the history pages of the typed text) whose
@@ -608,7 +619,7 @@ public struct CommandBarKnownSitesSource: CommandBarSource {
         guard !Task.isCancelled,
               let best = CommandBarSiteCompletionRules.bestCandidate(forTyped: typed, candidates: candidates) else { return [] }
         return [CommandBarSiteRows.row(
-            id: "site:\(best.candidate.url.absoluteString)",
+            id: CommandBarSiteRows.visitedIDPrefix + best.candidate.url.absoluteString,
             url: best.candidate.url,
             title: best.candidate.title,
             typed: typed,
