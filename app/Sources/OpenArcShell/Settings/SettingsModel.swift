@@ -407,8 +407,11 @@ public final class SettingsModel: ObservableObject {
 
     // MARK: Shortcuts
 
+    /// The pane's rows, the Space jumps named after the app's Spaces in dock order ([02] header
+    /// note observed, F5-22), filtered by the search field.
     public var shortcutGroups: [ShortcutGroup] {
-        ShortcutCatalog.filtered(ShortcutCatalog.groups, query: shortcutQuery)
+        let names = shell.controller.workspace.allLiveSpaces.map(\.name)
+        return ShortcutCatalog.filtered(ShortcutCatalog.groups(spaceNames: names), query: shortcutQuery)
     }
 
     // MARK: Links

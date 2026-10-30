@@ -76,7 +76,7 @@ extension ShellModel {
             allowsJavaScriptFromAppleEvents: allowsJavaScriptFromAppleEvents,
             selectedSpaceID: selectedSpaceID,
             isCreatingSpace: spaceFlow.isCreating,
-            spaces: sidebar.dockSpaces.map { MenuBarInputs.SpaceRow(id: $0.id, name: $0.name, icon: $0.icon) },
+            spaces: menuSpaces.map { MenuBarInputs.SpaceRow(id: $0.id, name: $0.name, icon: $0.icon) },
             pinMenuTitle: pinMenuTitle,
             canResetPinnedTabs: sidebar.canResetPinnedTabs,
             staysOnTop: staysOnTop,

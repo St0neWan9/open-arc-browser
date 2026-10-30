@@ -372,6 +372,10 @@ public final class WorkspaceController: ObservableObject {
         return child
     }
 
+    /// The Spaces the Spaces menu lists, in dock order. An incognito controller lists the app's
+    /// Spaces (its parent's), which the menu shows greyed. [06 §20.2] observed (F5-4).
+    var menuSpaces: [Space] { (parent ?? self).workspace.allLiveSpaces }
+
     /// Live incognito controllers made from this one.
     var liveIncognitoChildren: [WorkspaceController] {
         incognitoChildren.removeAll { $0.object == nil }

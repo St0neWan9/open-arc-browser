@@ -125,6 +125,9 @@ struct BrowserWindowObserver: NSViewRepresentable {
             // The app restores its own windows from `ui-state.json` (and never an incognito one),
             // so AppKit's window restoration stays off.
             window.isRestorable = false
+            // An incognito window lies exactly over the window it was opened from. [06 §20.1]
+            // observed (F5-41).
+            if let frame = model.takeOpeningFrame() { window.setFrame(frame, display: true) }
             // An incognito window carries no badge, not even in its title; its appearance comes from
             // its palette like any window (`WindowAppearanceApplier`). [06 §20.1] observed (B48).
             model.focusWindow = { [weak window] in window.map(BrowserWindowObserver.bringToFront) }

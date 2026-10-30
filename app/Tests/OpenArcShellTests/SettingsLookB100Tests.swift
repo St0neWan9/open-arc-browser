@@ -242,6 +242,38 @@ final class SettingsLookB100Tests: XCTestCase {
         }
     }
 
+    // MARK: F5 (B137)
+
+    /// [07 §6] observed "684 × 650 (some pages 701 × 650)", [06 §25] observed Links at 701 (F5-24,
+    /// F5-51): the Links pane makes the window 701 wide, the others stay 684.
+    func testLinksPaneIs701Wide() {
+        XCTAssertEqual(Metrics.Settings.wideWindowWidth, 701)
+        for pane in SettingsPane.allCases {
+            XCTAssertEqual(SettingsTokens.windowWidth(for: pane), pane == .links ? 701 : 684, pane.rawValue)
+        }
+        let settings = makeSettings()
+        settings.selectedPane = .links
+        let links = host(SettingsWindowView(model: settings), height: 650, width: 701)
+        XCTAssertEqual(links.fittingSize.width, 701, accuracy: 0.5)
+        settings.selectedPane = .general
+        settle(links)
+        XCTAssertEqual(links.fittingSize.width, 684, accuracy: 0.5)
+    }
+
+    /// [03 §Links] and [06 §25.1] observed (F5-25): the switch label has no parenthetical; the
+    /// italic note reads "Note: This only affects Favorites and Pinned tabs" (lower-case "tabs").
+    func testPeekOtherSitesLabelAndNote() {
+        XCTAssertEqual(SettingsCatalog.control("links.peekOtherSites").label, "Open links to other sites in Peek")
+        XCTAssertEqual(LinksPane.peekOtherSitesNote, "Note: This only affects Favorites and Pinned tabs")
+    }
+
+    /// [02 §复制链接] observed note in Settings, [03 §外观] the red "toolbar, quote" tile (F5-26):
+    /// the full-URL row explains that Copy URL as Quote (⌃⇧⌘C) still works with it off.
+    func testFullURLRowExplainsCopyURLAsQuote() {
+        XCTAssertTrue(WebToolbarFullURLToggle.quoteNote.contains("Copy URL as Quote (⌃⇧⌘C)"))
+        XCTAssertEqual(AdvancedPane.tile("advanced.showFullURL").color, SettingsTile.red)
+    }
+
     // MARK: Helpers
 
     @discardableResult

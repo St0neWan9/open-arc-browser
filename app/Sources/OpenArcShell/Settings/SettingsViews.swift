@@ -21,7 +21,7 @@ public struct SettingsWindowView: View {
             SettingsPaneView(pane: model.selectedPane, model: model)
                 .id(model.selectedPane)
         }
-        .frame(width: SettingsTokens.windowWidth)
+        .frame(width: SettingsTokens.windowWidth(for: model.selectedPane))
         .fixedSize(horizontal: false, vertical: true)
         // Always light (user decision, 2026-10-28; B100 capture: Arc's light Settings is white).
         .modifier(SettingsWindowChrome(title: model.selectedPane.title))
@@ -33,6 +33,14 @@ public struct SettingsWindowView: View {
 /// opens centered on the screen like Arc's ([07 §12] observed). B42.
 enum SettingsTokens {
     static let windowWidth = CGFloat(Metrics.Settings.windowSize.width)
+    /// The panes Arc shows 701 pt wide: Links ([06 §25] observed 701 × 650; [07 §6] "some pages").
+    /// The others stay 684. The content column keeps its width and stays centered (inferred).
+    static let widePanes: Set<SettingsPane> = [.links]
+
+    /// The window width while `pane` is shown (F5-24).
+    static func windowWidth(for pane: SettingsPane) -> CGFloat {
+        widePanes.contains(pane) ? CGFloat(Metrics.Settings.wideWindowWidth) : windowWidth
+    }
     /// Title bar plus toolbar above the pane: the system title bar and the 56 pt toolbar
     /// ([07 §6] observed; ours draws the toolbar itself since B100).
     static let chromeHeight = CGFloat(Metrics.Settings.titleBarHeight + Metrics.Settings.toolbarHeight)
@@ -670,6 +678,10 @@ struct ClearBrowsingDataSheet: View {
 struct LinksPane: View {
     @ObservedObject var model: SettingsModel
 
+    /// The italic note under "Open links to other sites in Peek", lower-case "tabs". [06 §25.1]
+    /// observed (F5-25).
+    static let peekOtherSitesNote = "Note: This only affects Favorites and Pinned tabs"
+
     var body: some View {
         SettingsScrollingPane {
             VStack(spacing: 0) {
@@ -718,7 +730,7 @@ struct LinksPane: View {
                         SettingsToggleRow(
                             label: SettingsCatalog.control("links.peekOtherSites").label,
                             isOn: Binding(get: { model.opensPeekForOtherSites }, set: { model.opensPeekForOtherSites = $0 }),
-                            subtitle: "Note: This only affects Favorites and Pinned Tabs",
+                            subtitle: LinksPane.peekOtherSitesNote,
                             subtitleIsNote: true
                         )
                     }
@@ -1325,12 +1337,17 @@ struct AdvancedBehaviorToggle: View {
     }
 }
 
-/// "Show full URL when Toolbar is enabled": the shared toolbar setting (B43).
+/// "Show full URL when Toolbar is enabled": the shared toolbar setting (B43). Its subtitle says
+/// Copy URL as Quote (⌃⇧⌘C) still copies the address with the full URL off ([02 §复制链接]
+/// observed note in Settings; [03 §外观] the red "toolbar, quote" tile; F5-26). Wording ours.
 struct WebToolbarFullURLToggle: View {
     @ObservedObject var settings: WebToolbarSettings
     var tile: SettingsTile?
 
+    static let quoteNote = "With this off, Copy URL as Quote (⌃⇧⌘C) still copies the page’s address as a quote."
+
     var body: some View {
-        SettingsToggleRow(label: SettingsCatalog.control("advanced.showFullURL").label, isOn: $settings.showsFullURL, tile: tile)
+        SettingsToggleRow(label: SettingsCatalog.control("advanced.showFullURL").label, isOn: $settings.showsFullURL,
+                          subtitle: Self.quoteNote, tile: tile)
     }
 }

@@ -36,13 +36,18 @@ public struct BrowserWindowRequest: Codable, Hashable, Sendable {
     /// Page an `.incognito` window opens with instead of its command bar (the page context
     /// menu's "Open Link in Incognito Window", B124); nil for the usual empty window.
     public var url: URL?
+    /// Frame (AppKit screen coordinates) the new window takes: an `.incognito` window opened from
+    /// a browser window lies exactly over it ([06 §20.1] observed same size and position; F5-41).
+    /// nil leaves the placement to SwiftUI.
+    public var frame: CGRect?
 
-    public init(id: UUID = UUID(), kind: Kind, spaceID: UUID? = nil, tabID: UUID? = nil, url: URL? = nil) {
+    public init(id: UUID = UUID(), kind: Kind, spaceID: UUID? = nil, tabID: UUID? = nil, url: URL? = nil, frame: CGRect? = nil) {
         self.id = id
         self.kind = kind
         self.spaceID = spaceID
         self.tabID = tabID
         self.url = url
+        self.frame = frame
     }
 }
 

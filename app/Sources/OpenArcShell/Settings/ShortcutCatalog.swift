@@ -11,9 +11,11 @@ import OpenArcModel
 // that `02` does not list but our menus bind carry their own source: ⌘. Stop Loading ([01 §菜单项
 // 图标与缩进] view-crop.png observed), ⇧⌘D Show Toolbar ([06 §17.1] observed), ⌥⇧⌘V Paste and Match
 // Style (the macOS key). The standard macOS Edit keys (Undo, Cut, Copy, Paste, Select All, spelling)
-// are the system's and, as in `02`, not listed. `02` entries without a key we bind (Join Meeting,
-// New ChatGPT Message, Network Inspector) are not listed either. Fixed keys only: no custom
-// shortcuts in v1 (plan Q17).
+// are the system's and, as in `02`, not listed. `02` entries whose key belongs to a feature Open
+// Arc does not have (Join Meeting ⌃⌘J, New ChatGPT Message ⌥⌘G, New Note ⌃⇧N) are not listed: the
+// key would do nothing. The `02` actions without a default key are listed with '---', as Arc's
+// list shows them ([02] header observed; F5-6). Fixed keys only: no custom shortcuts in v1 (plan
+// Q17).
 
 /// A key and its modifiers.
 public struct ShortcutKey: Hashable, Sendable {
@@ -124,7 +126,17 @@ public struct ShortcutDefinition: Identifiable, Sendable {
 public struct ShortcutDefinitionGroup: Identifiable, Sendable {
     public let title: String
     public let definitions: [ShortcutDefinition]
+    /// Actions [02] lists in this section without a default key: pane rows reading '---' after
+    /// the keyed rows ([02]'s order within the section; where Arc puts them among the keyed rows
+    /// is unknown).
+    public let unboundActions: [String]
     public var id: String { title }
+
+    init(title: String, definitions: [ShortcutDefinition], unboundActions: [String] = []) {
+        self.title = title
+        self.definitions = definitions
+        self.unboundActions = unboundActions
+    }
 }
 
 /// One row of the Shortcuts pane: an action and its key.
@@ -133,7 +145,8 @@ public struct ShortcutEntry: Identifiable, Hashable, Sendable {
     public let keys: String
     /// Each key on its own, for the search field ("⌘5" finds "⌘1…⌘8").
     let searchKeys: [String]
-    public var id: String { action }
+    /// Action and keys: two Spaces may share a name, never a key (F5-22).
+    public var id: String { "\(action)\u{1F}\(keys)" }
 }
 
 /// A titled group of shortcuts, as `02` groups them.
@@ -145,6 +158,9 @@ public struct ShortcutGroup: Identifiable, Hashable, Sendable {
 
 /// The Shortcuts pane list, generated from `table`.
 public enum ShortcutCatalog {
+    /// The key column of an action without a default key. [02] header observed.
+    public static let noKey = "---"
+
     private static func entry(
         _ id: AppShortcut, _ title: String, _ keys: ShortcutKey...,
         list: ShortcutKeyList = .alternatives, binding: ShortcutBinding = .menu
@@ -180,13 +196,21 @@ public enum ShortcutCatalog {
             entry(.toggleSidebar, "Hide / Show Sidebar", ShortcutKey("s", .command)),
             // [06 §17.1] observed.
             entry(.toggleToolbar, "Hide / Show Toolbar", ShortcutKey("d", [.shift, .command])),
-            // [02] "Open Little Arc or Peek in…"; Little Arc's button takes it ([06 §21.7] observed).
-            entry(.openLittleArcIn, "Open Little Arc in…", ShortcutKey("o", .command), binding: .window),
+            // [02 §标签与侧边栏] observed row name (F5-21). Little Arc's button takes it ([06 §21.7]
+            // observed), and so does Peek (`LinkPeekViews`).
+            entry(.openLittleArcIn, "Open Little Arc or Peek in…", ShortcutKey("o", .command), binding: .window),
+        ], unboundActions: [
+            // [02 §标签与侧边栏] observed, no default key (F5-6).
+            "Rename Current Item", "Reset Tab to Original URL", "Duplicate", "Collapse All Folders",
+            "Expand All Folders", "New Folder…",
         ]),
         ShortcutDefinitionGroup(title: "Spaces", definitions: [
             numbered(.goToSpace, "Go to Space 1–9", 1...9, .control),
             entry(.nextSpace, "Next Space", ShortcutKey(right, [.option, .command])),
             entry(.previousSpace, "Previous Space", ShortcutKey(left, [.option, .command])),
+        ], unboundActions: [
+            // [02 §Space] observed, no default key (F5-6).
+            "New Space…", "Manage Spaces…", "Reset all tabs in this Space",
         ]),
         ShortcutDefinitionGroup(title: "Split View", definitions: [
             entry(.addSplitView, "Add Split View", ShortcutKey("=", [.control, .shift])),
@@ -216,6 +240,9 @@ public enum ShortcutCatalog {
             entry(.capture, "Capture…", ShortcutKey("2", [.shift, .command])),
             entry(.openExtensions, "Open Extensions", ShortcutKey("e", .command)),
             entry(.openLibrary, "View Library", ShortcutKey("l", [.shift, .command])),
+        ], unboundActions: [
+            // [02 §页面与导航] observed, no default key (F5-6).
+            "Capture Full Page", "Capture in Portrait Mode", "Cast", "Clear Cookies and Refresh",
         ]),
         ShortcutDefinitionGroup(title: "Copy Links", definitions: [
             entry(.copyURL, "Copy URL", ShortcutKey("c", [.shift, .command])),
@@ -230,7 +257,8 @@ public enum ShortcutCatalog {
             entry(.newLittleArcWindow, "New Little Arc Window", ShortcutKey("n", [.option, .command])),
             entry(.closeWindow, "Close Window", ShortcutKey("w", [.shift, .command])),
             entry(.fullScreen, "Enter/Exit Full Screen", ShortcutKey("f", [.control, .command]), binding: .system),
-            entry(.settings, "Settings…", ShortcutKey(",", .command), binding: .system),
+            // The list calls it "Preferences…", the menu Settings…. [02 §窗口与应用] observed (F5-23).
+            entry(.settings, "Preferences…", ShortcutKey(",", .command), binding: .system),
             entry(.hideApp, "Hide \(AppIdentity.displayName)", ShortcutKey("h", .command), binding: .system),
             entry(.hideOthers, "Hide Other Windows", ShortcutKey("h", [.option, .command]), binding: .system),
             entry(.minimize, "Minimize Window", ShortcutKey("m", .command), binding: .system),
@@ -243,6 +271,9 @@ public enum ShortcutCatalog {
             entry(.inspectElements, "Inspect Elements", ShortcutKey("c", [.option, .command])),
             entry(.javaScriptConsole, "JavaScript Console", ShortcutKey("j", [.option, .command])),
             entry(.viewSource, "View Source", ShortcutKey("u", [.option, .command])),
+        ], unboundActions: [
+            // [02 §开发者] observed, no default key (F5-6).
+            "Network Inspector",
         ]),
     ]
 
@@ -256,11 +287,28 @@ public enum ShortcutCatalog {
         return definition
     }
 
-    /// The pane's rows, one per action.
-    public static let groups: [ShortcutGroup] = table.map { group in
-        ShortcutGroup(title: group.title, entries: group.definitions.map {
-            ShortcutEntry(action: $0.title, keys: $0.keyText, searchKeys: $0.keys.map(\.symbols))
-        })
+    /// The pane's rows with the Space jumps as one "Go to Space 1–9" row (no Spaces known).
+    public static let groups: [ShortcutGroup] = groups(spaceNames: [])
+
+    /// The pane's rows: one per action, then the group's actions without a key ('---', F5-6).
+    /// With `spaceNames` (the Spaces in dock order) the Space jumps are one row per Space, "Go to
+    /// “<name>”" with its ⌃N, for the first nine ([02] header note observed; F5-22).
+    public static func groups(spaceNames: [String]) -> [ShortcutGroup] {
+        table.map { group in
+            var entries: [ShortcutEntry] = []
+            for definition in group.definitions {
+                if definition.id == .goToSpace, !spaceNames.isEmpty {
+                    for (name, key) in zip(spaceNames, definition.keys) {
+                        entries.append(ShortcutEntry(action: "Go to “\(name)”", keys: key.symbols, searchKeys: [key.symbols]))
+                    }
+                } else {
+                    entries.append(ShortcutEntry(action: definition.title, keys: definition.keyText,
+                                                 searchKeys: definition.keys.map(\.symbols)))
+                }
+            }
+            entries += group.unboundActions.map { ShortcutEntry(action: $0, keys: noKey, searchKeys: []) }
+            return ShortcutGroup(title: group.title, entries: entries)
+        }
     }
 
     /// Groups whose entries match `query` in the action name or the keys ([02 §其他] observed: the

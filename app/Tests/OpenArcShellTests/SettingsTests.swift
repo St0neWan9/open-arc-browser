@@ -548,7 +548,7 @@ final class SettingsTests: XCTestCase {
                        ["Tabs and Sidebar", "Spaces", "Split View", "Page and Navigation", "Copy Links", "Windows and App", "Developer"])
         let all = ShortcutCatalog.groups.flatMap(\.entries)
         XCTAssertEqual(all.first { $0.action == "Archive Tab" }?.keys, "⌘W")
-        XCTAssertEqual(all.first { $0.action == "Settings…" }?.keys, "⌘,")
+        XCTAssertEqual(all.first { $0.action == "Preferences…" }?.keys, "⌘,", "[02 §窗口与应用] list name")
         XCTAssertEqual(ShortcutCatalog.filtered(ShortcutCatalog.groups, query: "split").flatMap(\.entries).count, 2)
         XCTAssertEqual(ShortcutCatalog.filtered(ShortcutCatalog.groups, query: "⇧⌘K").flatMap(\.entries).map(\.action),
                        ["Clear Unpinned Tabs"])

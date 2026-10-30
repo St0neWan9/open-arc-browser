@@ -182,9 +182,10 @@ public enum SettingsCatalog {
         // archived (`LittleArcArchive.swift`).
         SettingsControl("links.archiveLittleArcsAfter", "Archive Little Arcs after", .picker(defaultValue: LittleArcArchiveLifetime.default.displayName), .live),
         // Live (B49): `AppPreferences.opensPeekOnShiftClick` / `opensPeekForOtherSites`. Defaults
-        // inferred (the spec records none). [06 §22.1] observed behavior.
+        // inferred (the spec records none). [06 §22.1] observed behavior. The second label has no
+        // parenthetical: the row's italic note says it ([06 §25.1] observed, F5-25).
         SettingsControl("links.peekShiftClick", "Shift-click a link to open it in Peek", .toggle(defaultValue: true), .live),
-        SettingsControl("links.peekOtherSites", "Open links to other sites in Peek (Favorites and Pinned Tabs only)", .toggle(defaultValue: true), .live),
+        SettingsControl("links.peekOtherSites", "Open links to other sites in Peek", .toggle(defaultValue: true), .live),
         // Live (B52): opens the route sheet. [06 §25.1] observed.
         SettingsControl("links.airTrafficControl", "Air Traffic Control…", .button, .live),
     ]

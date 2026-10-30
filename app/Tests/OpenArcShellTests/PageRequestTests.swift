@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import AppKit
 import OpenArcModel
 import OpenArcEngine
 import OpenArcSyncAPI
@@ -341,6 +343,37 @@ final class PageRequestTests: XCTestCase {
         model.sidebar.reloadOrStop()
         await controller.settleEngineWork()
         XCTAssertEqual(live.commands, [.reload(bypassingCache: true), .reload(bypassingCache: false)])
+    }
+
+    /// [02 §页面与导航] ⌘R, [01 §View] observed items (F5-5): Refresh the Page reloads also while
+    /// the page loads; Stop Loading (⌘.) and the toolbar button stop. The menu items, the ⌘R
+    /// command and the toolbar button are checked on the same page.
+    func testRefreshAlwaysReloadsAndStopStays() async throws {
+        let (id, live) = try await openPage("https://loading.example")
+        live.simulateLoadState(LoadState(isLoading: true, progress: 0.3))
+        try await waitUntil { self.model.sidebar.reloadMode == .stop }
+        guard #available(macOS 15, *) else { throw XCTSkip("NSHostingMenu needs macOS 15") }
+        let menu = NSHostingMenu(rootView: ViewMenuItems(model: model, hasWindow: true))
+        menu.update()
+        let refresh = try XCTUnwrap(menu.items.first { $0.title == "Refresh the Page" })
+        XCTAssertEqual(refresh.keyEquivalent, "r")
+        _ = (try XCTUnwrap(refresh.target) as AnyObject).perform(try XCTUnwrap(refresh.action), with: refresh)
+        await controller.settleEngineWork()
+        XCTAssertEqual(live.commands, [.reload(bypassingCache: false)], "a reload, not a stop, during the load")
+        // The command bar's Refresh the Page row does the same.
+        live.simulateLoadState(LoadState(isLoading: true, progress: 0.3))
+        try await waitUntil { self.model.sidebar.reloadMode == .stop }
+        model.run(.reload)
+        await controller.settleEngineWork()
+        XCTAssertEqual(live.commands, [.reload(bypassingCache: false), .reload(bypassingCache: false)])
+        // The toolbar's button still stops while loading.
+        live.simulateLoadState(LoadState(isLoading: true, progress: 0.3))
+        try await waitUntil { self.model.sidebar.reloadMode == .stop }
+        model.webToolbarReload(id)
+        await controller.settleEngineWork()
+        XCTAssertEqual(live.commands.count, 2, "the toolbar button stopped instead of reloading")
+        let stop = try XCTUnwrap(menu.items.first { $0.title == "Stop Loading" })
+        XCTAssertEqual(stop.keyEquivalent, ".")
     }
 
     func testExtraTabStateReachesTheLiveState() async throws {

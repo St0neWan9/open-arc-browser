@@ -22,6 +22,19 @@ extension ShellModel {
         controller.enqueueTabCommand(live) { try? await $0.reload() }
     }
 
+    /// View ▸ Refresh the Page (⌘R): always a reload, also while the page loads. Stopping is
+    /// View ▸ Stop Loading (⌘.) and the toolbar's reload / stop button. [02 §页面与导航] observed
+    /// key; [01 §View] observed items. F5-5: Chromium's ⌘R also reloads during a load (inferred
+    /// for Arc, which the spec does not record).
+    public func reload() {
+        runOnSelectedPage { try await $0.reload() }
+    }
+
+    /// View ▸ Stop Loading (⌘.): stops the selected page's load. [01 §View] observed item.
+    public func stopLoading() {
+        runOnSelectedPage { try await $0.stopLoading() }
+    }
+
     /// View ▸ Force Refresh the Page (⇧⌘R): reload bypassing the cache.
     public func forceReload() {
         runOnSelectedPage { try await $0.reload(bypassingCache: true) }

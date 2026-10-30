@@ -16,7 +16,7 @@ extension AppPreferences {
         set { setBool(newValue, Self.peekShiftClickKey) }
     }
 
-    /// "Open links to other sites in Peek (Favorites and Pinned Tabs only)". Per device.
+    /// "Open links to other sites in Peek" (Favorites and Pinned tabs only). Per device.
     public var opensPeekForOtherSites: Bool {
         get { boolValue(Self.peekOtherSitesKey) ?? true }
         set { setBool(newValue, Self.peekOtherSitesKey) }
