@@ -148,6 +148,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // Plan B130: iCloud Keychain passkeys through the tab's window, with the fake keychain.
         try await checkICloudKeychainPasskeys(engine, server: identityServer)
 
+        // B132: site icons for never visited sites; the page menu's Services requestor.
+        try await checkSmallGapsB132(engine, server: identityServer, profileID: UUID())
+
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
         let crashEvents = tab.events()

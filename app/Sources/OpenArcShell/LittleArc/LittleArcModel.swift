@@ -127,6 +127,10 @@ public final class LittleArcModel: ObservableObject {
         )
         commandBar.onAction = { [weak self] action in self?.handle(action) }
         commandBar.faviconProvider = { [weak shell] result in shell?.controller.commandBarFavicon(for: result) }
+        commandBar.missingIconsRequester = { [weak shell, weak commandBar] results in
+            guard let shell, let commandBar else { return }
+            shell.controller.loadMissingCommandBarIcons(results, profileID: shell.sidebar.currentProfileID, bar: commandBar)
+        }
         commandBar.onDismiss = { [weak self] in self?.close() }
         colorSchemeObservation = shell.controller.colorSchemeInputsChanged.sink { [weak self] in
             MainActor.assumeIsolated { self?.syncColorScheme() }

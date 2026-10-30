@@ -133,14 +133,21 @@ final class ProfileIsolationServer: @unchecked Sendable {
             let target = text.split(separator: " ", maxSplits: 2).dropFirst().first.map(String.init) ?? "/"
             let path = target.split(separator: "?").first.map(String.init) ?? "/"
             let (status, type, body): (String, String, String)
+            var binary: Data?
             switch path {
             case "/": (status, type, body) = ("200 OK", "text/html; charset=utf-8", ProfileIsolationSite.indexHTML)
             case "/sw.js": (status, type, body) = ("200 OK", "text/javascript", ProfileIsolationSite.serviceWorkerJS)
             case "/ua": (status, type, body) = ("200 OK", "text/html; charset=utf-8", ProfileIsolationSite.identityHTML)
             case "/webauthn": (status, type, body) = ("200 OK", "text/html; charset=utf-8", WebAuthnTestPage.html)
+            // B132: a link page over http (Copy Link to Highlight is offered on http(s) pages only).
+            case "/link": (status, type, body) = ("200 OK", "text/html; charset=utf-8", SiteIconTestImage.linkHTML)
+            // B132: the site icon the command bar fetches for a never visited site.
+            case "/favicon.ico":
+                (status, type, body) = ("200 OK", "image/png", "")
+                binary = SiteIconTestImage.png
             default: (status, type, body) = ("404 Not Found", "text/plain", "not found")
             }
-            let payload = Data(body.utf8)
+            let payload = binary ?? Data(body.utf8)
             let head = "HTTP/1.0 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(payload.count)\r\n"
                 + "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
             connection.send(content: Data(head.utf8) + payload, completion: .contentProcessed { _ in connection.cancel() })

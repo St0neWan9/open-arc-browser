@@ -171,6 +171,8 @@ public final class WorkspaceController: ObservableObject {
     /// Favicon images seen from the engine (C9, WorkspaceController+Favicons.swift). On disk next to
     /// the workspace file; memory only for an incognito controller or without persistence.
     public let favicons: FaviconCache
+    /// Icons of never visited sites the command bar lists (plan B132, Favicons/SiteIconLoader.swift).
+    let siteIcons = SiteIconLoader()
     /// State of page-initiated tabs and engine-event observation (C7b, WorkspaceController+PageRequests.swift).
     let pageRequests = PageRequestState()
     /// Link preview triggers sent to live tabs (B49, LinkPeek/WorkspaceController+LinkPeek.swift).
@@ -409,6 +411,7 @@ public final class WorkspaceController: ObservableObject {
         terminationObserver?.invalidate()
         terminationObserver = nil
         pageRequests.stop()
+        siteIcons.cancelAll()
         if isOffTheRecord { Array(liveTabs.keys).forEach(closeLive) }
         eventTasks.values.forEach { $0.cancel() }
         eventTasks.removeAll()

@@ -23,7 +23,11 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
     /// Scripted answers with navigation rows; nil builds them from `provider` (plan B128).
     private var completions: CompletionProvider?
     private var delay: Duration = .zero
-    private var supported: AutocompleteCapabilities = [.history, .searchSuggestions]
+    private var supported: AutocompleteCapabilities = [.history, .searchSuggestions, .siteIcons]
+    /// Site icons by host without "www." (plan B132).
+    private var icons: [String: Data] = [:]
+    private var iconDelay: Duration = .zero
+    private var iconLog: [URL] = []
     private var requestLog: [SearchSuggestionRequest] = []
     private var queryLog: [String] = []
     private var cancelled = 0
@@ -53,6 +57,18 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
         get { lock.withLock { delay } }
         set { lock.withLock { delay = newValue } }
     }
+    /// Site icons the fake answers, by host without "www." (plan B132). Default: none.
+    public var siteIcons: [String: Data] {
+        get { lock.withLock { icons } }
+        set { lock.withLock { icons = newValue } }
+    }
+    /// How long a site icon request takes. Default: none.
+    public var siteIconDelay: Duration {
+        get { lock.withLock { iconDelay } }
+        set { lock.withLock { iconDelay = newValue } }
+    }
+    /// Pages whose site icon was asked for, in order. For tests.
+    public var siteIconRequests: [URL] { lock.withLock { iconLog } }
     /// Suggestion requests received, in order. For tests.
     public var suggestionRequests: [SearchSuggestionRequest] { lock.withLock { requestLog } }
     /// History texts asked for, in order. For tests.
@@ -122,6 +138,21 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
         }
         guard enabled, maxCount > 0, !Task.isCancelled else { return [] }
         return Array(HistoryMatch.sortedByVisits(candidates).prefix(maxCount))
+    }
+
+    /// The scripted icon of the page's host (plan B132), after the scripted delay; nil without
+    /// `.siteIcons`, for a non-http(s) page or a cancelled task.
+    public func siteIcon(for pageURL: URL, profileID: Profile.ID, isOffTheRecord: Bool) async -> Data? {
+        let (enabled, icons, delay): (Bool, [String: Data], Duration) = lock.withLock {
+            iconLog.append(pageURL)
+            return (supported.contains(.siteIcons), self.icons, iconDelay)
+        }
+        guard enabled, let scheme = pageURL.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              var host = pageURL.host?.lowercased() else { return nil }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        if delay > .zero { try? await Task.sleep(for: delay) }
+        guard !Task.isCancelled else { return nil }
+        return icons[host]
     }
 
     public func searchSuggestions(_ request: SearchSuggestionRequest) async -> [String] {
