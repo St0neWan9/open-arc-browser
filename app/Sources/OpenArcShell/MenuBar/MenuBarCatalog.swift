@@ -20,8 +20,6 @@ enum MenuBarCatalog {
     static let omittedItems: [String: String] = [
         // Arc ▸ Sign Out: Open Arc has no account; sync uses the iCloud account of the Mac.
         "Sign Out": "no account to sign out of (iCloud sync)",
-        // Help ▸ Restore Data: [01 §Help] lists the item only; what it restores is unknown.
-        "Restore Data": "behavior unknown in the spec",
         // Help ▸ Export Arc Notes: Notes are gone from Arc 1.170 ([06 §23]) and not in Open Arc.
         "Export Arc Notes": "no Notes feature",
         // Help ▸ Troubleshooting ▸ Record Trace / Open Task Manager: need engine tracing and a
@@ -160,7 +158,8 @@ enum MenuBarCatalog {
     /// Arc's Help has none (B122). For development, a launch with an empty `OPENARC_DATA_DIR` is a
     /// first launch and shows onboarding.
     static let helpGroups: [[String]] = [
-        ["Getting Started", "Essential Keyboard Shortcuts", "Contact the Team", "Visit Help Center"],
+        // Restore Data: our local meaning (plan Q18, B117): restore the sidebar from a local backup.
+        ["Getting Started", "Essential Keyboard Shortcuts", "Contact the Team", "Visit Help Center", "Restore Data"],
         ["Troubleshooting"],
     ]
 

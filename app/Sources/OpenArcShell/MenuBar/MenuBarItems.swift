@@ -385,8 +385,9 @@ struct WindowMenuItems: View {
 }
 
 /// Help ▸ items after the system search field ([01 §Help] observed items, no icons). The groups
-/// are ours (not recorded). Restore Data and Export Arc Notes are omitted
-/// (`MenuBarCatalog.omittedItems`). Items that open a page need a browser window.
+/// are ours (not recorded). Restore Data restores a local backup (plan Q18, `RestoreDataMenuItem`);
+/// Export Arc Notes is omitted (`MenuBarCatalog.omittedItems`). Items that open a page need a
+/// browser window.
 struct HelpMenuItems: View {
     let model: ShellModel
     /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
@@ -408,6 +409,7 @@ struct HelpMenuItems: View {
         Button("Contact the Team") { model.contactTheTeam() }
         Button("Visit Help Center") { model.openHelpCenter() }
             .disabled(!hasWindow)
+        RestoreDataMenuItem(controller: model.controller)
         Divider()
         Menu("Troubleshooting") {
             Button("Reveal Open Arc Data") { model.revealAppData() }

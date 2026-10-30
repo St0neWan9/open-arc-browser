@@ -71,6 +71,12 @@ struct TempDirectory {
     func contents() -> [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []).sorted()
     }
+
+    /// File names in the backup folder, sorted.
+    func backupNames() -> [String] {
+        let folder = WorkspaceBackups.directory(in: url)
+        return ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted()
+    }
 }
 
 /// A workspace that contains every record type, including tombstones, built with `TreeOps`.
