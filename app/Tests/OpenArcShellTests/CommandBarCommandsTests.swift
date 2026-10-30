@@ -254,6 +254,8 @@ final class CommandBarCommandsTests: XCTestCase {
                 XCTAssertEqual(m.workspace.today(spaceID: space).first?.id, id, "top of Today")
             },
             RoutingCase(command: .replacePinWithCurrentPage, setUp: { m in try await self.navigatePinnedTabAway(m) }) { m in
+                // The replace runs after the tab's queued engine commands (B129).
+                await m.sidebar.settleEngineWork()
                 let id = try XCTUnwrap(m.selectedTabID)
                 XCTAssertEqual(m.workspace.tabs[id]?.pinnedURL, self.elsewhere)
             },
@@ -412,6 +414,28 @@ final class CommandBarCommandsTests: XCTestCase {
     private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<200 where !condition() { await Task.yield() }
         XCTAssertTrue(condition(), "condition not reached")
+    }
+
+    /// B129: Replace Pin with Current Page right after a URL was entered pins the page just
+    /// loaded. The command used to read the cached live state, which still held the previous page
+    /// (the load was queued, or its events were still on the tab's event stream), and pinned that
+    /// page or wrote it back into the record. Here it runs before the load: deterministic.
+    func testReplacePinRightAfterNavigatingPinsTheNewPage() async throws {
+        let model = makeModel()
+        let id = try await selectPinnedTab(model)
+        let pinned = try XCTUnwrap(model.workspace.tabs[id]?.pinnedURL)
+        XCTAssertNotEqual(pinned, elsewhere)
+        model.sidebar.navigateSelectedTab(to: elsewhere)
+        model.perform(.runCommand(.replacePinWithCurrentPage))
+        await model.sidebar.settleEngineWork()
+        XCTAssertEqual(model.workspace.tabs[id]?.pinnedURL, elsewhere, "the page just loaded is pinned")
+        XCTAssertEqual(model.workspace.tabs[id]?.url, elsewhere, "the record keeps the page shown")
+        // Late engine events of the load change nothing.
+        try await waitUntil { model.sidebar.liveState(for: id)?.url == self.elsewhere }
+        await model.sidebar.settleEngineWork()
+        XCTAssertEqual(model.workspace.tabs[id]?.url, elsewhere)
+        XCTAssertEqual(model.workspace.tabs[id]?.pinnedURL, elsewhere)
+        model.stop()
     }
 
     /// Every command routes to the change its menu item makes.

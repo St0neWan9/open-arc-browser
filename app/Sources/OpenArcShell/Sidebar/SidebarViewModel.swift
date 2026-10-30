@@ -551,10 +551,6 @@ public final class SidebarViewModel: ObservableObject {
         controller.apply(event, to: id)
     }
 
-    private func syncContent(_ id: UUID) {
-        controller.syncContent(id)
-    }
-
     /// Live engine tab for a model tab id, if one has been created.
     func liveTab(for id: UUID) -> (any BrowserTab)? { controller.liveTab(for: id) }
 
@@ -750,9 +746,14 @@ public final class SidebarViewModel: ObservableObject {
     }
 
     /// Edit Pinned Page ▸ Replace Pinned URL with Current. [05 §context menus] observed.
+    /// The current page is the one the engine shows once the tab's queued commands ran (a URL
+    /// entered just before is included); the cached live state may still hold the previous page
+    /// (B129), so the record is brought up to the engine's state first. Settles with engine work.
     public func replacePinnedURLWithCurrent(_ id: UUID) {
-        if let live = liveState(for: id)?.url, workspace.tabs[id]?.url != live { syncContent(id) }
-        mutate { try TreeOps.replacePinnedURLWithCurrent($0, id: id, now: now()) }
+        controller.afterContentSettles(of: id) { [weak self] in
+            guard let self else { return }
+            self.mutate { try TreeOps.replacePinnedURLWithCurrent($0, id: id, now: self.now()) }
+        }
     }
 
     /// Reset Tab to Original URL. [02 §tabs] observed command name.
