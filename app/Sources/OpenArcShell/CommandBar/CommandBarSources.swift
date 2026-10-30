@@ -419,6 +419,15 @@ public struct CommandBarTypedInputSource: CommandBarSource {
 /// `CommandBarStaticSuggestionProvider` in previews and tests.
 public protocol CommandBarSuggestionProviding: Sendable {
     func suggestions(for query: String) async -> [String]
+    /// The suggestions including the service's navigation rows (plan B128). Default: the phrases
+    /// of `suggestions(for:)` as query rows.
+    func completions(for query: String) async -> [SearchSuggestion]
+}
+
+extension CommandBarSuggestionProviding {
+    public func completions(for query: String) async -> [SearchSuggestion] {
+        await suggestions(for: query).map { SearchSuggestion(text: $0) }
+    }
 }
 
 /// The engine's suggestions (`EngineAutocomplete.searchSuggestions`, plan B66) from the search
@@ -441,15 +450,25 @@ public struct CommandBarEngineSuggestionProvider: CommandBarSuggestionProviding 
         guard let request = await request(query), !Task.isCancelled else { return [] }
         return await autocomplete.searchSuggestions(request)
     }
+
+    /// Query and navigation rows (`EngineAutocomplete.searchCompletions`, plan B128).
+    public func completions(for query: String) async -> [SearchSuggestion] {
+        guard let request = await request(query), !Task.isCancelled else { return [] }
+        return await autocomplete.searchCompletions(request)
+    }
 }
 
 /// Offline provider: phrases from a fixed list that contain the query (case-insensitive). For
 /// previews and tests.
 public struct CommandBarStaticSuggestionProvider: CommandBarSuggestionProviding {
     public var phrases: [String]
+    /// Navigation rows: each one whose title or host starts with the query is answered after the
+    /// matching phrases (plan B128).
+    public var navigations: [SearchSuggestion]
 
-    public init(phrases: [String]) {
+    public init(phrases: [String], navigations: [SearchSuggestion] = []) {
         self.phrases = phrases
+        self.navigations = navigations
     }
 
     public func suggestions(for query: String) async -> [String] {
@@ -457,11 +476,27 @@ public struct CommandBarStaticSuggestionProvider: CommandBarSuggestionProviding 
         guard !folded.isEmpty else { return [] }
         return phrases.filter { CommandBarTextNormalizer.fold($0).hasPrefix(folded) }
     }
+
+    public func completions(for query: String) async -> [SearchSuggestion] {
+        let folded = CommandBarTextNormalizer.fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !folded.isEmpty else { return [] }
+        let pages = navigations.filter { page in
+            let host = page.url.flatMap(CommandBarTextNormalizer.host) ?? ""
+            return CommandBarTextNormalizer.fold(page.text).contains(folded) || host.hasPrefix(folded)
+        }
+        return await suggestions(for: query).map { SearchSuggestion(text: $0) } + pages
+    }
 }
 
 /// Web suggestion rows from an injected provider: magnifier glyph ([07 §9] observed row glyphs),
 /// the suggestion as the title, "Search" on the right (unknown). Deferred by default: they come
 /// over the network, so the other rows show first.
+///
+/// Navigation rows of the service (plan B128) become site rows: "Title — domain" with the site's
+/// favicon, opening the page ([05 §命令栏] observed "National Weather Service — weather.gov" among
+/// the query rows). One whose host starts with the typed text becomes the completing site row
+/// (`siteCompletion`; [05 §命令栏] observed that a site whose host the typed text starts comes
+/// first and completes inline; that a suggested site may be that row is inferred).
 public struct CommandBarWebSuggestionsSource: CommandBarSource {
     private let provider: any CommandBarSuggestionProviding
     private let maxCount: Int
@@ -476,10 +511,22 @@ public struct CommandBarWebSuggestionsSource: CommandBarSource {
     public func results(for context: CommandBarQueryContext) async -> [CommandBarResult] {
         let query = context.trimmedText
         guard !query.isEmpty else { return [] }
-        let suggestions = await provider.suggestions(for: query)
+        let suggestions = await provider.completions(for: query)
         guard !Task.isCancelled else { return [] }
-        return suggestions.prefix(maxCount).enumerated().map { index, text in
-            CommandBarResult(
+        return suggestions.prefix(maxCount).enumerated().map { index, suggestion in
+            if let url = suggestion.url {
+                return CommandBarSiteRows.row(
+                    id: "navigation:\(url.absoluteString)",
+                    url: url,
+                    title: suggestion.text,
+                    typed: query,
+                    strength: Self.navigationStrength,
+                    sourceOrder: index,
+                    target: context.mode.openTarget
+                )
+            }
+            let text = suggestion.text
+            return CommandBarResult(
                 id: "suggestion:\(index):\(text)",
                 kind: .searchSuggestion,
                 title: text,
@@ -491,17 +538,98 @@ public struct CommandBarWebSuggestionsSource: CommandBarSource {
             )
         }
     }
+
+    /// How well a navigation suggestion's site counts as known, against a visited site's frecency
+    /// (0...1), when both complete the typed text. inferred.
+    public static let navigationStrength = 0.5
+}
+
+// MARK: - Known sites (plan B128)
+
+/// Site rows shared by the known-site source and the navigation suggestions.
+enum CommandBarSiteRows {
+    /// A site row: "Title — host" with the site's favicon ([05 §命令栏] observed), opening `url`.
+    /// When `typed` is a proper prefix of the host it is the completing row (`siteCompletion`),
+    /// whose Tab completion is the host; otherwise a plain `siteSuggestion`.
+    static func row(
+        id: String,
+        url: URL,
+        title: String,
+        typed: String,
+        strength: Double,
+        sourceOrder: Int,
+        target: CommandBarOpenTarget
+    ) -> CommandBarResult {
+        let host = CommandBarTextNormalizer.host(url) ?? url.absoluteString
+        let completes = CommandBarSiteCompletionRules.completedHost(forTyped: typed, host: host) != nil
+        var row = CommandBarResult(
+            id: id,
+            kind: completes ? .siteCompletion : .siteSuggestion,
+            title: title.isEmpty ? host : title,
+            subtitle: host,
+            url: url,
+            iconHint: .site(faviconURL: nil),
+            actionLabel: CommandBarHistorySource.openLabel,
+            action: .openURL(url, target: target),
+            completion: completes ? host : url.absoluteString,
+            sourceOrder: sourceOrder
+        )
+        row.frecency = min(max(strength, 0), 1)
+        return row
+    }
+}
+
+/// Sites the profile knows (its most visited pages and the history pages of the typed text) whose
+/// host starts with the typed text: the completing site row, first in the list and completed
+/// inline in the field ([05 §命令栏] observed 2026-10-30: "weather" → "Weather.com — weather.com"
+/// first, ".com" completed in the field). Never in an incognito window (no history, [06 §20.1]
+/// observed). Which pages count is inferred (`CommandBarKnownSites`).
+public struct CommandBarKnownSitesSource: CommandBarSource {
+    /// Pages asked from the engine per query. inferred.
+    public static let defaultMaxCount = 12
+
+    private let pages: @Sendable (_ text: String, _ maxCount: Int) async -> [CommandBarSiteCandidate]
+    private let maxCount: Int
+
+    /// - Parameter pages: the window profile's known sites for the typed text
+    ///   (`CommandBarKnownSites.candidates` over the engine's most visited and history pages).
+    public init(
+        maxCount: Int = CommandBarKnownSitesSource.defaultMaxCount,
+        pages: @escaping @Sendable (_ text: String, _ maxCount: Int) async -> [CommandBarSiteCandidate]
+    ) {
+        self.pages = pages
+        self.maxCount = maxCount
+    }
+
+    public func results(for context: CommandBarQueryContext) async -> [CommandBarResult] {
+        let typed = context.trimmedText
+        guard typed.count >= CommandBarSiteCompletionRules.minimumPrefixLength, !context.listsHelpOnlyWhenEmpty else { return [] }
+        let candidates = await pages(typed, maxCount)
+        guard !Task.isCancelled,
+              let best = CommandBarSiteCompletionRules.bestCandidate(forTyped: typed, candidates: candidates) else { return [] }
+        return [CommandBarSiteRows.row(
+            id: "site:\(best.candidate.url.absoluteString)",
+            url: best.candidate.url,
+            title: best.candidate.title,
+            typed: typed,
+            strength: best.candidate.strength,
+            sourceOrder: best.candidate.sourceOrder,
+            target: context.mode.openTarget
+        )]
+    }
 }
 
 /// The default set of sources for a workspace. `commandState` is the window state the command and
 /// space rows depend on; the default offers every command and no move rows. `history` is the
 /// engine's history source (nil: no history rows); `topSites` its most-visited source (nil: none);
-/// `suggestions` the web suggestion provider.
+/// `knownSites` the completing site row's source (nil: none, plan B128); `suggestions` the web
+/// suggestion provider (its navigation rows are site rows).
 public func commandBarDefaultSources(
     workspace: @escaping @Sendable () async -> WorkspaceState,
     commandState: @escaping @Sendable () async -> CommandBarCommandState = { .everything },
     history: CommandBarHistorySource? = nil,
     topSites: CommandBarTopSitesSource? = nil,
+    knownSites: CommandBarKnownSitesSource? = nil,
     suggestions: any CommandBarSuggestionProviding = CommandBarStaticSuggestionProvider(phrases: []),
     suggestionsAreDeferred: Bool = false
 ) -> [any CommandBarSource] {
@@ -511,6 +639,7 @@ public func commandBarDefaultSources(
     ]
     if let history { sources.append(history) }
     if let topSites { sources.append(topSites) }
+    if let knownSites { sources.append(knownSites) }
     sources += [
         CommandBarCommandsSource(state: commandState),
         CommandBarSpacesSource(workspace: workspace, state: commandState),

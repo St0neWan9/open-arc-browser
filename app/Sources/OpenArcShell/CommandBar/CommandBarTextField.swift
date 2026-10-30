@@ -160,15 +160,18 @@ struct CommandBarTextField: NSViewRepresentable {
 
         // MARK: Text
 
-        /// Pushes programmatic text changes (prefill, Tab completion, reset) into the field.
+        /// Pushes programmatic text changes (prefill, Tab completion, reset) and the inline site
+        /// completion (plan B128: the typed text plus a selected suffix, so typing replaces it)
+        /// into the field.
         func syncText() {
-            guard let field, field.stringValue != viewModel.queryText else { return }
+            let shown = viewModel.displayedText
+            guard let field, field.stringValue != shown else { return }
             // Never replace text while an input method is composing.
             if let editor = field.editingTextView, editor.hasMarkedText() { return }
-            field.stringValue = viewModel.queryText
+            field.stringValue = shown
             if let editor = field.editingTextView {
                 let length = (editor.string as NSString).length
-                editor.selectedRange = NSRange(location: length, length: 0)
+                editor.selectedRange = viewModel.inlineCompletion?.selectedRange ?? NSRange(location: length, length: 0)
             }
         }
 
@@ -180,8 +183,23 @@ struct CommandBarTextField: NSViewRepresentable {
         // MARK: Keys
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // ←, → or End with a completion up keep the completed text, and the field then moves
+            // the caret as usual (inferred, B128; Arc's arrow keys in the field were not captured).
+            if viewModel.inlineCompletion != nil, Self.acceptsCompletion(commandSelector) {
+                viewModel.acceptInlineCompletion()
+                return false
+            }
             guard let key = Self.key(for: commandSelector) else { return false }
             return viewModel.handle(key) != .ignored
+        }
+
+        /// Keys that turn the inline completion into typed text.
+        static func acceptsCompletion(_ selector: Selector) -> Bool {
+            selector == #selector(NSResponder.moveRight(_:))
+                || selector == #selector(NSResponder.moveLeft(_:))
+                || selector == #selector(NSResponder.moveToEndOfLine(_:))
+                || selector == #selector(NSResponder.moveToEndOfParagraph(_:))
+                || selector == #selector(NSResponder.moveToEndOfDocument(_:))
         }
 
         /// Maps AppKit's key commands to the bar's keys.
@@ -193,6 +211,7 @@ struct CommandBarTextField: NSViewRepresentable {
             case #selector(NSResponder.insertBacktab(_:)): return .shiftTab
             case #selector(NSResponder.insertNewline(_:)): return .returnKey
             case #selector(NSResponder.cancelOperation(_:)): return .escape
+            case #selector(NSResponder.deleteBackward(_:)): return .deleteBackward
             default: return nil
             }
         }

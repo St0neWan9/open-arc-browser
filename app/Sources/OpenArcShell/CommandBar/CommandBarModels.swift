@@ -447,6 +447,13 @@ public enum CommandBarResultKind: Hashable, Sendable {
     case archivedItem
     /// A page of the profile's browsing history (plan B66): not open, not archived.
     case historyItem
+    /// A site the bar knows (a frequently visited page) whose host starts with the typed text: the
+    /// first row while the field completes inline ("Weather.com — weather.com", site favicon).
+    /// [05 §命令栏] observed (2026-10-30).
+    case siteCompletion
+    /// The search service's navigation suggestion: a page it proposes, shown as "Title — domain"
+    /// among the query suggestions ("National Weather Service — weather.gov"). [05 §命令栏] observed.
+    case siteSuggestion
     /// One of the profile's most visited pages (plan B121), for an empty or short query.
     /// [05 §command bar] inferred (analysis).
     case topSite
@@ -628,25 +635,39 @@ public enum CommandBarInputGlyph: Hashable, Sendable {
     /// The first result is an app command: its glyph (`CommandBarCommand.glyphSymbol`).
     /// [07 §5] E27 observed (settings → gear, copy url → copy, split → split, archive → box).
     case command(CommandBarCommand)
+    /// The first row is a site suggestion whose host completes the typed text: the site's favicon.
+    /// [07 §5] / [05 §命令栏] observed (2026-10-30): with "weather" completed to ".com" the field's
+    /// glyph is the site's icon.
+    case site(CommandBarResult)
 
     /// The glyph for the field's text and the list's first result (nil for an empty list).
-    /// [07 §5] E27 observed: a command on top shows its glyph, anything else the magnifier. An
-    /// empty field keeps the magnifier even when a help command heads the list (incognito, [06
-    /// §20.1]): F4 live E3 observed the magnifier for the empty bar (B109). The globe of the
+    /// [07 §5] E27 observed: a command on top shows its glyph, anything else the magnifier, and
+    /// [05 §命令栏] observed the site's favicon while the field shows an inline completion (B128).
+    /// An empty field keeps the magnifier even when a help command heads the list (incognito,
+    /// [06 §20.1]): F4 live E3 observed the magnifier for the empty bar (B109). The globe of the
     /// earlier [07 §5] table capture is no longer drawn: E27 saw the magnifier for every first
     /// result that is not a command (plan B127).
-    public static func forField(text: String, firstResult: CommandBarResult?) -> CommandBarInputGlyph {
+    public static func forField(
+        text: String,
+        firstResult: CommandBarResult?,
+        inlineCompletion: CommandBarInlineCompletion? = nil
+    ) -> CommandBarInputGlyph {
+        if let inlineCompletion, let firstResult, inlineCompletion.resultID == firstResult.id {
+            return .site(firstResult)
+        }
         guard !text.isEmpty, let firstResult, firstResult.drawsGlyphBox, let command = firstResult.command else {
             return .magnifier
         }
         return .command(command)
     }
 
-    /// SF Symbol drawn for the glyph.
+    /// SF Symbol drawn for the glyph (a site glyph falls back to the globe placeholder when the
+    /// window's favicon cache has no image).
     public var symbolName: String {
         switch self {
         case .magnifier: return "magnifyingglass"
         case .command(let command): return command.glyphSymbol
+        case .site: return "globe"
         }
     }
 }
@@ -659,6 +680,9 @@ public enum CommandBarKey: Hashable, Sendable {
     case shiftTab
     case returnKey
     case escape
+    /// Backspace: deletes as the field decides and drops the inline completion for good.
+    /// [05 §命令栏] observed (2026-10-30): Backspace removes the completion.
+    case deleteBackward
 }
 
 /// Result of feeding a key to the view model.

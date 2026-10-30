@@ -168,9 +168,27 @@ extension ShellModel {
             commandState: commandState,
             history: commandBarHistorySource(),
             topSites: commandBarTopSitesSource(),
+            knownSites: commandBarKnownSitesSource(),
             suggestions: commandBarSuggestionProvider(),
             suggestionsAreDeferred: true
         )
+    }
+
+    /// The completing site row (plan B128): the window profile's most visited pages and the
+    /// history pages of the typed text, folded into one candidate per site. None in an incognito
+    /// window (no history, [06 §20.1] observed). nil there.
+    func commandBarKnownSitesSource() -> CommandBarKnownSitesSource? {
+        guard !isIncognito else { return nil }
+        let autocomplete = dependencies.engine.autocomplete
+        let sidebar = self.sidebar
+        let clock = controller.now
+        return CommandBarKnownSitesSource { @MainActor text, maxCount in
+            guard let profileID = sidebar.currentProfileID else { return [] }
+            async let top = autocomplete.topSites(profileID: profileID, maxCount: maxCount)
+            async let visited = autocomplete.historyMatches(for: text, profileID: profileID, maxCount: maxCount)
+            let (topSites, history) = await (top, visited)
+            return CommandBarKnownSites.candidates(history: history, topSites: topSites, now: clock())
+        }
     }
 
     /// History rows from the engine for the window's profile. An incognito window has none: its

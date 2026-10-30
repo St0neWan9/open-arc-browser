@@ -9,6 +9,8 @@ import OpenArcModel
 public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
     /// Answers a suggestion request; default: no suggestions.
     public typealias SuggestionProvider = @Sendable (SearchSuggestionRequest) -> [String]
+    /// Answers a suggestion request including navigation rows (plan B128).
+    public typealias CompletionProvider = @Sendable (SearchSuggestionRequest) -> [SearchSuggestion]
 
     private struct Key: Hashable {
         var profileID: Profile.ID
@@ -18,6 +20,8 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
     private let lock = NSLock()
     private var pages: [Key: HistoryMatch] = [:]
     private var provider: SuggestionProvider = { _ in [] }
+    /// Scripted answers with navigation rows; nil builds them from `provider` (plan B128).
+    private var completions: CompletionProvider?
     private var delay: Duration = .zero
     private var supported: AutocompleteCapabilities = [.history, .searchSuggestions]
     private var requestLog: [SearchSuggestionRequest] = []
@@ -38,6 +42,11 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
     public var suggestionProvider: SuggestionProvider {
         get { lock.withLock { provider } }
         set { lock.withLock { provider = newValue } }
+    }
+    /// Answers suggestion requests with navigation rows (plan B128); nil maps `suggestionProvider`.
+    public var completionProvider: CompletionProvider? {
+        get { lock.withLock { completions } }
+        set { lock.withLock { completions = newValue } }
     }
     /// How long a suggestion request takes (to test cancellation). Default: none.
     public var suggestionDelay: Duration {
@@ -116,9 +125,20 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
     }
 
     public func searchSuggestions(_ request: SearchSuggestionRequest) async -> [String] {
-        let (enabled, provider, delay): (Bool, SuggestionProvider, Duration) = lock.withLock {
+        await answer(request).filter { !$0.isNavigation }.map(\.text)
+    }
+
+    /// The suggestions including navigation rows (plan B128).
+    public func searchCompletions(_ request: SearchSuggestionRequest) async -> [SearchSuggestion] {
+        await answer(request)
+    }
+
+    /// The scripted answer, after the scripted delay; empty when disabled, cancelled or on a
+    /// request without a URL. Query rows equal to the typed text are dropped (as engines do).
+    private func answer(_ request: SearchSuggestionRequest) async -> [SearchSuggestion] {
+        let (enabled, provider, completions, delay): (Bool, SuggestionProvider, CompletionProvider?, Duration) = lock.withLock {
             requestLog.append(request)
-            return (supported.contains(.searchSuggestions), self.provider, self.delay)
+            return (supported.contains(.searchSuggestions), self.provider, self.completions, self.delay)
         }
         guard enabled, request.url != nil else { return [] }
         if delay > .zero {
@@ -134,6 +154,7 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
             return []
         }
         let folded = request.query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return provider(request).filter { $0.lowercased() != folded }
+        let entries = completions.map { $0(request) } ?? provider(request).map { SearchSuggestion(text: $0) }
+        return entries.filter { $0.isNavigation || $0.text.lowercased() != folded }
     }
 }
