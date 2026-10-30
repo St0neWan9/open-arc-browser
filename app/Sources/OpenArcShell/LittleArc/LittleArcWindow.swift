@@ -6,7 +6,8 @@ import OpenArcDesign
 
 // The Little Arc window. Compact: the `.littleArc` command bar fills the window ([06 §7] observed).
 // Expanded: the 47 pt top bar (Profile capsule, domain, copy link, "Open in <Space> ⌘O" with a
-// Spaces dropdown) above the page ([06 §21.7] observed, B60).
+// Spaces dropdown) above the page ([06 §21.7] observed, B60), and the Close / Enter Full Screen
+// round buttons at the top right (B119).
 
 /// Scene id of the Little Arc window group.
 public enum LittleArcScene {
@@ -87,6 +88,8 @@ struct LittleArcBrowsingView: View {
     /// See-through like the main window (B64, [07 §8.4]; for Little Arc inferred), opaque in full
     /// screen and with Reduce Transparency.
     @State private var isFullScreen = false
+    /// The pointer is over the window: the Close / Enter Full Screen buttons show. inferred.
+    @State private var isHovering = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
@@ -102,6 +105,19 @@ struct LittleArcBrowsingView: View {
                 .webPanelEdgeShadow(palette.appearance)
                 .padding([.horizontal, .bottom], LittleArcTokens.pageInset)
         }
+        // Close / Enter Full Screen round buttons, shown while the pointer is over the window.
+        // [06 §21.7] observed in AX; showing them on hover and their spot are inferred
+        // (`LittleArcWindowButtonLayout`).
+        .overlay(alignment: .topTrailing) {
+            let shown = isHovering && !model.spacePicker.isOpen
+            LittleArcWindowButtons(model: model)
+                .padding(.top, LittleArcWindowButtonLayout.topInset)
+                .padding(.trailing, LittleArcWindowButtonLayout.trailingInset)
+                .opacity(shown ? 1 : 0)
+                .allowsHitTesting(shown)
+                // Shown and hidden at once: the fade is unknown ([07 §11] low by rule).
+        }
+        .onHover { isHovering = $0 }
         .overlay(alignment: .topTrailing) {
             VStack(alignment: .trailing, spacing: 8) {
                 // Opens in place over the button, top-right aligned. [06 §21.7] observed.
@@ -180,16 +196,27 @@ struct LittleArcTopBar: View {
         case .placeholder:
             Text(SidebarURLBoxContent.placeholderText)
                 .textStyle(Typography.addressField, ink: palette.chromeInk)
-        case .domain(let host, let isSecure):
+        case .domain(let host, _):
             HStack(spacing: 4) {
-                if isSecure {
-                    Image(systemName: "lock.fill").font(.system(size: 10))
+                if Self.showsInsecureLock(url: model.currentURL) {
+                    Image(systemName: "lock.slash")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(ThemeDerivation.webToolbarInsecureLock.swiftUI)
+                        .accessibilityLabel("Not Secure")
                 }
                 Text(host).lineLimit(1).truncationMode(.middle)
             }
             .textStyle(Typography.addressField, ink: palette.chromeInk)
             .accessibilityIdentifier("openarc.littlearc.domain")
         }
+    }
+
+    /// The bar shows only the domain: no lock on https ([06 §21.7] observed "centered domain";
+    /// [06 §17.2] observed: secure pages show no lock). A plain http page gets the toolbar's red
+    /// struck-through lock before it, as the toolbar and the sidebar URL box do ([06 §17.2,
+    /// §17.7] observed there; in Little Arc inferred, not captured).
+    static func showsInsecureLock(url: URL?) -> Bool {
+        SidebarURLBoxContent.showsInsecureLock(url: url)
     }
 
     private var copyButton: some View {
@@ -258,6 +285,94 @@ struct LittleArcTopBar: View {
         }
         .font(.system(size: 13, weight: .regular))
         .lineLimit(1)
+    }
+}
+
+/// The round buttons at the window's top right. [06 §21.7] observed in AX: "Close" and "Enter
+/// Full Screen", 34 × 33, the same as Peek's ([06 §22.2]), in that order, 44 pt apart (y 56 / 100).
+enum LittleArcWindowButton: CaseIterable, Sendable {
+    case close
+    case enterFullScreen
+
+    /// AX names. [06 §21.7] observed.
+    var title: String {
+        switch self {
+        case .close: "Close"
+        case .enterFullScreen: "Enter Full Screen"
+        }
+    }
+
+    /// Our glyphs (icons may differ), the same as Peek's buttons.
+    var symbol: String {
+        switch self {
+        case .close: "xmark"
+        case .enterFullScreen: "arrow.up.left.and.arrow.down.right"
+        }
+    }
+
+    var identifier: String {
+        switch self {
+        case .close: "openarc.littlearc.close"
+        case .enterFullScreen: "openarc.littlearc.enterFullScreen"
+        }
+    }
+
+    /// Close closes the window like Escape. Enter Full Screen moves the page into the main window
+    /// as "Open in <Space>" does, like Peek's button of that name ([06 §22.3] observed: Peek's
+    /// expands to a tab). For Little Arc inferred: the button was not clicked in the capture.
+    @MainActor
+    func perform(on model: LittleArcModel) {
+        switch self {
+        case .close: model.close()
+        case .enterFullScreen: model.adopt()
+        }
+    }
+
+    /// Whether the button can act: Enter Full Screen needs a page.
+    @MainActor
+    func isEnabled(on model: LittleArcModel) -> Bool {
+        self == .close || model.currentURL != nil
+    }
+}
+
+/// Placement of the round buttons. Size and pitch [06 §21.7] observed (34 × 33, y 56 / 100 → 44
+/// apart). Their x was not recorded and they did not show in screenshots, so the spot (inside the
+/// page's top right corner, below the bar where they cover nothing of it) and showing them only
+/// while the pointer is over the window are inferred.
+enum LittleArcWindowButtonLayout {
+    static let size = CGSize(width: PeekMetrics.buttonSize.width, height: PeekMetrics.buttonSize.height)
+    static let pitch = CGFloat(PeekMetrics.buttonPitch)
+    /// Top of the first button: 8 pt into the page, below the top bar. inferred.
+    static let topInset: CGFloat = LittleArcTokens.topBarHeight + 8
+    /// Right edge: 8 pt inside the page's right edge. inferred.
+    static let trailingInset: CGFloat = LittleArcTokens.pageInset + 8
+
+    /// Top edge of each button below the column's top, in `LittleArcWindowButton.allCases` order.
+    static var offsets: [CGFloat] { LittleArcWindowButton.allCases.indices.map { CGFloat($0) * pitch } }
+}
+
+/// The column of round buttons: dark circles with a light glyph, as Peek's. [06 §21.7], [06 §22.2] observed.
+struct LittleArcWindowButtons: View {
+    @ObservedObject var model: LittleArcModel
+
+    var body: some View {
+        VStack(spacing: LittleArcWindowButtonLayout.pitch - LittleArcWindowButtonLayout.size.height) {
+            ForEach(LittleArcWindowButton.allCases, id: \.self) { button in
+                Button { button.perform(on: model) } label: {
+                    Image(systemName: button.symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(PeekColors.buttonInk.swiftUI)
+                        .frame(width: LittleArcWindowButtonLayout.size.width, height: LittleArcWindowButtonLayout.size.height)
+                        .background(Circle().fill(PeekColors.buttonFill.swiftUI))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!button.isEnabled(on: model))
+                .help(button.title)
+                .accessibilityLabel(button.title)
+                .accessibilityIdentifier(button.identifier)
+            }
+        }
     }
 }
 

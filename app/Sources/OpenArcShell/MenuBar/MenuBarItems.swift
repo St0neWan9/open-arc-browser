@@ -296,8 +296,16 @@ struct TabsMenuItems: View {
             Button("Reveal Tab in Sidebar") { model.revealSelectedTabInSidebar() }
                 .appShortcut(.revealCurrentTab)
                 .disabled(model.selectedTabID == nil)
-            // The three-item split submenu of [01 §Tabs] is not built: its title and items were not
-            // recorded (`MenuBarCatalog.omittedItems`).
+            // [01 §Tabs] E27 observed: an untitled, disabled submenu with three disabled items
+            // literally titled "Item 1" … "Item 3", between Reveal Tab in Sidebar and Clear Today.
+            // Shown disabled as observed (plan Q19). Whether it changes with a selected tab is
+            // unknown.
+            Menu(MenuBarCatalog.tabsPlaceholderSubmenuTitle) {
+                ForEach(MenuBarCatalog.tabsPlaceholderSubmenuItems, id: \.self) { title in
+                    Button(title) {}.disabled(true)
+                }
+            }
+            .disabled(true)
             Divider()
             Button("Clear Today") { model.sidebar.clearToday() }
                 .appShortcut(.clearToday)
@@ -466,6 +474,11 @@ struct KeyOnlyMenuItems: View {
             Button("Open Extensions") { model.openExtensions() }
                 .appShortcut(.openExtensions)
                 .disabled(model.selectedTabID == nil || model.isIncognito)
+            // ⌥⌘F [02 §页面与导航] observed. The Find and Replace item is not shown (B122,
+            // `MenuBarCatalog.omittedItems`); the key opens the find bar as before.
+            Button("Find and Replace") { model.findBar.show() }
+                .appShortcut(.findAndReplace)
+                .disabled(!model.canRunPageCommands)
             // Aliases: the visible items' commands under the [02] alternative keys.
             Button("Next Tab") { model.sidebar.stepTab(by: 1) }
                 .appShortcut(.nextTab, 1)

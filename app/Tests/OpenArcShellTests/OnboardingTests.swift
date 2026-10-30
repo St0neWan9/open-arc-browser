@@ -27,8 +27,9 @@ private final class RecordingDefaultBrowserService: DefaultBrowserService {
 }
 
 /// D9: first-run onboarding. The behavior is our own: shown once on first launch, skippable from
-/// every step, per-device completion flag in `ui-state.json`, and Help ▸ Show Welcome Again
-/// (inferred). B53: the look follows the E6 capture, `docs/arc-spec/06-flows.md §27`.
+/// every step screen but not from the welcome screen ([06 §27.1] observed, B122), per-device
+/// completion flag in `ui-state.json`, and `showAgain` (inferred; no Help item since B122).
+/// B53: the look follows the E6 capture, `docs/arc-spec/06-flows.md §27`.
 @MainActor
 final class OnboardingTests: XCTestCase {
     private nonisolated let directory: URL = FileManager.default.temporaryDirectory
@@ -91,6 +92,7 @@ final class OnboardingTests: XCTestCase {
         // A device that already had a workspace (and a ui-state.json without the new flag).
         do {
             let controller = makeController()
+            controller.onboarding.next()
             controller.onboarding.skip()
             try await controller.flushPersistence()
             controller.stop()
@@ -115,13 +117,15 @@ final class OnboardingTests: XCTestCase {
 
     // MARK: Skip
 
-    func testSkipFromEveryStepMarksCompleted() async throws {
-        for step in OnboardingModel.Step.allCases {
+    /// Skip (link or Escape) ends the flow from every step screen (D9, own design).
+    func testSkipFromEveryStepScreenMarksCompleted() async throws {
+        for step in OnboardingModel.Step.allCases where step != .welcome {
             try? FileManager.default.removeItem(at: directory)
             let controller = makeController()
             let window = openWindow(controller)
             let onboarding = controller.onboarding
             while onboarding.step != step { onboarding.next() }
+            XCTAssertTrue(onboarding.canSkip, "\(step)")
             onboarding.skip()
             XCTAssertFalse(onboarding.isPresented, "skip at \(step)")
             XCTAssertFalse(onboarding.isShown(in: window))
@@ -130,6 +134,27 @@ final class OnboardingTests: XCTestCase {
             window.stop()
             controller.stop()
         }
+    }
+
+    /// [06 §27.1] observed: the welcome screen has no skip and no other control besides "→"
+    /// (B122). Skip and Escape do nothing there; the rendered screen has no Skip button.
+    func testWelcomeScreenCannotBeSkipped() {
+        let controller = makeController()
+        let window = openWindow(controller)
+        let onboarding = controller.onboarding
+        XCTAssertEqual(onboarding.step, .welcome)
+        XCTAssertFalse(onboarding.canSkip)
+        onboarding.skip()
+        XCTAssertTrue(onboarding.isShown(in: window))
+        XCTAssertEqual(onboarding.step, .welcome)
+        XCTAssertFalse(controller.onboardingCompleted)
+
+        // The overlay shows the hidden Escape button only when `canSkip` (OnboardingOverlay), and
+        // the visible Skip link is on the step screens only (the welcome screen is its own view).
+        XCTAssertEqual(OnboardingModel.screen(for: .welcome), .welcome)
+        onboarding.next()
+        XCTAssertTrue(onboarding.canSkip, "the step screens keep Skip (D9)")
+        XCTAssertEqual(onboarding.screen, .split)
     }
 
     func testContinueThroughAllStepsFinishes() {
@@ -261,7 +286,7 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(relaunched.onboarding.step, .welcome)
     }
 
-    // MARK: Show Welcome Again
+    // MARK: Run again (no Help item since B122: [01 §Help] observed none)
 
     func testShowWelcomeAgainReopensFlow() async throws {
         let controller = makeController()
@@ -275,6 +300,7 @@ final class OnboardingTests: XCTestCase {
         XCTAssertTrue(relaunched.onboarding.isShown(in: next))
         XCTAssertEqual(relaunched.onboarding.step, .welcome)
         XCTAssertEqual(relaunched.onboarding.spaceName, FirstLaunchDefaults.spaceName)
+        relaunched.onboarding.next()
         relaunched.onboarding.skip()
         XCTAssertFalse(relaunched.onboarding.isPresented)
         XCTAssertTrue(relaunched.onboardingCompleted)

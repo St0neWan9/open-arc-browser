@@ -106,33 +106,48 @@ final class SidebarDragImageTests: XCTestCase {
 
     /// [06 §15.5] observed tile samples over three sidebars (lavender #DFE0FA → #F0F0F6, pink light
     /// #F2B0C9 → #F6E5EB, navy dark #7D7E98 → #B9BBC8): white at the token opacity over the
-    /// favorites block (window × 0.96) lands within 5/255 (inferred rule).
+    /// favorites block (the control fill: window × 0.96 with dark ink, window + 11 % white with the
+    /// navy theme's light ink) lands within 4/255 (inferred rule; B118 refit of the dark opacity).
     func testTileFillMatchesTheSamples() {
         let d = Metrics.SidebarDrag.self
-        let samples: [(sidebar: UInt32, tile: UInt32, dark: Bool)] = [
-            (0xDFE0FA, 0xF0F0F6, false), (0xF2B0C9, 0xF6E5EB, false), (0x7D7E98, 0xB9BBC8, true),
+        let samples: [(sidebar: UInt32, tile: UInt32, dark: Bool, lightInk: Bool)] = [
+            (0xDFE0FA, 0xF0F0F6, false, false), (0xF2B0C9, 0xF6E5EB, false, false), (0x7D7E98, 0xB9BBC8, true, true),
         ]
         for sample in samples {
-            let block = ThemeDerivation.shade(RGBAColor(hex: sample.sidebar), by: ThemeDerivation.controlFillScale)
+            let window = RGBAColor(hex: sample.sidebar)
+            let block = sample.lightInk
+                ? ThemeDerivation.overlayWhite(window, amount: ThemeDerivation.lightInkControlWhite)
+                : ThemeDerivation.shade(window, by: ThemeDerivation.controlFillScale)
             let alpha = sample.dark ? d.favoriteTileWhiteOpacityDark : d.favoriteTileWhiteOpacity
             let blended = ThemeDerivation.overlayWhite(block, amount: alpha)
             let expected = RGBAColor(hex: sample.tile)
-            XCTAssertEqual(blended.red * 255, expected.red * 255, accuracy: 5)
-            XCTAssertEqual(blended.green * 255, expected.green * 255, accuracy: 5)
-            XCTAssertEqual(blended.blue * 255, expected.blue * 255, accuracy: 5)
+            let label = String(sample.tile, radix: 16)
+            XCTAssertEqual(blended.red * 255, expected.red * 255, accuracy: 4, label)
+            XCTAssertEqual(blended.green * 255, expected.green * 255, accuracy: 4, label)
+            XCTAssertEqual(blended.blue * 255, expected.blue * 255, accuracy: 4, label)
         }
+    }
+
+    /// The navy preset takes light ink in dark mode (B46), so its favorites block is the light-ink
+    /// control fill the tile sample was fitted over. [06 §15.5], [07 §8.3].
+    func testNavyDarkTileSitsOverTheLightInkBlock() {
+        // The dark navy window #7D7E98 comes from a dark theme color; any light-ink theme uses the
+        // same control rule.
+        let navy = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0x3B3F7A)]), appearance: .dark)
+        XCTAssertTrue(navy.usesLightInk)
+        XCTAssertEqual(navy.controlFill, ThemeDerivation.overlayWhite(navy.windowBackground, amount: ThemeDerivation.lightInkControlWhite))
     }
 
     /// [06 §15.4] observed (E17): the split preview block follows the theme — lavender (light)
     /// #838BFE, navy (dark) #B7B7C9 — and is about half the row wide (≈ 129 × 37). Light reuses
-    /// the band rule (≤ 10/255 from the band, which is itself 4/255 from the block): inferred.
+    /// the band rule; both samples within 4/255 (B118): inferred rule.
     func testSplitPreviewFollowsTheTheme() {
         let lavender = ThemeDerivation.splitPreviewFill(window: RGBAColor(hex: 0xDFE0FA), isDark: false)
         let navy = ThemeDerivation.splitPreviewFill(window: RGBAColor(hex: 0x7D7E98), isDark: true)
         for (got, want) in [(lavender, RGBAColor(hex: 0x838BFE)), (navy, RGBAColor(hex: 0xB7B7C9))] {
-            XCTAssertEqual(got.red * 255, want.red * 255, accuracy: 14)
-            XCTAssertEqual(got.green * 255, want.green * 255, accuracy: 14)
-            XCTAssertEqual(got.blue * 255, want.blue * 255, accuracy: 14)
+            XCTAssertEqual(got.red * 255, want.red * 255, accuracy: 4)
+            XCTAssertEqual(got.green * 255, want.green * 255, accuracy: 4)
+            XCTAssertEqual(got.blue * 255, want.blue * 255, accuracy: 4)
         }
         XCTAssertEqual(Metrics.SidebarDrag.splitPreviewWidthFraction, 0.5)
         let palette = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0xC9C6F0)]), appearance: .light)

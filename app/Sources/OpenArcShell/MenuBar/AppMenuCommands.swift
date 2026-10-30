@@ -58,8 +58,7 @@ struct MenuBarExtrasCommands: Commands {
         CommandGroup(before: .windowSize) {
             WindowMenuItems(model: focused ?? controller.appHost(), hasWindow: focused != nil)
         }
-        // [01 §Help] observed items after the system search field. Show Welcome Again
-        // (`OnboardingCommands`) follows in its own group.
+        // [01 §Help] observed items after the system search field, and nothing else (B122).
         CommandGroup(replacing: .help) {
             HelpMenuItems(model: pageModel, hasWindow: pageWindow != nil)
         }

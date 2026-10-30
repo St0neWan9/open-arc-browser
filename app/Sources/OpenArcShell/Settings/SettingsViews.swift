@@ -1089,7 +1089,8 @@ struct RadioMark: View {
 /// [03 §Advanced] observed switches and buttons; B100 capture, observed layout: three cards of
 /// tiled rows (sound and haptics; windows and pages; video, theme data and Boosts), then More
 /// Settings… and Reset Translated-site Prompts on the left and Export Data on the right. Our own
-/// rows (ad blocking, software update, crash reports) follow in the same style.
+/// rows (ad blocking, Check for Updates, crash reports) follow in one compact card in the same
+/// style (B120).
 struct AdvancedPane: View {
     @ObservedObject var model: SettingsModel
 
@@ -1120,6 +1121,7 @@ struct AdvancedPane: View {
         case "advanced.boosts": return SettingsTile(symbol: "paintbrush.pointed.fill", color: SettingsTile.purple)
         case "advanced.adBlocking": return SettingsTile(symbol: "hand.raised.fill", color: SettingsTile.gray)
         case "advanced.showCrashReports": return SettingsTile(symbol: "doc.text.magnifyingglass", color: SettingsTile.gray)
+        case "advanced.checkForUpdates": return SettingsTile(symbol: "arrow.triangle.2.circlepath", color: SettingsTile.gray)
         default: return SettingsTile(symbol: "arrow.triangle.2.circlepath", color: SettingsTile.gray)
         }
     }
@@ -1194,29 +1196,57 @@ struct AdvancedPane: View {
         }
     }
 
-    /// Our additions after Arc's groups, drawn the same way.
+    /// Rows of our one extra card after Arc's groups and the button row (B120), in order. Not in
+    /// [03 §Advanced]: ad blocking (plan C16; shown only with a filter ruleset), Check for Updates
+    /// (plan D7; its automatic switch is General's "Automatically update Open Arc"), crash reports
+    /// (plan Q8). Compact: one row each, the details behind ⓘ.
+    static let extraRowIDs = ["advanced.adBlocking", "advanced.checkForUpdates", "advanced.showCrashReports"]
+
+    /// Our extra card, drawn the same way as Arc's (B100 style).
     @ViewBuilder
     private var ourRows: some View {
-        // Plan C16: the engine's ad blocker; hidden when the engine has no filter ruleset.
-        if let version = model.adBlockingRulesetVersion {
-            SettingsCard {
+        SettingsCard {
+            // Plan C16: the engine's ad blocker; hidden when the engine has no filter ruleset.
+            if let version = model.adBlockingRulesetVersion {
                 SettingsToggleRow(
                     label: SettingsCatalog.control("advanced.adBlocking").label,
                     isOn: Binding(get: { model.isAdBlockingOn }, set: { isOn in Task { await model.setAdBlocking(isOn) } }),
-                    subtitle: "EasyList and EasyPrivacy (\(version)). Sites can be allowed one by one in the site controls.",
+                    info: Self.adBlockingInfo(version: version),
                     tile: Self.tile("advanced.adBlocking")
                 )
+                SettingsDivider()
             }
-        }
-        // Plan D7: automatic updates (Sparkle). Not in [03 §Advanced]; our addition.
-        UpdateSettingsSection(model: model.updates)
-        SettingsCard {
+            // Plan D7: the manual check. The automatic switch is General's (B100); not repeated here.
+            AdvancedUpdateRow(model: model.updates, tile: Self.tile("advanced.checkForUpdates"))
+            SettingsDivider()
             // Plan decision Q8: stored locally only, never uploaded.
-            SettingsControlRow(label: "Crash Reports",
-                               subtitle: "Stored on this Mac only, never sent anywhere.",
+            SettingsControlRow(label: Self.crashReportsLabel, info: Self.crashReportsInfo,
                                tile: Self.tile("advanced.showCrashReports")) {
                 CatalogButton(id: "advanced.showCrashReports") { model.showCrashReports() }
             }
+        }
+    }
+
+    /// Labels and ⓘ texts of the extra card (our wording, inferred).
+    static func adBlockingInfo(version: String) -> String {
+        "EasyList and EasyPrivacy (\(version)). Sites can be allowed one by one in the site controls."
+    }
+    static let crashReportsLabel = "Crash Reports"
+    static let crashReportsInfo = "Stored on this Mac only, never sent anywhere."
+}
+
+/// Software Update row of Advanced's extra card: Check for Updates… (plan D7). The automatic-update
+/// switch is General's "Automatically update Open Arc" (B100 capture, observed); B120 dropped the
+/// second switch this pane had.
+struct AdvancedUpdateRow: View {
+    @ObservedObject var model: UpdatesModel
+    let tile: SettingsTile
+
+    var body: some View {
+        SettingsControlRow(label: UpdateStrings.sectionTitle, info: model.unavailableReason, tile: tile) {
+            Button(UpdateStrings.checkForUpdates) { model.checkForUpdates() }
+                .buttonStyle(SettingsButtonStyle())
+                .disabled(!model.isCheckEnabled)
         }
     }
 }

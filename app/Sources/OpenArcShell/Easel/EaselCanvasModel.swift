@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Combine
 import OpenArcModel
 import OpenArcEngine
@@ -14,7 +15,7 @@ import OpenArcDesign
 // and an inert "add collaborator" button. What each tool does on the canvas was not captured
 // ([00] Easel row: "graphic editing untested"), so the gestures below are inferred: drag to draw a
 // shape, click to place a text box, drag the pen to draw, select / move / resize with the select
-// tool, ⌫ deletes, ⌘V pastes an image or text.
+// tool, ⌫ deletes, ⌘V pastes an image or text, capture/add places a capture of the last used page.
 
 /// What a paste puts on the canvas.
 enum EaselPasteContent: Equatable {
@@ -27,8 +28,9 @@ public final class EaselCanvasModel: ObservableObject {
     /// The toolbar's tools, in the observed order. [06 §9] observed.
     public enum Tool: String, CaseIterable, Sendable {
         case select, image, text, circle, rectangle, arrow, pen
-        /// The last button (stacked squares with +): "capture / add". Its action was not observed;
-        /// inert. unknown.
+        /// The last button (stacked squares with +): "capture / add". [06 §9] observed button; its
+        /// action was not observed. Ours (B122, inferred): captures the visible part of the page
+        /// last used in this Space and places it on the canvas, with the page capture of B51.
         case capture
 
         /// Tools that stay selected after use. Shape tools and text go back to select after one
@@ -44,10 +46,12 @@ public final class EaselCanvasModel: ObservableObject {
     @Published private(set) var preview: [UUID: EaselElement] = [:]
     /// The element being drawn (shape drag, pen stroke), not stored yet.
     @Published private(set) var draft: EaselElement?
-    /// How often an inert control (capture, collaborators, Share) was used. For tests and
-    /// diagnostics: collaboration and capture are out of scope (B56).
+    /// How often an inert control (collaborators, Share) was used. For tests and diagnostics:
+    /// collaboration is out of scope (B56).
     @Published public private(set) var inertActionCount = 0
     @Published public private(set) var lastError: Error?
+    /// The capture tool's capture in flight (B122).
+    private var captureTask: Task<Void, Never>?
 
     /// Asks the user for an image file and returns it encoded (`EaselImageEncoder`); nil cancels.
     /// The view installs the open panel; tests install their own.
@@ -122,7 +126,8 @@ public final class EaselCanvasModel: ObservableObject {
 
     // MARK: Toolbar
 
-    /// A toolbar click. Image opens the file picker at once; capture is inert. inferred.
+    /// A toolbar click. Image opens the file picker at once; capture places a capture of the last
+    /// used page (`captureLastPage`). inferred.
     public func selectTool(_ newTool: Tool) {
         syncEasel()
         switch newTool {
@@ -131,11 +136,59 @@ public final class EaselCanvasModel: ObservableObject {
             guard let image = pickImage?() else { return }
             insertImage(image)
         case .capture:
-            inertActionCount += 1
+            tool = .select
+            captureLastPage()
         default:
             tool = newTool
             if newTool != .select { selection = [] }
         }
+    }
+
+    // MARK: Capture tool (B122)
+
+    /// The page the capture tool renders: the most recently active tab of the Easel's Space that
+    /// has a live web page (not an Easel). inferred: [06 §9] records the button only.
+    var captureSourceTabID: UUID? {
+        guard let tabID = sidebar.selectedTabID, let spaceID = sidebar.workspace.tabs[tabID]?.location.spaceID
+                ?? sidebar.selectedSpaceID else { return nil }
+        let workspace = sidebar.workspace
+        return workspace.allTabs(inSpace: spaceID)
+            .filter { $0.id != tabID && workspace.easelID(ofTab: $0.id) == nil && sidebar.liveTab(for: $0.id) != nil }
+            .max { ($0.lastActiveAt, $0.id.uuidString) < ($1.lastActiveAt, $1.id.uuidString) }?
+            .id
+    }
+
+    /// The capture tool: renders the visible part of `captureSourceTabID`'s page with the engine's
+    /// page capture (B51, [06 §24.1] region capture of the whole view) and places the image in
+    /// view, selected, like a picked image. Without such a page it does nothing (lastError says
+    /// why). inferred.
+    public func captureLastPage() {
+        guard let easelID else { return }
+        guard let sourceID = captureSourceTabID, let live = sidebar.liveTab(for: sourceID) else {
+            lastError = EngineError.engineFailure("No page to capture in this Space")
+            return
+        }
+        captureTask?.cancel()
+        captureTask = Task { [weak self] in
+            let snapshot: EngineSnapshot
+            do {
+                snapshot = try await live.capture(.visible(nil))
+            } catch {
+                self?.lastError = error
+                return
+            }
+            guard let self, !Task.isCancelled, self.easelID == easelID else { return }
+            guard let bitmap = NSImage(data: snapshot.pngData), let image = EaselImageEncoder.encode(bitmap) else {
+                self.lastError = EngineError.engineFailure("The capture could not be read")
+                return
+            }
+            self.insertImage(image)
+        }
+    }
+
+    /// Waits for the capture tool's capture (tests).
+    func settleCapture() async {
+        await captureTask?.value
     }
 
     /// The collaborator button (lower right) and the URL box's Share button: collaboration is out

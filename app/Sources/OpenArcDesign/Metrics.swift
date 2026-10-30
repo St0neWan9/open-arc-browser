@@ -645,12 +645,14 @@ public enum Metrics {
         public static let favoriteTileSize = Size2D(width: 126, height: 47)
         public static let favoriteTileCornerRadius: Double = 11
         /// Its fill: near white / light gray whatever the theme (lavender #F0F0F6, pink light
-        /// #F6E5EB, navy dark #B9BBC8 observed). The tile sits over the favorites block (window ×
-        /// 0.96), so it is modeled as white at this opacity over that fill: 0.66 in light (≤ 4/255
-        /// for lavender and pink), 0.48 in dark (≤ 3/255 for navy). [06 §15.5] observed samples;
-        /// rule inferred (B44 side-by-side check).
+        /// #F6E5EB, navy dark #B9BBC8 observed). The tile sits over the favorites block (the
+        /// palette's control fill: window × 0.96 with dark ink, window + 11 % white with light
+        /// ink), so it is modeled as white at this opacity over that fill: 0.66 in light (≤ 4/255
+        /// for lavender and pink), 0.40 in dark (navy, light ink since B46: #BABAC8, ≤ 1/255; the
+        /// former 0.48 was fitted over the dark-ink block and gave #C3C3CF, B118). [06 §15.5]
+        /// observed samples; rule inferred. A dark-ink dark theme has no sample (unknown).
         public static let favoriteTileWhiteOpacity: Double = 0.66
-        public static let favoriteTileWhiteOpacityDark: Double = 0.48
+        public static let favoriteTileWhiteOpacityDark: Double = 0.40
 
         /// Split preview block on a row's middle band: about half the row (≈ 129 of 258 wide).
         /// [06 §15.4] observed (E17, ≈ 129 × 37); E9 measured ≈ 105 of 250 on a narrower sidebar.

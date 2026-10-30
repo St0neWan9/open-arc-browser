@@ -90,16 +90,23 @@ final class MenuBarTests: XCTestCase {
         assertNoOwnIcons(built)
     }
 
-    /// 01 §Edit: Find ▸ Find… / Find and Replace / Find Next / Find Previous / Use Selection to
-    /// Find / Jump to Selection; keys 02 §页面与导航: ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / — / ⌘J.
+    /// 01 §Edit: Find ▸ Find… / Find Next / Find Previous / Use Selection to Find / Jump to
+    /// Selection; keys 02 §页面与导航: ⌘F / ⌘G / ⇧⌘G / — / ⌘J. Find and Replace is not shown
+    /// (B122: no replace step, decision pending); its ⌥⌘F stays in the key-only menu and opens
+    /// the find bar.
     func testFindMenu() throws {
         let model = makeModel()
         let built = try items(FindMenu(model: model, findBar: model.findBar, hasWindow: true))
         XCTAssertEqual(built.map(\.title), [MenuBarCatalog.findMenuTitle])
         let find = try XCTUnwrap(built.first?.submenu?.items)
         XCTAssertEqual(find.map(\.title), MenuBarCatalog.findItems)
-        XCTAssertEqual(find.map(\.keyEquivalent), ["f", "f", "g", "g", "", "j"])
-        XCTAssertEqual(find[1].keyEquivalentModifierMask, [.option, .command])
+        XCTAssertFalse(find.contains { $0.title == "Find and Replace" })
+        XCTAssertEqual(find.map(\.keyEquivalent), ["f", "g", "g", "", "j"])
+        let keyOnly = try items(KeyOnlyMenuItems(model: model, hasWindow: true))
+        let replace = try XCTUnwrap(keyOnly.first { $0.title == "Find and Replace" })
+        XCTAssertEqual(replace.keyEquivalent, "f")
+        XCTAssertEqual(replace.keyEquivalentModifierMask, [.option, .command])
+        XCTAssertNotNil(MenuBarCatalog.omittedItems["Find and Replace"])
     }
 
     /// 01 §Spaces / §菜单项图标与缩进: New Space… · Edit Theme… · Rename Space · Change Profile ‖
@@ -148,8 +155,8 @@ final class MenuBarTests: XCTestCase {
     }
 
     /// 01 §Tabs, E20 tabs-crop.png: New Tab… · Pin Tab · New Folder… ‖ Next · Previous · Reveal Tab
-    /// in Sidebar ‖ Clear Today · Reset all tabs in this Space. Archive Tab and Go to Sidebar Item
-    /// are in no [01] menu.
+    /// in Sidebar · (untitled disabled submenu, 01 E27) ‖ Clear Today · Reset all tabs in this
+    /// Space. Archive Tab and Go to Sidebar Item are in no [01] menu.
     func testTabsMenuGroups() throws {
         let model = makeModel()
         let built = try items(TabsMenuItems(model: model, hasWindow: true))
@@ -160,6 +167,25 @@ final class MenuBarTests: XCTestCase {
         let reveal = try XCTUnwrap(built.first { $0.title == "Reveal Tab in Sidebar" })
         XCTAssertEqual(reveal.keyEquivalent, " ", "⌃Space [02 §标签与侧边栏]")
         XCTAssertEqual(reveal.keyEquivalentModifierMask, .control)
+    }
+
+    /// 01 §Tabs, E27 observed: between Reveal Tab in Sidebar and Clear Today an untitled submenu,
+    /// itself disabled, with three disabled items "Item 1", "Item 2", "Item 3" (plan Q19: shown
+    /// disabled).
+    func testTabsPlaceholderSubmenu() throws {
+        let model = makeModel()
+        let built = try items(TabsMenuItems(model: model, hasWindow: true)).filter { !$0.isHidden }
+        let reveal = try XCTUnwrap(built.firstIndex { $0.title == "Reveal Tab in Sidebar" })
+        let placeholder = built[reveal + 1]
+        XCTAssertEqual(placeholder.title, "")
+        XCTAssertFalse(placeholder.isSeparatorItem)
+        // The item itself is `.disabled(true)`; NSHostingMenu reports a submenu item as enabled
+        // whatever SwiftUI says, so only its items' state is checked here.
+        let submenu = try XCTUnwrap(placeholder.submenu)
+        XCTAssertEqual(submenu.items.map(\.title), ["Item 1", "Item 2", "Item 3"])
+        XCTAssertTrue(submenu.items.allSatisfy { !$0.isEnabled })
+        XCTAssertTrue(built[reveal + 2].isSeparatorItem)
+        XCTAssertEqual(built[reveal + 3].title, "Clear Today")
     }
 
     /// 06 §16.2 observed: the pin item reads "Unpin Tab" for a pinned tab.
@@ -191,7 +217,7 @@ final class MenuBarTests: XCTestCase {
         let model = makeModel()
         let built = try items(KeyOnlyMenuItems(model: model, hasWindow: true))
         XCTAssertEqual(built.map(\.title), ["Archive Tab"] + (1...8).map { "Go to Sidebar Item \($0)" }
-            + ["Go to Last Sidebar Item", "Open Extensions", "Next Tab", "Previous Tab", "Go Back", "Go Forward", "Developer Tools"])
+            + ["Go to Last Sidebar Item", "Open Extensions", "Find and Replace", "Next Tab", "Previous Tab", "Go Back", "Go Forward", "Developer Tools"])
         XCTAssertEqual(built.map(\.title), MenuBarCatalog.keyOnlyItems)
         XCTAssertEqual(built.first?.keyEquivalent, "w", "⌘W archives [02]")
     }
@@ -351,7 +377,7 @@ final class MenuBarTests: XCTestCase {
                                                                  "Visit Help Center", "Troubleshooting"])
         XCTAssertEqual(MenuBarCatalog.troubleshootingItems, ["Reveal Open Arc Data", "Copy Open Arc Info"])
         XCTAssertEqual(Set(MenuBarCatalog.omittedItems.keys),
-                       ["Sign Out", "Restore Data", "Export Arc Notes", "Record Trace", "Open Task Manager", "Tabs split submenu"])
+                       ["Sign Out", "Restore Data", "Export Arc Notes", "Record Trace", "Open Task Manager", "Find and Replace"])
     }
 
     /// 01 §Help: Getting Started … Troubleshooting ▸ (Reveal Open Arc Data · Copy Open Arc Info);
@@ -360,6 +386,8 @@ final class MenuBarTests: XCTestCase {
         let model = makeModel()
         let built = try items(HelpMenuItems(model: model, hasWindow: true))
         XCTAssertEqual(groups(built), MenuBarCatalog.helpGroups)
+        // B122: Arc's Help has no Show Welcome Again ([01 §Help] observed).
+        XCTAssertFalse(MenuBarCatalog.helpGroups.joined().contains("Show Welcome Again"))
         XCTAssertEqual(built.first { $0.title == "Troubleshooting" }?.submenu?.items.map(\.title), MenuBarCatalog.troubleshootingItems)
         assertNoOwnIcons(built)
     }

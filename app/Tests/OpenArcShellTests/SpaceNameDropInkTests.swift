@@ -7,8 +7,8 @@ import OpenArcDesign
 /// with a darker tone of the theme color, not a fixed blue, and the name keeps its dark theme ink.
 @MainActor
 final class SpaceNameDropBandTests: XCTestCase {
-    /// [06 §15.4] observed (E17): sidebar → band pairs on three themes. The rule
-    /// (`ThemeDerivation.dropTargetFill`) is inferred and works on the window color.
+    /// [06 §15.4] observed (E17): sidebar → band pairs on three themes, each within 4/255 (B118).
+    /// The rule (`ThemeDerivation.dropTargetFill`) is inferred and works on the window color.
     func testBandMatchesTheThreeE17Samples() {
         let samples: [(window: UInt32, band: UInt32, dark: Bool)] = [
             (0xDFE0FA, 0x878CFF, false), // lavender (light)
@@ -18,9 +18,9 @@ final class SpaceNameDropBandTests: XCTestCase {
         for sample in samples {
             let band = ThemeDerivation.dropTargetFill(window: RGBAColor(hex: sample.window), isDark: sample.dark)
             let expected = RGBAColor(hex: sample.band)
-            XCTAssertEqual(band.red * 255, expected.red * 255, accuracy: 11, String(sample.band, radix: 16))
-            XCTAssertEqual(band.green * 255, expected.green * 255, accuracy: 11, String(sample.band, radix: 16))
-            XCTAssertEqual(band.blue * 255, expected.blue * 255, accuracy: 11, String(sample.band, radix: 16))
+            XCTAssertEqual(band.red * 255, expected.red * 255, accuracy: 4, String(sample.band, radix: 16))
+            XCTAssertEqual(band.green * 255, expected.green * 255, accuracy: 4, String(sample.band, radix: 16))
+            XCTAssertEqual(band.blue * 255, expected.blue * 255, accuracy: 4, String(sample.band, radix: 16))
         }
         // The band is darker than the sidebar in every case (a darker tone, not gray).
         for sample in samples {
@@ -36,9 +36,9 @@ final class SpaceNameDropBandTests: XCTestCase {
         XCTAssertEqual(SidebarSpaceNameRowView.dropBandFill(palette: lavender), lavender.dropTargetFill)
         // Magenta theme #E204E6: Arc's band measured ≈ #B828BC.
         let band = magenta.dropTargetFill
-        XCTAssertEqual(band.red * 255, 184, accuracy: 14)
-        XCTAssertEqual(band.green * 255, 40, accuracy: 14)
-        XCTAssertEqual(band.blue * 255, 188, accuracy: 14)
+        XCTAssertEqual(band.red * 255, 184, accuracy: 4)
+        XCTAssertEqual(band.green * 255, 40, accuracy: 4)
+        XCTAssertEqual(band.blue * 255, 188, accuracy: 4)
         XCTAssertNotEqual(SidebarSpaceNameRowView.dropBandFill(palette: lavender), SidebarSpaceNameRowView.dropBandFill(palette: magenta))
     }
 

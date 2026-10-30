@@ -110,7 +110,6 @@ enum OnboardingTokens {
     static let back = "Back"
     static let next = "Continue"
     static let done = "Start Browsing"
-    static let showAgainMenuItem = "Show Welcome Again"
 
     struct Copy {
         let symbol: String
@@ -169,12 +168,15 @@ struct OnboardingOverlay: View {
                 OnboardingSplitScreen(onboarding: onboarding)
                     .transition(.opacity)
             }
-            // Escape skips from every screen. own design (D9).
-            Button(OnboardingTokens.skip) { onboarding.skip() }
-                .keyboardShortcut(.cancelAction)
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
+            // Escape skips from the step screens. own design (D9). Not on the welcome screen:
+            // [06 §27.1] observed no skip and no other control there (B122).
+            if onboarding.canSkip {
+                Button(OnboardingTokens.skip) { onboarding.skip() }
+                    .keyboardShortcut(.cancelAction)
+                    .opacity(0)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
         }
         .animation(OnboardingTokens.transition, value: onboarding.screen)
         .environment(\.colorScheme, .light)
@@ -973,27 +975,7 @@ struct OnboardingWindowConfigurator: NSViewRepresentable {
     }
 }
 
-// MARK: - Menu and layer
-
-/// Help ▸ Show Welcome Again: re-runs onboarding in the key browser window. The menu placement
-/// is inferred (D9 own design): its own group after the [01 §Help] items, which replace the
-/// system "<App> Help" item (`MenuBarExtrasCommands`; [01 §Help] observed no such item). B62, B72.
-struct OnboardingCommands: Commands {
-    let controller: WorkspaceController
-    /// The key window's menu state, not its model (B103, see `BrowserCommands`).
-    @FocusedObject private var focusedMenuBar: MenuBarState?
-    private var focused: ShellModel? { focusedMenuBar?.model }
-
-    var body: some Commands {
-        CommandGroup(after: .help) {
-            Divider()
-            Button(OnboardingTokens.showAgainMenuItem) {
-                if let window = focused ?? controller.activeWindow { controller.onboarding.showAgain(in: window) }
-            }
-            .disabled((focused ?? controller.activeWindow).map { $0.isIncognito } ?? true)
-        }
-    }
-}
+// MARK: - Layer
 
 /// Shows the overlay only in the window that hosts the flow. Observes the onboarding model so
 /// the window updates when the flow starts or ends.

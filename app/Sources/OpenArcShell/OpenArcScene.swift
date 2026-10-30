@@ -59,7 +59,6 @@ public struct OpenArcScene: Scene {
             AppMenuCommands(controller: controller)
             MenuBarExtrasCommands(controller: controller)
             ExternalOpenCommands(inbox: externalOpenInbox, controller: controller)
-            OnboardingCommands(controller: controller)
         }
 
         // Open Arc ▸ Settings… (⌘,). [01 §Arc menu, 02 §窗口与应用] observed. [B12]
@@ -201,9 +200,10 @@ struct SpacesAndTabsCommands: Commands {
     }
 }
 
-/// Edit ▸ Find ▸. B25. Items [01 §Edit] observed; keys [02 §页面与导航] observed: ⌘F, ⌥⌘F (Find and Replace), ⌘G, ⇧⌘G,
-/// ⌘J (Jump to Selection). Find and Replace opens the find bar: a page cannot be edited by
-/// replacing its text, so there is no replace field (inferred; B72).
+/// Edit ▸ Find ▸. B25. Items [01 §Edit] observed; keys [02 §页面与导航] observed: ⌘F, ⌘G, ⇧⌘G,
+/// ⌘J (Jump to Selection). Find and Replace (⌥⌘F) is not shown: the find bar has no replace step
+/// and Arc's item was not recorded doing one (B122, `MenuBarCatalog.omittedItems`); its key stays
+/// in the hidden key-only menu and opens the find bar.
 struct FindMenu: View {
     let model: ShellModel
     /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
@@ -223,8 +223,6 @@ struct FindMenu: View {
         Menu("Find") {
             Button("Find…") { findBar.show() }
                 .appShortcut(.find)
-            Button("Find and Replace") { findBar.show() }
-                .appShortcut(.findAndReplace)
             Button("Find Next") { findBar.findNext() }
                 .appShortcut(.findNext)
             Button("Find Previous") { findBar.findPrevious() }
