@@ -293,11 +293,19 @@ struct SiteControlsView: View {
         }
     }
 
-    /// An action's right-click menu (B116): the extension's name, then Manage / Remove. inferred.
+    /// An action's right-click menu (B116): the extension's name, its own `contextMenus` items
+    /// (B124), then Manage / Remove. inferred.
     @ViewBuilder
     private func extensionMenu(_ ext: SiteExtensionAction) -> some View {
         Text(ext.name)
         Divider()
+        let own = model.extensionOwnMenuItems(for: ext.id)
+        if !own.isEmpty {
+            ForEach(Array(own.enumerated()), id: \.offset) { _, item in
+                ExtensionOwnMenuItemView(item: item) { model.performExtensionOwnMenuItem($0, extensionID: ext.id) }
+            }
+            Divider()
+        }
         ForEach(model.extensionMenuItems(for: ext.id), id: \.self) { item in
             Button(item.title(extensionName: ext.name)) { model.perform(item, extensionID: ext.id) }
                 .disabled(!model.isEnabled(item, extensionID: ext.id))
@@ -545,6 +553,36 @@ extension View {
                 onDismiss: { _ in model.closeExtensionPopup() },
                 onBecameKey: { model.focusExtensionPopup() }
             )
+        }
+    }
+}
+
+/// One of an extension's own action menu items (B124), with its submenus.
+private struct ExtensionOwnMenuItemView: View {
+    let item: PageContextMenuItem
+    let perform: (Int) -> Void
+
+    var body: some View {
+        if !item.isVisible {
+            EmptyView()
+        } else {
+            switch item.kind {
+            case .separator:
+                Divider()
+            case .submenu:
+                Menu(item.title) {
+                    ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in
+                        ExtensionOwnMenuItemView(item: child, perform: perform)
+                    }
+                }
+                .disabled(!item.isEnabled)
+            case .checkbox:
+                Toggle(item.title, isOn: Binding(get: { item.isChecked }, set: { _ in perform(item.id) }))
+                    .disabled(!item.isEnabled)
+            case .command:
+                Button(item.title) { perform(item.id) }
+                    .disabled(!item.isEnabled)
+            }
         }
     }
 }

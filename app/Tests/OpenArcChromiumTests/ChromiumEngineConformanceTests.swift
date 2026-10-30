@@ -129,6 +129,19 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         XCTAssertEqual(identity.dropFirst().first, "Google Inc.")
         XCTAssertEqual(identity.last.map { Set($0.split(separator: "+").map(String.init)) }, BrowserIdentity.expectedBrands)
 
+        // Plan B123 ([05 §command bar] inferred (analysis): most-visited pages): an http page the
+        // shell loaded (a typed navigation) becomes a most visited page of the profile. History
+        // is written on Chromium's history thread, so the query is retried for a while.
+        var topSites: [HistoryMatch] = []
+        for _ in 0..<100 {
+            topSites = await engine.autocomplete.topSites(profileID: tab.profileID, maxCount: 5)
+            if !topSites.isEmpty { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(topSites.contains { $0.url.path == "/ua" }, "top sites: \(topSites.map(\.url))")
+        XCTAssertTrue(topSites.allSatisfy { $0.url.scheme == "http" || $0.url.scheme == "https" })
+        XCTAssertLessThanOrEqual(topSites.count, 5)
+
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
         let crashEvents = tab.events()

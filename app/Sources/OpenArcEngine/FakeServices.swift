@@ -118,6 +118,25 @@ public final class FakeExtensions: EngineExtensions, @unchecked Sendable {
     /// The popup `runAction` opened last, until it closes. For tests.
     public var popup: FakeExtensionPopup? { lock.withLock { openPopup.flatMap { $0.isClosed ? nil : $0 } } }
 
+    private var actionMenus: [String: [PageContextMenuItem]] = [:]
+    private var actionMenuLog: [String] = []
+
+    /// The `contexts: ["action"]` items of an extension (plan B124).
+    public func simulateActionMenuItems(_ items: [PageContextMenuItem], extensionID: String) {
+        lock.withLock { actionMenus[extensionID] = items }
+    }
+
+    /// "<extension id>#<item id>@<tab id>" for every action menu item run. For tests.
+    public var actionMenuItemsRun: [String] { lock.withLock { actionMenuLog } }
+
+    public func actionMenuItems(extensionID: String, tabID: EngineTabID) async -> [PageContextMenuItem] {
+        lock.withLock { actionMenus[extensionID] ?? [] }
+    }
+
+    public func performActionMenuItem(_ itemID: Int, extensionID: String, tabID: EngineTabID) async {
+        lock.withLock { actionMenuLog.append("\(extensionID)#\(itemID)@\(tabID)") }
+    }
+
     public func simulateInstalled(_ info: EngineExtensionInfo, profileID: Profile.ID) {
         let target: AsyncBroadcaster<ExtensionEvent> = lock.withLock {
             installedByProfile[profileID, default: []].append(info)

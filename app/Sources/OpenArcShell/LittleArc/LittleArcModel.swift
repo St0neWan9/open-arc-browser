@@ -248,6 +248,8 @@ public final class LittleArcModel: ObservableObject {
                     if case .urlChanged = event { self.noteActivity() }
                     // window.close(): the window closes with its page (inferred, C7b).
                     if event == .closeRequested { self.close() }
+                    // B124: the engine's items only (the window's toolbar carries the rest; inferred).
+                    if case .contextMenuRequested(let menu) = event { menu.presentEngineItemsOnly(searchEngineName: self.shell.controller.profileSettings(for: self.pageProfileID).searchEngine.displayName) }
                 }
             }
         } catch {

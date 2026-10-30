@@ -114,6 +114,8 @@ public final class LinkPeekModel: ObservableObject {
                 case .urlChanged: self.publishToSidebar()
                 // window.close() in the Peek page closes the preview (inferred).
                 case .closeRequested: self.close()
+                // B124: the engine's items only (Peek's buttons carry the rest; inferred).
+                case .contextMenuRequested(let menu): menu.presentEngineItemsOnly(searchEngineName: self.controller.profileSettings(for: self.sidebar.currentProfileID).searchEngine.displayName)
                 default: break
                 }
             }

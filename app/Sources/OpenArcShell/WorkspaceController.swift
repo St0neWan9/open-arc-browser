@@ -725,6 +725,7 @@ public final class WorkspaceController: ObservableObject {
         case .closeRequested: pageRequestedClose(id)
         case .activationRequested: pageRequestedActivation(id)
         case .linkPreviewRequested(let request): linkPreviewRequested(request, from: id)
+        case .contextMenuRequested(let menu): pageContextMenuRequested(menu, from: id)
         default: break
         }
     }

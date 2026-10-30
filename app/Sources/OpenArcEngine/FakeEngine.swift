@@ -1056,6 +1056,27 @@ public final class FakeTab: BrowserTab, @unchecked Sendable {
         }
     }
 
+    /// A right-click on the page (plan B124): sends `.contextMenuRequested` with `items` (the
+    /// engine's part, as `FakePageContextMenu.items(for:)` builds it by default). The returned
+    /// recorder sees what the shell does with the session.
+    @discardableResult
+    public func simulateContextMenu(
+        _ target: PageContextMenuTarget, items: [PageContextMenuItem]? = nil
+    ) -> FakePageContextMenuRecorder {
+        let recorder = FakePageContextMenuRecorder()
+        let session = PageContextMenuSession(
+            present: { menu in recorder.notePresented(menu); return true },
+            perform: { id in recorder.notePerformed(id) },
+            close: { recorder.noteClosed() }
+        )
+        let menu = PageContextMenu(target: target, items: items ?? FakePageContextMenu.items(for: target), session: session)
+        lock.withLock {
+            guard !isClosed else { return }
+            broadcaster.yield(.contextMenuRequested(menu))
+        }
+        return recorder
+    }
+
     /// Text that find in page searches (default: title and URL).
     public func simulatePageText(_ text: String?) { lock.withLock { pageText = text } }
 

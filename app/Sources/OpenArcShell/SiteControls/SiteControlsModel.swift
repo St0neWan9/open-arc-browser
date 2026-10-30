@@ -238,6 +238,9 @@ public final class SiteControlsModel: ObservableObject {
 
     /// The profile has extensions (C14), whether or not they have an action here.
     @Published public private(set) var hasInstalledExtensions = false
+    /// Each listed extension's `chrome.contextMenus` items for its action (`contexts: ["action"]`)
+    /// on the bubble's tab, by extension id (plan B124). Refreshed with the section.
+    @Published public private(set) var extensionActionMenuItems: [String: [PageContextMenuItem]] = [:]
 
     /// Engine extensions (C14): installed list and change events for the bubble's section.
     var engineExtensions: (any EngineExtensions)?
@@ -459,6 +462,22 @@ public final class SiteControlsModel: ObservableObject {
         return [.manage, .remove]
     }
 
+    /// The extension's own items for its action menu (`chrome.contextMenus` with
+    /// `contexts: ["action"]`), shown before Manage / Remove, as Chrome's action menu lists them
+    /// after the extension's name (inferred). Plan B124.
+    public func extensionOwnMenuItems(for extensionID: String) -> [PageContextMenuItem] {
+        guard settings.extensions.contains(where: { $0.id == extensionID }) else { return [] }
+        return extensionActionMenuItems[extensionID] ?? []
+    }
+
+    /// Runs one of the extension's own action menu items on the bubble's tab: the extension's
+    /// `contextMenus.onClicked` fires. The bubble closes (inferred, as for Manage).
+    public func performExtensionOwnMenuItem(_ itemID: Int, extensionID: String) {
+        guard let engineExtensions, let id = tabID, let engineTab = sidebar.liveTab(for: id)?.id else { return }
+        close(.action)
+        work.append(Task { await engineExtensions.performActionMenuItem(itemID, extensionID: extensionID, tabID: engineTab) })
+    }
+
     public func isEnabled(_ item: SiteExtensionMenuItem, extensionID: String) -> Bool {
         switch item {
         case .manage: manageExtensionHandler != nil
@@ -615,9 +634,17 @@ public final class SiteControlsModel: ObservableObject {
         }
         var installed: [EngineExtensionInfo] = []
         if let profileID, let engineExtensions { installed = await engineExtensions.installed(profileID: profileID) }
+        var actionItems: [String: [PageContextMenuItem]] = [:]
+        if let engineExtensions, let engineTab = tabID.flatMap({ sidebar.liveTab(for: $0) })?.id {
+            for action in state.extensions {
+                let items = await engineExtensions.actionMenuItems(extensionID: action.id, tabID: engineTab)
+                if !items.isEmpty { actionItems[action.id] = items }
+            }
+        }
         guard self.site == site, generation == refreshGeneration else { return }
         settings = state
         hasInstalledExtensions = !installed.isEmpty
+        extensionActionMenuItems = actionItems
     }
 
     /// Follows the profile's extension changes (installs, badges, icons) while the bubble is open.
