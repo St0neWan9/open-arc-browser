@@ -25,7 +25,8 @@ final class SidebarAccessoryTokenTests: XCTestCase {
 
     /// [07 §8.6] observed: x 8–268, ≈ 22 pt, sage #6C9174 → #7D9C84.
     func testUpdatePillTokens() {
-        XCTAssertEqual(UpdatePillTokens.height, 22)
+        XCTAssertEqual(UpdatePillTokens.height, 24)
+        XCTAssertEqual(UpdatePillTokens.titleStyle.size, 11.5)
         XCTAssertEqual(UpdatePillTokens.horizontalInset, 8)
         XCTAssertLessThanOrEqual(distance(UpdatePillTokens.fill(over: RGBAColor(hex: 0x6C9174)), RGBAColor(hex: 0x7D9C84)), 1.5)
         // [07 §8.6] observed on a pale violet Space: #DBDBEE → #D6D5E9 with black text.
