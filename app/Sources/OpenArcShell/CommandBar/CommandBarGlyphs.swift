@@ -95,6 +95,9 @@ extension CommandBarResult {
         if let hint = visibleShortcutHint(for: presentation) {
             return .shortcutChip(hint)
         }
+        // [07 §5] E27 follow-up observed (2026-10-30): in the window's bar only open-tab rows draw
+        // the arrow box; site, search, history and command rows end bare.
+        if presentation == .window, !kind.isTab { return .none }
         return .arrowBox
     }
 }
@@ -108,4 +111,6 @@ public enum CommandBarRowAccessory: Hashable, Sendable {
     case shortcutChip(String)
     /// The 24 × 24 arrow box.
     case arrowBox
+    /// Nothing (rows other than open tabs in the window's bar).
+    case none
 }

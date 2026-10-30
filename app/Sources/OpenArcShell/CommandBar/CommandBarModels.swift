@@ -612,6 +612,9 @@ public struct CommandBarResult: Identifiable, Hashable, Sendable {
             if let spaceID, spaceID != currentSpaceID, let spaceName, !spaceName.isEmpty { return spaceName }
             return isSelected ? actionLabel : nil
         }
+        // [07 §5] E27 follow-up observed (2026-10-30): in the window's bar, site, search, history
+        // and command rows show no action text, highlighted or not; only open tabs keep theirs.
+        if presentation == .window, !kind.isTab { return nil }
         return actionLabel
     }
 }

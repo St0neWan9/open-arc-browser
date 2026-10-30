@@ -135,7 +135,10 @@ final class CommandBarCommandsTests: XCTestCase {
         XCTAssertNil(rows.first { $0.action == .runCommand(.newSpace) }?.visibleShortcutHint(for: .window))
         var withLabel = newWindow!
         withLabel.actionLabel = "Switch to Tab"
-        XCTAssertNil(withLabel.visibleShortcutHint(for: .window))
+        // Right-hand text wins over the hint where text is drawn (a pane; the window's bar draws
+        // no text on command rows, [07 §5] E27 follow-up).
+        XCTAssertNil(withLabel.visibleShortcutHint(for: .pane))
+        XCTAssertEqual(withLabel.visibleShortcutHint(for: .window), "⌘N")
     }
 
     /// [06 §16.2] observed: "Unpin Tab" (⌘D) while the selected tab is pinned.
