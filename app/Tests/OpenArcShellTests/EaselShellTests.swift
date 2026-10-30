@@ -289,17 +289,55 @@ final class EaselShellTests: XCTestCase {
 
     // MARK: Inert controls [06 §9]
 
-    /// Capture, the collaborator button and Share do nothing (collaboration is out of scope).
+    /// The collaborator button and Share do nothing (collaboration is out of scope).
     func testInertControls() throws {
         let model = makeModel()
         let easelID = try XCTUnwrap(model.newEasel())
         let before = model.workspace
-        model.easelCanvas.selectTool(.capture)
         model.easelCanvas.inertCollaborationAction()
-        XCTAssertEqual(model.easelCanvas.inertActionCount, 2)
+        XCTAssertEqual(model.easelCanvas.inertActionCount, 1)
         XCTAssertEqual(model.easelCanvas.tool, .select)
         XCTAssertEqual(model.workspace, before)
         XCTAssertNotNil(model.workspace.liveEasel(easelID))
+        model.stop()
+    }
+
+    // MARK: Capture tool [06 §9] (B122)
+
+    /// [06 §9] observed: the toolbar's last tool is "capture / add"; its action was not recorded.
+    /// Ours (inferred): it captures the visible part of the page used last in the Space with the
+    /// engine's page capture (B51) and places the image on the canvas, selected.
+    func testCaptureToolPlacesTheLastPage() async throws {
+        let model = makeModel()
+        try await model.activate(tabID: fixture.today1)
+        let easelID = try XCTUnwrap(model.newEasel())
+        XCTAssertEqual(model.easelCanvas.captureSourceTabID, fixture.today1)
+        model.easelCanvas.selectTool(.capture)
+        await model.easelCanvas.settleCapture()
+        let elements = model.workspace.elements(inEasel: easelID)
+        XCTAssertEqual(elements.count, 1)
+        let element = try XCTUnwrap(elements.first)
+        guard case .image(let image) = element.content else { return XCTFail("an image element") }
+        // FakeEngine's visible page is 800 × 600 (EaselImageEncoder keeps it under the stored limit).
+        XCTAssertEqual(Double(image.pixelWidth) / Double(image.pixelHeight), 800.0 / 600.0, accuracy: 0.01)
+        XCTAssertEqual(model.easelCanvas.selection, [element.id])
+        XCTAssertEqual(model.easelCanvas.tool, .select)
+        XCTAssertNil(model.easelCanvas.lastError)
+        let tab = try XCTUnwrap(model.sidebar.liveTab(for: fixture.today1) as? FakeTab)
+        XCTAssertTrue(tab.commands.contains(.capture(.visible(nil))))
+        model.stop()
+    }
+
+    /// Without a live page in the Space the capture tool changes nothing and reports why.
+    func testCaptureToolWithoutAPageDoesNothing() throws {
+        let model = makeModel()
+        let easelID = try XCTUnwrap(model.newEasel())
+        let before = model.workspace
+        model.easelCanvas.selectTool(.capture)
+        XCTAssertEqual(model.workspace, before)
+        XCTAssertTrue(model.workspace.elements(inEasel: easelID).isEmpty)
+        XCTAssertNotNil(model.easelCanvas.lastError)
+        XCTAssertEqual(model.easelCanvas.tool, .select)
         model.stop()
     }
 

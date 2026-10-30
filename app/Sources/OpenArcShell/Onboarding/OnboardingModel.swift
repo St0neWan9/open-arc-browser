@@ -7,7 +7,8 @@ import OpenArcPersistence
 // First-run onboarding (plan D9, restyled in B53). The steps and their wording are our own (D9);
 // the look follows the captured onboarding ([06 §27.1–27.4]): a full-window welcome screen, then a
 // split layout with one D9 step per screen in the white left column. Each step is optional and the
-// whole flow can be skipped at any point. No network, no AI.
+// flow can be skipped from any step screen, but not from the welcome screen ([06 §27.1]). No
+// network, no AI.
 //
 // The flow is app-level (one per `WorkspaceController`) and shown in one browser window at a time
 // (the host). Workspace changes go through `TreeOps` and are committed by the controller.
@@ -44,7 +45,7 @@ public final class OnboardingModel: ObservableObject {
         case split
     }
 
-    /// The flow wants to be on screen (first launch, or Help ▸ Show Welcome Again).
+    /// The flow wants to be on screen (first launch, or `showAgain`).
     @Published public private(set) var isPresented: Bool
     @Published public private(set) var step: Step = .welcome
     /// Text of the Space name field (step 2). Applied when the step is left with Continue.
@@ -84,8 +85,9 @@ public final class OnboardingModel: ObservableObject {
         host(in: window)
     }
 
-    /// Help ▸ Show Welcome Again: runs the flow again from the first step in `window`. The saved
-    /// completion flag stays set, so quitting midway does not bring it back at launch. inferred.
+    /// Runs the flow again from the first step in `window` (tests and previews; B122 removed the
+    /// Help ▸ Show Welcome Again item, which Arc lacks). The saved completion flag stays set, so
+    /// quitting midway does not bring it back at launch. inferred.
     public func showAgain(in window: ShellModel) {
         guard !window.isIncognito, let controller, window.controller === controller else { return }
         step = .welcome
@@ -141,9 +143,17 @@ public final class OnboardingModel: ObservableObject {
         step = previous
     }
 
-    /// "Skip" / Escape on any step: ends the flow and records it as completed. Input not yet
-    /// applied (an edited Space name) is dropped; theme edits were applied live and stay.
-    public func skip() { finish() }
+    /// "Skip" / Escape on a step screen: ends the flow and records it as completed. Input not yet
+    /// applied (an edited Space name) is dropped; theme edits were applied live and stay. Does
+    /// nothing on the welcome screen ([06 §27.1] observed: no skip there; B122).
+    public func skip() {
+        guard canSkip else { return }
+        finish()
+    }
+
+    /// The flow can be skipped: every step but the welcome screen. [06 §27.1] observed (welcome
+    /// has no skip); the step screens' Skip is our own (D9).
+    public var canSkip: Bool { isPresented && step != .welcome }
 
     /// Ends the flow and saves the per-device flag.
     public func finish() {

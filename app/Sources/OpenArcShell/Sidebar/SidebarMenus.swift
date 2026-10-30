@@ -41,6 +41,10 @@ struct SidebarTabMenu: View {
     let tab: TabNode
     let kind: SidebarTabMenuKind
 
+    /// The disabled "Customize Page…" is in the favorite and Today menus ([06 §21.5] observed),
+    /// not in the pinned one ([05 §右键菜单] observed; B122).
+    static func showsCustomizePage(_ kind: SidebarTabMenuKind) -> Bool { kind != .pinned }
+
     var body: some View {
         let id = tab.id
         let link = viewModel.linkURL(for: id)
@@ -53,7 +57,8 @@ struct SidebarTabMenu: View {
         Divider()
 
         // Show Unread Badge (favorites only; [05 §context menus] observed, listed before Change
-        // Icon…) · Change Icon… · Rename… · Mute (disabled without sound) · Customize Page…
+        // Icon…) · Change Icon… · Rename… · Mute (disabled without sound) · Customize Page… (not on
+        // pinned tabs: [05 §右键菜单] observed list has none; favorites and Today [06 §21.5])
         if kind == .favorite {
             Toggle("Show Unread Badge", isOn: Binding(
                 get: { viewModel.showsUnreadBadge(id) },
@@ -64,7 +69,9 @@ struct SidebarTabMenu: View {
         Button("Rename…") { viewModel.beginRename(id) }
         Button(viewModel.liveState(for: id)?.isMuted == true ? "Unmute" : "Mute") { viewModel.toggleMute(id) }
             .disabled(viewModel.liveState(for: id)?.isAudible != true)
-        Button("Customize Page…") {}.disabled(true)
+        if Self.showsCustomizePage(kind) {
+            Button("Customize Page…") {}.disabled(true)
+        }
 
         switch kind {
         case .favorite, .pinned:

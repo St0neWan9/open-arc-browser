@@ -312,15 +312,17 @@ public enum ThemeDerivation {
     public static let floatingPanelChromaFactor: Double = 0.24
     public static let darkFloatingPanelLightness: Double = 0.318
     public static let darkFloatingPanelChromaFactor: Double = 0.29
-    /// Drop target fill (Space-name band), derived from the window color in OKLCH, hue kept.
-    /// Light: L = min(window L × 0.80, 0.685), chroma = max(window chroma, min(0.155, window
-    /// chroma × 5)), i.e. pale windows get a saturated band. Dark: L × 0.893, chroma × 1.05.
-    /// [06 §15.4] fitted to the E17 pairs (lavender, pink light, navy dark) and the magenta
-    /// sample: ≤ 10/255 per channel (dark ≤ 1/255). inferred.
-    public static let dropTargetLightnessFactor: Double = 0.80
-    public static let dropTargetMaxLightness: Double = 0.685
-    public static let dropTargetChromaBoost: Double = 5
-    public static let dropTargetMaxBoostedChroma: Double = 0.155
+    /// Drop target fill (Space-name band), derived from the window color, hue kept.
+    /// Light: HSB saturation = max(window saturation × 1.3, 0.475), then the HSB brightness that
+    /// puts the OKLCH lightness at min(window L × 0.805, 0.6825), i.e. pale windows get a saturated
+    /// band of a fixed depth. Dark: OKLCH L × 0.893, chroma × 1.05.
+    /// [06 §15.4] fitted (B118) to the E17 pairs (lavender, pink light, navy dark), the lavender
+    /// split block (#838BFE) and the magenta sample: ≤ 2.6/255 per channel (dark ≤ 1/255). The
+    /// former OKLCH chroma boost missed lavender and pink by 9–10/255. inferred.
+    public static let dropTargetSaturationFactor: Double = 1.3
+    public static let dropTargetMinSaturation: Double = 0.475
+    public static let dropTargetLightnessFactor: Double = 0.805
+    public static let dropTargetMaxLightness: Double = 0.6825
     public static let darkDropTargetLightnessFactor: Double = 0.893
     public static let darkDropTargetChromaFactor: Double = 1.05
 
@@ -331,14 +333,25 @@ public enum ThemeDerivation {
             return OKLCH(lightness: lch.lightness * darkDropTargetLightnessFactor,
                          chroma: lch.chroma * darkDropTargetChromaFactor, hue: lch.hue).rgb(alpha: 1)
         }
-        return OKLCH(lightness: min(lch.lightness * dropTargetLightnessFactor, dropTargetMaxLightness),
-                     chroma: max(lch.chroma, min(dropTargetMaxBoostedChroma, lch.chroma * dropTargetChromaBoost)),
-                     hue: lch.hue).rgb(alpha: 1)
+        let hsv = HSV(window)
+        let saturation = max(hsv.saturation * dropTargetSaturationFactor, dropTargetMinSaturation)
+        let target = min(lch.lightness * dropTargetLightnessFactor, dropTargetMaxLightness)
+        // OKLCH lightness grows with HSB brightness at a fixed hue and saturation: bisect for it.
+        var low = 0.0, high = 1.0
+        for _ in 0..<32 {
+            let mid = (low + high) / 2
+            if OKLCH(HSV(hue: hsv.hue, saturation: saturation, value: mid).rgb(alpha: 1)).lightness < target {
+                low = mid
+            } else {
+                high = mid
+            }
+        }
+        return HSV(hue: hsv.hue, saturation: saturation, value: low).rgb(alpha: 1)
     }
 
     /// Split preview block: light = the Space-name band color (lavender block #838BFE vs band
-    /// #878CFF); dark = window + 45 % white (navy dark #7D7E98 → #B7B7C9, ≤ 3/255).
-    /// [06 §15.4] observed samples; rule inferred.
+    /// #878CFF, ≤ 2.4/255 with the B118 rule); dark = window + 45 % white (navy dark #7D7E98 →
+    /// #B7B7C9, ≤ 3/255). [06 §15.4] observed samples; rule inferred.
     public static func splitPreviewFill(window: RGBAColor, isDark: Bool) -> RGBAColor {
         isDark ? overlayWhite(window, amount: Metrics.SidebarDrag.darkSplitPreviewWhite)
             : dropTargetFill(window: window, isDark: false)

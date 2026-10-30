@@ -28,8 +28,10 @@ enum MenuBarCatalog {
         // process list the bridge does not expose.
         "Record Trace": "needs engine tracing support",
         "Open Task Manager": "needs a process list from the engine",
-        // Tabs ▸ the three-item split submenu: [01 §Tabs] records neither its title nor its items.
-        "Tabs split submenu": "title and items not recorded",
+        // Edit ▸ Find ▸ Find and Replace: the find bar has no replace field and the engine offers
+        // no replace in page text; [01]/[02] record only the item and ⌥⌘F, not what it does in
+        // Arc (B122: hidden, decision pending).
+        "Find and Replace": "no replace step in the find bar; Arc's behavior not recorded",
     ]
 
     /// System items whose titles differ in [01]/[02], by action. Observed: "Hide Other Windows"
@@ -60,7 +62,7 @@ enum MenuBarCatalog {
     ]
 
     /// Our Edit ▸ Find ▸ items. [01 §Edit] observed; keys [02 §页面与导航] observed.
-    static let findItems = ["Find…", "Find and Replace", "Find Next", "Find Previous", "Use Selection to Find", "Jump to Selection"]
+    static let findItems = ["Find…", "Find Next", "Find Previous", "Use Selection to Find", "Jump to Selection"]
 
     /// The system Edit submenus that follow Find ([01 §Edit] observed, plan Q15). SwiftUI's
     /// `TextEditingCommands` adds the first four; Format comes from `TextFormattingCommands` as a
@@ -118,13 +120,18 @@ enum MenuBarCatalog {
     ]
 
     /// Tabs. [01 §Tabs] observed, groups from the E20 capture (tabs-crop.png): New Tab… · Pin Tab ·
-    /// New Folder… ‖ Next Tab · Previous Tab · Reveal Tab in Sidebar ‖ Clear Today · Reset all tabs
-    /// in this Space.
+    /// New Folder… ‖ Next Tab · Previous Tab · Reveal Tab in Sidebar · (untitled disabled submenu,
+    /// E27) ‖ Clear Today · Reset all tabs in this Space.
     static let tabsGroups: [[String]] = [
         ["New Tab…", "Pin/Unpin Tab", "New Folder…"],
-        ["Next Tab", "Previous Tab", "Reveal Tab in Sidebar"],
+        ["Next Tab", "Previous Tab", "Reveal Tab in Sidebar", tabsPlaceholderSubmenuTitle],
         ["Clear Today", "Reset all tabs in this Space"],
     ]
+
+    /// Tabs ▸ the untitled, disabled submenu after Reveal Tab in Sidebar and its three disabled
+    /// items, literally "Item 1" … "Item 3". [01 §Tabs] E27 observed; shown disabled (plan Q19).
+    static let tabsPlaceholderSubmenuTitle = ""
+    static let tabsPlaceholderSubmenuItems = ["Item 1", "Item 2", "Item 3"]
 
     /// Archive. [01 §Archive] observed; E20 (archive-crop.png): Go Back · Go Forward ‖ View History ·
     /// View Archive… · Clear Archive. All built (B69).
@@ -149,8 +156,9 @@ enum MenuBarCatalog {
     ]
 
     /// Help, after the system search field. [01 §Help] observed items; no icons
-    /// ([01 §菜单项图标与缩进] observed). The groups are ours (not recorded). Show Welcome Again
-    /// (onboarding, D9) follows in its own group.
+    /// ([01 §菜单项图标与缩进] observed). The groups are ours (not recorded). No Show Welcome Again:
+    /// Arc's Help has none (B122). For development, a launch with an empty `OPENARC_DATA_DIR` is a
+    /// first launch and shows onboarding.
     static let helpGroups: [[String]] = [
         ["Getting Started", "Essential Keyboard Shortcuts", "Contact the Team", "Visit Help Center"],
         ["Troubleshooting"],
@@ -161,7 +169,7 @@ enum MenuBarCatalog {
 
     /// Key-only commands ([02] observed keys, in no [01] menu; plan Q16), in menu order.
     static let keyOnlyItems: [String] = ["Archive Tab"] + (1...8).map { "Go to Sidebar Item \($0)" }
-        + ["Go to Last Sidebar Item", "Open Extensions"] + keyOnlyAliases.map(\.title)
+        + ["Go to Last Sidebar Item", "Open Extensions", "Find and Replace"] + keyOnlyAliases.map(\.title)
 
     /// The [02] alternative keys of visible items, in the key-only menu (plan B85): each item's
     /// title and the table entry whose second key it binds. ⌘} / ⌘{ [02 §标签与侧边栏], ⌘← / ⌘→
