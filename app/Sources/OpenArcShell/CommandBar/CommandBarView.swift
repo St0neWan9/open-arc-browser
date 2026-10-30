@@ -11,7 +11,7 @@ import OpenArcDesign
 enum CommandBarStyle {
     /// Field placeholder text. unknown (not recorded in the spec).
     static let placeholder = "Search or Enter URL…"
-    /// Glyph point sizes that give the measured ink: input globe 13 × 13 ([07 §5] observed ink),
+    /// Glyph point sizes that give the measured ink: input glyph 13 × 13 ([07 §5] observed ink),
     /// row icons in a 16 pt box (ink ≈ 12–13 [07 §5] observed). SF Symbols are our own icons.
     static let inputIconPointSize: CGFloat = 13
     /// Box of the input icon: its measured ink (13 × 13 centered at panel (31.5, 31.5)). [07 §5] observed.
@@ -103,7 +103,7 @@ public struct CommandBarView: View {
         let c = Metrics.CommandBar.self
         let iconBox = CGFloat(c.inputFieldLeading - c.inputIconCenter) * 2
         return ZStack(alignment: .topLeading) {
-            Image(systemName: "globe")
+            Image(systemName: inputGlyphSymbol)
                 .font(.system(size: CommandBarStyle.inputIconPointSize, weight: .medium))
                 .foregroundStyle(palette.commandBarSecondaryText.commandBarColor)
                 .frame(width: CommandBarStyle.inputIconInk, height: CommandBarStyle.inputIconInk)
@@ -121,6 +121,14 @@ public struct CommandBarView: View {
                 .offset(x: layout.panelWidth - c.infoButtonTrailing - c.infoButtonSize, y: c.infoButtonTop)
         }
         .frame(width: layout.panelWidth, height: c.inputRowHeight, alignment: .topLeading)
+    }
+
+    /// Magnifier for an empty field, globe once it holds text (`CommandBarInputGlyph`, B109).
+    private var inputGlyphSymbol: String {
+        switch CommandBarInputGlyph.forFieldText(viewModel.queryText) {
+        case .magnifier: return "magnifyingglass"
+        case .globe: return "globe"
+        }
     }
 
     /// ⓘ in the main window, ✕ in Little Arc. [06 §6] observed; panes show ⓘ (inferred).
@@ -172,6 +180,7 @@ public struct CommandBarView: View {
                         CommandBarRow(
                             result: result,
                             presentation: viewModel.presentation,
+                            currentSpaceID: viewModel.currentSpaceID,
                             isSelected: index == viewModel.selectedIndex,
                             colors: CommandBarRowColors(palette: palette),
                             favicon: viewModel.faviconProvider?(result),
@@ -221,6 +230,8 @@ struct CommandBarRowColors {
 struct CommandBarRow: View {
     let result: CommandBarResult
     let presentation: CommandBarPresentation
+    /// The window's Space: tabs of other Spaces show their Space's name (B109).
+    var currentSpaceID: UUID? = nil
     let isSelected: Bool
     let colors: CommandBarRowColors
     /// The page's favicon for site rows (C9); nil draws the placeholder glyph.
@@ -236,7 +247,7 @@ struct CommandBarRow: View {
                 .padding(.trailing, c.resultIconTextGap)
             titleView(primary: text, secondary: dimmed)
             Spacer(minLength: 8)
-            if let trailing = result.trailingLabel(for: presentation) {
+            if let trailing = result.trailingLabel(for: presentation, isSelected: isSelected, currentSpaceID: currentSpaceID) {
                 Text(trailing)
                     .font(Typography.commandBarActionLabel.font)
                     .foregroundStyle(dimmed)

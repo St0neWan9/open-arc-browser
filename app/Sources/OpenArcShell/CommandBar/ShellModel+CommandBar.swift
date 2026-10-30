@@ -157,7 +157,8 @@ extension ShellModel {
         paneCommandBar.listsHelpOnlyWhenEmpty = isIncognito
     }
 
-    /// The default sources plus the engine's browsing history and search suggestions (plan B66).
+    /// The default sources plus the engine's browsing history, most visited pages (plan B121) and
+    /// search suggestions (plan B66).
     func commandBarSources(
         workspace: @escaping @Sendable () async -> WorkspaceState,
         commandState: @escaping @Sendable () async -> CommandBarCommandState
@@ -166,6 +167,7 @@ extension ShellModel {
             workspace: workspace,
             commandState: commandState,
             history: commandBarHistorySource(),
+            topSites: commandBarTopSitesSource(),
             suggestions: commandBarSuggestionProvider(),
             suggestionsAreDeferred: true
         )
@@ -182,6 +184,20 @@ extension ShellModel {
         return CommandBarHistorySource(now: now) { @MainActor text, maxCount in
             guard let profileID = sidebar.currentProfileID else { return [] }
             return await autocomplete.historyMatches(for: text, profileID: profileID, maxCount: maxCount)
+        }
+    }
+
+    /// The window profile's most visited pages from the engine (plan B121). None in an incognito
+    /// window, for the same reason as the history rows. nil there.
+    func commandBarTopSitesSource() -> CommandBarTopSitesSource? {
+        guard !isIncognito else { return nil }
+        let autocomplete = dependencies.engine.autocomplete
+        let sidebar = self.sidebar
+        let clock = controller.now
+        let now: @Sendable () async -> Date = { @MainActor in clock() }
+        return CommandBarTopSitesSource(now: now) { @MainActor maxCount in
+            guard let profileID = sidebar.currentProfileID else { return [] }
+            return await autocomplete.topSites(profileID: profileID, maxCount: maxCount)
         }
     }
 

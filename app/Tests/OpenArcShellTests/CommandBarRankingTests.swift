@@ -39,14 +39,14 @@ final class CommandBarRankingTests: XCTestCase {
         XCTAssertTrue(ranked.prefix(4).allSatisfy { $0.actionLabel == "Switch to Tab" })
     }
 
-    /// Inferred: most recent first, current space before other spaces, the viewed tab is skipped.
+    /// Inferred: most recent first across every Space (F4 live E2 observed other Spaces' tabs in
+    /// the empty list, plan B109), the viewed tab is skipped.
     func testEmptyQueryOrdersByRecencyAndSkipsCurrentTab() async throws {
         let world = try CommandBarFixtures.world()
         let all = await candidates(world, text: "")
         let current = world.tabIDs["Another Tab"]
         let ranked = CommandBarRanker.rank(all, context: context("", current: current, space: world.homeSpace))
-        XCTAssertEqual(titles(ranked), ["Example News", "GitHub", "Apple Developer Documentation", "Swift.org", "Contact the Team"])
-        XCTAssertFalse(titles(ranked).contains("Jira Board"), "other-space tab ranks after the current space and falls off the 4-tab limit")
+        XCTAssertEqual(titles(ranked), ["Jira Board", "Example News", "GitHub", "Apple Developer Documentation", "Contact the Team"])
     }
 
     // MARK: Text matching tiers (inferred)
