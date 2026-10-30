@@ -1,0 +1,524 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Fri, 30 Oct 2026 17:46:47 +0800
+Subject: [PATCH] openarc: chrome: let an embedder list its windows and open
+ action popups
+
+Plans B125 and B126. In an app that embeds Chrome's browser process and
+shows its tabs itself (chrome::EmbedderOwnsUI()), there are no Browser
+windows, so chrome.windows.getCurrent and getLastFocused failed ("No
+current window", "No last-focused window"), chrome.windows.getAll
+returned [], and chrome.action.openPopup() failed with "Could not find an
+active browser window."
+
+Adds two embedder hooks to ExtensionTabUtil:
+
+- SetEmbedderWindowList(): the embedder's windows, most recently focused
+  first, each with a window id (a SessionID value the embedder also sets
+  as its tabs' window id), its profile (an incognito window: the
+  off-the-record profile), focus, popup or normal type, screen bounds and
+  tabs (with the active ones). GetEmbedderWindows() keeps those an
+  extension may see, with the rule of windows_util::CanOperateOnWindow().
+  windows.get, getCurrent (the caller's window, else the most recently
+  focused one), getLastFocused and getAll build their window objects from
+  it where Chrome finds no WindowController, honouring windowTypes and
+  populate. tabs.query({windowId}) matches the tabs of that window, and
+  the tab objects of patch 0025 carry the window id through the
+  SessionTabHelper.
+- SetEmbedderActionPopupOpener(): where the profile has no Browser,
+  action.openPopup() runs the embedder's opener on the active tab of the
+  embedder's most recently focused (or the given) window. As in Chrome it
+  fails for an unfocused window, a popup window, or a tab without a
+  visible popup; the call resolves once the popup's page loaded.
+
+Nothing changes when no embedder registers the hooks.
+---
+ .../extension_action/extension_action_api.cc  |  68 ++++++++
+ .../extension_action/extension_action_api.h   |   4 +
+ .../browser/extensions/api/tabs/tabs_api.cc   | 154 +++++++++++++++++-
+ .../browser/extensions/extension_tab_util.cc  |  82 ++++++++++
+ .../browser/extensions/extension_tab_util.h   |  53 ++++++
+ 5 files changed, 357 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/extensions/api/extension_action/extension_action_api.cc b/chrome/browser/extensions/api/extension_action/extension_action_api.cc
+index 35e0c913d607..a15ddcad7fbe 100644
+--- a/chrome/browser/extensions/api/extension_action/extension_action_api.cc
++++ b/chrome/browser/extensions/api/extension_action/extension_action_api.cc
+@@ -538,6 +538,16 @@ ExtensionFunction::ResponseAction ActionOpenPopupFunction::Run() {
+   BrowserWindowInterface* browser = nullptr;
+   Profile* profile = Profile::FromBrowserContext(browser_context());
+   std::string error;
++
++  // Open Arc: an embedder that owns the UI has no Browser windows; it shows
++  // the popup over the active tab of its focused window.
++  if (ExtensionTabUtil::HasEmbedderActionPopupOpener() &&
++      ExtensionTabUtil::HasEmbedderWindowList() &&
++      !GetLastActiveBrowserWithProfile(*profile,
++                                       include_incognito_information())) {
++    return RunInEmbedder(window_id);
++  }
++
+   if (window_id == extension_misc::kCurrentWindowId) {
+     browser =
+         FindActiveBrowserWindow(*profile, include_incognito_information());
+@@ -578,6 +588,64 @@ ExtensionFunction::ResponseAction ActionOpenPopupFunction::Run() {
+   return RespondLater();
+ }
+ 
++ExtensionFunction::ResponseAction ActionOpenPopupFunction::RunInEmbedder(
++    int window_id) {
++  std::vector<ExtensionTabUtil::EmbedderWindow> windows =
++      ExtensionTabUtil::GetEmbedderWindows(browser_context(),
++                                           include_incognito_information());
++  // The windows come most recently focused first: the current window is the
++  // first one, and only a focused window shows a popup (as in Chrome).
++  const ExtensionTabUtil::EmbedderWindow* window = nullptr;
++  for (const ExtensionTabUtil::EmbedderWindow& candidate : windows) {
++    if (window_id == extension_misc::kCurrentWindowId ||
++        candidate.id == window_id) {
++      window = &candidate;
++      break;
++    }
++  }
++  if (!window) {
++    return RespondNow(
++        Error(window_id == extension_misc::kCurrentWindowId
++                  ? std::string(kNoActiveWindowFound)
++                  : ErrorUtils::FormatErrorMessage(
++                        ExtensionTabUtil::kWindowNotFoundError,
++                        base::NumberToString(window_id))));
++  }
++  if (!window->focused) {
++    return RespondNow(Error(kOpenPopupInactiveWindow));
++  }
++  // As OpenPopupInBrowser(): popup windows have no toolbar to show it from.
++  if (window->popup) {
++    return RespondNow(Error("Browser window has no toolbar."));
++  }
++  content::WebContents* active = nullptr;
++  for (const ExtensionTabUtil::EmbedderTab& tab : window->tabs) {
++    if (tab.active && tab.contents) {
++      active = tab.contents;
++      break;
++    }
++  }
++  if (!active) {
++    return RespondNow(Error(kNoActivePopup));
++  }
++  ExtensionAction* extension_action =
++      ExtensionActionManager::Get(browser_context())
++          ->GetExtensionAction(*extension());
++  const int tab_id = ExtensionTabUtil::GetTabId(active);
++  if (!extension_action || !extension_action->HasPopup(tab_id) ||
++      !extension_action->GetIsVisibleIgnoringDeclarative(tab_id)) {
++    return RespondNow(Error(kNoActivePopup));
++  }
++  if (!ExtensionTabUtil::OpenEmbedderActionPopup(
++          *extension(), active,
++          base::BindOnce(&ActionOpenPopupFunction::OnShowPopupComplete,
++                         this))) {
++    return RespondNow(Error(kFailedToOpenPopupGenericError));
++  }
++  // The function responds in OnShowPopupComplete().
++  return RespondLater();
++}
++
+ void ActionOpenPopupFunction::OnShowPopupComplete(ExtensionHost* popup_host) {
+   DCHECK(!did_respond());
+ 
+diff --git a/chrome/browser/extensions/api/extension_action/extension_action_api.h b/chrome/browser/extensions/api/extension_action/extension_action_api.h
+index 6e0395ba699f..63d9bbf8c36e 100644
+--- a/chrome/browser/extensions/api/extension_action/extension_action_api.h
++++ b/chrome/browser/extensions/api/extension_action/extension_action_api.h
+@@ -314,6 +314,10 @@ class ActionOpenPopupFunction : public ExtensionFunction {
+   ~ActionOpenPopupFunction() override;
+   ResponseAction Run() override;
+ 
++  // Open Arc: opens the popup through ExtensionTabUtil's embedder popup
++  // opener, in the embedder's window `window_id` (or its current window).
++  ResponseAction RunInEmbedder(int window_id);
++
+   void OnShowPopupComplete(ExtensionHost* popup_host);
+ };
+ 
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
+index 6d016e00bd78..f274e9fcae70 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -884,6 +884,104 @@ void ZoomModeToZoomSettings(zoom::ZoomController::ZoomMode zoom_mode,
+   }
+ }
+ 
++namespace {
++
++// Open Arc: window objects for an embedder that owns the UI
++// (ExtensionTabUtil::GetEmbedderWindows()), where Chrome has no Browser
++// windows and so no WindowControllers.
++
++// Whether `window` passes the windowTypes filter of a query (no filter:
++// normal and popup windows, as Chrome's default).
++bool EmbedderWindowMatchesFilter(const ExtensionTabUtil::EmbedderWindow& window,
++                                 WindowController::TypeFilter filter) {
++  if (!filter) {
++    return true;
++  }
++  const windows::WindowType type = window.popup ? windows::WindowType::kPopup
++                                                : windows::WindowType::kNormal;
++  return (filter & (1 << std::to_underlying(type))) != 0;
++}
++
++base::DictValue CreateEmbedderWindowValue(
++    const ExtensionTabUtil::EmbedderWindow& embedder_window,
++    const Extension* extension,
++    mojom::ContextType context,
++    bool populate_tabs) {
++  windows::Window window;
++  window.id = embedder_window.id;
++  window.focused = embedder_window.focused;
++  window.left = embedder_window.bounds.x();
++  window.top = embedder_window.bounds.y();
++  window.width = embedder_window.bounds.width();
++  window.height = embedder_window.bounds.height();
++  window.incognito = embedder_window.browser_context &&
++                     embedder_window.browser_context->IsOffTheRecord();
++  window.type = embedder_window.popup ? windows::WindowType::kPopup
++                                      : windows::WindowType::kNormal;
++  window.state = windows::WindowState::kNormal;
++  window.always_on_top = false;
++  if (populate_tabs) {
++    std::vector<api::tabs::Tab> tab_objects;
++    int index = 0;
++    for (const ExtensionTabUtil::EmbedderTab& embedder_tab :
++         embedder_window.tabs) {
++      if (!embedder_tab.contents) {
++        continue;
++      }
++      api::tabs::Tab tab_object = tabs_internal::CreateTabObjectHelper(
++          embedder_tab.contents, extension, context, /*browser=*/nullptr,
++          /*tab_index=*/-1);
++      tab_object.index = index++;
++      tab_object.window_id = embedder_window.id;
++      tab_object.active = embedder_tab.active;
++      tab_object.selected = embedder_tab.active;
++      tab_object.highlighted = embedder_tab.active;
++      tab_objects.push_back(std::move(tab_object));
++    }
++    window.tabs = std::move(tab_objects);
++  }
++  return window.ToValue();
++}
++
++// The embedder window a windows.get* call asks for: `window_id`; for
++// kCurrentWindowId the window of the calling tab, else the most recently
++// focused one (Chrome: the focused window, else the last one); for
++// `last_focused`, the most recently focused one. Nullopt when none matches.
++std::optional<ExtensionTabUtil::EmbedderWindow> FindEmbedderWindow(
++    ExtensionFunction* function,
++    int window_id,
++    bool last_focused,
++    WindowController::TypeFilter filter) {
++  std::vector<ExtensionTabUtil::EmbedderWindow> windows =
++      ExtensionTabUtil::GetEmbedderWindows(
++          function->browser_context(),
++          function->include_incognito_information());
++  if (!last_focused && window_id == extension_misc::kCurrentWindowId) {
++    if (content::WebContents* sender = function->GetSenderWebContents()) {
++      for (const ExtensionTabUtil::EmbedderWindow& window : windows) {
++        for (const ExtensionTabUtil::EmbedderTab& tab : window.tabs) {
++          if (tab.contents == sender &&
++              EmbedderWindowMatchesFilter(window, filter)) {
++            return window;
++          }
++        }
++      }
++    }
++  }
++  for (const ExtensionTabUtil::EmbedderWindow& window : windows) {
++    if (!EmbedderWindowMatchesFilter(window, filter)) {
++      continue;
++    }
++    if (last_focused || window_id == extension_misc::kCurrentWindowId ||
++        window.id == window_id) {
++      return window;
++    }
++  }
++  return std::nullopt;
++}
++
++}  // namespace
++
+ ExtensionFunction::ResponseAction WindowsGetFunction::Run() {
+   std::optional<windows::Get::Params> params =
+       windows::Get::Params::Create(args());
+@@ -895,6 +993,15 @@ ExtensionFunction::ResponseAction WindowsGetFunction::Run() {
+   if (!windows_util::GetControllerFromWindowID(this, params->window_id,
+                                                extractor.type_filters(),
+                                                &window_controller, &error)) {
++    // Open Arc: the embedder's windows.
++    if (std::optional<ExtensionTabUtil::EmbedderWindow> window =
++            FindEmbedderWindow(this, params->window_id,
++                               /*last_focused=*/false,
++                               extractor.type_filters())) {
++      return RespondNow(WithArguments(CreateEmbedderWindowValue(
++          *window, extension(), source_context_type(),
++          extractor.populate_tabs())));
++    }
+     return RespondNow(Error(std::move(error)));
+   }
+ 
+@@ -918,6 +1025,15 @@ ExtensionFunction::ResponseAction WindowsGetCurrentFunction::Run() {
+   if (!windows_util::GetControllerFromWindowID(
+           this, extension_misc::kCurrentWindowId, extractor.type_filters(),
+           &window_controller, &error)) {
++    // Open Arc: the embedder's windows.
++    if (std::optional<ExtensionTabUtil::EmbedderWindow> window =
++            FindEmbedderWindow(this, extension_misc::kCurrentWindowId,
++                               /*last_focused=*/false,
++                               extractor.type_filters())) {
++      return RespondNow(WithArguments(CreateEmbedderWindowValue(
++          *window, extension(), source_context_type(),
++          extractor.populate_tabs())));
++    }
+     return RespondNow(Error(std::move(error)));
+   }
+ 
+@@ -949,6 +1065,15 @@ ExtensionFunction::ResponseAction WindowsGetLastFocusedFunction::Run() {
+         return true;  // Continue iterating.
+       });
+   if (!last_focused_browser) {
++    // Open Arc: the embedder's windows.
++    if (std::optional<ExtensionTabUtil::EmbedderWindow> window =
++            FindEmbedderWindow(this, extension_misc::kUnknownWindowId,
++                               /*last_focused=*/true,
++                               extractor.type_filters())) {
++      return RespondNow(WithArguments(CreateEmbedderWindowValue(
++          *window, extension(), source_context_type(),
++          extractor.populate_tabs())));
++    }
+     return RespondNow(Error(tabs_constants::kNoLastFocusedWindowError));
+   }
+ 
+@@ -983,6 +1108,17 @@ ExtensionFunction::ResponseAction WindowsGetAllFunction::Run() {
+         populate_tab_behavior, source_context_type()));
+   }
+ 
++  // Open Arc: the embedder's windows (most recently focused first).
++  for (const ExtensionTabUtil::EmbedderWindow& window :
++       ExtensionTabUtil::GetEmbedderWindows(browser_context(),
++                                            include_incognito_information())) {
++    if (EmbedderWindowMatchesFilter(window, extractor.type_filters())) {
++      window_list.Append(CreateEmbedderWindowValue(
++          window, extension(), source_context_type(),
++          extractor.populate_tabs()));
++    }
++  }
++
+   return RespondNow(WithArguments(std::move(window_list)));
+ }
+ 
+@@ -1992,13 +2128,23 @@ base::ListValue TabsQueryFunction::BuildTabList(
+   }
+ 
+   // Open Arc: tabs of an embedder-owned UI live in no Browser window. They
+-  // have no window id and no index, so a query for a given window or index
+-  // never matches them.
+-  if (window_id < 0 && tab_index < 0 && window_type.empty()) {
++  // have no index, so a query for an index never matches them. A query for a
++  // window id matches the tabs of that embedder window (the window id the
++  // embedder gave its tabs, ExtensionTabUtil::GetEmbedderWindows()); the
++  // current window's id matches the tabs of the window the user works in.
++  if (tab_index < 0 && window_type.empty()) {
+     for (const ExtensionTabUtil::EmbedderTab& embedder_tab :
+          ExtensionTabUtil::GetEmbedderTabs(browser_context(),
+                                            include_incognito_information())) {
+-      if (MatchesEmbedderTab(embedder_tab, url_patterns)) {
++      const bool window_matches =
++          window_id == extension_misc::kCurrentWindowId
++              ? embedder_tab.in_current_window
++              : window_id < 0 ||
++                    (embedder_tab.contents &&
++                     ExtensionTabUtil::GetWindowIdOfTab(
++                         embedder_tab.contents) == window_id);
++      if (window_matches &&
++          MatchesEmbedderTab(embedder_tab, url_patterns)) {
+         api::tabs::Tab tab_object = tabs_internal::CreateTabObjectHelper(
+             embedder_tab.contents, extension(), source_context_type(),
+             /*browser=*/nullptr, /*tab_index=*/-1);
+diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
+index 5a740842d77c..7f4017a5dec3 100644
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -124,6 +124,20 @@ ExtensionTabUtil::EmbedderTabOpener& EmbedderTabOpenerCallback() {
+   return *opener;
+ }
+ 
++// Open Arc: see ExtensionTabUtil::SetEmbedderWindowList().
++ExtensionTabUtil::EmbedderWindowList& EmbedderWindowListCallback() {
++  static base::NoDestructor<ExtensionTabUtil::EmbedderWindowList> list;
++  return *list;
++}
++
++// Open Arc: see ExtensionTabUtil::SetEmbedderActionPopupOpener().
++ExtensionTabUtil::EmbedderActionPopupOpener&
++EmbedderActionPopupOpenerCallback() {
++  static base::NoDestructor<ExtensionTabUtil::EmbedderActionPopupOpener>
++      opener;
++  return *opener;
++}
++
+ constexpr char kGroupNotFoundError[] = "No group with id: *.";
+ constexpr char kSplitNotFoundError[] = "No split view with id: *.";
+ constexpr char kInvalidSplitIdError[] = "Invalid split view id: *.";
+@@ -815,6 +829,74 @@ bool ExtensionTabUtil::OpenOptionsPageInEmbedder(
+                          EmbedderTabDisposition::kForegroundTab) != nullptr;
+ }
+ 
++ExtensionTabUtil::EmbedderWindow::EmbedderWindow() = default;
++ExtensionTabUtil::EmbedderWindow::EmbedderWindow(const EmbedderWindow&) =
++    default;
++ExtensionTabUtil::EmbedderWindow& ExtensionTabUtil::EmbedderWindow::operator=(
++    const EmbedderWindow&) = default;
++ExtensionTabUtil::EmbedderWindow::~EmbedderWindow() = default;
++
++// static
++void ExtensionTabUtil::SetEmbedderWindowList(EmbedderWindowList list) {
++  EmbedderWindowListCallback() = std::move(list);
++}
++
++// static
++bool ExtensionTabUtil::HasEmbedderWindowList() {
++  return !EmbedderWindowListCallback().is_null();
++}
++
++// static
++std::vector<ExtensionTabUtil::EmbedderWindow>
++ExtensionTabUtil::GetEmbedderWindows(content::BrowserContext* browser_context,
++                                     bool include_incognito) {
++  const EmbedderWindowList& list = EmbedderWindowListCallback();
++  if (!list || !browser_context) {
++    return {};
++  }
++  Profile* profile = Profile::FromBrowserContext(browser_context);
++  std::vector<EmbedderWindow> result;
++  for (EmbedderWindow& window : list.Run()) {
++    if (!window.browser_context) {
++      continue;
++    }
++    // As windows_util::CanOperateOnWindow(): the profile's own windows, and
++    // its incognito profile's when the extension may see incognito.
++    Profile* window_profile =
++        Profile::FromBrowserContext(window.browser_context);
++    if (window_profile == profile ||
++        (include_incognito && window_profile->IsOffTheRecord() &&
++         window_profile->GetOriginalProfile() == profile)) {
++      result.push_back(std::move(window));
++    }
++  }
++  return result;
++}
++
++// static
++void ExtensionTabUtil::SetEmbedderActionPopupOpener(
++    EmbedderActionPopupOpener opener) {
++  EmbedderActionPopupOpenerCallback() = std::move(opener);
++}
++
++// static
++bool ExtensionTabUtil::HasEmbedderActionPopupOpener() {
++  return !EmbedderActionPopupOpenerCallback().is_null();
++}
++
++// static
++bool ExtensionTabUtil::OpenEmbedderActionPopup(
++    const Extension& extension,
++    content::WebContents* contents,
++    base::OnceCallback<void(ExtensionHost*)> callback) {
++  const EmbedderActionPopupOpener& opener =
++      EmbedderActionPopupOpenerCallback();
++  if (!opener || !contents) {
++    return false;
++  }
++  return opener.Run(extension, contents, std::move(callback));
++}
++
+ // static
+ std::vector<ExtensionTabUtil::EmbedderTab> ExtensionTabUtil::GetEmbedderTabs(
+     content::BrowserContext* browser_context,
+diff --git a/chrome/browser/extensions/extension_tab_util.h b/chrome/browser/extensions/extension_tab_util.h
+index 493af9527a67..ba0b322ed036 100644
+--- a/chrome/browser/extensions/extension_tab_util.h
++++ b/chrome/browser/extensions/extension_tab_util.h
+@@ -23,6 +23,7 @@
+ #include "extensions/buildflags/buildflags.h"
+ #include "extensions/common/mojom/context_type.mojom-forward.h"
+ #include "ui/base/window_open_disposition.h"
++#include "ui/gfx/geometry/rect.h"
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+@@ -45,6 +46,7 @@ class TabGroupVisualData;
+ namespace extensions {
+ class ChromeExtensionFunctionDetails;
+ class Extension;
++class ExtensionHost;
+ class WindowController;
+ 
+ // Provides various utility functions that help manipulate tabs.
+@@ -252,6 +254,57 @@ class ExtensionTabUtil {
+       const Extension* extension,
+       content::BrowserContext* browser_context);
+ 
++  // Open Arc: the same embedder's windows, for chrome.windows.get, getCurrent,
++  // getLastFocused and getAll and for chrome.action.openPopup(), which look
++  // for Browser windows only. `id` is a SessionID value the embedder gives the
++  // window (it also sets it as the window id of the window's tabs, so tab
++  // objects carry it); `browser_context` is the profile its tabs belong to (an
++  // incognito window: the off-the-record profile); `bounds` are in screen
++  // coordinates; `tabs` in the window's order, with `active` for the tab (or
++  // the panes) it shows. Not part of upstream Chromium.
++  struct EmbedderWindow {
++    EmbedderWindow();
++    EmbedderWindow(const EmbedderWindow&);
++    EmbedderWindow& operator=(const EmbedderWindow&);
++    ~EmbedderWindow();
++
++    int id = -1;
++    raw_ptr<content::BrowserContext> browser_context = nullptr;
++    bool focused = false;
++    bool popup = false;
++    gfx::Rect bounds;
++    std::vector<EmbedderTab> tabs;
++  };
++  // Every window of the embedder, most recently focused first.
++  using EmbedderWindowList =
++      base::RepeatingCallback<std::vector<EmbedderWindow>()>;
++  static void SetEmbedderWindowList(EmbedderWindowList list);
++  static bool HasEmbedderWindowList();
++  // The embedder's windows of `browser_context` (and of its incognito profile
++  // when `include_incognito`), most recently focused first; empty when no
++  // embedder registered a list.
++  static std::vector<EmbedderWindow> GetEmbedderWindows(
++      content::BrowserContext* browser_context,
++      bool include_incognito);
++
++  // Open Arc: the embedder shows an extension action's popup for
++  // chrome.action.openPopup() on `contents`, the active tab of its focused
++  // window. It runs `callback` with the popup's host once the popup's page
++  // loaded, or with null when it closed first; it returns false (without
++  // running `callback`) when it cannot show one. Not part of upstream
++  // Chromium.
++  using EmbedderActionPopupOpener = base::RepeatingCallback<bool(
++      const Extension& extension,
++      content::WebContents* contents,
++      base::OnceCallback<void(ExtensionHost*)> callback)>;
++  static void SetEmbedderActionPopupOpener(EmbedderActionPopupOpener opener);
++  static bool HasEmbedderActionPopupOpener();
++  // Runs the embedder's popup opener; false when none is registered.
++  static bool OpenEmbedderActionPopup(
++      const Extension& extension,
++      content::WebContents* contents,
++      base::OnceCallback<void(ExtensionHost*)> callback);
++
+   // Gets the extensions-specific Group ID.
+   static int GetGroupId(const tab_groups::TabGroupId& id);
+ 

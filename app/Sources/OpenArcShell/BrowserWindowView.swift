@@ -151,6 +151,24 @@ struct BrowserWindowObserver: NSViewRepresentable {
             let center = NotificationCenter.default
             center.addObserver(self, selector: #selector(didBecomeKey(_:)), name: NSWindow.didBecomeKeyNotification, object: window)
             center.addObserver(self, selector: #selector(willClose(_:)), name: NSWindow.willCloseNotification, object: window)
+            // Extensions see the window's focus and bounds (plan B126).
+            center.addObserver(self, selector: #selector(didResignKey(_:)), name: NSWindow.didResignKeyNotification, object: window)
+            center.addObserver(self, selector: #selector(frameDidChange(_:)), name: NSWindow.didMoveNotification, object: window)
+            center.addObserver(self, selector: #selector(frameDidChange(_:)), name: NSWindow.didResizeNotification, object: window)
+            reportFrame(of: window)
+        }
+
+        @objc private func didResignKey(_ notification: Notification) {
+            model.windowDidResignKey()
+        }
+
+        @objc private func frameDidChange(_ notification: Notification) {
+            if let window { reportFrame(of: window) }
+        }
+
+        private func reportFrame(of window: NSWindow) {
+            let frame = window.frame
+            model.windowFrameDidChange(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height)
         }
 
         /// Applies the model's title `titleCoalescingDelay` after the first change of a burst; the

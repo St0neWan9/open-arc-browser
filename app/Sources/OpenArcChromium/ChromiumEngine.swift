@@ -142,6 +142,11 @@ public final class ChromiumEngine: BrowserEngine {
     public func clearBrowsingData(_ profileID: Profile.ID, types: BrowsingDataTypes, since: Date?) async {
         await core.clearBrowsingData(profileID, types: types, since: since)
     }
+
+    /// Plan B126: `OACExtensions.windows`, for `chrome.windows.*` and `action.openPopup()`.
+    public func setWindows(_ windows: [EngineWindowInfo]) async {
+        await core.setWindows(windows)
+    }
 }
 
 // MARK: - Engine core (main actor)
@@ -262,6 +267,26 @@ final class ChromiumEngineCore {
         }
         onProfileLoaded?(id, profile)
         return offTheRecord ? profile.offTheRecordProfile : profile
+    }
+
+    /// Plan B126: hands the shell's windows to the bridge. A window whose profile is not loaded
+    /// (or, for an incognito one, whose off-the-record context does not exist yet) is left out:
+    /// it has no tabs an extension could see.
+    func setWindows(_ windows: [EngineWindowInfo]) {
+        let app = OACApplication.shared
+        guard !isShutDown, app.state == .running else { return }
+        OACExtensions.windows = windows.compactMap { info -> OACExtensionWindow? in
+            guard let loaded = app.loadedProfile(identifier: info.profileID) else { return nil }
+            if info.isOffTheRecord, !loaded.hasOffTheRecordProfile { return nil }
+            let profile = info.isOffTheRecord ? loaded.offTheRecordProfile : loaded
+            let window = OACExtensionWindow(identifier: info.id, profile: profile)
+            window.isFocused = info.isFocused
+            window.isPopup = info.isPopup
+            window.frame = CGRect(x: info.x, y: info.y, width: info.width, height: info.height)
+            window.tabs = info.tabIDs.compactMap { tabs[$0]?.core.tab }
+            window.activeTabs = info.activeTabIDs.compactMap { tabs[$0]?.core.tab }
+            return window
+        }
     }
 
     func makeTab(_ configuration: TabConfiguration) async throws -> ChromiumTab {

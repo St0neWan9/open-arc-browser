@@ -82,6 +82,12 @@ public final class ShellModel: ObservableObject {
     public private(set) var revealRequestCount = 0
     /// `revealTab` ran before the window's view installed `focusWindow`.
     private var wantsFocusOnAttach = false
+    /// The window's identity for the engine's extensions (plan B126).
+    let windowID = UUID()
+    /// The window's frame (AppKit screen coordinates), set by the window's view (plan B126).
+    private(set) var windowFrame = EngineWindowFrame()
+    /// Reports the window again when its Space, selection or tabs change (plan B126).
+    private var engineWindowChanges: AnyCancellable?
 
     /// When this window's menu bar items must be rebuilt (B103): they observe it instead of this
     /// model, which publishes on every change of the workspace and of its pages.
@@ -174,6 +180,10 @@ public final class ShellModel: ObservableObject {
             launchNotice = controller.takeLaunchNotice()
             // Starts auto-archive with the first window, after its selection is restored. [B3]
             controller.registerWindow(self)
+            // Extensions see the window (plan B126).
+            let reporter = controller.engineWindows
+            reporter.register(self)
+            engineWindowChanges = sidebar.objectWillChange.sink { [weak reporter] _ in reporter?.setNeedsReport() }
         }
     }
 
@@ -244,6 +254,21 @@ public final class ShellModel: ObservableObject {
     /// The window became the key window: New Window opens on its Space from now on.
     public func windowDidBecomeKey() {
         controller.windowDidBecomeActive(self)
+        if isBrowserWindow { controller.engineWindows.windowKeyStateChanged(self, isKey: true) }
+    }
+
+    /// The window stopped being the key window (plan B126: extensions see it unfocused).
+    public func windowDidResignKey() {
+        if isBrowserWindow { controller.engineWindows.windowKeyStateChanged(self, isKey: false) }
+    }
+
+    /// The window moved or resized; `x`, `y`, `width`, `height` are its `NSWindow.frame` (plan
+    /// B126: extensions read it as the window's bounds).
+    public func windowFrameDidChange(x: Double, y: Double, width: Double, height: Double) {
+        let frame = EngineWindowFrame(x: x, y: y, width: width, height: height)
+        guard frame != windowFrame else { return }
+        windowFrame = frame
+        if isBrowserWindow { controller.engineWindows.setNeedsReport() }
     }
 
     /// The window closed (close button, Close Window ⇧⌘W). Its state leaves the saved UI state and
@@ -608,6 +633,8 @@ public final class ShellModel: ObservableObject {
         guard !isStopped else { return }
         isStopped = true
         if isBrowserWindow { controller.unregisterWindow(self, save: false) }
+        engineWindowChanges = nil
+        if isBrowserWindow { controller.engineWindows.unregister(self) }
         libraryFlagChanges = nil
         autoPictureInPicture?.stop()
         siteControls.stop()

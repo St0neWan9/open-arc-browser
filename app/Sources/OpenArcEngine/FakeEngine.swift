@@ -45,6 +45,8 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
     private let fakeImporterService = FakeImporter()
     private let fakeAutocompleteService: FakeAutocomplete
     private let autofillStore = FakeAutofillStore()
+    private var reportedWindows: [EngineWindowInfo] = []
+    private var windowReportCount = 0
 
     /// - Parameter clock: visit times of the fake history (plan B66); default the system clock.
     public init(titleProvider: @escaping TitleProvider = FakeEngine.defaultTitle,
@@ -190,6 +192,20 @@ public final class FakeEngine: BrowserEngine, @unchecked Sendable {
         lock.withLock { clearedData.append(ClearedBrowsingData(profileID: profileID, types: types, since: since)) }
         if types.contains(.history) { fakeAutocompleteService.removeHistory(profileID: profileID, since: since) }
     }
+
+    // MARK: Windows (plan B126)
+
+    public func setWindows(_ windows: [EngineWindowInfo]) async {
+        lock.withLock {
+            reportedWindows = windows
+            windowReportCount += 1
+        }
+    }
+
+    /// The last window list the shell sent (`setWindows`), most recently focused first. For tests.
+    public var windows: [EngineWindowInfo] { lock.withLock { reportedWindows } }
+    /// How often the shell sent a window list. For tests.
+    public var windowReports: Int { lock.withLock { windowReportCount } }
 
     // MARK: Test hooks
 

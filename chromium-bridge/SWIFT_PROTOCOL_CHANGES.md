@@ -206,3 +206,11 @@ Found while wiring engine events end to end in the shell (plan C9). The Swift si
 **Gap.** Chromium's `ui::DispositionFromClick` folds ⌥⌘-click into `NEW_BACKGROUND_TAB` (⌘ wins over ⌥), and `OACNewTabDisposition` has no Little Arc case. **Workaround in place:** `ChromiumEngine.newTabRequested` reads `CGEventSource.flagsState(.combinedSessionState)` and maps a user-gesture URL request for a background tab with ⌥⌘ (no ⇧) still held to `.littleArc`.
 
 **Proposal.** `OACNewTabDispositionLittleArc = 4`, set by the embedder's `OpenURLFromTab` / `AddNewContents` when the triggering mouse event had both the meta and alt modifiers (from `NavigationHandle`/`OpenURLParams` user-gesture input). Then remove the workaround.
+
+## §15 Windows for extensions (`chrome.windows.*`, `action.openPopup()`) — P2, B125 / B126
+
+**Status: applied (B126), needs Opus review.** `BrowserEngine.setWindows(_ windows: [EngineWindowInfo]) async`, with a default no-op in a protocol extension, so engines without extension window APIs (and the test engines) need nothing. `EngineWindowInfo` holds: id (UUID, stable per window), profileID, isOffTheRecord, isFocused, isPopup, frame (x, y, width, height in AppKit screen points), tabIDs and activeTabIDs (`EngineTabID`). FakeEngine records the last list (`windows`, `windowReports`).
+
+**Shell.** `EngineWindowReporter` (one per app, `WorkspaceController.engineWindows`) lists the browser windows (`ShellModel`: normal; the selected Space's live tabs, Favorites → Pinned → Today, active = the tabs on screen) and the Little Arc windows (popup, inferred; its page). Focus order follows key-window changes, and frames follow `NSWindow` move and resize notifications. An incognito window is reported off the record. Changes are coalesced per main-actor turn, and an unchanged list is not sent again.
+
+**Bridge.** `OACExtensions.windows` (class property) of `OACExtensionWindow` objects (`OACExtensions.h`). `-extensions:didOpenPopup:fromKeyboardOnTab:` is renamed `-extensions:didOpenPopup:onTab:`: `chrome.action.openPopup()` popups use the same path (`EngineExtensions.popupsOpenedFromKeyboard()` keeps its name; it now also carries API popups).
