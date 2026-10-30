@@ -161,17 +161,14 @@
 	<!--
 	  Sparkle 2 software updates (plan D7). See docs/release.md.
 	  SUFeedURL: raw content of the public repository's "updates" branch (plan D14).
-	  SUPublicEDKey: PLACEHOLDER. TODO(release): replace with the base64 Ed25519 public key
-	    printed by Sparkle's generate_keys. The private key stays in the release machine's
-	    Keychain and is never committed. While this placeholder is here the app does not start
-	    Sparkle (UpdateConfiguration) and "Check for Updates…" is disabled.
-	  Keep the placeholder strings in sync with UpdateConfiguration in
-	    app/Sources/OpenArcShell/Updates/UpdateChecker.swift.
+	  SUPublicEDKey: the base64 Ed25519 public key of the release update key (plan B108,
+	    2026-10-29). The private key lives only in the signing folder outside both repositories
+	    (sparkle-ed25519.pem / .seed.b64, see docs/release.md) and is never committed.
 	-->
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>OPENARC_PLACEHOLDER_EDDSA_PUBLIC_KEY</string>
+	<string>W8mu5CaK9nzI4tBi8jqF4qlmMpdUtA4ECqJyWhniJrQ=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 
