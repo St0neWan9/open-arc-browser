@@ -50,6 +50,7 @@ target_cpu = "arm64"
 proprietary_codecs = true                          # MP4 / MSE demuxing of H.264, HEVC, AAC
 ffmpeg_branding = "Chromium"                       # FFmpeg without H.264 / AAC decoders
 media_proprietary_decoders_platform_only = true    # decode only via VideoToolbox / AudioToolbox (patch 0009)
+dcheck_always_on = false                           # no DCHECKs in release (B114; not is_official_build: that also turns on LTO/PGO and needs the official toolchain setup)
 root_extra_deps = [
   "//openarc:openarc_framework",
   "//openarc:openarc_shell_test",
