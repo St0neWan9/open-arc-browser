@@ -136,9 +136,14 @@ final class EngineEventsTests: XCTestCase {
         let icon = try url("https://site.example/favicon.ico")
         let first = FaviconCache(directory: dir)
         first.store(Favicon(url: icon, pngData: Self.png), pageURL: try url("https://site.example/a"))
-        let file = FaviconCache.fileURL(dir, key: FaviconCache.iconKey(icon))
+        // The icon, page and site keys are written by separate background tasks; wait for all of
+        // them (waiting for the icon's file alone left the site file racing the relaunch).
+        let files = [FaviconCache.iconKey(icon), FaviconCache.hostKey(try url("https://site.example/a"))!]
+            .map { FaviconCache.fileURL(dir, key: $0) }
         let deadline = Date().addingTimeInterval(5)
-        while !FileManager.default.fileExists(atPath: file.path), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        while !files.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
 
         let relaunched = FaviconCache(directory: dir)
         XCTAssertEqual(relaunched.image(iconURL: icon), Self.png)
