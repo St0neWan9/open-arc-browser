@@ -495,8 +495,9 @@ enum SidebarReloadMode: Equatable {
     static func make(isLoading: Bool) -> SidebarReloadMode { isLoading ? .stop : .reload }
 }
 
-/// What the URL box displays. [06 §4] observed: only the domain is shown (not the full URL), and
-/// secure pages use green text. [05 §window hierarchy] observed: the box is a placeholder that
+/// What the URL box displays. [06 §4] observed: only the domain is shown (not the full URL); the
+/// text is not green on secure pages ([04] E16/E18 observed, which corrects 06 §4's first note).
+/// [05 §window hierarchy] observed: the box is a placeholder that
 /// opens the command bar rather than an in-place editor.
 enum SidebarURLBoxContent: Equatable {
     case placeholder
