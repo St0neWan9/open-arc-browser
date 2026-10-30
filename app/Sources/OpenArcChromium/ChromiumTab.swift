@@ -1075,6 +1075,8 @@ extension WebAuthnState {
         case .thisMac: .thisMac
         case .securityKey: .securityKey
         case .other: .other
+        case .iCloudKeychain: .iCloudKeychain
+        case .passkeyInICloudKeychain: .passkeyInICloudKeychain
         @unknown default: .other
         }
     }

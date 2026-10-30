@@ -1,0 +1,456 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Fri, 30 Oct 2026 22:19:48 +0700
+Subject: [PATCH] openarc: embedder: iCloud Keychain passkeys in the shell's
+ WebAuthn dialog
+
+Plan B130. iCloud Keychain passkeys (Apple's Passwords app and other
+passkey provider apps) work once the app is signed with Apple's
+com.apple.developer.web-browser.public-key-credential entitlement:
+
+- Each request's window is the tab's NSWindow (the window of the
+  WebContents' native view), through the previous patch's hook, so
+  device/fido creates the iCloud Keychain discovery and macOS has a
+  window for its sheet.
+- The dialog offers iCloud Keychain: OACWebAuthnMechanismKindICloudKeychain
+  for //chrome's generic "iCloud Keychain" method and
+  OACWebAuthnMechanismKindPasskeyInICloudKeychain for one account's
+  passkey (title: the account; subtitle: the app that holds it).
+  Choosing one moves //chrome to kPlatformAuthenticator, which closes
+  the dialog (withdrawn by the engine) while macOS shows its sheet.
+
+Tests only: with --openarc-fake-icloud-keychain the bridge replaces
+macOS's iCloud Keychain API (SetSystemInterfaceForTesting) with a
+stand-in that lists two passkeys and answers create() and get() with
+errors macOS gives, so the engine conformance test runs the path
+without the entitlement. Chromium's own fake is testonly in GN; this one
+is installed only with the switch, and nothing in it runs otherwise.
+---
+ openarc/BUILD.gn                              |   2 +
+ openarc/bridge/oac_application.mm             |  12 +-
+ openarc/bridge/oac_webauthn.mm                |  74 ++++++--
+ openarc/bridge/oac_webauthn_internal.h        |  13 +-
+ openarc/bridge/oac_webauthn_test_keychain.mm  | 167 ++++++++++++++++++
+ .../bridge/public/OpenArcCore/OACWebAuthn.h   |  18 +-
+ 6 files changed, 260 insertions(+), 26 deletions(-)
+ create mode 100644 openarc/bridge/oac_webauthn_test_keychain.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index b2d1da5ce0ab..b0de99388547 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -290,6 +290,7 @@ source_set("bridge") {
+               "bridge/oac_values.mm",
+               "bridge/oac_webauthn.mm",
+               "bridge/oac_webauthn_internal.h",
++              "bridge/oac_webauthn_test_keychain.mm",
+               "browser/openarc_page_top_color.h",
+               "browser/openarc_page_top_color.mm",
+             ]
+@@ -369,6 +370,7 @@ source_set("bridge") {
+   ]
+   frameworks = [
+     "AppKit.framework",
++    "AuthenticationServices.framework",
+     "CoreGraphics.framework",
+     "Foundation.framework",
+     "Security.framework",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index 1b4d40eb94de..a1bad35e01c7 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -7,6 +7,7 @@
+ #import <AppKit/AppKit.h>
+ #import <Security/Security.h>
+ 
++#include <algorithm>
+ #include <memory>
+ #include <string>
+ #include <vector>
+@@ -331,8 +332,15 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   openarc::InstallBridgeAutofillHost();
+   // Client-certificate picker (plan C25).
+   openarc::InstallClientCertificateSelector();
+-  // WebAuthn dialog and the keychain group of passkeys on this Mac (C21).
+-  openarc::InstallWebAuthnDialog(WebAuthnKeychainAccessGroup());
++  // WebAuthn dialog and the keychain group of passkeys on this Mac (C21),
++  // each request's window (B130). The command line is not parsed yet, so the
++  // test-only switch is looked up in the arguments.
++  const bool fake_icloud_keychain = std::ranges::any_of(
++      g_engine->arguments, [](const std::string& argument) {
++        return argument == "--openarc-fake-icloud-keychain";
++      });
++  openarc::InstallWebAuthnDialog(WebAuthnKeychainAccessGroup(),
++                                 fake_icloud_keychain);
+   // Page translation (plan B47): Chrome's translate bubble steps go to the
+   // tab's translate helper; no Google API key gate.
+   openarc::InstallTranslateHooks();
+diff --git a/openarc/bridge/oac_webauthn.mm b/openarc/bridge/oac_webauthn.mm
+index 920479bca14a..4a67fa56bfb6 100644
+--- a/openarc/bridge/oac_webauthn.mm
++++ b/openarc/bridge/oac_webauthn.mm
+@@ -12,6 +12,8 @@
+ 
+ #import "openarc/bridge/oac_webauthn_internal.h"
+ 
++#import <AppKit/AppKit.h>
++
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -25,12 +27,14 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "chrome/browser/ui/webauthn/authenticator_request_dialog_view_controller.h"
+ #include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
++#include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+ #include "chrome/browser/webauthn/chrome_web_authentication_delegate.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "device/fido/pin.h"
+ #include "device/fido/public/fido_transport_protocol.h"
+ #include "device/fido/public/fido_types.h"
++#include "ui/gfx/native_ui_types.h"
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
+@@ -388,16 +392,27 @@ StepDescription DescribeStep(Step step) {
+   }
+ }
+ 
+-// Methods the shell can offer. Phones (hybrid), Apple's and Google's password
+-// managers need entitlements, Bluetooth or a Google account this embedder does
+-// not have, so they are left out.
++// Methods the shell can offer. Phones (hybrid) and Google Password Manager
++// need Bluetooth or a Google account this embedder does not have, so they are
++// left out. iCloud Keychain (Apple's Passwords app and other passkey provider
++// apps) is offered whenever //chrome lists it: device/fido creates it only when
++// the app has Apple's browser passkey entitlement and the tab has a window
++// (InstallWebAuthnDialog).
+ std::optional<OACWebAuthnMechanismKind> MechanismKindFor(
+     const Mechanism& mechanism) {
+   if (const auto* credential =
+           std::get_if<Mechanism::Credential>(&mechanism.type)) {
+-    return credential->value().source == device::AuthenticatorType::kTouchID
+-               ? std::optional(OACWebAuthnMechanismKindPasskeyOnThisMac)
+-               : std::nullopt;
++    switch (credential->value().source) {
++      case device::AuthenticatorType::kTouchID:
++        return OACWebAuthnMechanismKindPasskeyOnThisMac;
++      case device::AuthenticatorType::kICloudKeychain:
++        return OACWebAuthnMechanismKindPasskeyInICloudKeychain;
++      default:
++        return std::nullopt;
++    }
++  }
++  if (std::holds_alternative<Mechanism::ICloudKeychain>(mechanism.type)) {
++    return OACWebAuthnMechanismKindICloudKeychain;
+   }
+   if (const auto* transport =
+           std::get_if<Mechanism::Transport>(&mechanism.type)) {
+@@ -514,17 +529,23 @@ void Describe() {
+         priority = static_cast<NSInteger>(mechanism_indices_.size());
+       }
+       mechanism_indices_.push_back(i);
+-      const bool is_passkey = *kind == OACWebAuthnMechanismKindPasskeyOnThisMac;
+-      [mechanisms
+-          addObject:[[OACWebAuthnMechanism alloc]
+-                        initWithKind:*kind
+-                               title:is_passkey
+-                                         ? base::SysUTF16ToNSString(
+-                                               mechanism.name)
+-                                         : @""
+-                            subtitle:is_passkey ? base::SysUTF16ToNSString(
+-                                                      mechanism.display_name)
+-                                                : @""]];
++      // Passkeys name their account; the other methods are named by the
++      // shell. An iCloud Keychain passkey has no display name; its subtitle
++      // is the app that holds it (Passwords or a third-party provider).
++      NSString* title = @"";
++      NSString* subtitle = @"";
++      if (*kind == OACWebAuthnMechanismKindPasskeyOnThisMac) {
++        title = base::SysUTF16ToNSString(mechanism.name);
++        subtitle = base::SysUTF16ToNSString(mechanism.display_name);
++      } else if (*kind == OACWebAuthnMechanismKindPasskeyInICloudKeychain) {
++        title = base::SysUTF16ToNSString(mechanism.name);
++        subtitle = base::SysUTF16ToNSString(
++            mechanism.description.empty() ? mechanism.display_name
++                                          : mechanism.description);
++      }
++      [mechanisms addObject:[[OACWebAuthnMechanism alloc] initWithKind:*kind
++                                                                 title:title
++                                                              subtitle:subtitle]];
+     }
+     if (description.step == OACWebAuthnStepConfirmMethod && priority < 0) {
+       // The priority method is one we do not offer: show the list instead.
+@@ -663,12 +684,29 @@ void Accept(Step step) {
+   return std::make_unique<ShellWebAuthnDialogController>(web_contents, model);
+ }
+ 
++// The window the tab's page view is in (plan B130). Chrome finds a request's
++// window through its views::Widget; the shell's AppKit windows have none, and
++// without a window device/fido never creates the iCloud Keychain discovery
++// (FidoDiscoveryFactory::MaybeCreatePlatformDiscovery), and macOS would have
++// no window for its passkey sheet. Null while the tab is not in a window.
++gfx::NativeWindow WindowForWebContents(content::WebContents* web_contents) {
++  NSView* view = web_contents->GetNativeView().GetNativeNSView();
++  NSWindow* window = view.window;
++  return window ? gfx::NativeWindow(window) : gfx::NativeWindow();
++}
++
+ }  // namespace
+ 
+-void InstallWebAuthnDialog(const std::string& keychain_access_group) {
++void InstallWebAuthnDialog(const std::string& keychain_access_group,
++                           bool fake_icloud_keychain) {
+   AuthenticatorRequestDialogViewController::SetEmbedderFactory(&CreateDialog);
+   ChromeWebAuthenticationDelegate::SetKeychainAccessGroupOverride(
+       keychain_access_group);
++  ChromeAuthenticatorRequestDelegate::SetEmbedderWindowGetter(
++      &WindowForWebContents);
++  if (fake_icloud_keychain) {
++    InstallFakeICloudKeychainForTesting();
++  }
+ }
+ 
+ }  // namespace openarc
+diff --git a/openarc/bridge/oac_webauthn_internal.h b/openarc/bridge/oac_webauthn_internal.h
+index 216c16bf7627..bcff136ebcfe 100644
+--- a/openarc/bridge/oac_webauthn_internal.h
++++ b/openarc/bridge/oac_webauthn_internal.h
+@@ -14,8 +14,17 @@ namespace openarc {
+ // Plan C21: registers the bridge's WebAuthn dialog with //chrome
+ // (AuthenticatorRequestDialogViewController's embedder factory) and points
+ // profile passkeys at |keychain_access_group| (<team>.<bundle id>.webauthn;
+-// empty keeps Chrome's). Called once when the engine starts.
+-void InstallWebAuthnDialog(const std::string& keychain_access_group);
++// empty keeps Chrome's). Plan B130: also names each request's window (the
++// tab's NSWindow), without which device/fido never offers iCloud Keychain.
++// |fake_icloud_keychain| (the --openarc-fake-icloud-keychain switch, tests
++// only) replaces macOS's iCloud Keychain API with a stand-in. Called once
++// when the engine starts.
++void InstallWebAuthnDialog(const std::string& keychain_access_group,
++                           bool fake_icloud_keychain);
++
++// Plan B130, tests only (oac_webauthn_test_keychain.mm): see
++// InstallWebAuthnDialog.
++void InstallFakeICloudKeychainForTesting();
+ 
+ }  // namespace openarc
+ 
+diff --git a/openarc/bridge/oac_webauthn_test_keychain.mm b/openarc/bridge/oac_webauthn_test_keychain.mm
+new file mode 100644
+index 000000000000..8feb231661e7
+--- /dev/null
++++ b/openarc/bridge/oac_webauthn_test_keychain.mm
+@@ -0,0 +1,167 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Plan B130: a stand-in for macOS's iCloud Keychain passkey API, for the
++// engine conformance test only. device/fido reaches iCloud Keychain through
++// device::fido::icloud_keychain::SystemInterface, which needs Apple's
++// com.apple.developer.web-browser.public-key-credential entitlement. This file
++// replaces it so the rest of the path (the discovery and its window, the
++// mechanisms in the shell's dialog, the handover to macOS) runs without it.
++//
++// Installed only when the browser process starts with
++// --openarc-fake-icloud-keychain (OACApplication passes it on from the host's
++// switches); nothing here runs otherwise. Chromium's own fake
++// (device/fido/mac/fake_icloud_keychain_sys.mm) is testonly in GN and cannot
++// be linked into the framework.
++//
++// What it answers:
++// - available, authorized for passkey listing, not "configured for passkeys"
++//   (so Chrome lists iCloud Keychain as a method instead of jumping to it);
++// - two passkeys for any relying party, "alice@example.com" and
++//   "bob@example.com" (two different accounts, so Chrome shows a list);
++// - create(): the error macOS gives when an excluded credential matched, so
++//   the page sees InvalidStateError, which nothing else in the test produces;
++// - get(): the error macOS gives when it has no passkey for the site, so
++//   //chrome shows its "no passkeys" step in the shell's dialog again.
++
++#import "openarc/bridge/oac_webauthn_internal.h"
++
++#import <AuthenticationServices/AuthenticationServices.h>
++
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/functional/callback.h"
++#include "base/logging.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
++#include "device/fido/ctap_get_assertion_request.h"
++#include "device/fido/ctap_make_credential_request.h"
++#include "device/fido/mac/icloud_keychain_sys.h"
++
++// A listed passkey. AuthenticationServices offers no initializer for this
++// class, so the properties are overridden in a subclass.
++API_AVAILABLE(macos(13.3))
++@interface OpenArcTestKeychainPasskey
++    : ASAuthorizationWebBrowserPlatformPublicKeyCredential
++@property(nonatomic, copy) NSString* name;
++@property(nonatomic, copy) NSString* relyingParty;
++@property(nonatomic, copy) NSData* credentialID;
++@property(nonatomic, copy) NSData* userHandle;
++@property(nonatomic, copy) NSString* providerName;
++@end
++
++@implementation OpenArcTestKeychainPasskey
++@synthesize name = _name;
++@synthesize relyingParty = _relyingParty;
++@synthesize credentialID = _credentialID;
++@synthesize userHandle = _userHandle;
++@synthesize providerName = _providerName;
++@end
++
++namespace openarc {
++
++namespace {
++
++using device::fido::icloud_keychain::SystemInterface;
++
++class API_AVAILABLE(macos(13.3)) TestKeychain : public SystemInterface {
++ public:
++  TestKeychain() = default;
++  TestKeychain(const TestKeychain&) = delete;
++  TestKeychain& operator=(const TestKeychain&) = delete;
++
++  // SystemInterface:
++  bool IsAvailable() const override { return true; }
++
++  API_AVAILABLE(macos(26.2))
++  bool IsConfiguredForPasskeys() const override { return false; }
++
++  AuthState GetAuthState() override { return kAuthAuthorized; }
++
++  void AuthorizeAndContinue(base::OnceCallback<void()> callback) override {
++    std::move(callback).Run();
++  }
++
++  void GetPlatformCredentials(
++      const std::string& rp_id,
++      void (^handler)(
++          NSArray<ASAuthorizationWebBrowserPlatformPublicKeyCredential*>*))
++      override {
++    NSString* relying_party = base::SysUTF8ToNSString(rp_id);
++    NSMutableArray* passkeys = [NSMutableArray array];
++    uint8_t id_byte = 0;
++    for (NSString* name in @[ @"alice@example.com", @"bob@example.com" ]) {
++      // Not initialized: the class has no initializer (see above); the
++      // overridden properties are all that is read.
++      OpenArcTestKeychainPasskey* passkey = [OpenArcTestKeychainPasskey alloc];
++      ++id_byte;
++      passkey.name = name;
++      passkey.relyingParty = relying_party;
++      passkey.credentialID = [NSData dataWithBytes:&id_byte length:1];
++      passkey.userHandle = [NSData dataWithBytes:&id_byte length:1];
++      passkey.providerName = @"Open Arc Test Keychain";
++      [passkeys addObject:passkey];
++    }
++    handler(passkeys);
++  }
++
++  void MakeCredential(
++      NSWindow* window,
++      device::CtapMakeCredentialRequest request,
++      device::MakeCredentialOptions options,
++      base::OnceCallback<void(ASAuthorization*, NSError*)> callback) override {
++    LOG(INFO) << "OpenArc: test keychain: create, window "
++              << (window ? "set" : "missing");
++    // device/fido maps this error to "credential excluded".
++    Answer(std::move(callback),
++           [NSError errorWithDomain:@"WKErrorDomain" code:8 userInfo:nil]);
++  }
++
++  void GetAssertion(
++      NSWindow* window,
++      device::CtapGetAssertionRequest request,
++      LargeBlobAssertionInputs large_blob_inputs,
++      base::OnceCallback<void(ASAuthorization*, NSError*)> callback) override {
++    LOG(INFO) << "OpenArc: test keychain: get, window "
++              << (window ? "set" : "missing");
++    // device/fido maps this error to "no passkeys for this site".
++    Answer(std::move(callback),
++           [NSError errorWithDomain:ASAuthorizationErrorDomain
++                               code:1001
++                           userInfo:@{
++                             NSLocalizedDescriptionKey :
++                                 @"No credentials available for login."
++                           }]);
++  }
++
++  void Cancel() override {}
++
++ private:
++  ~TestKeychain() override = default;
++
++  // Answers later, as macOS does once its sheet closes.
++  static void Answer(
++      base::OnceCallback<void(ASAuthorization*, NSError*)> callback,
++      NSError* error) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(std::move(callback), nil, error));
++  }
++};
++
++}  // namespace
++
++void InstallFakeICloudKeychainForTesting() {
++  LOG(WARNING) << "OpenArc: --openarc-fake-icloud-keychain: iCloud Keychain "
++                  "is simulated (tests only)";
++  // Always true (Open Arc needs macOS 14); device/fido's API is marked 13.3.
++  if (@available(macOS 13.3, *)) {
++    device::fido::icloud_keychain::SetSystemInterfaceForTesting(
++        base::MakeRefCounted<TestKeychain>());
++  }
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/public/OpenArcCore/OACWebAuthn.h b/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
+index f0c367703252..6c2b3c537556 100644
+--- a/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
++++ b/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
+@@ -22,10 +22,13 @@
+ //   app's `keychain-access-groups` entitlement (a Developer ID build with a matching provisioning
+ //   profile, scripts/make-app.sh); without it the engine offers security keys only. During a
+ //   passkey operation macOS shows its own Touch ID / password prompt and this dialog closes.
++// - iCloud Keychain passkeys (Apple's Passwords app and other passkey provider apps; plan B130):
++//   offered only when the app is signed with Apple's restricted
++//   `com.apple.developer.web-browser.public-key-credential` entitlement (scripts/make-app.sh adds
++//   it when the provisioning profile allows it) and the tab is in a window. Without the
++//   entitlement the engine never offers them. Choosing one hands over to macOS's own passkey
++//   sheet (first: its "Passkeys Access for Web Browsers" consent), and this dialog closes.
+ // Not supported:
+-// - iCloud Keychain passkeys: they need Apple's restricted
+-//   `com.apple.developer.web-browser.public-key-credential` entitlement, which this app does not
+-//   have, so the engine never offers them.
+ // - Phones and tablets as security keys (hybrid / caBLE, needs Bluetooth and the QR flow); the
+ //   bridge leaves that method out.
+ // - Google Password Manager passkeys (need a signed-in Google account).
+@@ -123,6 +126,12 @@ typedef NS_ENUM(NSInteger, OACWebAuthnMechanismKind) {
+     OACWebAuthnMechanismKindSecurityKey = 2,
+     /// Anything else the engine offers.
+     OACWebAuthnMechanismKindOther = 3,
++    /// Save or use a passkey in iCloud Keychain (Passwords or another passkey app; no account
++    /// yet). macOS shows its own sheet next.
++    OACWebAuthnMechanismKindICloudKeychain = 4,
++    /// A passkey for one account in iCloud Keychain (`title`: the account; `subtitle`: the app
++    /// that holds it, may be empty). macOS shows its own sheet next.
++    OACWebAuthnMechanismKindPasskeyInICloudKeychain = 5,
+ };
+ 
+ /// One way to continue (a row of the method list).
+@@ -131,7 +140,8 @@ OAC_EXPORT NS_SWIFT_SENDABLE
+ @property (nonatomic, readonly) OACWebAuthnMechanismKind kind;
+ /// Account name for passkeys; empty for the others (the shell names them).
+ @property (nonatomic, readonly, copy) NSString *title;
+-/// The account's display name, if different (may be empty).
++/// The account's display name, if different, or for iCloud Keychain passkeys the app that holds
++/// the passkey (may be empty).
+ @property (nonatomic, readonly, copy) NSString *subtitle;
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;

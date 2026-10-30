@@ -190,6 +190,24 @@ final class ShellDialogsF1Tests: XCTestCase {
         XCTAssertEqual(WebAuthnPresentation.rowCommand(for: state, row: 0), .selectAccount(0))
     }
 
+    /// Plan B130 (passkey-entitlement.md §4.2; [00 §A] inferred (analysis), look unknown): iCloud
+    /// Keychain rows: the generic method and one account's passkey, named by the app that holds
+    /// it; a click selects the method.
+    func testWebAuthnPresentationICloudKeychainRows() {
+        let state = WebAuthnState(
+            operation: .signIn, relyingPartyID: "webauthn.io", step: .chooseMethod,
+            mechanisms: [
+                .init(kind: .passkeyInICloudKeychain, title: "alice@example.com", subtitle: "Passwords"),
+                .init(kind: .passkeyInICloudKeychain, title: "bob@example.com"),
+                .init(kind: .iCloudKeychain),
+            ]
+        )
+        let rows = WebAuthnPresentation(state).rows
+        XCTAssertEqual(rows.map(\.title), ["alice@example.com", "bob@example.com", "iCloud Keychain"])
+        XCTAssertEqual(rows.map(\.detail), ["Passkey in Passwords", "Passkey in iCloud Keychain", "Passwords or another passkey app"])
+        XCTAssertEqual(WebAuthnPresentation.rowCommand(for: state, row: 2), .selectMechanism(2))
+    }
+
     /// The live sheet: queued like the other tab-modal dialogs, Cancel answers it, and the engine
     /// withdrawing it (macOS took over) removes it.
     func testWebAuthnSheetInTheQueue() async throws {

@@ -136,6 +136,11 @@ public struct WebAuthnPresentation: Equatable, Sendable {
             Row(symbol: "key.horizontal", title: "Security key", detail: "USB or NFC")
         case .other:
             Row(symbol: "ellipsis.circle", title: mechanism.title.isEmpty ? "Another method" : mechanism.title, detail: mechanism.subtitle)
+        case .iCloudKeychain:
+            Row(symbol: "key.icloud", title: "iCloud Keychain", detail: "Passwords or another passkey app")
+        case .passkeyInICloudKeychain:
+            Row(symbol: "key.icloud", title: mechanism.title,
+                detail: mechanism.subtitle.isEmpty ? "Passkey in iCloud Keychain" : "Passkey in \(mechanism.subtitle)")
         }
     }
 

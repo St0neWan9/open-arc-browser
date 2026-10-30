@@ -137,6 +137,7 @@ final class ProfileIsolationServer: @unchecked Sendable {
             case "/": (status, type, body) = ("200 OK", "text/html; charset=utf-8", ProfileIsolationSite.indexHTML)
             case "/sw.js": (status, type, body) = ("200 OK", "text/javascript", ProfileIsolationSite.serviceWorkerJS)
             case "/ua": (status, type, body) = ("200 OK", "text/html; charset=utf-8", ProfileIsolationSite.identityHTML)
+            case "/webauthn": (status, type, body) = ("200 OK", "text/html; charset=utf-8", WebAuthnTestPage.html)
             default: (status, type, body) = ("404 Not Found", "text/plain", "not found")
             }
             let payload = Data(body.utf8)

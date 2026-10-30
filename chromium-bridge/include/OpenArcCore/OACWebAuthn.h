@@ -22,10 +22,13 @@
 //   app's `keychain-access-groups` entitlement (a Developer ID build with a matching provisioning
 //   profile, scripts/make-app.sh); without it the engine offers security keys only. During a
 //   passkey operation macOS shows its own Touch ID / password prompt and this dialog closes.
+// - iCloud Keychain passkeys (Apple's Passwords app and other passkey provider apps; plan B130):
+//   offered only when the app is signed with Apple's restricted
+//   `com.apple.developer.web-browser.public-key-credential` entitlement (scripts/make-app.sh adds
+//   it when the provisioning profile allows it) and the tab is in a window. Without the
+//   entitlement the engine never offers them. Choosing one hands over to macOS's own passkey
+//   sheet (first: its "Passkeys Access for Web Browsers" consent), and this dialog closes.
 // Not supported:
-// - iCloud Keychain passkeys: they need Apple's restricted
-//   `com.apple.developer.web-browser.public-key-credential` entitlement, which this app does not
-//   have, so the engine never offers them.
 // - Phones and tablets as security keys (hybrid / caBLE, needs Bluetooth and the QR flow); the
 //   bridge leaves that method out.
 // - Google Password Manager passkeys (need a signed-in Google account).
@@ -123,6 +126,12 @@ typedef NS_ENUM(NSInteger, OACWebAuthnMechanismKind) {
     OACWebAuthnMechanismKindSecurityKey = 2,
     /// Anything else the engine offers.
     OACWebAuthnMechanismKindOther = 3,
+    /// Save or use a passkey in iCloud Keychain (Passwords or another passkey app; no account
+    /// yet). macOS shows its own sheet next.
+    OACWebAuthnMechanismKindICloudKeychain = 4,
+    /// A passkey for one account in iCloud Keychain (`title`: the account; `subtitle`: the app
+    /// that holds it, may be empty). macOS shows its own sheet next.
+    OACWebAuthnMechanismKindPasskeyInICloudKeychain = 5,
 };
 
 /// One way to continue (a row of the method list).
@@ -131,7 +140,8 @@ OAC_EXPORT NS_SWIFT_SENDABLE
 @property (nonatomic, readonly) OACWebAuthnMechanismKind kind;
 /// Account name for passkeys; empty for the others (the shell names them).
 @property (nonatomic, readonly, copy) NSString *title;
-/// The account's display name, if different (may be empty).
+/// The account's display name, if different, or for iCloud Keychain passkeys the app that holds
+/// the passkey (may be empty).
 @property (nonatomic, readonly, copy) NSString *subtitle;
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;

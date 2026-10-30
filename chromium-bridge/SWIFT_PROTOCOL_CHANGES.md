@@ -214,3 +214,9 @@ Found while wiring engine events end to end in the shell (plan C9). The Swift si
 **Shell.** `EngineWindowReporter` (one per app, `WorkspaceController.engineWindows`) lists the browser windows (`ShellModel`: normal; the selected Space's live tabs, Favorites → Pinned → Today, active = the tabs on screen) and the Little Arc windows (popup, inferred; its page). Focus order follows key-window changes, and frames follow `NSWindow` move and resize notifications. An incognito window is reported off the record. Changes are coalesced per main-actor turn, and an unchanged list is not sent again.
 
 **Bridge.** `OACExtensions.windows` (class property) of `OACExtensionWindow` objects (`OACExtensions.h`). `-extensions:didOpenPopup:fromKeyboardOnTab:` is renamed `-extensions:didOpenPopup:onTab:`: `chrome.action.openPopup()` popups use the same path (`EngineExtensions.popupsOpenedFromKeyboard()` keeps its name; it now also carries API popups).
+
+## §16 iCloud Keychain passkeys in the WebAuthn dialog — P2, B130
+
+**Status: applied (B130), needs Opus review.** Two cases added to `WebAuthnState.MechanismKind` (`DialogRequests.swift`): `iCloudKeychain` (save or use a passkey in iCloud Keychain, no account yet) and `passkeyInICloudKeychain` (one account's passkey; `title` the account, `subtitle` the app that holds it, may be empty). No other type changes; choosing either is the existing `.selectMechanism(_:)`, and macOS taking over is the existing withdrawal (`.dialogCancelled`). FakeEngine needs nothing new (`simulateWebAuthnDialog` carries any kinds); `EngineDialogsF1Tests.testWebAuthnICloudKeychainMechanismsHandOverToMacOS` covers it.
+
+**Bridge.** `OACWebAuthnMechanismKindICloudKeychain = 4` and `OACWebAuthnMechanismKindPasskeyInICloudKeychain = 5` (`OACWebAuthn.h`), mapped in `ChromiumTab.swift`. **Shell.** `WebAuthnPresentation.row(for:)` draws both (look unknown, [00 §A] inferred (analysis)).

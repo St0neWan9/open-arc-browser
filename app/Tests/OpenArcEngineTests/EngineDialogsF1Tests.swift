@@ -223,4 +223,35 @@ final class EngineDialogsF1Tests: XCTestCase {
         XCTAssertTrue(dialog.reply.isFinished)
         XCTAssertNil(tab.dialogAnswers[id])
     }
+
+    /// Plan B130 (passkey-entitlement.md §4.2; [00 §A] inferred (analysis)): iCloud Keychain
+    /// methods and passkeys reach the shell; choosing one is a plain command, and macOS taking over
+    /// withdraws the dialog without an answer.
+    func testWebAuthnICloudKeychainMechanismsHandOverToMacOS() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine, url: "https://webauthn.example")
+        let events = tab.events()
+        let stream = tab.dialogRequests()
+        let methods = WebAuthnState(
+            operation: .signIn, relyingPartyID: "webauthn.example", step: .chooseMethod,
+            mechanisms: [
+                .init(kind: .passkeyInICloudKeychain, title: "alice@example.com", subtitle: "Passwords"),
+                .init(kind: .iCloudKeychain),
+                .init(kind: .securityKey),
+            ]
+        )
+        let (id, _) = tab.simulateWebAuthnDialog(methods)
+        guard case .webAuthn(let dialog) = await take(1, from: stream).first else { return XCTFail("expected the dialog") }
+        XCTAssertEqual(dialog.session.state.mechanisms.map(\.kind), [.passkeyInICloudKeychain, .iCloudKeychain, .securityKey])
+        XCTAssertEqual(dialog.session.state.mechanisms.first?.subtitle, "Passwords")
+
+        dialog.session.send(.selectMechanism(0))
+        XCTAssertEqual(tab.webAuthnCommands, [.selectMechanism(0)])
+        tab.simulateDialogCancel(id)
+        for await event in events {
+            if case .dialogCancelled(let cancelled) = event, cancelled == id { break }
+        }
+        XCTAssertTrue(dialog.reply.isFinished)
+        XCTAssertNil(tab.dialogAnswers[id], "macOS's sheet answers the page, not the shell")
+    }
 }
