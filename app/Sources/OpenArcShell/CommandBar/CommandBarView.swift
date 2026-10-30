@@ -17,12 +17,14 @@ enum CommandBarStyle {
     /// Box of the input icon: its measured ink (13 × 13 centered at panel (31.5, 31.5)). [07 §5] observed.
     static let inputIconInk: CGFloat = 13
     static let rowIconPointSize: CGFloat = 13
+    /// Glyph inside the ≈ 20 pt command glyph box. inferred (ink not measured).
+    static let commandGlyphPointSize: CGFloat = 11
     /// ⓘ glyph inside the 26 pt button. unknown (ink not measured).
     static let infoGlyphPointSize: CGFloat = 15
     /// Arrow glyph inside the 24 pt box. unknown.
     static let arrowGlyphPointSize: CGFloat = 11
-    /// Shortcut hint: right edge 13 pt from the row's right edge ([06 §16.2] observed, AX), i.e.
-    /// 2 pt less than the 15 pt the row's trailing padding already gives.
+    /// Shortcut chip: right edge 13 pt from the row's right edge ([06 §16.2] observed, AX, the
+    /// hint text's edge; inferred for the chip), i.e. 2 pt less than the 15 pt trailing padding.
     static let shortcutHintTrailing: CGFloat = -2
 }
 
@@ -123,12 +125,10 @@ public struct CommandBarView: View {
         .frame(width: layout.panelWidth, height: c.inputRowHeight, alignment: .topLeading)
     }
 
-    /// Magnifier for an empty field, globe once it holds text (`CommandBarInputGlyph`, B109).
+    /// The first result's command glyph, else the magnifier (`CommandBarInputGlyph`, [07 §5] E27
+    /// observed). The unedited ⌘L prefill lists the empty-query rows, so it counts as empty.
     private var inputGlyphSymbol: String {
-        switch CommandBarInputGlyph.forFieldText(viewModel.queryText) {
-        case .magnifier: return "magnifyingglass"
-        case .globe: return "globe"
-        }
+        CommandBarInputGlyph.forField(text: viewModel.effectiveQuery, firstResult: viewModel.results.first).symbolName
     }
 
     /// ⓘ in the main window, ✕ in Little Arc. [06 §6] observed; panes show ⓘ (inferred).
@@ -210,6 +210,8 @@ struct CommandBarRowColors {
     var selectedText: Color
     var selectionFill: Color
     var arrowBoxFill: Color
+    /// Unselected glyph box and shortcut chip fill (≈ #F0F0F0). [07 §5] E27 observed.
+    var glyphBoxFill: Color
 
     init(palette: ThemePalette) {
         text = palette.commandBarText.commandBarColor
@@ -217,6 +219,7 @@ struct CommandBarRowColors {
         selectedText = palette.commandBarSelectedText.commandBarColor
         selectionFill = palette.commandBarSelection.commandBarColor
         arrowBoxFill = palette.commandBarArrowBoxFill.commandBarColor
+        glyphBoxFill = palette.commandBarGlyphBoxFill.commandBarColor
     }
 }
 
@@ -254,18 +257,12 @@ struct CommandBarRow: View {
                     .lineLimit(1)
                     .padding(.trailing, c.resultActionToArrowGap)
             }
-            // [06 §16.2] observed: a command row shows its shortcut at the right end, where other
-            // rows have the arrow box (the hint's right edge sits 13 pt from the row's edge, over
-            // the box's place); so the hint replaces the box (inferred).
-            if let hint = result.visibleShortcutHint(for: presentation) {
-                Text(hint)
-                    .font(Typography.commandBarActionLabel.font)
-                    .foregroundStyle(dimmed)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .padding(.trailing, CommandBarStyle.shortcutHintTrailing)
-            } else {
-                arrowBox
+            // [06 §16.2] observed: a command row shows its shortcut at the right end, over the
+            // arrow box's place; [07 §5] E27 observed it in a chip styled like the arrow box and
+            // no arrow box on such rows.
+            switch result.trailingAccessory(for: presentation) {
+            case .shortcutChip(let hint): shortcutChip(hint)
+            case .arrowBox: arrowBox
             }
         }
         .padding(.leading, c.resultIconLeading)
@@ -308,11 +305,15 @@ struct CommandBarRow: View {
     }
 
     /// The site's favicon when known (C9), else a placeholder glyph (SF Symbols). 16 × 16 box.
-    /// [07 §5, §9] observed the box.
+    /// [07 §5, §9] observed the box. Command rows draw their own glyph in a rounded box
+    /// ([07 §5] E27 observed), centered on the 16 pt icon slot so the title stays put.
     @ViewBuilder
     private func icon(tint: Color) -> some View {
         let size = Metrics.CommandBar.resultIconSize
-        if let image = SidebarFaviconView.image(favicon) {
+        if result.drawsGlyphBox, let command = result.command {
+            commandGlyphBox(command)
+                .frame(width: size, height: size)
+        } else if let image = SidebarFaviconView.image(favicon) {
             Image(nsImage: image).resizable().interpolation(.high)
                 .frame(width: size, height: size)
         } else {
@@ -334,6 +335,38 @@ struct CommandBarRow: View {
         case .search: return "magnifyingglass"
         case .globe: return "network"
         }
+    }
+
+    /// A command's glyph in its rounded box: white with a theme-colored glyph when selected,
+    /// ≈ #F0F0F0 with a gray glyph otherwise. [07 §5] E27 observed (box ≈ 20 × 20).
+    private func commandGlyphBox(_ command: CommandBarCommand) -> some View {
+        let c = Metrics.CommandBar.self
+        return Image(systemName: command.glyphSymbol)
+            .font(.system(size: CommandBarStyle.commandGlyphPointSize, weight: .medium))
+            .foregroundStyle(isSelected ? colors.selectionFill : colors.secondaryText)
+            .frame(width: c.commandGlyphBoxSize, height: c.commandGlyphBoxSize)
+            .background(
+                RoundedRectangle(cornerRadius: c.commandGlyphBoxCornerRadius, style: .continuous)
+                    .fill(isSelected ? Color.white : colors.glyphBoxFill)
+            )
+    }
+
+    /// The shortcut in a chip styled like the arrow box: white with theme-colored text when
+    /// selected, ≈ #F0F0F0 with gray text otherwise. [07 §5] E27 observed.
+    private func shortcutChip(_ hint: String) -> some View {
+        let c = Metrics.CommandBar.self
+        return Text(hint)
+            .font(Typography.commandBarActionLabel.font)
+            .foregroundStyle(isSelected ? colors.selectionFill : colors.secondaryText)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, c.shortcutChipHorizontalPadding)
+            .frame(minWidth: c.resultArrowBoxSize, minHeight: c.resultArrowBoxSize)
+            .background(
+                RoundedRectangle(cornerRadius: c.resultArrowBoxCornerRadius, style: .continuous)
+                    .fill(isSelected ? Color.white : colors.glyphBoxFill)
+            )
+            .padding(.trailing, CommandBarStyle.shortcutHintTrailing)
     }
 
     private var arrowBox: some View {

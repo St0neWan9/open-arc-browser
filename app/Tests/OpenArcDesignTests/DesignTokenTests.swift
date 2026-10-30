@@ -187,6 +187,17 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertLessThan(ThemeDerivation.luminance(palette.primaryText), 0.1)
     }
 
+    /// [07 §5] E27 observed: the default theme's command bar selection is #ADABE2 (light), not
+    /// the #A5A5BC the picked-color rule derives from `defaultBaseColor`. B127.
+    func testDefaultThemeCommandBarSelection() {
+        XCTAssertEqual(ThemeDerivation.defaultCommandBarSelection, RGBAColor(hex: 0xADABE2))
+        XCTAssertEqual(ThemeDerivation.palette(for: nil, appearance: .light).commandBarSelection, RGBAColor(hex: 0xADABE2))
+        let ruled = ThemeDerivation.tone(of: ThemeDerivation.defaultBaseColor,
+                                         lightness: ThemeDerivation.commandBarSelectionLightness,
+                                         chromaFactor: ThemeDerivation.commandBarSelectionChromaFactor)
+        XCTAssertNotEqual(ruled, ThemeDerivation.defaultCommandBarSelection)
+    }
+
     /// [06 §2] observed: a theme can have several color dots. The gradient stops follow them in
     /// order (inferred), each mapped like the window color; the first dot drives every fill.
     func testGradientStopsFollowTheThemeColors() {

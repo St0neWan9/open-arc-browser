@@ -112,11 +112,15 @@ final class CommandBarAllSpacesTests: XCTestCase {
         XCTAssertEqual(littleArc.first { $0.title == "Work Tab" }?.subtitle, "work.example")
     }
 
-    /// F4 live E3 observed: magnifier for the empty field; the globe ([07 §5]) once it holds text.
+    /// F4 live E3 observed: magnifier for the empty field. [07 §5] E27 observed: with text, the
+    /// magnifier unless a command is the first result (B127 replaced the globe).
     func testInputGlyphIsMagnifierWhenEmpty() {
-        XCTAssertEqual(CommandBarInputGlyph.forFieldText(""), .magnifier)
-        XCTAssertEqual(CommandBarInputGlyph.forFieldText("swift"), .globe)
-        XCTAssertEqual(CommandBarInputGlyph.forFieldText("https://swift.org/"), .globe)
+        let command = CommandBarResult(id: "command:openSettings", kind: .command, title: "Settings…",
+                                       iconHint: .command, actionLabel: nil, action: .runCommand(.openSettings))
+        XCTAssertEqual(CommandBarInputGlyph.forField(text: "", firstResult: nil), .magnifier)
+        XCTAssertEqual(CommandBarInputGlyph.forField(text: "", firstResult: command), .magnifier)
+        XCTAssertEqual(CommandBarInputGlyph.forField(text: "swift", firstResult: nil), .magnifier)
+        XCTAssertEqual(CommandBarInputGlyph.forField(text: "settings", firstResult: command), .command(.openSettings))
     }
 
     /// Choosing a tab of another Space switches the window to that Space and selects the tab
