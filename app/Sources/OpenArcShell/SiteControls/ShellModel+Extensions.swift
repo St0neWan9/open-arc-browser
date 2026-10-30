@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import OpenArcEngine
 
@@ -16,6 +17,34 @@ import OpenArcEngine
 enum ExtensionPages {
     static let webStore = URL(string: "https://chromewebstore.google.com/category/extensions")!
     static let manage = URL(string: "chrome://extensions/")!
+
+    /// One extension's details page (an action's "Manage Extension", B116). inferred.
+    static func details(extensionID: String) -> URL? {
+        var components = URLComponents(string: "chrome://extensions/")
+        components?.queryItems = [URLQueryItem(name: "id", value: extensionID)]
+        return components?.url
+    }
+}
+
+/// The question before an action's "Remove" (B116). inferred: the spec records no such menu; the
+/// wording is ours.
+@MainActor
+enum ExtensionRemovalAlert {
+    static func title(extensionName: String) -> String { "Remove “\(extensionName)”?" }
+    static let message = "The extension and its data are removed from this profile."
+    static let removeButton = "Remove"
+    static let cancelButton = "Cancel"
+
+    /// Shows the alert and waits for the answer. Return removes, Esc cancels.
+    static func run(extensionName: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title(extensionName: extensionName)
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: removeButton)
+        alert.addButton(withTitle: cancelButton).keyEquivalent = "\u{1b}"
+        return alert.runModal() == .alertFirstButtonReturn
+    }
 }
 
 extension ShellModel {
@@ -23,6 +52,17 @@ extension ShellModel {
     func installExtensionHandlers() {
         siteControls.addExtensionHandler = { [weak self] in self?.openAddExtension() }
         siteControls.manageExtensionsHandler = { [weak self] in self?.openManageExtensions() }
+        // An action's right-click menu (B116). Incognito windows cannot remove extensions, as the
+        // Extensions menu is disabled there.
+        siteControls.manageExtensionHandler = { [weak self] id in self?.openManageExtension(id) }
+        siteControls.confirmExtensionRemoval = isIncognito ? nil : { name in ExtensionRemovalAlert.run(extensionName: name) }
+    }
+
+    /// An action's "Manage Extension": that extension's details page in a new tab (B116).
+    func openManageExtension(_ extensionID: String) {
+        siteControls.close(.action)
+        guard let url = ExtensionPages.details(extensionID: extensionID) else { return }
+        sidebar.newTab(url: url, title: "Extensions")
     }
 
     /// Extensions ▸ Add Extension…: the Chrome Web Store in a new tab.

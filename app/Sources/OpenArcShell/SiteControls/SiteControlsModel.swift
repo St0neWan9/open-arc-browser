@@ -44,6 +44,20 @@ public enum SiteControlsTool: String, CaseIterable, Sendable {
     }
 }
 
+/// Items of an extension action's right-click menu in the "Extensions" section (B116). inferred:
+/// the spec records no such menu; see `SiteControlsModel.extensionMenuItems(for:)`.
+public enum SiteExtensionMenuItem: String, CaseIterable, Sendable {
+    case manage, remove
+
+    /// Title for the extension named `name`. Our wording (unknown in the spec).
+    public func title(extensionName name: String) -> String {
+        switch self {
+        case .manage: "Manage Extension"
+        case .remove: "Remove “\(name)”…"
+        }
+    }
+}
+
 /// Items of the "⋯" menu at the bottom right of the bubble. [06 §19.1] observed order and titles.
 public enum SiteControlsMenuItem: String, CaseIterable, Sendable {
     case clearCache, clearCookies, manageBoosts, newBoost, manageExtensions, addExtension, allSiteSettings
@@ -168,6 +182,11 @@ public final class SiteControlsModel: ObservableObject {
     /// Opens the extension gallery ("+") and the extension manager ("Manage") (C14). nil disables them.
     public var addExtensionHandler: (() -> Void)?
     public var manageExtensionsHandler: (() -> Void)?
+    /// The action's right-click menu (B116): opens one extension's details page; nil disables it.
+    public var manageExtensionHandler: ((String) -> Void)?
+    /// The action's right-click menu (B116): asks before removing the named extension (an app-modal
+    /// alert in the app). Answers true to remove. nil disables "Remove" (incognito windows).
+    public var confirmExtensionRemoval: ((String) -> Bool)?
 
     /// Seconds the "Copied" state stays. inferred.
     var copiedFeedbackDuration: Double = SiteControlsLocalTokens.copiedFeedbackDuration
@@ -425,6 +444,42 @@ public final class SiteControlsModel: ObservableObject {
             guard let popup = await provider.runExtensionAction(extensionID, tabID: id, site: site, profileID: profile) else { return }
             self?.show(popup, tabID: id)
         })
+    }
+
+    // MARK: Action context menu (B116)
+
+    /// Items of an extension action's right-click menu, in order. The spec records no such menu
+    /// (`06 §12` observed only the section's buttons); Chrome's toolbar action has one, and these
+    /// are the items of it that need no browser window: Manage Extension (the extension's details
+    /// page) and Remove. inferred.
+    public func extensionMenuItems(for extensionID: String) -> [SiteExtensionMenuItem] {
+        guard settings.extensions.contains(where: { $0.id == extensionID }) else { return [] }
+        return [.manage, .remove]
+    }
+
+    public func isEnabled(_ item: SiteExtensionMenuItem, extensionID: String) -> Bool {
+        switch item {
+        case .manage: manageExtensionHandler != nil
+        case .remove: confirmExtensionRemoval != nil && engineExtensions != nil && sidebar.currentProfileID != nil
+        }
+    }
+
+    /// Runs one item of the action's right-click menu. Both close the bubble; Remove asks first
+    /// and then uninstalls through the engine (the section updates from the engine's events).
+    public func perform(_ item: SiteExtensionMenuItem, extensionID: String) {
+        guard isEnabled(item, extensionID: extensionID),
+              let action = settings.extensions.first(where: { $0.id == extensionID }) else { return }
+        switch item {
+        case .manage:
+            close(.action)
+            manageExtensionHandler?(extensionID)
+        case .remove:
+            guard let engineExtensions, let profile = sidebar.currentProfileID,
+                  confirmExtensionRemoval?(action.name) == true else { return }
+            close(.action)
+            if openPopup?.extensionID == extensionID { closeExtensionPopup() }
+            work.append(Task { await engineExtensions.uninstall(extensionID, profileID: profile) })
+        }
     }
 
     // MARK: Extension popup

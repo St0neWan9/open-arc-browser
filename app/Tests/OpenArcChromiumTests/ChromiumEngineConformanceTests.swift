@@ -151,6 +151,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // B83: per-profile download folder, the engine's settings pages, clearing more kinds.
         try await checkProfileSettings(engine, dataDirectory: dataDirectory)
 
+        // B116: extension APIs that need browser chrome, with a sample extension.
+        try await checkExtensionLeftovers(engine, dataDirectory: dataDirectory, profileID: UUID())
+
         // Closing ends the tab's stream; shutdown makes new tabs fail.
         await engine.closeTab(tab.id)
         let closedLookup = await engine.tab(for: tab.id)
