@@ -177,6 +177,10 @@ public final class WorkspaceController: ObservableObject {
     let linkPeekRouting = LinkPeekRouting()
     /// Open Little Arc windows and their idle-archive timer (B82, LittleArc/LittleArcArchive.swift).
     let littleArcArchive = LittleArcArchiveState()
+    /// The windows the engine's extensions see (plan B126). One per app: an incognito controller
+    /// uses its parent's.
+    var engineWindows: EngineWindowReporter { parent?.engineWindows ?? ownEngineWindows }
+    private lazy var ownEngineWindows = EngineWindowReporter(engine: dependencies.engine)
     private var engineWork: [Task<Void, Never>] = []
     /// Tabs whose live content waits to be mirrored into their records (`scheduleContentSync`).
     private var pendingContentSyncs: Set<UUID> = []
@@ -393,6 +397,7 @@ public final class WorkspaceController: ObservableObject {
         autoArchiveScheduler?.stop()
         autoArchiveScheduler = nil
         littleArcArchive.stop()
+        if parent == nil { ownEngineWindows.stop() }
         if !isOffTheRecord { dependencies.globalHotKeys.unregisterLittleArcHotKey() }
         syncForwarding?.cancel()
         syncForwarding = nil
@@ -689,6 +694,7 @@ public final class WorkspaceController: ObservableObject {
             return
         }
         liveTabs[id] = live
+        engineWindows.setNeedsReport()
         // Its saved back/forward list (plan C20) was used or is out of date now.
         savedTabHistories.removeValue(forKey: id)
         // The tab moved to a Space of another Profile while the engine made it (C11).
@@ -816,6 +822,7 @@ public final class WorkspaceController: ObservableObject {
         liveStates.removeValue(forKey: id)
         sentColorSchemes.removeValue(forKey: id)
         guard let live = liveTabs.removeValue(forKey: id) else { return }
+        engineWindows.setNeedsReport()
         tabCommandTails.removeValue(forKey: live.id)
         // The page goes away: its queued dialogs get their default answers.
         dialogs.stopObserving(live.id)

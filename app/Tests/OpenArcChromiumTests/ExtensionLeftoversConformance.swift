@@ -9,11 +9,15 @@ import OpenArcChromium
 /// expected outcomes are the decisions recorded for B116; Arc's behavior for them is not in the
 /// spec (`docs/arc-spec/06-flows.md §12` records only the Site Control Center's "Extensions"
 /// section, observed):
-/// - `chrome.contextMenus.create` succeeds (Chromium's menu manager keeps the item), but no page
-///   menu shows it yet: the bridge shows no page context menu at all (needs a bridge patch).
-/// - `chrome.windows.get*` finds no window (needs a Chromium patch).
-/// - `chrome.action.openPopup()` fails (needs a Chromium patch).
-/// - `chrome.sidePanel.open()` fails; side panels stay out of v1.
+/// - `chrome.contextMenus.create` succeeds (Chromium's menu manager keeps the item).
+/// - `chrome.windows.get*` (plan B126) answer with the windows the shell reported
+///   (`BrowserEngine.setWindows`): `getCurrent` / `getLastFocused` give the focused window with
+///   its tabs, which carry its id; `getAll` lists every window of the profile, but not the
+///   incognito one (the extension is not allowed in incognito). A browser window is `normal`, a
+///   Little Arc window `popup` (inferred).
+/// - `chrome.action.openPopup()` (plan B125) resolves, and its popup reaches the shell through
+///   `popupsOpenedFromKeyboard()` and loads.
+/// - `chrome.sidePanel.open()` fails; side panels stay out of v1 (decision Q27).
 /// Every call settles (none hangs) within its timeout.
 extension ChromiumEngineConformanceTests {
     @MainActor
@@ -25,6 +29,39 @@ extension ChromiumEngineConformanceTests {
         let page = try XCTUnwrap(URL(string: "chrome-extension://\(extensionID)/probe.html"))
         let tab = try await engine.makeTab(TabConfiguration(profileID: profileID, initialURL: page))
         try await waitForState(tab) { $0.title == "B116 probe" && !$0.loadState.isLoading }
+
+        // B126: the focused browser window shows the probe tab; a Little Arc window (a popup)
+        // and an incognito window are open too.
+        let blank = try XCTUnwrap(URL(string: "about:blank"))
+        let other = try await engine.makeTab(TabConfiguration(profileID: profileID, initialURL: blank))
+        let incognito = try await engine.makeTab(TabConfiguration(profileID: profileID, initialURL: blank, isOffTheRecord: true))
+        let mainWindow = EngineWindowInfo(
+            id: UUID(), profileID: profileID, isFocused: true,
+            x: 100, y: 200, width: 1200, height: 800, tabIDs: [tab.id], activeTabIDs: [tab.id]
+        )
+        let littleArc = EngineWindowInfo(
+            id: UUID(), profileID: profileID, isFocused: false, isPopup: true,
+            x: 300, y: 300, width: 490, height: 329, tabIDs: [other.id], activeTabIDs: [other.id]
+        )
+        let incognitoWindow = EngineWindowInfo(
+            id: UUID(), profileID: profileID, isOffTheRecord: true, isFocused: false,
+            x: 0, y: 0, width: 800, height: 600, tabIDs: [incognito.id], activeTabIDs: [incognito.id]
+        )
+        await engine.setWindows([mainWindow, littleArc, incognitoWindow])
+
+        // B125: the popup `openPopup()` opens comes to the shell like a shortcut's.
+        let popups = engine.extensions.popupsOpenedFromKeyboard()
+        let popupLoaded = Task { () -> String? in
+            for await opened in popups {
+                for await event in opened.popup.events() where event == .loaded {
+                    await opened.popup.close()
+                    return opened.popup.extensionID
+                }
+                return nil
+            }
+            return nil
+        }
+
         let json = try await tab.evaluateJavaScript(SampleLeftoversExtension.probeScript)
         let results = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: String], "probe returned \(json)"
@@ -33,16 +70,48 @@ extension ChromiumEngineConformanceTests {
         print("B116 probe: \(report)")
 
         XCTAssertEqual(results["contextMenusCreate"], "ok", report)
-        for key in ["windowsGetCurrent", "windowsGetLastFocused", "actionOpenPopup", "sidePanelOpen"] {
-            let outcome = try XCTUnwrap(results[key], key)
-            XCTAssertTrue(outcome.hasPrefix("error:"), "\(key): \(outcome)")
+        XCTAssertTrue(results["sidePanelOpen"]?.hasPrefix("error:") == true, report)
+
+        // B126: the focused window with its tab, which carries the window's id.
+        let current = try windowObject(results["windowsGetCurrent"], report)
+        let lastFocused = try windowObject(results["windowsGetLastFocused"], report)
+        for found in [current, lastFocused] {
+            XCTAssertEqual(found["focused"] as? Bool, true, report)
+            XCTAssertEqual(found["type"] as? String, "normal", report)
+            XCTAssertEqual(found["incognito"] as? Bool, false, report)
+            XCTAssertEqual(found["width"] as? Int, 1200, report)
+            XCTAssertEqual(found["height"] as? Int, 800, report)
+            let tabs = try XCTUnwrap(found["tabs"] as? [[String: Any]], report)
+            XCTAssertEqual(tabs.count, 1, report)
+            XCTAssertEqual(tabs.first?["windowId"] as? Int, found["id"] as? Int, report)
+            XCTAssertEqual(tabs.first?["active"] as? Bool, true, report)
+            XCTAssertEqual(tabs.first?["url"] as? String, page.absoluteString, report)
         }
-        XCTAssertEqual(results["windowsGetAll"], "ok:[]", report)
+        let currentID = try XCTUnwrap(current["id"] as? Int, report)
+        XCTAssertEqual(lastFocused["id"] as? Int, currentID, report)
+        // The tab object (patch 0025) and tabs.query({windowId}) carry the same window id.
+        XCTAssertEqual(results["tabWindowId"], "ok:\(currentID)", report)
+        XCTAssertEqual(results["queryByWindow"], "ok:1", report)
+        // getAll: both windows of the profile, focused first; not the incognito one.
+        let all = try XCTUnwrap(
+            results["windowsGetAll"].flatMap { decodeJSON(String($0.dropFirst(3))) as? [[String: Any]] }, report
+        )
+        XCTAssertEqual(all.map { $0["type"] as? String }, ["normal", "popup"], report)
+        XCTAssertEqual(all.map { $0["focused"] as? Bool }, [true, false], report)
+        XCTAssertEqual(all.first?["id"] as? Int, currentID, report)
 
         // B124: the page's right-click menu carries the extension's `page` item, and choosing it
         // reaches `contextMenus.onClicked` in the extension's service worker.
         try await checkPageContextMenu(engine, tab: tab, extensionID: extensionID)
 
+        // B125: openPopup() resolved, and its popup reached the shell and loaded.
+        XCTAssertEqual(results["actionOpenPopup"], "ok:null", report)
+        let shownPopup = await popupLoaded.value
+        XCTAssertEqual(shownPopup, extensionID, "the popup reached the shell and loaded")
+
+        await engine.setWindows([])
+        await engine.closeTab(other.id)
+        await engine.closeTab(incognito.id)
         await engine.closeTab(tab.id)
         await engine.extensions.uninstall(extensionID, profileID: profileID)
     }
@@ -111,6 +180,17 @@ extension ChromiumEngineConformanceTests {
         }
         link.session.close()
     }
+
+    /// One window object of the probe ("ok:<json>").
+    private func windowObject(_ outcome: String?, _ report: String) throws -> [String: Any] {
+        let text = try XCTUnwrap(outcome, report)
+        XCTAssertTrue(text.hasPrefix("ok:"), report)
+        return try XCTUnwrap(decodeJSON(String(text.dropFirst(3))) as? [String: Any], report)
+    }
+
+    private func decodeJSON(_ json: String) -> Any? {
+        try? JSONSerialization.jsonObject(with: Data(json.utf8))
+    }
 }
 
 /// The sample extension of plan B116: a popup (so `action.openPopup()` has one to open), a side
@@ -166,9 +246,14 @@ enum SampleLeftoversExtension {
           { id: 'b116-' + Date.now(), title: 'B116 item', contexts: ['page', 'action'] },
           () => chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(true));
       }), true);
-      await run('windowsGetCurrent', () => chrome.windows.getCurrent());
-      await run('windowsGetLastFocused', () => chrome.windows.getLastFocused());
+      await run('windowsGetCurrent', () => chrome.windows.getCurrent({ populate: true }));
+      await run('windowsGetLastFocused', () => chrome.windows.getLastFocused({ populate: true }));
       await run('windowsGetAll', () => chrome.windows.getAll());
+      await run('tabWindowId', async () => (await chrome.tabs.getCurrent()).windowId);
+      await run('queryByWindow', async () => {
+        const current = await chrome.windows.getCurrent();
+        return (await chrome.tabs.query({ windowId: current.id })).length;
+      });
       await run('actionOpenPopup', () => chrome.action.openPopup());
       const self = await chrome.tabs.getCurrent();
       await run('sidePanelOpen', () => chrome.sidePanel.open({ tabId: self ? self.id : -1 }));

@@ -202,7 +202,8 @@ public protocol EngineExtensions: AnyObject, Sendable {
     func uninstall(_ extensionID: String, profileID: Profile.ID) async
     /// Changes for one profile. Every call returns a new stream.
     func events(profileID: Profile.ID) -> AsyncStream<ExtensionEvent>
-    /// Popups the extensions' `_execute_action` shortcuts opened, in every profile (plan C26).
+    /// Popups the extensions' `_execute_action` shortcuts (plan C26) or `chrome.action.openPopup()`
+    /// (plan B125) opened, in every profile.
     /// Every call returns a new stream; a popup nobody shows is closed by the engine.
     func popupsOpenedFromKeyboard() -> AsyncStream<ExtensionPopupOpenedFromKeyboard>
     /// The `chrome.contextMenus` items `extensionID` added for its toolbar action

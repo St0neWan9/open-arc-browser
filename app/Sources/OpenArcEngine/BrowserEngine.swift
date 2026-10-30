@@ -392,6 +392,47 @@ public struct BrowsingDataTypes: OptionSet, Hashable, Sendable {
     ]
 }
 
+/// One of the shell's windows as the engine's extensions see it (`chrome.windows`, plan B126).
+/// [00 §A] inferred (analysis): extensions work; how Arc reports its windows to them is not in
+/// the spec.
+public struct EngineWindowInfo: Hashable, Sendable {
+    /// Stable for the window's life (the engine gives it one window id).
+    public var id: UUID
+    /// The profile of the window's tabs; with `isOffTheRecord`, its incognito context only.
+    public var profileID: Profile.ID
+    public var isOffTheRecord: Bool
+    /// The window is the key window.
+    public var isFocused: Bool
+    /// A popup window (`type: "popup"`): a Little Arc window. inferred.
+    public var isPopup: Bool
+    /// The window frame in screen points, AppKit coordinates (origin at the bottom left of the
+    /// main screen), as `NSWindow.frame`.
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+    /// The window's live tabs in its order; a tab belongs to one window.
+    public var tabIDs: [EngineTabID]
+    /// The tabs it shows (the selected tab, or the panes of a split); a subset of `tabIDs`.
+    public var activeTabIDs: [EngineTabID]
+
+    public init(id: UUID, profileID: Profile.ID, isOffTheRecord: Bool = false, isFocused: Bool,
+                isPopup: Bool = false, x: Double = 0, y: Double = 0, width: Double = 0, height: Double = 0,
+                tabIDs: [EngineTabID], activeTabIDs: [EngineTabID]) {
+        self.id = id
+        self.profileID = profileID
+        self.isOffTheRecord = isOffTheRecord
+        self.isFocused = isFocused
+        self.isPopup = isPopup
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.tabIDs = tabIDs
+        self.activeTabIDs = activeTabIDs
+    }
+}
+
 /// The web engine as seen by the shell.
 ///
 /// Isolation (decision Q11): the protocols stay nonisolated and `Sendable` for v1. A Chromium
@@ -445,9 +486,19 @@ public protocol BrowserEngine: AnyObject, Sendable {
     /// Browsing history matches and search suggestions for the command bar (plan B66,
     /// Autocomplete.swift). Engines without them get `UnavailableAutocomplete`.
     var autocomplete: any EngineAutocomplete { get }
+
+    // MARK: Windows (plan B126)
+
+    /// The shell's windows of every profile, most recently focused first. The shell sends the
+    /// whole list again when a window opens, closes, gains or loses focus, moves or resizes, or
+    /// changes its tabs or the tab it shows. Extensions see them through `chrome.windows.*`, and
+    /// `chrome.action.openPopup()` opens over the active tab of the first one when it is focused.
+    func setWindows(_ windows: [EngineWindowInfo]) async
 }
 
 extension BrowserEngine {
+    /// Engines without extension window APIs ignore the list.
+    public func setWindows(_ windows: [EngineWindowInfo]) async {}
     public var adBlocking: any EngineAdBlocking { UnavailableAdBlocking.shared }
     public var translation: any EngineTranslation { UnavailableTranslation.shared }
     public var importer: any EngineImporter { UnavailableImporter.shared }

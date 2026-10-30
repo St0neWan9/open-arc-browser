@@ -14,7 +14,8 @@ final class ChromiumExtensions: EngineExtensions, @unchecked Sendable {
     // `observers` is read and written only on the main actor.
     private let core: ChromiumEngineCore
     @MainActor private var observers: [Profile.ID: ExtensionsObserver] = [:]
-    /// Popups the `_execute_action` shortcuts opened (plan C26), from every profile.
+    /// Popups the `_execute_action` shortcuts (plan C26) or `action.openPopup()` (B125) opened,
+    /// from every profile.
     private let keyboardPopups = AsyncBroadcaster<ExtensionPopupOpenedFromKeyboard>()
 
     init(core: ChromiumEngineCore) {
@@ -187,8 +188,9 @@ private final class ExtensionsObserver: NSObject, OACExtensionsDelegate {
         send(.actionUpdated(extensionID: extensionIdentifier, tabID: tab.map { EngineTabID($0.identifier) }))
     }
 
-    /// C26: an `_execute_action` shortcut opened the popup; nobody listening closes it.
-    func extensions(_ extensions: OACExtensions, didOpen popup: OACExtensionPopup, fromKeyboardOn tab: OACTab) {
+    /// C26 / B125: an `_execute_action` shortcut or `chrome.action.openPopup()` opened the popup;
+    /// nobody listening closes it.
+    func extensions(_ extensions: OACExtensions, didOpen popup: OACExtensionPopup, on tab: OACTab) {
         guard keyboardPopups.subscriberCount > 0 else {
             popup.close()
             return

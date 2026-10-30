@@ -22,8 +22,8 @@
 // Keyboard commands (plan C26): the manifest's `commands` work while a tab of the profile has the
 // keyboard, as in Chrome: a named command sends `commands.onCommand` with that tab (and grants
 // activeTab when the extension asks for it); `_execute_action` runs the action on the tab and its
-// popup comes to the delegate (`-extensions:didOpenPopup:fromKeyboardOnTab:`). Shortcuts are set
-// in chrome://extensions/shortcuts. Global (system-wide) commands are not registered.
+// popup comes to the delegate (`-extensions:didOpenPopup:onTab:`). Shortcuts are set in
+// chrome://extensions/shortcuts. Global (system-wide) commands are not registered.
 //
 // Runtime errors (plan C26): with developer mode on, Chromium's error console collects them for
 // every extension (all of an unpacked one's, and errors of others once their "Collect errors"
@@ -37,9 +37,21 @@
 // Moving tabs between windows, incognito windows and window ids other than the current one are
 // errors for the extension.
 //
-// Not covered: the extension context menu, side panels, `chrome.action.openPopup()` and the rest
-// of `chrome.windows.*` (no window objects): they fail as in a Chrome without windows. "Manage
-// Extensions…" opens chrome://extensions in a tab until a native page exists.
+// Windows (plan B126): the shell reports its windows (`OACExtensions.windows`, most recently
+// focused first). `chrome.windows.get`, `getCurrent`, `getLastFocused` and `getAll` answer with
+// them (id, focused, bounds, type normal or popup, their tabs); the tabs carry the window's id
+// (`tab.windowId`, `tabs.query({windowId})`), and `tabs.query({currentWindow: true})` means the
+// most recently focused window. A window belongs to one profile: an incognito window to the
+// off-the-record profile only. Window events (`windows.onFocusChanged` …), `windows.update` and
+// `windows.remove` are not covered.
+//
+// `chrome.action.openPopup()` (plan B125) opens the popup over the active tab of the most recently
+// focused window, when that window is focused, and hands it to the delegate like a keyboard
+// shortcut's popup (`-extensions:didOpenPopup:onTab:`); the call resolves once the popup's page
+// loaded. It fails while another popup is open, as in Chrome.
+//
+// Not covered: side panels and the rest of `chrome.windows.*`: they fail as in a Chrome without
+// windows. "Manage Extensions…" opens chrome://extensions in a tab until a native page exists.
 
 #import <OpenArcCore/OACDefines.h>
 
@@ -145,6 +157,32 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 + (instancetype)new NS_UNAVAILABLE;
 @end
 
+/// One of the shell's windows as extensions see it (`chrome.windows`, plan B126). The shell makes
+/// one per window it reports in `OACExtensions.windows`.
+OAC_EXPORT NS_SWIFT_UI_ACTOR
+@interface OACExtensionWindow : NSObject
+/// Stable for the window's life: the bridge gives each identifier one Chromium window id.
+@property (nonatomic, readonly, copy) NSUUID *identifier;
+/// The profile the window's tabs belong to; an incognito window passes the off-the-record profile.
+/// nil once the profile is gone (the window is then left out).
+@property (nonatomic, readonly, weak, nullable) OACProfile *profile;
+/// The window is the key window.
+@property (nonatomic, getter=isFocused) BOOL focused;
+/// A popup window (`type: "popup"`), else a normal one.
+@property (nonatomic, getter=isPopup) BOOL popup;
+/// The window's frame in AppKit screen coordinates (points, origin at the bottom left of the main
+/// screen), as `NSWindow.frame`. Extensions get it flipped, as Chrome reports bounds.
+@property (nonatomic) CGRect frame;
+/// The window's tabs in its order. Each tab belongs to one window: a tab listed by several takes
+/// the id of the first one in `OACExtensions.windows`. Held weakly: closed tabs drop out.
+@property (nonatomic, copy) NSArray<OACTab *> *tabs;
+/// The tabs it shows (the selected tab, or the panes of a split view); a subset of `tabs`.
+@property (nonatomic, copy) NSArray<OACTab *> *activeTabs;
+- (instancetype)initWithIdentifier:(NSUUID *)identifier profile:(OACProfile *)profile NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
++ (instancetype)new NS_UNAVAILABLE;
+@end
+
 NS_SWIFT_UI_ACTOR
 @protocol OACExtensionsDelegate <NSObject>
 @optional
@@ -154,9 +192,11 @@ NS_SWIFT_UI_ACTOR
 - (void)extensions:(OACExtensions *)extensions didUpdateActionOfExtension:(NSString *)extensionIdentifier tab:(nullable OACTab *)tab;
 /// Chromium wants to confirm an install. Return YES to show UI and answer later, NO to cancel.
 - (BOOL)extensions:(OACExtensions *)extensions confirmInstall:(OACExtensionInstallRequest *)request;
-/// An extension's `_execute_action` shortcut opened its popup on `tab` (plan C26). The shell shows
-/// it as after `-runActionOfExtension:onTab:`. Without this method the popup is closed.
-- (void)extensions:(OACExtensions *)extensions didOpenPopup:(OACExtensionPopup *)popup fromKeyboardOnTab:(OACTab *)tab;
+/// An extension opened its popup on `tab` without a call to `-runActionOfExtension:onTab:`: its
+/// `_execute_action` shortcut (plan C26) or `chrome.action.openPopup()` (plan B125). The shell
+/// shows it as after `-runActionOfExtension:onTab:`. Without this method the popup is closed (and
+/// `openPopup()` fails).
+- (void)extensions:(OACExtensions *)extensions didOpenPopup:(OACExtensionPopup *)popup onTab:(OACTab *)tab;
 /// An extension's error count changed (plan C26, `OACExtensionInfo.errorCount`).
 - (void)extensions:(OACExtensions *)extensions didChangeErrorsOfExtension:(NSString *)extensionIdentifier;
 @end
@@ -183,6 +223,12 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 - (nullable OACExtensionPopup *)runActionOfExtension:(NSString *)extensionIdentifier onTab:(OACTab *)tab;
 /// The open popup, if any.
 @property (nonatomic, readonly, nullable) OACExtensionPopup *popup;
+
+/// The shell's windows for every profile, most recently focused first (plan B126). The shell sets
+/// the whole list again whenever a window opens, closes, gains or loses focus, moves, or changes
+/// its tabs or the tab it shows. Empty until then: `chrome.windows.get*` finds no window and every
+/// tab counts as in the current window.
+@property (class, nonatomic, copy) NSArray<OACExtensionWindow *> *windows;
 
 /// Installs from the Web Store by id. Chromium asks through `-extensions:confirmInstall:` (with no
 /// tab). The store page's own "Add to …" button takes the store's install flow instead.

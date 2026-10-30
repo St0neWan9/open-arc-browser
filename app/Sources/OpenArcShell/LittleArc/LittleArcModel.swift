@@ -94,6 +94,11 @@ public final class LittleArcModel: ObservableObject {
     private(set) var lastActiveAt: Date
     /// The window is the key window (in use: never archived). Set by the window configurator.
     private(set) var isKeyWindow = false
+    /// The window's identity for the engine's extensions, which see it as a popup window (plan
+    /// B126, inferred).
+    let windowID = UUID()
+    /// The window's frame (AppKit screen coordinates), set by the window's configurator (B126).
+    private(set) var windowFrame = EngineWindowFrame()
 
     let shell: ShellModel
     private let engine: any BrowserEngine
@@ -133,6 +138,8 @@ public final class LittleArcModel: ObservableObject {
         }
         // Idle windows are archived after "Archive Little Arcs after" (B82).
         shell.controller.registerLittleArc(self)
+        // Extensions see the window (plan B126).
+        shell.controller.engineWindows.register(self)
     }
 
     /// The window was used now: the idle time starts again. B82.
@@ -145,6 +152,15 @@ public final class LittleArcModel: ObservableObject {
         guard isKeyWindow != isKey else { return }
         isKeyWindow = isKey
         noteActivity()
+        shell.controller.engineWindows.windowKeyStateChanged(self, isKey: isKey)
+    }
+
+    /// The window moved or resized (`NSWindow.frame`). Plan B126.
+    func windowFrameDidChange(x: Double, y: Double, width: Double, height: Double) {
+        let frame = EngineWindowFrame(x: x, y: y, width: width, height: height)
+        guard frame != windowFrame else { return }
+        windowFrame = frame
+        shell.controller.engineWindows.setNeedsReport()
     }
 
     // MARK: Derived state
@@ -236,6 +252,7 @@ public final class LittleArcModel: ObservableObject {
                 return
             }
             liveTab = tab
+            shell.controller.engineWindows.setNeedsReport()
             sentColorScheme = scheme
             syncColorScheme()
             dialogs.observe(tab)
@@ -305,6 +322,7 @@ public final class LittleArcModel: ObservableObject {
         liveTab = nil
         commandBar.dismiss()
         shell.controller.unregisterLittleArc(self)
+        shell.controller.engineWindows.unregister(self)
         onClose?()
     }
 
