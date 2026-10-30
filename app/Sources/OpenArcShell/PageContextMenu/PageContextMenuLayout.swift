@@ -190,7 +190,20 @@ public struct PageContextMenuLayout: Sendable {
     // MARK: Pieces
 
     private func engine(_ menu: PageContextMenu, _ roles: PageContextMenuRole...) -> [PageMenuEntry] {
-        roles.flatMap { menu.items($0) }.map(PageMenuEntry.engine)
+        roles.flatMap { menu.items($0) }.map { PageMenuEntry.engine(Self.arcTitled($0)) }
+    }
+
+    /// Arc's fixed titles for engine items whose engine title names the selection or the frame
+    /// ([05 §右键菜单] E29, observed): "Copy Link to Highlight" (the engine says "Copy Link to
+    /// “<text>”") and "Print…" (the engine says "Print Text Selection…" or similar for a selection).
+    static func arcTitled(_ item: PageContextMenuItem) -> PageContextMenuItem {
+        var item = item
+        switch item.role {
+        case .copyLinkToHighlight: item.title = "Copy Link to Highlight"
+        case .print: item.title = "Print…"
+        default: break
+        }
+        return item
     }
 
     private func shell(_ action: PageMenuShellAction, _ title: String, enabled: Bool = true) -> [PageMenuEntry] {
@@ -200,7 +213,7 @@ public struct PageContextMenuLayout: Sendable {
     /// Print…: the engine's item when it offers one (it prints just the image or the selection's
     /// frame), else the shell's File ▸ Print.
     private func printEntry(_ menu: PageContextMenu) -> [PageMenuEntry] {
-        if let item = menu.item(.print) { return [.engine(item)] }
+        if let item = menu.item(.print) { return [.engine(Self.arcTitled(item))] }
         return shell(.print, "Print…")
     }
 

@@ -93,6 +93,22 @@ final class PageContextMenuB124Tests: XCTestCase {
         XCTAssertEqual(Array(names[copy...(copy + 3)]), ["Copy", "Copy Link to Highlight", "Search Google for “next”", "Print…"])
     }
 
+    /// [05 §右键菜单] E29 observed: Arc titles these "Copy Link to Highlight" and "Print…" even
+    /// when the engine names the selection ("Copy Link to “next”", "Print Text Selection…").
+    func testEngineTitlesBecomeArcTitlesSpec05ContextMenu() throws {
+        let target = PageContextMenuTarget(linkURL: try url("https://b.example"), linkText: "next", selectionText: "next")
+        let chromiumTitled = [
+            PageContextMenuItem(id: 9001, role: .copyLinkToHighlight, title: "Copy Link to “next”"),
+            PageContextMenuItem(id: 9002, role: .print, title: "Print Text Selection…"),
+        ]
+        let base = FakePageContextMenu.items(for: target).filter { $0.role != .copyLinkToHighlight && $0.role != .print }
+        let session = PageContextMenuSession(present: { _ in true }, perform: { _ in }, close: {})
+        let names = titles(layout.entries(for: PageContextMenu(target: target, items: base + chromiumTitled, session: session)))
+        XCTAssertTrue(names.contains("Copy Link to Highlight"))
+        XCTAssertTrue(names.contains("Print…"))
+        XCTAssertFalse(names.contains { $0.hasPrefix("Copy Link to “") || $0.hasPrefix("Print Text") })
+    }
+
     func testImageMenuOrder() {
         let target = PageContextMenuTarget(sourceURL: URL(string: "https://c.example/i.png"), media: .image, hasImageContents: true)
         XCTAssertEqual(titles(layout.entries(for: menu(target))), [
