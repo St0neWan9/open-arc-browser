@@ -54,8 +54,9 @@ public enum CreateSpaceButtonTokens {
 /// [07 §8.6] observed (E27): full sidebar content width, about 22 pt tall, fully rounded, the
 /// sidebar color lightened, white medium text centered, no border or shadow.
 public enum UpdatePillTokens {
-    /// Height: ≈ 22 pt (display y 942–965). [07 §8.6] observed.
-    public static let height: Double = 22
+    /// Height: 24 pt. [07 §8.6] observed: measured on a 2× capture, 48 px (the earlier ≈ 22 pt
+    /// came from a 1× reading of the display).
+    public static let height: Double = 24
     /// Spans the sidebar content width, x 8–268. [07 §8.6] observed.
     public static var horizontalInset: Double { Metrics.Sidebar.contentInset }
     /// Gap between the pill's bottom and the dock's top edge. [07 §8.6] inferred: the pill ends at
@@ -67,8 +68,9 @@ public enum UpdatePillTokens {
     /// Height the list gives up while the pill shows.
     public static var bandHeight: Double { topGap + height + bottomGap }
 
-    /// Text: ≈ 12 pt medium. [07 §8.6] observed.
-    public static let titleStyle = TextStyle(size: 12, weight: .medium)
+    /// Text: 11.5 pt medium. [07 §8.6] observed: "New Arc Version Available" is 145 pt wide on a
+    /// 2× capture; 11.5 pt medium sets it at 144.8 pt (12 pt medium would be 150.3).
+    public static let titleStyle = TextStyle(size: 11.5, weight: .medium)
     /// Text color: white on a light-ink (dark) sidebar, black on a dark-ink (light) one. [07 §8.6]
     /// observed: white on the dark sage Space; black on a pale violet Space (E27 follow-up).
     public static func titleColor(lightInk: Bool) -> RGBAColor {

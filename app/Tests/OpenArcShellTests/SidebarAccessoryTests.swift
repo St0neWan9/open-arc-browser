@@ -27,7 +27,7 @@ final class SidebarAccessoryTests: XCTestCase {
         let pill = try XCTUnwrap(layout.updatePillFrame)
         XCTAssertEqual(pill.minX, 8)
         XCTAssertEqual(pill.maxX, 268)
-        XCTAssertEqual(pill.height, 22)
+        XCTAssertEqual(pill.height, 24)
         XCTAssertEqual(layout.dockFrame.minY - pill.maxY, CGFloat(UpdatePillTokens.bottomGap))
         XCTAssertLessThan(pill.maxY, layout.dockFrame.minY)
         // The list ends above the pill, so its last rows are not covered.
@@ -39,7 +39,7 @@ final class SidebarAccessoryTests: XCTestCase {
     func testUpdatePillColorLightensTheSidebar() {
         let pill = UpdatePillTokens.fill(over: RGBAColor(hex: 0x6C9174))
         XCTAssertLessThanOrEqual(distance(pill, RGBAColor(hex: 0x7D9C84)), 1.5)
-        XCTAssertEqual(UpdatePillTokens.titleStyle.size, 12)
+        XCTAssertEqual(UpdatePillTokens.titleStyle.size, 11.5)
         XCTAssertEqual(UpdatePillTokens.titleStyle.weight, .medium)
         XCTAssertEqual(UpdatePillTokens.titleColor(lightInk: true), RGBAColor(hex: 0xFFFFFF))
         XCTAssertEqual(UpdatePillTokens.titleColor(lightInk: false), RGBAColor(hex: 0x000000))
