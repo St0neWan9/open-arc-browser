@@ -75,7 +75,7 @@ struct WebToolbarView: View {
             }
 
             // Center group: copy link · (http) lock · domain. [06 §17.2] observed.
-            centerButton("link", label: "Copy Link", id: "openarc.webToolbar.copyLink", tint: colors.icon) {
+            centerButton("link", label: "Copy Link", tooltip: .copyLink, id: "openarc.webToolbar.copyLink", tint: colors.icon) {
                 if model.webToolbarCopyLink(state.tabID) { copyToast?.show() }
             }
             .frame(width: layout.copyLinkFrame.width, height: layout.copyLinkFrame.height)
@@ -139,14 +139,14 @@ struct WebToolbarView: View {
         switch item {
         case .showSidebar:
             WebToolbarButton(symbol: "sidebar.left", glyphSize: t.sidebarGlyphSize, label: "Show Sidebar",
-                             identifier: "openarc.webToolbar.showSidebar", colors: colors) { model.webToolbarShowSidebar() }
+                             tooltip: .showSidebar, identifier: "openarc.webToolbar.showSidebar", colors: colors) { model.webToolbarShowSidebar() }
         case .back:
-            WebToolbarButton(symbol: "arrow.left", glyphSize: t.arrowGlyphSize, label: "Go Back", help: "Go Back ⌘[",
+            WebToolbarButton(symbol: "arrow.left", glyphSize: t.arrowGlyphSize, label: "Go Back", tooltip: .back,
                              identifier: "openarc.webToolbar.back", colors: colors, isEnabled: state.canGoBack) {
                 model.webToolbarGoBack(state.tabID)
             }
         case .forward:
-            WebToolbarButton(symbol: "arrow.right", glyphSize: t.arrowGlyphSize, label: "Go Forward", help: "Go Forward ⌘]",
+            WebToolbarButton(symbol: "arrow.right", glyphSize: t.arrowGlyphSize, label: "Go Forward", tooltip: .forward,
                              identifier: "openarc.webToolbar.forward", colors: colors, isEnabled: state.canGoForward) {
                 model.webToolbarGoForward(state.tabID)
             }
@@ -155,7 +155,7 @@ struct WebToolbarView: View {
             WebToolbarButton(symbol: state.isLoading ? "xmark" : "arrow.clockwise",
                              glyphSize: state.isLoading ? t.stopGlyphSize : t.reloadGlyphSize,
                              label: state.isLoading ? "Stop Loading" : "Refresh the Page",
-                             help: state.isLoading ? "Stop Loading" : "Refresh the Page ⌘R",
+                             tooltip: state.isLoading ? .stop : .reload,
                              identifier: "openarc.webToolbar.reload", colors: colors, isEnabled: state.tabID != nil) {
                 model.webToolbarReload(state.tabID)
             }
@@ -178,7 +178,8 @@ struct WebToolbarView: View {
         }
     }
 
-    private func centerButton(_ symbol: String, label: String, id: String, tint: RGBAColor, action: @escaping () -> Void) -> some View {
+    private func centerButton(_ symbol: String, label: String, tooltip: WebToolbarTooltip? = nil, id: String, tint: RGBAColor,
+                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: WebToolbarLocalTokens.centerGlyphSize, weight: WebToolbarLocalTokens.glyphWeight))
@@ -187,19 +188,21 @@ struct WebToolbarView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(SidebarUndimmedButtonStyle())
-        .help(label)
+        .webToolbarTooltip(tooltip ?? WebToolbarTooltip(text: label))
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)
     }
 }
 
 /// A toolbar button: the glyph centered in its frame, a ≈ 32 × 21 rounded block ≈ 4 % darker
-/// behind it while hovered, the help tag after a moment. [06 §17.5] observed.
+/// behind it while hovered, our tooltip with key caps after ≈ 0.5 s (`webToolbarTooltip`).
+/// [06 §17.5] observed.
 struct WebToolbarButton: View {
     let symbol: String
     let glyphSize: CGFloat
     let label: String
-    var help: String? = nil
+    /// The tooltip; nil shows the label alone.
+    var tooltip: WebToolbarTooltip? = nil
     let identifier: String
     let colors: WebToolbarColors
     var isEnabled = true
@@ -223,7 +226,7 @@ struct WebToolbarButton: View {
         .buttonStyle(SidebarUndimmedButtonStyle())
         .disabled(!isEnabled)
         .onHover { isHovering = $0 }
-        .help(help ?? label)
+        .webToolbarTooltip(tooltip ?? WebToolbarTooltip(text: label))
         .accessibilityLabel(label)
         .accessibilityIdentifier(identifier)
     }
@@ -258,7 +261,7 @@ struct WebToolbarSplitMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .onHover { isHovering = $0 }
-        .help("Split View")
+        .webToolbarTooltip(WebToolbarTooltip(text: "Split View"))
         .accessibilityLabel("Split View")
         .accessibilityIdentifier("openarc.webToolbar.splitMenu")
     }
@@ -293,7 +296,7 @@ struct WebPanelWithToolbar<Page: View>: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         // A transparent bar (no page) shows the panel fill. [06 §17.4] observed.
-        .background(model.windowPalette.webPanelBackground.swiftUI)
+        .background(WebPanelBackgroundView(palette: model.windowPalette))
     }
 }
 

@@ -98,10 +98,16 @@ struct MainWindowContent: View {
                     )
                 }
 
-                // A pane command bar is drawn inside its pane by `SplitWebArea`.
-                if model.isCommandBarPresented && model.commandBarPaneTabID == nil {
-                    CommandBarOverlay(model: model, commandBar: model.commandBar, windowSize: proxy.size, palette: palette)
+                // A pane command bar is drawn inside its pane by `SplitWebArea`. Opening is a
+                // one-frame jump; closing fades out over ≈ 50 ms ([07 §11], `Motion.commandBarClose`).
+                ZStack(alignment: .topLeading) {
+                    if model.isCommandBarPresented && model.commandBarPaneTabID == nil {
+                        CommandBarOverlay(model: model, commandBar: model.commandBar, windowSize: proxy.size, palette: palette)
+                            .transition(.asymmetric(insertion: .identity, removal: .opacity))
+                    }
                 }
+                .animation(ShellMotion.commandBarPresence(isPresented: model.isCommandBarPresented),
+                           value: model.isCommandBarPresented)
 
                 // The selected tab's permission prompt hangs under the URL box (inferred, C7b).
                 if let tabID = permissionTabUnderURLBox {
@@ -339,6 +345,10 @@ struct WebPanel: View {
     /// [07 §8.1] (E12) in light and dark. With no tab the panel is just this color, with no text
     /// (B32 round 1 observed: Arc's empty panel is blank).
     var background: RGBAColor = RGBAColor(hex: 0xFFFFFF)
+    /// The content area as a top-left → bottom-right gradient where the palette has one (the
+    /// no-color light theme, [07 §8.5] observed); empty paints `background` flat. `background`
+    /// stays the value the placeholder text picks its ink from.
+    var backgroundGradient: [RGBAColor] = []
     /// Set while the tab's renderer is gone: the crash page covers the surface (C9).
     var crashed: CrashedPageState? = nil
     @Environment(\.dialogCenter) private var dialogCenter
@@ -346,7 +356,12 @@ struct WebPanel: View {
 
     var body: some View {
         ZStack {
-            background.swiftUI
+            if backgroundGradient.count > 1 {
+                LinearGradient(stops: WindowBackgroundView.stops(backgroundGradient, locations: nil),
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else {
+                background.swiftUI
+            }
             if let tab {
                 VStack(spacing: 0) {
                     // Engine info bars (C23) sit above the page, which moves down under them.

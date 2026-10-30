@@ -86,6 +86,29 @@ final class FloatingBubbleTests: XCTestCase {
         XCTAssertEqual(origin, CGPoint(x: 1410, y: 50))
     }
 
+    /// [07 §11], [06 §21.7] observed: after a page opens, Little Arc grows from 490 × 329 to
+    /// 1185 × 832 with its right and top edges fixed: x 1410 → 715, y 50 stays, 20 pt from the
+    /// right of a 1920 screen. AppKit space here: a 1080 tall screen, visible area y 0…1050.
+    func testLittleArcExpandsAnchoredTopRight() {
+        let visible = CGRect(x: 0, y: 0, width: 1920, height: 1050)
+        let compact = CGRect(x: 1410, y: 1080 - 50 - 329, width: 490, height: 329)
+        let expanded = FloatingBubbleLayout.littleArcResizedFrame(from: compact, to: CGSize(width: 1185, height: 832),
+                                                                  visible: visible)
+        XCTAssertEqual(expanded.minX, 715)
+        XCTAssertEqual(expanded.maxX, compact.maxX, "right edge fixed")
+        XCTAssertEqual(expanded.maxY, compact.maxY, "top edge fixed")
+        XCTAssertEqual(1920 - expanded.maxX, 20)
+        // Back to compact: the top-right corner stays as well.
+        let back = FloatingBubbleLayout.littleArcResizedFrame(from: expanded, to: compact.size, visible: visible)
+        XCTAssertEqual(back, compact)
+        // A window that would leave the area is pulled back in (inferred).
+        let nearLeft = CGRect(x: 0, y: 700, width: 490, height: 329)
+        let clamped = FloatingBubbleLayout.littleArcResizedFrame(from: nearLeft, to: CGSize(width: 1185, height: 832),
+                                                                 visible: visible)
+        XCTAssertEqual(clamped.minX, 0)
+        XCTAssertEqual(clamped.maxY, nearLeft.maxY)
+    }
+
     // MARK: Chrome
 
     /// B42: the bubble panel is transparent and casts no system shadow, so only the drawn shape shows.

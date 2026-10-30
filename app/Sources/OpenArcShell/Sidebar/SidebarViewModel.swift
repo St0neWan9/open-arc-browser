@@ -1559,11 +1559,13 @@ public final class SidebarViewModel: ObservableObject {
         return accepted
     }
 
-    /// The drag left the sidebar: no indicator, no pending Space switch, no scrolling.
+    /// The drag left the sidebar: no indicator, no pending Space switch, no scrolling. An in-app
+    /// drag's edge switch is left to the drag source, which keeps reporting the pointer outside the
+    /// sidebar (the outer hot zones, [04 §拖动图像(E17)]); only an external drag's switch ends here.
     func clearDropTarget() {
         if dropTarget != nil { dropTarget = nil }
         cancelDockHover()
-        cancelEdgeSwitch()
+        if draggingItem == nil { cancelEdgeSwitch() }
         stopAutoScroll()
     }
 
@@ -1722,7 +1724,20 @@ public final class SidebarViewModel: ObservableObject {
     /// rests at the sidebar's left / right edge. [06 §15.6] observed. Leaving the edge cancels it;
     /// it fires once per stay (inferred). It does not wrap around the dock (inferred).
     func updateEdgeSwitch(x: CGFloat, sidebarWidth: CGFloat) {
-        guard isDragActive, let direction = SidebarEdgeSwitch.direction(x: x, sidebarWidth: sidebarWidth) else {
+        setEdgeSwitch(SidebarEdgeSwitch.direction(x: x, sidebarWidth: sidebarWidth))
+    }
+
+    /// The drag source reports every pointer move of an in-app drag, also outside the sidebar,
+    /// where no drop delegate is called: that is how the hot zones left of the window and right of
+    /// the sidebar work. `point` is in sidebar space (top-left = the window content's top-left).
+    /// [04 §拖动图像(E17)], [06 §15.1] observed zones; their Space switch is inferred.
+    func updateEdgeSwitch(sourcePoint point: CGPoint, sidebarWidth: CGFloat, windowHeight: CGFloat) {
+        guard draggingItem != nil else { return }
+        setEdgeSwitch(SidebarEdgeSwitch.direction(at: point, sidebarWidth: sidebarWidth, windowHeight: windowHeight))
+    }
+
+    private func setEdgeSwitch(_ direction: Int?) {
+        guard isDragActive, let direction else {
             cancelEdgeSwitch()
             return
         }

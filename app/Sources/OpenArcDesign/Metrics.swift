@@ -673,6 +673,13 @@ public enum Metrics {
         /// Light themes use the Space-name band color (lavender band #878CFF vs block #838BFE,
         /// observed; rule inferred).
         public static let darkSplitPreviewWhite: Double = 0.45
+
+        /// Extra edge hot zones while a drag is held, full window height: a 30 pt band just right
+        /// of the sidebar (x 276–306) and an 80 pt band just left of the window (x −80–0).
+        /// [04 §拖动图像(E17)], [06 §15.1] observed (window list during the drag); that they switch
+        /// Space like the in-sidebar edges of [06 §15.6] is inferred.
+        public static let edgeZoneRightOfSidebarWidth: Double = 30
+        public static let edgeZoneLeftOfWindowWidth: Double = 80
     }
 
     // MARK: Icon opacity

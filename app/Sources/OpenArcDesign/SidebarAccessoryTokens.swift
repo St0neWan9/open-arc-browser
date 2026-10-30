@@ -51,8 +51,9 @@ public enum CreateSpaceButtonTokens {
 }
 
 /// The pill shown right above the dock when an update has been downloaded and is ready to install.
-/// [07 §8.6] observed (E27): full sidebar content width, about 22 pt tall, fully rounded, the
-/// sidebar color lightened, white medium text centered, no border or shadow.
+/// [07 §8.6] observed (E27, re-measured 2026-10-31): full sidebar content width, 24 pt tall, fully
+/// rounded, 11.5 pt medium text centered, no border or shadow. A dark sidebar gets a lighter pill
+/// with white text, a light sidebar a slightly darker pill with black text.
 public enum UpdatePillTokens {
     /// Height: 24 pt. [07 §8.6] observed: measured on a 2× capture, 48 px (the earlier ≈ 22 pt
     /// came from a 1× reading of the display).

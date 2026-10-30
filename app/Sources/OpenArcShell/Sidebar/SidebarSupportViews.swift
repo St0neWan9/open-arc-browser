@@ -422,6 +422,9 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
         guard let window else { return }
         let point = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
         dragImage.move(sidebarPoint: point, screenPoint: screenPoint, layout: layout)
+        // The edge hot zones reach outside the sidebar, where no drop delegate is called.
+        // [04 §拖动图像(E17)] observed.
+        viewModel?.updateEdgeSwitch(sourcePoint: point, sidebarWidth: layout.width, windowHeight: bounds.height)
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {

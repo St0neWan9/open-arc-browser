@@ -113,6 +113,23 @@ enum FloatingBubbleLayout {
         return clamp(CGPoint(x: visible.maxX - margin - size.width, y: visible.minY + margin), size: size, into: visible)
     }
 
+    /// Little Arc's frame after a size change (compact ↔ expanded): the top-right corner stays
+    /// where it was, so the window grows to the left and down. [07 §11], [06 §21.7] observed:
+    /// 490 × 329 at x 1410 becomes 1185 × 832 at x 715, y 50 on a 1920 screen (right and top
+    /// edges fixed, 20 pt from the screen's right edge). The result is then kept inside `visible`
+    /// (inferred). Both rectangles are in AppKit screen space (bottom-left origin).
+    static func littleArcResizedFrame(from old: CGRect, to size: CGSize, visible: CGRect?) -> CGRect {
+        var origin = CGPoint(x: old.maxX - size.width, y: old.maxY - size.height)
+        if let visible {
+            // AppKit space: the top edge is maxY. A window taller than the area keeps its top on
+            // screen (its bottom runs off), like `clamp` keeps the top-left of a flipped rectangle.
+            origin.x = clamp(origin.x, lower: visible.minX, upper: visible.maxX - size.width)
+            let top = clamp(origin.y + size.height, lower: visible.minY + size.height, upper: visible.maxY)
+            origin.y = min(top, visible.maxY) - size.height
+        }
+        return CGRect(origin: origin, size: size)
+    }
+
     // MARK: Helpers
 
     /// Moves `origin` so a rectangle of `size` stays inside `bounds`; a rectangle larger than

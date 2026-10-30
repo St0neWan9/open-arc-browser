@@ -7,6 +7,26 @@ public enum ResolvedAppearance: String, Hashable, Sendable, CaseIterable {
     case light, dark
 }
 
+/// Start and end of a linear gradient in unit coordinates (0,0 = top left, 1,1 = bottom right).
+public struct GradientAxis: Hashable, Sendable {
+    public var startX: Double
+    public var startY: Double
+    public var endX: Double
+    public var endY: Double
+
+    public init(startX: Double, startY: Double, endX: Double, endY: Double) {
+        self.startX = startX
+        self.startY = startY
+        self.endX = endX
+        self.endY = endY
+    }
+
+    /// Top left → bottom right.
+    public static let diagonal = GradientAxis(startX: 0, startY: 0, endX: 1, endY: 1)
+    /// Top → bottom.
+    public static let vertical = GradientAxis(startX: 0.5, startY: 0, endX: 0.5, endY: 1)
+}
+
 /// Colors for one space, derived from its theme.
 ///
 /// The derivation follows docs/arc-spec/07-design-system.md §8 (E11, refitted by E12 / B38 / B46 and
@@ -47,6 +67,15 @@ public struct ThemePalette: Hashable, Sendable {
     /// is unknown [00 inventory]; spreading them evenly is inferred. `windowBackground` stays the
     /// first dot.
     public var backgroundGradientColors: [RGBAColor] = []
+    /// Direction of that gradient, in unit coordinates of the window. A theme with several dots
+    /// runs top → bottom ([07 §8.4] finding 4 observed main axis); the no-color default runs top
+    /// left → bottom right ([07 §8.5] observed).
+    public var backgroundGradientAxis: GradientAxis = .diagonal
+    /// Stop locations (0…1) for `backgroundGradientColors`, one per color; nil spreads them evenly.
+    public var backgroundGradientLocations: [Double]? = nil
+    /// The content area as a gradient, top left → bottom right, evenly spread; empty draws
+    /// `webPanelBackground` flat. Only the no-color light theme has one ([07 §8.5] observed).
+    public var webPanelBackgroundGradient: [RGBAColor] = []
 
     // MARK: B21 additions (appearance)
 
@@ -364,11 +393,18 @@ public enum ThemeDerivation {
     /// diagonal wash from lavender at the top left to pale pink at the bottom right.
     /// [07 §8.5] observed (2026-10-28): a Space created without picking a color stores no window
     /// theme, and its window reads sidebar top-left #DEDEF5, mid #E6E3F1, bottom #EAE5EF, top
-    /// frame #E9E4F1, right frame #F2E6E6–#F4E9E9 (light). These stops are those window colors.
+    /// frame #E9E4F1, right frame #F2E6E6–#F4E9E9 (light). These stops are exactly those window
+    /// colors (observed); their places on the diagonal are `defaultWindowStopLocations`.
     public static let defaultWindowStops: [RGBAColor] = [
-        RGBAColor(hex: 0xDEDEF5), RGBAColor(hex: 0xE6E3F1), RGBAColor(hex: 0xEAE5EF),
-        RGBAColor(hex: 0xF2E8EC), RGBAColor(hex: 0xF4E9E9),
+        RGBAColor(hex: 0xDEDEF5), RGBAColor(hex: 0xE6E3F1), RGBAColor(hex: 0xE9E4F1),
+        RGBAColor(hex: 0xEAE5EF), RGBAColor(hex: 0xF2E6E6), RGBAColor(hex: 0xF4E9E9),
     ]
+    /// Where each default stop sits on the top-left → bottom-right axis (0…1), from where it was
+    /// sampled on a 1920 × 985 window: the sidebar's top (0) and middle (≈ 0.25), the top frame
+    /// above the web panel (its middle, ≈ 0.32), the sidebar's bottom (≈ 0.5), the right frame
+    /// (≈ 0.75) and the bottom-right corner (1). [07 §8.5] inferred (projection of the sample
+    /// places; which end of the right frame read #F2E6E6 is unknown).
+    public static let defaultWindowStopLocations: [Double] = [0, 0.25, 0.32, 0.5, 0.75, 1]
 
     /// Theme color that the default window stops would come from under the light window rule
     /// (`lightWindow`): the first stop solved back through mix(·, #EBEBEB, 0.37). It drives the
@@ -382,8 +418,20 @@ public enum ThemeDerivation {
     public static let defaultCommandBarSelection = RGBAColor(hex: 0xADABE2)
 
     /// Content area of a Space with no picked color, light: #F6F6FC at the top left to #FDF8F8 at
-    /// the bottom right, center #F9F7F9. [07 §8.5] observed; one flat color is drawn (the center).
+    /// the bottom right, center #F9F7F9. [07 §8.5] observed. `defaultLightContent` is the center
+    /// (the flat value the ink and the page placeholder go by); the area paints the gradient.
     public static let defaultLightContent = RGBAColor(hex: 0xF9F7F9)
+    /// The content gradient's stops, evenly spread top left → bottom right. [07 §8.5] observed
+    /// colors; the even spread (center at the midpoint) is inferred.
+    public static let defaultLightContentGradient: [RGBAColor] = [
+        RGBAColor(hex: 0xF6F6FC), defaultLightContent, RGBAColor(hex: 0xFDF8F8),
+    ]
+
+    /// Main axis of a theme with several color dots: top → bottom, the top near the first dot's
+    /// window color. [07 §8.4] finding 4 observed (three-dot pink: sidebar top #DBA2B7 → bottom
+    /// #E6A0D5). The second, weaker direction (left ↔ right 4–6/255) and each dot's share are
+    /// unknown, so the dots are spread evenly along this one axis (inferred).
+    public static let multiColorGradientAxis = GradientAxis.vertical
 
     /// Command bar background in light. [07 §5, §10] observed (#F9F9F9).
     public static let commandBarBackground = RGBAColor(hex: 0xF9F9F9)
@@ -548,6 +596,9 @@ public enum ThemeDerivation {
                 ? (isDark ? defaultWindowStops.map(darkVariant) : defaultWindowStops)
                 : picked.map(windowOf)
         )
+        // Default wash: diagonal at the sampled places [07 §8.5]; several dots: top → bottom [07 §8.4].
+        palette.backgroundGradientAxis = picked.isEmpty ? .diagonal : multiColorGradientAxis
+        palette.backgroundGradientLocations = picked.isEmpty ? defaultWindowStopLocations : nil
         palette.appearance = appearance
         palette.grain = min(max(style?.grain ?? 0, 0), 1)
         palette.chromeInk = chromeInk
@@ -558,6 +609,7 @@ public enum ThemeDerivation {
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
         palette.webPanelBackground = picked.isEmpty && !isDark
             ? defaultLightContent : contentBackground(theme, appearance: appearance)
+        palette.webPanelBackgroundGradient = picked.isEmpty && !isDark ? defaultLightContentGradient : []
         // The see-through window [07 §8.4]: content, command bar and bubbles stay opaque.
         palette.windowOpacity = WindowTranslucency.opacity(for: appearance)
         palette.windowLayers = .derived(lightInk: lightInk)

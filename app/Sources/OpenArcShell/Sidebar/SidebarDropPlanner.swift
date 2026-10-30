@@ -419,19 +419,31 @@ enum SidebarDropPlanner {
 
 /// Space switching at the sidebar's left and right edges while dragging. [06 §15.6] observed:
 /// x < ≈ 20 pt goes to the previous Space, the right edge (fires 4 pt from the edge, not 20 pt) to
-/// the next one.
+/// the next one. Each zone also reaches outside the sidebar, as Arc's hot-zone windows do
+/// ([04 §拖动图像(E17)], [06 §15.1] observed): 80 pt left of the window and 30 pt right of the
+/// sidebar (over the web panel), both the window's height.
 enum SidebarEdgeSwitch {
-    /// -1 (previous Space), +1 (next Space), or nil away from both edges.
+    /// -1 (previous Space), +1 (next Space), or nil away from both edges. `x` is in sidebar space
+    /// (0 = the window's left edge).
     static func direction(
         x: CGFloat,
         sidebarWidth: CGFloat,
         leftBand: CGFloat = SidebarLocalTokens.edgeSwitchLeftBand,
-        rightBand: CGFloat = SidebarLocalTokens.edgeSwitchRightBand
+        rightBand: CGFloat = SidebarLocalTokens.edgeSwitchRightBand,
+        outsideLeft: CGFloat = SidebarLocalTokens.edgeZoneLeftOfWindow,
+        outsideRight: CGFloat = SidebarLocalTokens.edgeZoneRightOfSidebar
     ) -> Int? {
-        guard sidebarWidth > leftBand + rightBand, x >= 0, x <= sidebarWidth else { return nil }
+        guard sidebarWidth > leftBand + rightBand, x >= -outsideLeft, x <= sidebarWidth + outsideRight else { return nil }
         if x < leftBand { return -1 }
         if x > sidebarWidth - rightBand { return 1 }
         return nil
+    }
+
+    /// The same for a full pointer position: the outer zones are only as tall as the window
+    /// (y 0…`windowHeight`, top-left origin). [04 §拖动图像(E17)] observed.
+    static func direction(at point: CGPoint, sidebarWidth: CGFloat, windowHeight: CGFloat) -> Int? {
+        guard point.y >= 0, point.y <= windowHeight else { return nil }
+        return direction(x: point.x, sidebarWidth: sidebarWidth)
     }
 }
 
