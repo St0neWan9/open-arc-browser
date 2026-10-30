@@ -185,11 +185,10 @@ struct MainWindowContent: View {
         .background(TranslucentWindowConfigurator { isFullScreen = $0 })
     }
 
-    /// The page area shows no page: no tab, no address yet, or about:blank. [06 §13] observed: the
-    /// drag handle shows in a new window or on a blank page.
+    /// The page area shows no page: no tab, no address yet, or about:blank. [06 §13] E27 observed:
+    /// no drag handle there (`MainWindowLayout.showsDragHandle`).
     private var isBlankPage: Bool {
-        guard model.selectedLiveTab != nil, let url = sidebar.selectedURL else { return true }
-        return url.absoluteString == "about:blank"
+        MainWindowLayout.isBlankPage(hasSelectedTab: model.selectedLiveTab != nil, url: sidebar.selectedURL)
     }
 
     /// The engine tab whose permission bubble goes under the URL box: the selected tab's, while
@@ -425,9 +424,10 @@ struct SurfaceHostRepresentable: NSViewRepresentable {
 }
 
 /// The window-drag strip at the top of the page area. [06 §13] observed: a short bar centered at
-/// the top of the page area, shown in a new window or on a blank page. On a loaded page the grab
-/// area stays and the handle shows while the pointer is over it (inferred). Dragging it moves the
-/// window; a double-click zooms like the title bar (inferred). B84.
+/// the top of the page area. E27 observed no handle on the empty panel or `about:blank`; on a
+/// loaded page the handle shows while the pointer is over the grab area (inferred). The grab area
+/// works everywhere. Dragging it moves the window; a double-click zooms like the title bar
+/// (inferred). B84, B127.
 struct WindowDragStripLayer: View {
     @ObservedObject var settings: AdvancedBehaviorSettings
     let layout: MainWindowLayout
@@ -445,7 +445,7 @@ struct WindowDragStripLayer: View {
                     .fill(palette.windowBackground.swiftUI.opacity(0.9))
                     .overlay(Capsule().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
                     .frame(width: handle.width, height: handle.height)
-                    .opacity(isBlankPage || isHovered ? 1 : 0)
+                    .opacity(MainWindowLayout.showsDragHandle(isBlankPage: isBlankPage, isHovered: isHovered) ? 1 : 0)
                     .allowsHitTesting(false)
             }
             .frame(width: frame.width, height: frame.height)

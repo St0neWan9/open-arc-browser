@@ -480,6 +480,8 @@ public enum CommandBarIconHint: Hashable, Sendable {
     /// A browsing history page: a clock glyph. [07 §9] observed the row glyphs "globe, magnifier,
     /// clock"; the clock standing for history rows is inferred.
     case history
+    /// An app command row: the command's own glyph in a rounded box
+    /// (`CommandBarCommand.glyphSymbol`, [07 §5] E27 observed).
     case command
     case space
     case search
@@ -616,16 +618,33 @@ public struct CommandBarResult: Identifiable, Hashable, Sendable {
 
 /// Leading glyph of the command bar's input row.
 public enum CommandBarInputGlyph: Hashable, Sendable {
-    /// Empty field. [04 §command bar] and [06 §7] observed a magnifier; F4 live E3 (2026-10-29)
-    /// observed it for the empty ⌘T bar (plan B109).
+    /// No command on top. [04 §command bar] and [06 §7] observed a magnifier; F4 live E3
+    /// (2026-10-29) observed it for the empty ⌘T bar (plan B109); [07 §5] E27 observed it whenever
+    /// the first result is not a command.
     case magnifier
-    /// The field holds text (typed, or the ⌘L address). [07 §5] observed the globe in an earlier
-    /// capture; that it belongs to a field with text is inferred (plan B109).
-    case globe
+    /// The first result is an app command: its glyph (`CommandBarCommand.glyphSymbol`).
+    /// [07 §5] E27 observed (settings → gear, copy url → copy, split → split, archive → box).
+    case command(CommandBarCommand)
 
-    /// The glyph for the field's literal text.
-    public static func forFieldText(_ text: String) -> CommandBarInputGlyph {
-        text.isEmpty ? .magnifier : .globe
+    /// The glyph for the field's text and the list's first result (nil for an empty list).
+    /// [07 §5] E27 observed: a command on top shows its glyph, anything else the magnifier. An
+    /// empty field keeps the magnifier even when a help command heads the list (incognito, [06
+    /// §20.1]): F4 live E3 observed the magnifier for the empty bar (B109). The globe of the
+    /// earlier [07 §5] table capture is no longer drawn: E27 saw the magnifier for every first
+    /// result that is not a command (plan B127).
+    public static func forField(text: String, firstResult: CommandBarResult?) -> CommandBarInputGlyph {
+        guard !text.isEmpty, let firstResult, firstResult.drawsGlyphBox, let command = firstResult.command else {
+            return .magnifier
+        }
+        return .command(command)
+    }
+
+    /// SF Symbol drawn for the glyph.
+    public var symbolName: String {
+        switch self {
+        case .magnifier: return "magnifyingglass"
+        case .command(let command): return command.glyphSymbol
+        }
     }
 }
 

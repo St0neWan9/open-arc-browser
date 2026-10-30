@@ -368,6 +368,14 @@ public enum Metrics {
         public static let resultArrowBoxCornerRadius: Double = 4
         public static let resultArrowBoxTrailing: Double = 15
         public static let resultActionToArrowGap: Double = 7
+        /// Command glyph box: ≈ 20 × 20 rounded square behind a command row's glyph, centered on
+        /// the 16 pt icon slot. [07 §5] E27 observed size; the radius is inferred (the arrow
+        /// box's ≈ 4).
+        public static let commandGlyphBoxSize: Double = 20
+        public static let commandGlyphBoxCornerRadius: Double = 4
+        /// Shortcut chip: the arrow box's height and radius, the hint text padded 6 pt on each
+        /// side. [07 §5] E27 observed the chip; the padding is inferred.
+        public static let shortcutChipHorizontalPadding: Double = 6
         /// The backdrop is NOT dimmed. [07 §5] observed.
         public static let dimsBackground = false
         /// Shadow, in SwiftUI `.shadow` terms. [07 §5] measured profile: luminance at the edge

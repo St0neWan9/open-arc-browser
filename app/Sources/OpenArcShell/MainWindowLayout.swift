@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import OpenArcDesign
 
 /// Pure frame computation for the main window (top-left origin, points). Views read frames from
@@ -52,6 +53,20 @@ public struct MainWindowLayout: Equatable, Sendable {
     public static let dragStripSize = CGSize(width: 120, height: 12)
     /// The visible handle inside the grab area. inferred.
     public static let dragHandleSize = CGSize(width: 36, height: 4)
+
+    /// Whether the strip draws its handle. [06 §13] E27 observed (2026-10-30): no handle on the
+    /// empty panel (no tab selected) or on `about:blank`; the B84 rule that always showed it there
+    /// is dropped. On a loaded page it shows while the pointer is over the grab area (B84,
+    /// inferred; when Arc shows it is still unknown). The grab area itself stays everywhere.
+    public static func showsDragHandle(isBlankPage: Bool, isHovered: Bool) -> Bool {
+        !isBlankPage && isHovered
+    }
+
+    /// The page area shows no page: no tab selected, no address yet, or `about:blank`. [06 §13].
+    public static func isBlankPage(hasSelectedTab: Bool, url: URL?) -> Bool {
+        guard hasSelectedTab, let url else { return true }
+        return url.absoluteString == "about:blank"
+    }
 
     /// How far the sidebar content below the (removed) URL box moves up while the toolbar shows.
     /// [06 §17.1] observed (46: favorites y 82 → 36).

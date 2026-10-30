@@ -134,6 +134,9 @@ public struct ThemePalette: Hashable, Sendable {
     /// Unselected arrow box fill: black 4 % (light) [07 §5] observed; white 8 % (dark) inferred.
     /// The selected row's box is white with a theme-colored arrow. [07 §5] observed.
     public var commandBarArrowBoxFill: RGBAColor = RGBAColor(hex: 0x000000, alpha: 0.04)
+    /// Unselected command glyph box and shortcut chip: ≈ #F0F0F0 in light ([07 §5] E27 observed);
+    /// white 8 % in dark, like the arrow box (inferred). Selected: white (observed).
+    public var commandBarGlyphBoxFill: RGBAColor = RGBAColor(hex: 0xF0F0F0)
     /// Sheets (New Folder, Delete Space, Rename): #FAFBFF light, #171C30 dark (they follow the
     /// Space's light / dark, not its color). [07 §6] observed.
     public var dialogBackground: RGBAColor = RGBAColor(hex: 0xFAFBFF)
@@ -373,6 +376,11 @@ public enum ThemeDerivation {
     /// [07 §8.5] inferred; the derived control fill lands on the observed address box #D8D8EB.
     public static let defaultBaseColor = RGBAColor(hex: 0xD6D6FB)
 
+    /// Command bar selected row of a Space with no picked color, light. [07 §5] observed (E27,
+    /// 2026-10-30): #ADABE2. The picked-color rule above gives #A5A5BC from `defaultBaseColor`
+    /// (too gray), so the default theme uses the observed value. Dark keeps the rule (unknown).
+    public static let defaultCommandBarSelection = RGBAColor(hex: 0xADABE2)
+
     /// Content area of a Space with no picked color, light: #F6F6FC at the top left to #FDF8F8 at
     /// the bottom right, center #F9F7F9. [07 §8.5] observed; one flat color is drawn (the center).
     public static let defaultLightContent = RGBAColor(hex: 0xF9F7F9)
@@ -534,7 +542,9 @@ public enum ThemeDerivation {
             commandBarBackground: isDark ? darkCommandBarBackground : commandBarBackground,
             commandBarSelection: isDark
                 ? tone(of: theme, lightness: darkCommandBarSelectionLightness, chromaFactor: darkCommandBarSelectionChromaFactor)
-                : tone(of: theme, lightness: commandBarSelectionLightness, chromaFactor: commandBarSelectionChromaFactor),
+                : picked.isEmpty
+                    ? defaultCommandBarSelection
+                    : tone(of: theme, lightness: commandBarSelectionLightness, chromaFactor: commandBarSelectionChromaFactor),
             primaryText: primaryText,
             secondaryText: withAlpha(chromeInk, inkOpacity.spaceName),
             backgroundGradientColors: picked.isEmpty
@@ -572,6 +582,7 @@ public enum ThemeDerivation {
             palette.commandBarOuterOutline = withAlpha(black, 0.85)
             palette.commandBarAccessoryFill = withAlpha(white, 0.08)
             palette.commandBarArrowBoxFill = withAlpha(white, 0.08)
+            palette.commandBarGlyphBoxFill = withAlpha(white, 0.08)
             palette.floatingPanelInk = white
             palette.floatingPanelSelection = withAlpha(window, 0.45)
             palette.primaryButtonFill = tone(of: theme, lightness: 0.40, chromaFactor: 0.8)
