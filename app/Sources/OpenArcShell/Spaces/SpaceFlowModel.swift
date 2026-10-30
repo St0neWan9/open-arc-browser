@@ -41,7 +41,9 @@ enum SpaceFlowLocalTokens {
     /// How far the "Choose a Theme" bubble anchor reaches past our 28 pt form inset, so its right
     /// edge sits where Arc's row ends (x 262 of 276). [07 §12] observed row frame.
     static let themeRowAnchorOutset: CGFloat = 14
-    static let primaryButtonHeight: CGFloat = 36    // unknown
+    /// Side inset of the creation form; the "Create Space" button reaches past it to the sidebar
+    /// content edges (`CreateSpaceButtonTokens`, [07 §8.6] observed). Own value.
+    static let formHorizontalInset: CGFloat = 28
     static let swatchSize: CGFloat = 20             // unknown
     static let iconSheetSize = Size2D(width: 360, height: 360)     // inferred
 }

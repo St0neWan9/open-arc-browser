@@ -62,6 +62,40 @@ public final class UpdatesModel: ObservableObject {
         guard isCheckEnabled else { return }
         checker.checkForUpdates()
     }
+
+    // MARK: Update ready (B111)
+
+    /// An update has been downloaded and waits to be installed: the sidebar shows its pill above
+    /// the dock ([07 §8.6] observed). Set by the app's updater (or a test), never by the shell.
+    @Published public private(set) var isUpdateReady = false
+    /// Installs the downloaded update and relaunches, when the updater offered a direct way.
+    private var installNow: (@MainActor () -> Void)?
+
+    /// The updater finished downloading an update. `installNow` installs it and relaunches (with
+    /// Sparkle, the immediate-installation block it hands over for an update it would install on
+    /// quit); without it the pill opens the updater's own prompt. inferred.
+    public func noteUpdateReady(installNow: (@MainActor () -> Void)? = nil) {
+        self.installNow = installNow
+        if !isUpdateReady { isUpdateReady = true }
+    }
+
+    /// The downloaded update went away (installed, dismissed or replaced).
+    public func clearReadyUpdate() {
+        installNow = nil
+        if isUpdateReady { isUpdateReady = false }
+    }
+
+    /// The pill was clicked: install and relaunch through the updater. [07 §8.6] unknown in Arc;
+    /// ours inferred. Ignored while no update is ready.
+    public func installReadyUpdate() {
+        guard isUpdateReady else { return }
+        if let installNow {
+            installNow()
+        } else {
+            // Sparkle's standard prompt for a downloaded update offers "Install and Relaunch".
+            checker.checkForUpdates()
+        }
+    }
 }
 
 extension AppPreferences {

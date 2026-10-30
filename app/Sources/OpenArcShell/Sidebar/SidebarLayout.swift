@@ -27,14 +27,19 @@ struct SidebarLayout: Equatable {
     /// Height of the favorites tiles block (one row: 47). More rows, or the empty-state card, push
     /// the Space header and the list down by the difference. [06 §21.2, §21.3] observed (B55).
     var favoritesTilesHeight: CGFloat
+    /// A downloaded update waits: its pill sits right above the dock and the list ends above it.
+    /// [07 §8.6] observed (B111).
+    var showsUpdatePill: Bool
 
     init(windowSize: CGSize = CGSize(width: Metrics.referenceWindowSize.width, height: Metrics.referenceWindowSize.height),
          isWebToolbarShown: Bool = false, hidesFavorites: Bool = false,
-         favoritesTilesHeight: CGFloat = CGFloat(Metrics.FavoritesGrid.tileHeight)) {
+         favoritesTilesHeight: CGFloat = CGFloat(Metrics.FavoritesGrid.tileHeight),
+         showsUpdatePill: Bool = false) {
         self.windowSize = windowSize
         self.isWebToolbarShown = isWebToolbarShown
         self.hidesFavorites = hidesFavorites
         self.favoritesTilesHeight = favoritesTilesHeight
+        self.showsUpdatePill = showsUpdatePill
     }
 
     /// How much taller the favorites block is than one row of tiles (0 without favorites). B55.
@@ -154,6 +159,23 @@ struct SidebarLayout: Equatable {
     }
 
     var dockCenterY: CGFloat { windowSize.height - CGFloat(Metrics.Sidebar.dockCenterFromBottom) }
+
+    // MARK: Update pill ([07 §8.6] observed, B111)
+
+    /// The update-ready pill: x 8–268, 22 pt tall, `UpdatePillTokens.bottomGap` above the dock.
+    /// nil while no update is ready.
+    var updatePillFrame: CGRect? {
+        guard showsUpdatePill else { return nil }
+        let t = UpdatePillTokens.self
+        let height = CGFloat(t.height), inset = CGFloat(t.horizontalInset)
+        return CGRect(x: inset, y: dockFrame.minY - CGFloat(t.bottomGap) - height, width: width - 2 * inset, height: height)
+    }
+
+    /// Bottom edge of the Space pages (the list's viewport): the dock's top, or above the update
+    /// pill while it shows. Shrinking the list rather than covering its last rows is inferred.
+    var listBottom: CGFloat {
+        dockFrame.minY - (showsUpdatePill ? CGFloat(UpdatePillTokens.bandHeight) : 0)
+    }
 
     private func dockButton(x: Double) -> CGRect {
         let size = CGFloat(Metrics.Sidebar.dockButtonSize)

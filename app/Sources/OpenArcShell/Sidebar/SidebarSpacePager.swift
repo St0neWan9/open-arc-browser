@@ -125,7 +125,7 @@ struct SidebarSpacePage: View {
     let surface: WindowSurface
 
     var body: some View {
-        let listHeight = max(0, layout.dockFrame.minY - layout.listTop)
+        let listHeight = max(0, layout.listBottom - layout.listTop)
         ZStack(alignment: .topLeading) {
             SidebarSpaceNameRowView(viewModel: viewModel, changes: changes, spaceID: spaceID, layout: layout)
 

@@ -791,3 +791,35 @@ struct SidebarDockView: View, Equatable {
     }
 }
 
+
+// MARK: - Update pill (B111)
+
+/// "New Open Arc Version Available": a full-width capsule right above the dock while a downloaded
+/// update waits. [07 §8.6] observed (E27): x 8–268, ≈ 22 pt tall, fully rounded, the sidebar
+/// color lightened, white ≈ 12 pt medium text centered, no border or shadow. A click installs the
+/// update and relaunches (Arc's click behavior unknown; ours inferred).
+struct SidebarUpdatePill: View {
+    let action: @MainActor () -> Void
+
+    var body: some View {
+        let t = UpdatePillTokens.self
+        Button(action: action) {
+            Text(SidebarUpdatePill.title)
+                .font(t.titleStyle.font)
+                .foregroundStyle(t.titleColor.swiftUI)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // White over whatever the sidebar shows, so a see-through window lightens the same
+                // way as an opaque one.
+                .background(Capsule(style: .continuous).fill(Color.white.opacity(t.whiteOverlay)))
+                .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(SidebarUpdatePill.title)
+        .accessibilityHint("Installs the update and relaunches")
+        .accessibilityIdentifier("openarc.sidebar.updatePill")
+    }
+
+    /// [07 §8.6] observed "New Arc Version Available", with our app's name.
+    static let title = "New \(AppIdentity.displayName) Version Available"
+}
