@@ -25,7 +25,9 @@ import OpenArcEngine
 //
 // Left out, with why (v1):
 // - Cast…: Chromium's cast dialog is drawn by a Chrome browser window.
-// - Search Google for Image: Chromium's image search needs a Chrome browser window (Lens).
+// - Search Google for Image when the profile's engine has no search by image URL (DuckDuckGo,
+//   Yahoo, Ecosia) or the image has no web address. Chromium's own item needs a Chrome browser
+//   window (Lens), so ours opens the engine's image-search page instead (B139, `PageImageSearch`).
 // - Services ▸ and AutoFill ▸: added by macOS itself when it applies to the page's view; not built.
 // - Copy, Copy Link to Highlight and Search on a link come only with a selection (Arc selects the
 //   link's text on a right-click; Chromium on macOS does not).
@@ -36,6 +38,8 @@ public enum PageMenuShellAction: Hashable, Sendable {
     case openLinkInLittleArc(URL)
     case openLinkInIncognito(URL)
     case captureImage
+    /// Opens `searchURL` (the engine's results for the image) in a new tab. B139.
+    case searchImage(URL)
     case savePage
     case print
     case translate
@@ -49,6 +53,7 @@ public enum PageMenuShellAction: Hashable, Sendable {
         case .openLinkInLittleArc: .openLinkInLittleArc
         case .openLinkInIncognito: .openLinkInIncognito
         case .captureImage: .captureImage
+        case .searchImage: .searchImage
         case .savePage: .savePage
         case .print: .print
         case .translate: .translate
@@ -59,7 +64,7 @@ public enum PageMenuShellAction: Hashable, Sendable {
 
     public enum Kind: Hashable, Sendable, CaseIterable {
         case openLinkInSplitView, openLinkInLittleArc, openLinkInIncognito, captureImage, savePage, print
-        case translate, search, importPasswords
+        case translate, search, importPasswords, searchImage
     }
 }
 
@@ -83,11 +88,15 @@ public enum PageMenuEntry: Hashable, Sendable {
 public struct PageContextMenuLayout: Sendable {
     /// The profile's search engine name ("Google"). [05 §右键菜单] observed.
     public var searchEngineName: String
+    /// The profile's engine's search-by-image URL template (`SearchEngine.imageSearchURLTemplate`);
+    /// nil leaves "Search <engine> for Image" out. B139.
+    public var imageSearchURLTemplate: String?
     /// The shell actions this window offers (a Little Arc window or Peek offers fewer).
     public var availableActions: Set<PageMenuShellAction.Kind>
 
-    public init(searchEngineName: String, availableActions: Set<PageMenuShellAction.Kind> = Set(PageMenuShellAction.Kind.allCases)) {
+    public init(searchEngineName: String, imageSearchURLTemplate: String? = nil, availableActions: Set<PageMenuShellAction.Kind> = Set(PageMenuShellAction.Kind.allCases)) {
         self.searchEngineName = searchEngineName
+        self.imageSearchURLTemplate = imageSearchURLTemplate
         self.availableActions = availableActions
     }
 
@@ -160,7 +169,8 @@ public struct PageContextMenuLayout: Sendable {
         [
             engine(menu, .openImageInNewTab, .saveImageAs)
                 + shell(.captureImage, "Capture Image…")
-                + engine(menu, .copyImage, .copyImageAddress),
+                + engine(menu, .copyImage, .copyImageAddress)
+                + imageSearchEntry(menu),
             engine(menu, .inspect),
         ]
     }
@@ -228,6 +238,14 @@ public struct PageContextMenuLayout: Sendable {
         let text = menu.target.selectionText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !menu.target.isPasswordField else { return [] }
         return shell(.search(text), "Search \(searchEngineName) for “\(Self.shortened(text))”")
+    }
+
+    /// "Search <engine> for Image" for the image's source URL, last in the image group
+    /// ([05 §右键菜单] E29 observed). B139.
+    private func imageSearchEntry(_ menu: PageContextMenu) -> [PageMenuEntry] {
+        guard let template = imageSearchURLTemplate, let image = menu.target.sourceURL,
+              let url = PageImageSearch.url(template: template, imageURL: image) else { return [] }
+        return shell(.searchImage(url), "Search \(searchEngineName) for Image")
     }
 
     /// `text` on one line, cut at `maxSelectionTitleLength` with "…".

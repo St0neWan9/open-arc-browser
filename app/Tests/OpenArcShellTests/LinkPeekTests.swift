@@ -232,6 +232,8 @@ final class LinkPeekTests: XCTestCase {
         XCTAssertEqual(buttons.map(\.minY), [19, 63, 107])
         XCTAssertEqual(buttons[0].size, CGSize(width: 34, height: 33))
         XCTAssertEqual(LinkPeekButtonKind.allCases, [.close, .expand, .split])
+        // AX names and tooltips. 06 §22.2 observed (B139, F5-45).
+        XCTAssertEqual(LinkPeekButtonKind.allCases.map(\.title), ["Close", "Enter Full Screen", "Open in split"])
         let behind = MainWindowLayout(windowSize: window).withPeekInset().webPanelFrame
         XCTAssertEqual(behind, base.insetBy(dx: 9.5, dy: 9.5))
     }

@@ -489,12 +489,35 @@ final class WebToolbarTests: XCTestCase {
         let items = try menuItems(WebToolbarContextMenu(model: model, tabID: id, settings: model.webToolbar))
         XCTAssertEqual(titles(items), ["Copy URL", "Share", "Capture…", "Capture Full Page", "—",
                                        "Manage Extensions…", "—", "Show Full URL", "Hide Toolbar"])
-        // Share is the system share item, which keeps the system icon (B62 report).
-        for item in items where !item.isSeparatorItem && item.title != "Share" {
+        // No item has an icon, Share ▸ included, so nothing indents a group (06 §28; B139).
+        for item in items where !item.isSeparatorItem {
             XCTAssertNil(item.image, "\(item.title): no icon (06 §28)")
             XCTAssertEqual(item.keyEquivalent, "", "\(item.title): no key hint (06 §28)")
+            XCTAssertEqual(item.indentationLevel, 0, "\(item.title): not indented (06 §28)")
         }
+        let share = try XCTUnwrap(items.first { $0.title == "Share" })
+        XCTAssertNotNil(share.submenu, "Share ▸ is a submenu (06 §28)")
         model.stop()
+    }
+
+    /// 06 §28 observed "Share ▸"; its services are the system share services for the URL
+    /// (06 §21.5 observed "系统分享服务"); without a URL it offers none. B139 (F5-48).
+    func testToolbarShareMenuListsSystemServices() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com"))
+        let services = WebToolbarShareServices.services(for: url)
+        XCTAssertTrue(services.allSatisfy { $0.canPerform(withItems: [url]) })
+        let items = try menuItems(WebToolbarShareMenu(url: url))
+        let share = try XCTUnwrap(items.first)
+        XCTAssertEqual(share.title, "Share")
+        XCTAssertNil(share.image, "Share ▸ carries no icon (06 §28)")
+        XCTAssertEqual(share.submenu?.items.map(\.title), services.map(\.menuItemTitle))
+        XCTAssertTrue(share.submenu?.items.allSatisfy { $0.isEnabled } ?? false)
+
+        // Without a URL there is nothing to share. (`NSHostingMenu` does not carry SwiftUI's
+        // `.disabled` onto a submenu item, so the empty submenu is what can be checked here.)
+        let none = try XCTUnwrap(menuItems(WebToolbarShareMenu(url: nil)).first)
+        XCTAssertEqual(none.title, "Share")
+        XCTAssertEqual(none.submenu?.items.count ?? 0, 0)
     }
 
     /// 06 §28: the menu's actions — Copy URL copies the bar's URL, Show Full URL toggles the

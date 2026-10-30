@@ -379,6 +379,35 @@ final class PageCaptureTests: XCTestCase {
         XCTAssertEqual(G.portraitBubbleFrame(in: panel), CGRect(x: 674, y: 359.5, width: 286, height: 246))
     }
 
+    /// 06 §24.1 observed: while selecting, the pointer is a crosshair with a small camera (drawn
+    /// by us; sizes inferred). The hot spot is the cross center; with drags off it is the arrow.
+    func testRegionCursorIsCrosshairWithCamera() throws {
+        let view = CaptureDragSurfaceView()
+        XCTAssertTrue(view.cursor === NSCursor.captureRegion)
+        XCTAssertFalse(view.cursor === NSCursor.crosshair)
+        XCTAssertEqual(NSCursor.captureRegion.hotSpot, CaptureCursorTokens.hotSpot)
+        XCTAssertEqual(NSCursor.captureRegion.image.size, CaptureCursorTokens.size)
+        view.acceptsDrag = false
+        XCTAssertTrue(view.cursor === NSCursor.arrow)
+
+        // The drawing: black ink on the cross arm and on the camera's outline, nothing at the
+        // top-left corner, white inside the camera body.
+        let image = NSCursor.captureRegionImage()
+        let rep = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 28, pixelsHigh: 28, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: CaptureCursorTokens.size))
+        NSGraphicsContext.restoreGraphicsState()
+        func alpha(_ x: Int, _ y: Int) -> CGFloat { rep.colorAt(x: x, y: y)?.alphaComponent ?? 0 }
+        let t = CaptureCursorTokens.self
+        XCTAssertGreaterThan(alpha(Int(t.hotSpot.x), Int(t.hotSpot.y) - 6), 0.5, "upper cross arm")
+        XCTAssertGreaterThan(alpha(Int(t.hotSpot.x) - 6, Int(t.hotSpot.y)), 0.5, "left cross arm")
+        XCTAssertEqual(alpha(0, 0), 0, accuracy: 0.01, "transparent corner")
+        XCTAssertGreaterThan(alpha(Int(t.cameraBody.minX) + 1, Int(t.cameraBody.maxY) - 1), 0.5, "camera body")
+    }
+
     /// The capture items are off without a live page.
     func testNeedsALivePage() {
         XCTAssertFalse(model.canCapturePage)

@@ -324,10 +324,13 @@ final class CaptureDragSurfaceView: NSView {
         if window?.firstResponder === self { window?.makeFirstResponder(nil) }
     }
 
-    /// The crosshair cursor ("cross + small camera" observed; the camera is our omission).
+    /// The crosshair + small camera cursor while selecting ([06 §24.1] observed; `NSCursor.captureRegion`).
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: acceptsDrag ? .crosshair : .arrow)
+        addCursorRect(bounds, cursor: cursor)
     }
+
+    /// The cursor over the surface: the capture cursor while drags select, else the arrow.
+    var cursor: NSCursor { acceptsDrag ? .captureRegion : .arrow }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)

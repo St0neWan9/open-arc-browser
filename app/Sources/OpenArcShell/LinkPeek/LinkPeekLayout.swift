@@ -51,6 +51,17 @@ struct LinkPeekLayout: Equatable {
 /// The buttons right of the panel, in their order. [06 §22.2] observed.
 enum LinkPeekButtonKind: CaseIterable, Equatable {
     case close, expand, split
+
+    /// AX names and tooltips, as [06 §22.2] gives them: "Close", "Enter Full Screen" (expands
+    /// to a tab; the same name as Little Arc's button, [06 §21.7]) and "Open in split".
+    /// observed (B139, F5-45).
+    var title: String {
+        switch self {
+        case .close: "Close"
+        case .expand: "Enter Full Screen"
+        case .split: "Open in split"
+        }
+    }
 }
 
 extension MainWindowLayout {
