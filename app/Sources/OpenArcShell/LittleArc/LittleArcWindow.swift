@@ -99,7 +99,7 @@ struct LittleArcBrowsingView: View {
         VStack(spacing: 0) {
             LittleArcTopBar(model: model, palette: palette, onCopy: { if model.copyLink() { copyToast.show() } })
                 .frame(height: LittleArcTokens.topBarHeight)
-            WebPanel(tab: model.liveTab, background: palette.webPanelBackground,
+            WebPanel(tab: model.liveTab, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient,
                      crashed: model.page.isCrashed ? CrashedPageState(reload: { model.reloadOrStop() }) : nil)
                 .environment(\.dialogCenter, model.dialogs)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
@@ -460,7 +460,7 @@ struct LittleArcSpacePickerPanel: View {
 
 /// Applies window properties SwiftUI does not expose on macOS 14: floating level, hidden traffic
 /// lights while compact, transparent background so the bar's rounded corners show, resizing and
-/// re-centering when the phase changes.
+/// re-anchoring (top-right corner fixed) when the phase changes.
 ///
 /// B28: never write the window from inside `updateNSView`. Several of these properties (style
 /// mask, title bar, opacity, background, button visibility) are observed by the hosting view, and
@@ -469,7 +469,7 @@ struct LittleArcSpacePickerPanel: View {
 /// hosting view itself sets from the view's minimum frame, was written back to a different value
 /// each time: an endless loop that pinned the main thread when the window expanded. So the update only records what it wants and schedules
 /// one pass on the next run-loop turn (coalesced); that pass writes a property only when its value
-/// differs, and the per-phase changes (size, centering) run once per phase change.
+/// differs, and the per-phase changes (size, position) run once per phase change.
 struct LittleArcWindowConfigurator: NSViewRepresentable {
     let phase: LittleArcModel.Phase
     let size: CGSize
@@ -696,7 +696,8 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
             appliedPhase = phase
             changed = true
             // First opening: top right of the screen's visible area, 20 pt in from its right and
-            // top edges. [07 §12] observed. Later phase changes keep the window's center. inferred.
+            // top edges. [07 §12] observed. Later phase changes keep the top-right corner (the
+            // right and top edges stay put). [07 §11], [06 §21.7] observed.
             let oldFrame = window.frame
             window.setContentSize(size)
             if isFirst {
@@ -709,13 +710,8 @@ struct LittleArcWindowConfigurator: NSViewRepresentable {
                     window.center()
                 }
             } else {
-                var frame = window.frame
-                frame.origin.x = oldFrame.midX - frame.width / 2
-                frame.origin.y = oldFrame.maxY - frame.height
-                if let visible = window.screen?.visibleFrame {
-                    frame.origin.x = min(max(frame.origin.x, visible.minX), max(visible.minX, visible.maxX - frame.width))
-                    frame.origin.y = min(max(frame.origin.y, visible.minY), max(visible.minY, visible.maxY - frame.height))
-                }
+                let frame = FloatingBubbleLayout.littleArcResizedFrame(from: oldFrame, to: window.frame.size,
+                                                                       visible: window.screen?.visibleFrame)
                 window.setFrame(frame, display: true, animate: false)
             }
             return changed

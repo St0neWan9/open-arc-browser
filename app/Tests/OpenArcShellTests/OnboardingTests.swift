@@ -423,6 +423,11 @@ final class OnboardingTests: XCTestCase {
         XCTAssertNotEqual(OnboardingTokens.headline, "A browser for you.")
     }
 
+    /// [06 §27.1] observed: the arrow button sits ≈ 26 pt below the headline (F5-47).
+    func testHeadlineToButtonGapMatchesCapture() {
+        XCTAssertEqual(OnboardingTokens.headlineToButton, 26)
+    }
+
     /// Every screen renders at the captured window size and at the minimum window size, and the
     /// left column's content fits the half width. [06 §27.2]
     func testScreensRenderAtWindowSizes() {

@@ -161,4 +161,11 @@ public enum Motion {
     /// Little Arc growing after its first page load: the window frame is set to the final size in
     /// one frame. [07 §11] observed.
     public static let littleArcGrowOnLoad = MotionToken(.instant, .observed)
+
+    /// Command bar close (Esc, click outside, a pick): [07 §11] observed that on the first frame
+    /// the panel's children collapse to its lower left and the panel is gone ≈ 40–60 ms later
+    /// (≈ 3 frames; design-tokens.json `motion.commandBar.closeMs` 50). What the pixels do in
+    /// those frames is unknown (layer), so ours is a fade-out over the observed ≈ 50 ms: duration
+    /// observed, curve inferred. Opening stays a one-frame jump (`layoutChange`).
+    public static let commandBarClose = MotionToken(.easeOut(duration: 0.05), .inferred)
 }

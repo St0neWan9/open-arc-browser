@@ -675,7 +675,7 @@ struct SidebarDockView: View, Equatable {
         ZStack(alignment: .topLeading) {
             dockButton(layout.dockHomeFrame, top: top, symbol: SidebarLocalTokens.dockHomeSymbol,
                        glyphSize: SidebarLocalTokens.dockHomeGlyphSize, tint: tint,
-                       label: "Library", id: "openarc.sidebar.dock.home") {
+                       label: SidebarLocalTokens.dockHomeAccessibilityLabel, id: "openarc.sidebar.dock.home") {
                 viewModel.requestFromMenu(.openLibrary)
             }
             ForEach(Array(zip(entries, layout.dockItemFrames(count: entries.count))), id: \.0.id) { entry, frame in
@@ -795,9 +795,10 @@ struct SidebarDockView: View, Equatable {
 // MARK: - Update pill (B111)
 
 /// "New Open Arc Version Available": a full-width capsule right above the dock while a downloaded
-/// update waits. [07 §8.6] observed (E27): x 8–268, ≈ 22 pt tall, fully rounded, the sidebar
-/// color lightened with white text on a dark sidebar, darkened slightly with black text on a light one, ≈ 12 pt medium text centered, no border or shadow. A click installs the
-/// update and relaunches (Arc's click behavior unknown; ours inferred).
+/// update waits. [07 §8.6] observed (E27, re-measured 2026-10-31): x 8–268, 24 pt tall, fully
+/// rounded; on a dark sidebar the sidebar color lightened with white text, on a light one darkened
+/// slightly with black text; 11.5 pt medium text centered; no border or shadow. A click installs
+/// the update and relaunches (Arc's click behavior unknown; ours inferred).
 struct SidebarUpdatePill: View {
     /// The sidebar uses light ink (a dark theme color): white text on a lighter pill; otherwise
     /// black text on a slightly darker pill. [07 §8.6] observed.

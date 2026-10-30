@@ -17,8 +17,10 @@ enum OnboardingTokens {
     // MARK: Screen 1 [06 §27.1]
     /// Headline size: cap height ≈ 48 pt, so ≈ 64 pt. [06 §27.1] inferred.
     static let headlineSize: CGFloat = 64
-    /// Headline line box to the arrow button. [06 §27.1] observed ≈ 26 pt.
-    static let headlineToButton: CGFloat = 24
+    /// Headline line box to the arrow button. [06 §27.1] observed ≈ 26 pt below the headline. At
+    /// 64 pt the line box ends 13.5 pt under the baseline, where a "y" descender's ink ends too,
+    /// so the gap is the same whether measured from the ink or from the line box (inferred).
+    static let headlineToButton: CGFloat = 26
     /// The arrow button: 67 × 40, radius 8. [06 §27.1] observed.
     static let arrowButtonSize = CGSize(width: 67, height: 40)
     static let arrowButtonRadius: CGFloat = 8

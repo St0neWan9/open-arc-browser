@@ -96,13 +96,13 @@ struct SplitPaneView: View {
                 // An inactive pane's bar is fainter with the toolbar off. [06 §5] observed.
                 .opacity(model.isWebToolbarShown ? SplitPaneBarTokens.activeOpacity : bar.opacity)
                 .offset(x: layout.barFrame.minX, y: layout.barFrame.minY)
-            WebPanel(tab: tab, findBar: findBar, background: palette.webPanelBackground, crashed: crashed)
+            WebPanel(tab: tab, findBar: findBar, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient, crashed: crashed)
                 .frame(width: layout.pageFrame.width, height: layout.pageFrame.height)
                 .offset(x: layout.pageFrame.minX, y: layout.pageFrame.minY)
         }
         .frame(width: layout.paneFrame.width, height: layout.paneFrame.height, alignment: .topLeading)
         // A transparent bar (empty pane) shows the panel fill. [06 §17.4] observed.
-        .background(palette.webPanelBackground.swiftUI)
+        .background(WebPanelBackgroundView(palette: palette))
         .clipShape(shape)
         .webPanelEdgeShadow(palette.appearance)
         .overlay {

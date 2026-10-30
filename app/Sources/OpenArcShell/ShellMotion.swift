@@ -61,6 +61,13 @@ enum ShellMotion {
     static var littleArcExpandToMain: Animation? { Motion.littleArcExpandToMain.curve.swiftUI }
     /// Peek opening (B49). `Motion.peekOpen` (curve unknown).
     static var peekOpen: Animation? { Motion.peekOpen.curve.swiftUI }
+    /// The window command bar fading out on close; opening is not animated. `Motion.commandBarClose`.
+    static var commandBarClose: Animation? { Motion.commandBarClose.curve.swiftUI }
+    /// The animation for a change of "the command bar is shown": the close fade when it goes
+    /// away, none when it appears ([07 §11] observed one-frame open).
+    static func commandBarPresence(isPresented: Bool) -> Animation? {
+        isPresented ? nil : commandBarClose
+    }
     /// The new empty Space's illustration fading away ([06 §1] observed that it goes away; the
     /// ease-out over `NewSpaceIllustrationTrigger.fadeDuration` is inferred). B75.
     static var newSpaceIllustrationFade: Animation { .easeOut(duration: NewSpaceIllustrationTrigger.fadeDuration) }

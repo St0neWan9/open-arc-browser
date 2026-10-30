@@ -166,6 +166,9 @@ enum SidebarLocalTokens {
     /// Dock Home (Library) glyph: a filled box, 14 pt → ≈ 14 × 15 ink of ≈ 130 pt², near the
     /// reference's filled 13.5 × 16.5 ink [07 §4] (≈ 128 pt², round-2 PX). The shape is our own.
     static let dockHomeSymbol = "shippingbox.fill"
+    /// Accessibility name of the dock's Home button: "Home", though it opens the Library.
+    /// [05 §窗口层级] observed (AX); the Library it opens is [06 §20.2].
+    static let dockHomeAccessibilityLabel = "Home"
     static let dockHomeGlyphSize: CGFloat = 14
 
     /// Empty space below the last list row. Round-2 comparison (B33) inferred from the
@@ -249,8 +252,13 @@ enum SidebarLocalTokens {
     /// Edge switching while dragging: the pointer at the sidebar's left edge (x < 20) switches to
     /// the previous Space after ≈ 0.5–1.5 s; at the right edge (fires at 4 pt from Arc's edge, not
     /// at 20 pt) to the next Space after ≈ 0.8 s. [06 §15.6] observed; the exact delay of the left
-    /// edge and the right band width (between 4 and 20 pt) are inferred.
+    /// edge and the right band width (between 4 and 20 pt) are inferred. Both zones continue
+    /// outside the sidebar (`Metrics.SidebarDrag.edgeZone*`, [04 §拖动图像(E17)] observed).
     static let edgeSwitchLeftBand: CGFloat = 20
+    /// The outer hot zones (`Metrics.SidebarDrag`): 80 pt left of the window, 30 pt right of the
+    /// sidebar. [04 §拖动图像(E17)] observed.
+    static let edgeZoneLeftOfWindow = CGFloat(Metrics.SidebarDrag.edgeZoneLeftOfWindowWidth)
+    static let edgeZoneRightOfSidebar = CGFloat(Metrics.SidebarDrag.edgeZoneRightOfSidebarWidth)
     static let edgeSwitchRightBand: CGFloat = 12
     static let edgeSwitchLeftDelay: Double = 1.0
     static let edgeSwitchRightDelay: Double = 0.8

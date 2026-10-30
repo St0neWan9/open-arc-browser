@@ -33,9 +33,13 @@ struct WindowBackgroundView: View {
                 BehindWindowBlur()
             }
             if colors.count > 1 {
+                // Several dots run top → bottom [07 §8.4]; the no-color wash runs diagonally with
+                // its stops at the sampled places [07 §8.5].
+                let axis = palette.backgroundGradientAxis
                 LinearGradient(
-                    colors: colors.map(\.swiftUI),
-                    startPoint: .topLeading, endPoint: .bottomTrailing
+                    stops: Self.stops(colors, locations: palette.backgroundGradientLocations),
+                    startPoint: UnitPoint(x: axis.startX, y: axis.startY),
+                    endPoint: UnitPoint(x: axis.endX, y: axis.endY)
                 )
             } else {
                 (colors.first ?? palette.windowBackground).swiftUI
@@ -45,6 +49,33 @@ struct WindowBackgroundView: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    /// Gradient stops: at `locations` when there is one per color, else evenly spread.
+    static func stops(_ colors: [RGBAColor], locations: [Double]?) -> [Gradient.Stop] {
+        let places: [Double]
+        if let locations, locations.count == colors.count {
+            places = locations
+        } else {
+            places = colors.indices.map { colors.count > 1 ? Double($0) / Double(colors.count - 1) : 0 }
+        }
+        return zip(colors, places).map { Gradient.Stop(color: $0.swiftUI, location: CGFloat($1)) }
+    }
+}
+
+/// The content area's fill where no page paints: the palette's content gradient (top left →
+/// bottom right) when it has one, else `webPanelBackground` flat. [07 §8.1], [07 §8.5] observed.
+struct WebPanelBackgroundView: View {
+    let palette: ThemePalette
+
+    var body: some View {
+        let gradient = palette.webPanelBackgroundGradient
+        if gradient.count > 1 {
+            LinearGradient(stops: WindowBackgroundView.stops(gradient, locations: nil),
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+        } else {
+            palette.webPanelBackground.swiftUI
+        }
     }
 }
 

@@ -162,8 +162,8 @@ struct SidebarLayout: Equatable {
 
     // MARK: Update pill ([07 §8.6] observed, B111)
 
-    /// The update-ready pill: x 8–268, 22 pt tall, `UpdatePillTokens.bottomGap` above the dock.
-    /// nil while no update is ready.
+    /// The update-ready pill: x 8–268, `UpdatePillTokens.height` (24 pt) tall,
+    /// `UpdatePillTokens.bottomGap` above the dock. nil while no update is ready.
     var updatePillFrame: CGRect? {
         guard showsUpdatePill else { return nil }
         let t = UpdatePillTokens.self

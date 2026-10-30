@@ -858,10 +858,46 @@ final class SidebarDragTests: XCTestCase {
         XCTAssertNil(SidebarEdgeSwitch.direction(x: w - 20, sidebarWidth: w))
         XCTAssertNil(SidebarEdgeSwitch.direction(x: w / 2, sidebarWidth: w))
         XCTAssertNil(SidebarEdgeSwitch.direction(x: 5, sidebarWidth: 0), "unknown width")
+        // [04 §拖动图像(E17)], [06 §15.1] observed: hot zones right of the sidebar (x 276–306,
+        // 30 wide) and left of the window (x −80–0, 80 wide), the window's height.
+        XCTAssertEqual(SidebarEdgeSwitch.direction(x: w + 29, sidebarWidth: w), 1)
+        XCTAssertNil(SidebarEdgeSwitch.direction(x: w + 31, sidebarWidth: w))
+        XCTAssertEqual(SidebarEdgeSwitch.direction(x: -79, sidebarWidth: w), -1)
+        XCTAssertNil(SidebarEdgeSwitch.direction(x: -81, sidebarWidth: w))
+        XCTAssertEqual(SidebarEdgeSwitch.direction(at: CGPoint(x: w + 10, y: 400), sidebarWidth: w, windowHeight: 985), 1)
+        XCTAssertNil(SidebarEdgeSwitch.direction(at: CGPoint(x: w + 10, y: 990), sidebarWidth: w, windowHeight: 985),
+                     "below the window")
+        XCTAssertNil(SidebarEdgeSwitch.direction(at: CGPoint(x: -10, y: -5), sidebarWidth: w, windowHeight: 985),
+                     "above the window")
+        XCTAssertEqual(Metrics.SidebarDrag.edgeZoneRightOfSidebarWidth, 30)
+        XCTAssertEqual(Metrics.SidebarDrag.edgeZoneLeftOfWindowWidth, 80)
         XCTAssertGreaterThanOrEqual(SidebarLocalTokens.edgeSwitchLeftDelay, 0.5)
         XCTAssertLessThanOrEqual(SidebarLocalTokens.edgeSwitchLeftDelay, 1.5)
         XCTAssertEqual(SidebarLocalTokens.edgeSwitchRightDelay, 0.8, accuracy: 0.05)
         XCTAssertLessThanOrEqual(SidebarLocalTokens.dockSwitchDelay, 1, "[06 §15.6] dot hover within 1 s")
+    }
+
+    /// [04 §拖动图像(E17)] observed zones outside the sidebar: the drag source reports the pointer
+    /// over the web panel (30 pt band) after the drop delegate saw the drag leave; the switch still
+    /// fires. Past the band it is cancelled.
+    func testEdgeSwitchFromOuterZoneAfterLeavingSidebar() async {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        vm.edgeSwitchRightDelay = 0.03
+        vm.beginDrag(.tab(f.today1))
+        vm.clearDropTarget() // the drag left the sidebar (drop delegate)
+        vm.updateEdgeSwitch(sourcePoint: CGPoint(x: layout.width + 20, y: 300), sidebarWidth: layout.width, windowHeight: 985)
+        XCTAssertEqual(vm.edgeSwitchDirection, 1)
+        vm.clearDropTarget()
+        XCTAssertEqual(vm.edgeSwitchDirection, 1, "an in-app drag keeps its outer-zone timer")
+        let switched = await waitUntil { vm.selectedSpaceID == f.work }
+        XCTAssertTrue(switched)
+        vm.updateEdgeSwitch(sourcePoint: CGPoint(x: layout.width + 60, y: 300), sidebarWidth: layout.width, windowHeight: 985)
+        XCTAssertNil(vm.edgeSwitchDirection)
+        vm.dragSessionEnded()
+        vm.updateEdgeSwitch(sourcePoint: CGPoint(x: layout.width + 20, y: 300), sidebarWidth: layout.width, windowHeight: 985)
+        XCTAssertNil(vm.edgeSwitchDirection, "no drag, no switch")
+        vm.stop()
     }
 
     /// [06 §15.6] observed: resting at the right edge switches to the next Space, at the left edge to

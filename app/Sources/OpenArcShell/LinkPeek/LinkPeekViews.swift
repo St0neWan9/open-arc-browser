@@ -69,7 +69,7 @@ private struct LinkPeekPanel: View {
     @Environment(\.windowDrawnPermissionTab) private var windowDrawnPermissionTab
 
     var body: some View {
-        WebPanel(tab: peek.liveTab, background: palette.webPanelBackground)
+        WebPanel(tab: peek.liveTab, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient)
             .onChange(of: peek.session?.tab) { _, _ in focusPage() }
             .onAppear { focusPage() }
     }
