@@ -131,6 +131,8 @@ public struct AutocompleteCapabilities: OptionSet, Hashable, Sendable {
     public init(rawValue: Int) { self.rawValue = rawValue }
     public static let history = AutocompleteCapabilities(rawValue: 1 << 0)
     public static let searchSuggestions = AutocompleteCapabilities(rawValue: 1 << 1)
+    /// `siteIcon(for:profileID:isOffTheRecord:)` answers (plan B132).
+    public static let siteIcons = AutocompleteCapabilities(rawValue: 1 << 2)
 }
 
 /// History search and search suggestions of every profile (`BrowserEngine.autocomplete`).
@@ -155,12 +157,22 @@ public protocol EngineAutocomplete: AnyObject, Sendable {
     /// (analysis): the bar's results include most-visited pages). They come from the history, so an
     /// engine without `.history` answers nothing, and so does a cancelled task.
     func topSites(profileID: Profile.ID, maxCount: Int) async -> [HistoryMatch]
+    /// The icon of `pageURL`'s site as PNG bytes (at most 32 px), for a command bar row of a site
+    /// the shell never showed in a tab (plan B132; [05 §命令栏] observed site rows with the site's
+    /// icon, also for never visited sites). From the engine's own favicon store, else the site's
+    /// `/favicon.ico` fetched through the profile's network context (`isOffTheRecord`: the
+    /// incognito one). nil when the site has none, for a non-http(s) URL, a cancelled task or an
+    /// engine without `.siteIcons`.
+    func siteIcon(for pageURL: URL, profileID: Profile.ID, isOffTheRecord: Bool) async -> Data?
 }
 
 extension EngineAutocomplete {
     /// Engines without a most-visited query answer nothing, so the command bar simply shows no
     /// most-visited rows. (The Chromium engine has one since B123.)
     public func topSites(profileID: Profile.ID, maxCount: Int) async -> [HistoryMatch] { [] }
+
+    /// Engines without site icons answer none, so rows keep the globe (plan B132).
+    public func siteIcon(for pageURL: URL, profileID: Profile.ID, isOffTheRecord: Bool) async -> Data? { nil }
 
     /// An engine that only knows phrases answers query rows only (plan B128).
     public func searchCompletions(_ request: SearchSuggestionRequest) async -> [SearchSuggestion] {

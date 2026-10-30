@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Sat, 31 Oct 2026 03:29:01 +0700
+Subject: [PATCH] openarc: bridge: page menu pops up for the render widget
+ view, so macOS adds Services and AutoFill
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plan B132. AppKit adds Services ▸ to a contextual menu only when the view
+passed to +popUpContextMenu:withEvent:forView: answers
+-validRequestorForSendType:returnType: for the selection, and AutoFill ▸
+only for a view with a text input context. The WebContents container view
+has neither; RenderWidgetHostViewCocoa has both, so the menu is now shown
+for it (as Chrome's RenderViewContextMenuMacCocoa does).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ openarc/bridge/oac_context_menu.mm | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/openarc/bridge/oac_context_menu.mm b/openarc/bridge/oac_context_menu.mm
+index 4768ccaa37f5..42e628f15e57 100644
+--- a/openarc/bridge/oac_context_menu.mm
++++ b/openarc/bridge/oac_context_menu.mm
+@@ -694,10 +694,31 @@ - (OACContextMenuItem*)itemWithIdentifier:(NSInteger)identifier
+   return nil;
+ }
+ 
++// The view macOS shows the menu for. It must be the page's render widget view
++// (as in Chrome), not the WebContents container: AppKit adds Services ▸ only
++// when this view itself answers -validRequestorForSendType:returnType: for
++// the selection, and AutoFill ▸ only for a view with a text input context
++// (the render widget view has both for a focused field). Plan B132.
++- (NSView*)menuView {
++  OACTab* tab = _tab;
++  openarc::PageMenuModel* model = [self liveModel];
++  content::WebContents* contents = model ? model->GetWebContents() : nullptr;
++  if (contents) {
++    if (content::RenderWidgetHostView* rwhv =
++            contents->GetTopLevelRenderWidgetHostView()) {
++      if (NSView* view = rwhv->GetNativeView().GetNativeNSView();
++          view && view.window) {
++        return view;
++      }
++    }
++  }
++  return tab.nativeView;
++}
++
+ - (BOOL)popUpMenu:(id)menu {
+   CHECK(NSThread.isMainThread);
+   OACTab* tab = _tab;
+-  NSView* view = tab.nativeView;
++  NSView* view = [self menuView];
+   if (_closed || _popUpUsed || ![menu isKindOfClass:[NSMenu class]] || !view ||
+       !view.window || tab.isClosed) {
+     return NO;

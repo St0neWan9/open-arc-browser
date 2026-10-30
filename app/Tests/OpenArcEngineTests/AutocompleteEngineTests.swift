@@ -21,7 +21,8 @@ final class AutocompleteEngineTests: XCTestCase {
         XCTAssertEqual(found.map(\.title), ["Swift.org"])
         XCTAssertEqual(found.first?.lastVisit, now)
         XCTAssertEqual(engine.fakeAutocomplete.history(profileID: profile).count, 2, "data: URLs are not history")
-        XCTAssertEqual(engine.autocomplete.capabilities, [.history, .searchSuggestions])
+        // B132: the fake also answers site icons.
+        XCTAssertEqual(engine.autocomplete.capabilities, [.history, .searchSuggestions, .siteIcons])
     }
 
     /// [06 §20.1] observed "no history" in incognito: off-the-record tabs never record visits.

@@ -28,9 +28,17 @@ import OpenArcEngine
 // - Search Google for Image when the profile's engine has no search by image URL (DuckDuckGo,
 //   Yahoo, Ecosia) or the image has no web address. Chromium's own item needs a Chrome browser
 //   window (Lens), so ours opens the engine's image-search page instead (B139, `PageImageSearch`).
-// - Services ▸ and AutoFill ▸: added by macOS itself when it applies to the page's view; not built.
-// - Copy, Copy Link to Highlight and Search on a link come only with a selection (Arc selects the
-//   link's text on a right-click; Chromium on macOS does not).
+//
+// Added by macOS, not here (plan B132): Services ▸ (with a separator before it) and, in an editable
+// field, AutoFill ▸ before it. The bridge shows the menu for the page's input view, which serves
+// the selected text to Services and has a text input context in a field; AppKit then appends both
+// while the menu shows (they are never items of this NSMenu). The page menu without a selection
+// gets neither, as in Arc. Arc's image menu ends with Services ▸ (E29 observed); ours does not,
+// since the page view offers Services text only and a right-click on an image selects none.
+//
+// A mouse right-click on a link selects the link's text (Blink's Mac editing behavior), so the link
+// menu carries Copy, Copy Link to Highlight, Search and Print… as in Arc (B132 engine check). The
+// keyboard menu (`requestContextMenu`) selects nothing and has the link items only.
 
 /// What the shell does for an item it owns.
 public enum PageMenuShellAction: Hashable, Sendable {

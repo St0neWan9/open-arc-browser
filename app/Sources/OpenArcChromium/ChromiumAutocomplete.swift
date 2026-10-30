@@ -21,6 +21,8 @@ final class ChromiumAutocomplete: EngineAutocomplete {
     static let cancelSelector = NSSelectorFromString("cancel")
     /// Plan B123: `-[OACProfile queryMostVisitedWithMaximumCount:completionHandler:]`.
     static let mostVisitedSelector = NSSelectorFromString("queryMostVisitedWithMaximumCount:completionHandler:")
+    /// Plan B132: `-[OACProfile fetchSiteIconForPageURL:completionHandler:]`.
+    static let siteIconSelector = NSSelectorFromString("fetchSiteIconForPageURL:completionHandler:")
 
     private typealias HistoryHandler = @convention(block) (NSArray) -> Void
     private typealias HistoryFunction = @convention(c) (AnyObject, Selector, NSString, Int, HistoryHandler) -> AnyObject
@@ -39,6 +41,7 @@ final class ChromiumAutocomplete: EngineAutocomplete {
         var supported: AutocompleteCapabilities = []
         if OACProfile.instancesRespond(to: ChromiumAutocomplete.historySelector) { supported.insert(.history) }
         if OACProfile.instancesRespond(to: ChromiumAutocomplete.suggestionsSelector) { supported.insert(.searchSuggestions) }
+        if OACProfile.instancesRespond(to: ChromiumAutocomplete.siteIconSelector) { supported.insert(.siteIcons) }
         return supported
     }()
 
@@ -92,7 +95,33 @@ final class ChromiumAutocomplete: EngineAutocomplete {
         return HistoryMatch.sortedByVisits(entries)
     }
 
+    /// Plan B132: the site's icon from the profile's favicon database, else its `/favicon.ico`
+    /// (OACAutocomplete.h). A framework without the call (before B132) answers nil.
+    func siteIcon(for pageURL: URL, profileID: Profile.ID, isOffTheRecord: Bool) async -> Data? {
+        guard capabilities.contains(.siteIcons), !Task.isCancelled,
+              let scheme = pageURL.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let onDisk = await core.onDiskProfile(profileID) else { return nil }
+        let png: Data? = await Self.cancellable { finish in
+            // As for suggestions: an incognito window fetches through its off-the-record context
+            // when it has one; the bridge sends no cookies either way.
+            let profile = isOffTheRecord && onDisk.hasOffTheRecordProfile ? onDisk.offTheRecordProfile : onDisk
+            return Self.fetchSiteIcon(profile, url: pageURL) { data in finish(data.map { Data($0) }) }
+        } ?? nil
+        return png?.isEmpty == false ? png : nil
+    }
+
     // MARK: Bridge calls by selector
+
+    @MainActor
+    private static func fetchSiteIcon(_ profile: OACProfile, url: URL, handler: @escaping (NSData?) -> Void) -> AnyObject? {
+        guard let implementation = profile.method(for: siteIconSelector) else {
+            handler(nil)
+            return nil
+        }
+        let call = unsafeBitCast(implementation, to: SuggestionsFunction.self)
+        let block: SuggestionsHandler = { data in handler(data) }
+        return call(profile, siteIconSelector, url as NSURL, block)
+    }
 
     @MainActor
     private static func queryMostVisited(_ profile: OACProfile, maxCount: Int, handler: @escaping (NSArray) -> Void) -> AnyObject? {

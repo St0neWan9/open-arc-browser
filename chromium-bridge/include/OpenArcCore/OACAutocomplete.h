@@ -26,7 +26,15 @@
 //   64 KiB body limit. The body goes back unparsed; the shell reads the OpenSearch suggestion JSON
 //   (`SearchSuggestionParser`).
 //
-// Both calls return a request object. `-cancel` stops the work (the history task is cancelled, the
+// - Site icons (plan B132): the icon of a site the command bar lists but the shell never showed in
+//   a tab (a navigation suggestion, a most visited page). First the profile's favicon database
+//   (`favicon::FaviconService`, any icon type, falling back to the host), else one GET of the
+//   site's `/favicon.ico` through the profile's own network context, without cookies, a 5 s
+//   timeout and a 256 KiB body limit, decoded in the sandboxed data decoder. Nothing is written
+//   to the favicon database; the shell keeps its own cache. No third-party favicon service is
+//   asked.
+//
+// Every call returns a request object. `-cancel` stops the work (the history task is cancelled, the
 // network load is dropped); if the handler has not run yet it then runs once with an empty result.
 // The handler always runs exactly once, on the main thread, from a posted task.
 
@@ -89,6 +97,14 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 - (OACAutocompleteRequest *)fetchSearchSuggestionsFromURL:(NSURL *)suggestionURL
                                         completionHandler:(void (^)(NSData *_Nullable body))completionHandler
     NS_SWIFT_NAME(fetchSearchSuggestions(from:completionHandler:));
+
+/// The icon of the site of `pageURL` (http or https), as PNG, at most 32 × 32 pixels, or nil when
+/// there is none (plan B132; see the file comment for where it comes from). nil also for another
+/// scheme, an invalid profile or cancellation. An off-the-record profile reads the on-disk
+/// profile's favicon database (read only) and fetches through its own network context.
+- (OACAutocompleteRequest *)fetchSiteIconForPageURL:(NSURL *)pageURL
+                                  completionHandler:(void (^)(NSData *_Nullable pngData))completionHandler
+    NS_SWIFT_NAME(fetchSiteIcon(for:completionHandler:));
 
 @end
 

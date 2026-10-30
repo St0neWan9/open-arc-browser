@@ -168,6 +168,13 @@ public final class ShellModel: ObservableObject {
         let favicons: (CommandBarResult) -> Data? = { [weak controller] result in controller?.commandBarFavicon(for: result) }
         commandBar.faviconProvider = favicons
         paneCommandBar.faviconProvider = favicons
+        // B132: never visited sites get their icon fetched through the engine.
+        for bar in [commandBar, paneCommandBar] {
+            bar.missingIconsRequester = { [weak self, weak bar] results in
+                guard let self, let bar else { return }
+                self.controller.loadMissingCommandBarIcons(results, profileID: self.sidebar.currentProfileID, bar: bar)
+            }
+        }
         // Menu enablement (split items, back/forward) reads sidebar state through this model.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

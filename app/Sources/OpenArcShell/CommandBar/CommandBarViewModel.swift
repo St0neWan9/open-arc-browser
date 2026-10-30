@@ -19,7 +19,9 @@ public final class CommandBarViewModel: ObservableObject {
     @Published public var queryText: String = "" {
         didSet { queryTextDidChange(from: oldValue) }
     }
-    @Published public private(set) var results: [CommandBarResult] = []
+    @Published public private(set) var results: [CommandBarResult] = [] {
+        didSet { if results != oldValue { missingIconsRequester?(results) } }
+    }
     @Published public private(set) var selectedIndex: Int = 0
     @Published public private(set) var mode: CommandBarMode
     /// Increments whenever the field should select its whole text (⌘L prefill).
@@ -49,6 +51,17 @@ public final class CommandBarViewModel: ObservableObject {
     /// PNG bytes of a site row's favicon (C9): installed by the window from its favicon cache;
     /// nil (or a nil result) keeps the placeholder glyph.
     public var faviconProvider: ((CommandBarResult) -> Data?)?
+    /// Called with every new list (plan B132): the window fetches the icons of site rows its
+    /// favicon cache lacks (never visited sites) and calls `faviconsDidChange()` when one arrives.
+    /// Rows keep the globe until then; typing never waits for it.
+    public var missingIconsRequester: (([CommandBarResult]) -> Void)?
+    /// Bumped when an icon arrived, so the rows and the field's glyph redraw (plan B132).
+    @Published public private(set) var faviconRevision = 0
+
+    /// An icon the rows may show arrived (plan B132).
+    public func faviconsDidChange() {
+        faviconRevision &+= 1
+    }
 
     public private(set) var currentSpaceID: UUID?
     public private(set) var currentTabID: UUID?

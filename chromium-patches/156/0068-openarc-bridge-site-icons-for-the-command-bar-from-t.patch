@@ -1,0 +1,314 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Sat, 31 Oct 2026 03:29:04 +0700
+Subject: [PATCH] openarc: bridge: site icons for the command bar from the
+ favicon database or the site's favicon.ico
+
+Plan B132. -[OACProfile fetchSiteIconForPageURL:completionHandler:] answers
+the icon of a site the command bar lists but never showed in a tab: the
+profile's favicon database first (read only, host fallback), else one GET of
+/favicon.ico through the profile's own network context without cookies,
+decoded in the sandboxed data decoder and scaled to at most 32 px. No
+third-party favicon server is asked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ openarc/BUILD.gn                              |   3 +
+ openarc/bridge/oac_autocomplete.mm            | 183 +++++++++++++++++-
+ .../public/OpenArcCore/OACAutocomplete.h      |  18 +-
+ 3 files changed, 202 insertions(+), 2 deletions(-)
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index b0de99388547..3d00edbbce0b 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -353,6 +353,9 @@ source_set("bridge") {
+     "//components/prefs",
+     "//components/favicon/content",
+     "//components/favicon/core",
++    "//components/favicon_base",
++    "//chrome/browser/favicon",
++    "//services/data_decoder/public/cpp",
+     "//components/input",
+     "//components/viz/common",
+     "//content/public/app",
+diff --git a/openarc/bridge/oac_autocomplete.mm b/openarc/bridge/oac_autocomplete.mm
+index 69961284a6c2..cc2a078fd6ae 100644
+--- a/openarc/bridge/oac_autocomplete.mm
++++ b/openarc/bridge/oac_autocomplete.mm
+@@ -16,14 +16,21 @@
+ // - most visited (plan B123): HistoryService::QueryMostVisitedURLs, the
+ //   segment-based query behind Chrome's top sites;
+ // - suggestions: one SimpleURLLoader GET on the profile's storage partition
+-//   (the OTR partition for an incognito profile), credentials omitted.
++//   (the OTR partition for an incognito profile), credentials omitted;
++// - site icons (plan B132): FaviconService::GetRawFaviconForPageURL on the
++//   original profile (read only, host fallback), else one GET of the site's
++//   /favicon.ico on the profile's own partition, decoded out of process by
++//   the data decoder and scaled to at most 32 px. LargeIconService's Google
++//   server fallback is not used: it would send every listed site to Google.
+ 
+ #import <OpenArcCore/OACAutocomplete.h>
+ 
++#include <algorithm>
+ #include <memory>
+ #include <optional>
+ #include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/check.h"
+ #include "base/functional/bind.h"
+@@ -31,8 +38,12 @@
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/task/cancelable_task_tracker.h"
+ #include "base/time/time.h"
++#include "base/containers/span.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
+ #include "chrome/browser/history/history_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/favicon_base/favicon_types.h"
+ #include "components/history/core/browser/history_service.h"
+ #include "components/history/core/browser/history_types.h"
+ #include "components/keyed_service/core/service_access_type.h"
+@@ -43,7 +54,12 @@
+ #include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/cpp/shared_url_loader_factory.h"
+ #include "services/network/public/cpp/simple_url_loader.h"
++#include "services/data_decoder/public/cpp/decode_image.h"
+ #include "services/network/public/mojom/url_response_head.mojom.h"
++#include "skia/ext/image_operations.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/geometry/size.h"
+ #include "url/gurl.h"
+ 
+ #import "openarc/bridge/oac_application_internal.h"
+@@ -59,6 +75,53 @@
+ constexpr base::TimeDelta kSuggestTimeout = base::Milliseconds(1500);
+ constexpr size_t kMaxSuggestBodySize = 64 * 1024;
+ constexpr int kMaxHistoryCount = 100;
++// Site icons (plan B132), own values: the command bar's 16 pt glyph at 2x;
++// a favicon.ico is small, so a larger body is not an icon worth waiting for.
++constexpr int kSiteIconPixels = 32;
++constexpr base::TimeDelta kSiteIconTimeout = base::Seconds(5);
++constexpr size_t kMaxSiteIconBodySize = 256 * 1024;
++
++net::NetworkTrafficAnnotationTag SiteIconAnnotation() {
++  return net::DefineNetworkTrafficAnnotation("openarc_site_icon", R"(
++    semantics {
++      sender: "Open Arc command bar"
++      description:
++        "Loads the icon of a site the command bar suggests (a search "
++        "engine's site suggestion or a most visited page) when the browser "
++        "has no icon for it yet."
++      trigger:
++        "A site row in the command bar for a site without a stored icon."
++      data: "None: a GET of the site's /favicon.ico."
++      destination: WEBSITE
++    }
++    policy {
++      cookies_allowed: NO
++      setting: "None."
++      policy_exception_justification: "Not implemented."
++    })");
++}
++
++// `bitmap` as PNG, scaled down to fit kSiteIconPixels; nil when empty.
++NSData* SiteIconPNG(const SkBitmap& bitmap) {
++  if (bitmap.drawsNothing()) {
++    return nil;
++  }
++  SkBitmap fitted = bitmap;
++  const int longest = std::max(bitmap.width(), bitmap.height());
++  if (longest > kSiteIconPixels) {
++    const int width = std::max(1, bitmap.width() * kSiteIconPixels / longest);
++    const int height =
++        std::max(1, bitmap.height() * kSiteIconPixels / longest);
++    fitted = skia::ImageOperations::Resize(
++        bitmap, skia::ImageOperations::RESIZE_BEST, width, height);
++  }
++  std::optional<std::vector<uint8_t>> encoded =
++      gfx::PNGCodec::EncodeBGRASkBitmap(fitted, /*discard_transparency=*/false);
++  if (!encoded || encoded->empty()) {
++    return nil;
++  }
++  return [NSData dataWithBytes:encoded->data() length:encoded->size()];
++}
+ 
+ net::NetworkTrafficAnnotationTag SuggestAnnotation() {
+   return net::DefineNetworkTrafficAnnotation("openarc_search_suggestions", R"(
+@@ -129,6 +192,11 @@ - (NSInteger)typedCount {
+ 
+ @end
+ 
++@interface OACAutocompleteRequest ()
++- (void)fetchFaviconFile:(const GURL&)pageURL profile:(Profile*)profile;
++- (void)decodeIcon:(std::string)bytes;
++@end
++
+ // One request. Owns the history task tracker or the URL loader; dropping them
+ // cancels the work. The handler runs once, from a posted task.
+ @implementation OACAutocompleteRequest {
+@@ -286,6 +354,96 @@ - (void)startFetch:(const GURL&)url profile:(Profile*)profile {
+       kMaxSuggestBodySize);
+ }
+ 
++// Plan B132: the stored icon of the page's site, else its /favicon.ico. The
++// handler (the suggestion slot, which also answers NSData) gets PNG or nil.
++- (void)startSiteIcon:(const GURL&)pageURL
++              profile:(Profile*)profile
++       faviconService:(favicon::FaviconService*)faviconService {
++  if (!faviconService) {
++    [self fetchFaviconFile:pageURL profile:profile];
++    return;
++  }
++  _tracker = std::make_unique<base::CancelableTaskTracker>();
++  // The profile may go away while the database answers.
++  base::WeakPtr<Profile> weakProfile = profile->GetWeakPtr();
++  OACAutocompleteRequest* request = self;
++  const GURL page = pageURL;
++  faviconService->GetRawFaviconForPageURL(
++      page,
++      {favicon_base::IconType::kFavicon, favicon_base::IconType::kTouchIcon,
++       favicon_base::IconType::kTouchPrecomposedIcon,
++       favicon_base::IconType::kWebManifestIcon},
++      kSiteIconPixels, /*fallback_to_host=*/true,
++      base::BindOnce(^(const favicon_base::FaviconRawBitmapResult& result) {
++        if (result.is_valid()) {
++          // The database stores PNG; the service already scaled it.
++          [request
++              finishWithEntries:nil
++                           body:[NSData
++                                    dataWithBytes:result.bitmap_data->front()
++                                           length:result.bitmap_data->size()]];
++          return;
++        }
++        Profile* live = weakProfile.get();
++        if (!live) {
++          [request finishWithEntries:nil body:nil];
++          return;
++        }
++        [request fetchFaviconFile:page profile:live];
++      }),
++      _tracker.get());
++}
++
++- (void)fetchFaviconFile:(const GURL&)pageURL profile:(Profile*)profile {
++  if (_finished) {
++    return;
++  }
++  auto resource = std::make_unique<network::ResourceRequest>();
++  resource->url = pageURL.GetWithEmptyPath().Resolve("/favicon.ico");
++  resource->method = "GET";
++  resource->credentials_mode = network::mojom::CredentialsMode::kOmit;
++  resource->load_flags = net::LOAD_DO_NOT_SAVE_COOKIES;
++  _loader = network::SimpleURLLoader::Create(std::move(resource),
++                                             SiteIconAnnotation());
++  _loader->SetTimeoutDuration(kSiteIconTimeout);
++  scoped_refptr<network::SharedURLLoaderFactory> factory =
++      profile->GetDefaultStoragePartition()
++          ->GetURLLoaderFactoryForBrowserProcess();
++  // As for suggestions: the callback keeps the request alive until it
++  // finishes; -finish... drops the loader.
++  OACAutocompleteRequest* request = self;
++  network::SimpleURLLoader* loader = _loader.get();
++  loader->DownloadToString(
++      factory.get(),
++      base::BindOnce(^(std::optional<std::string> body) {
++        const network::mojom::URLResponseHead* head = loader->ResponseInfo();
++        const int status =
++            head && head->headers ? head->headers->response_code() : 0;
++        if (!body || body->empty() || status < 200 || status >= 300) {
++          [request finishWithEntries:nil body:nil];
++          return;
++        }
++        [request decodeIcon:std::move(*body)];
++      }),
++      kMaxSiteIconBodySize);
++}
++
++// Decodes in the sandboxed data decoder (ICO, PNG, GIF, JPEG, WebP...); the
++// frame closest to the icon size is picked.
++- (void)decodeIcon:(std::string)bytes {
++  if (_finished) {
++    return;
++  }
++  OACAutocompleteRequest* request = self;
++  data_decoder::DecodeImageIsolated(
++      base::as_byte_span(bytes), data_decoder::mojom::ImageCodec::kDefault,
++      /*shrink_to_fit=*/false, data_decoder::kDefaultMaxSizeInBytes,
++      gfx::Size(kSiteIconPixels, kSiteIconPixels),
++      base::BindOnce(^(const SkBitmap& bitmap) {
++        [request finishWithEntries:nil body:SiteIconPNG(bitmap)];
++      }));
++}
++
+ @end
+ 
+ @implementation OACProfile (OACAutocomplete)
+@@ -358,4 +516,27 @@ @implementation OACProfile (OACAutocomplete)
+   return request;
+ }
+ 
++- (OACAutocompleteRequest*)
++    fetchSiteIconForPageURL:(NSURL*)pageURL
++          completionHandler:(void (^)(NSData*))completionHandler {
++  CHECK(NSThread.isMainThread);
++  CHECK(completionHandler);
++  OACAutocompleteRequest* request =
++      [[OACAutocompleteRequest alloc] initWithHistoryHandler:nil
++                                              suggestHandler:completionHandler];
++  Profile* profile = self.valid ? self.chromeProfile : nullptr;
++  GURL url = net::GURLWithNSURL(pageURL);
++  if (!profile || !url.is_valid() || !url.SchemeIsHTTPOrHTTPS() ||
++      url.host().empty()) {
++    [request finishWithEntries:nil body:nil];
++    return request;
++  }
++  // Read only: an incognito window's lookups leave nothing in the on-disk
++  // profile's database.
++  favicon::FaviconService* service = FaviconServiceFactory::GetForProfile(
++      profile->GetOriginalProfile(), ServiceAccessType::EXPLICIT_ACCESS);
++  [request startSiteIcon:url profile:profile faviconService:service];
++  return request;
++}
++
+ @end
+diff --git a/openarc/bridge/public/OpenArcCore/OACAutocomplete.h b/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
+index 167cda80ecc4..44244a479e65 100644
+--- a/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
++++ b/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
+@@ -26,7 +26,15 @@
+ //   64 KiB body limit. The body goes back unparsed; the shell reads the OpenSearch suggestion JSON
+ //   (`SearchSuggestionParser`).
+ //
+-// Both calls return a request object. `-cancel` stops the work (the history task is cancelled, the
++// - Site icons (plan B132): the icon of a site the command bar lists but the shell never showed in
++//   a tab (a navigation suggestion, a most visited page). First the profile's favicon database
++//   (`favicon::FaviconService`, any icon type, falling back to the host), else one GET of the
++//   site's `/favicon.ico` through the profile's own network context, without cookies, a 5 s
++//   timeout and a 256 KiB body limit, decoded in the sandboxed data decoder. Nothing is written
++//   to the favicon database; the shell keeps its own cache. No third-party favicon service is
++//   asked.
++//
++// Every call returns a request object. `-cancel` stops the work (the history task is cancelled, the
+ // network load is dropped); if the handler has not run yet it then runs once with an empty result.
+ // The handler always runs exactly once, on the main thread, from a posted task.
+ 
+@@ -90,6 +98,14 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+                                         completionHandler:(void (^)(NSData *_Nullable body))completionHandler
+     NS_SWIFT_NAME(fetchSearchSuggestions(from:completionHandler:));
+ 
++/// The icon of the site of `pageURL` (http or https), as PNG, at most 32 × 32 pixels, or nil when
++/// there is none (plan B132; see the file comment for where it comes from). nil also for another
++/// scheme, an invalid profile or cancellation. An off-the-record profile reads the on-disk
++/// profile's favicon database (read only) and fetches through its own network context.
++- (OACAutocompleteRequest *)fetchSiteIconForPageURL:(NSURL *)pageURL
++                                  completionHandler:(void (^)(NSData *_Nullable pngData))completionHandler
++    NS_SWIFT_NAME(fetchSiteIcon(for:completionHandler:));
++
+ @end
+ 
+ NS_ASSUME_NONNULL_END

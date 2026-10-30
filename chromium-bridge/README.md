@@ -26,7 +26,7 @@ chromium-bridge/
     ├── OACTranslation.h           page translation state and commands, translation settings reset (B47)
     ├── OACCapture.h               visible-rectangle and full-page capture (B51)
     ├── OACJavaScript.h            run a script in the page for AppleScript `execute` (B71)
-    ├── OACAutocomplete.h          history search, search suggestions and most visited pages for the command bar (B66, B123)
+    ├── OACAutocomplete.h          history search, search suggestions, most visited pages and site icons for the command bar (B66, B123, B132)
     └── OACContextMenu.h           the web page's right-click menu, built by Chromium and drawn by the shell (B124)
 ```
 

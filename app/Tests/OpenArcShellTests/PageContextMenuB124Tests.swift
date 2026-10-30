@@ -7,8 +7,8 @@ import OpenArcSyncAPI
 /// Plan B124: the web page's right-click menu. Spec: docs/arc-spec/05-surfaces.md §右键菜单,
 /// "网页内容右键菜单 (E29)" (observed items and order for the page, a link, an image, a selection
 /// and an editable field; "Search Google" names the profile's search engine). Items the shell
-/// leaves out in v1 (Cast…, Search Google for Image, Services ▸, AutoFill ▸) are listed in
-/// PageContextMenuLayout.swift.
+/// leaves out in v1 (Cast…, Search Google for Image) and the ones macOS appends (Services ▸,
+/// AutoFill ▸, B132) are listed in PageContextMenuLayout.swift.
 @MainActor
 final class PageContextMenuB124Tests: XCTestCase {
     private var engine: FakeEngine!
@@ -91,6 +91,18 @@ final class PageContextMenuB124Tests: XCTestCase {
         let names = titles(layout.entries(for: menu(target)))
         let copy = try XCTUnwrap(names.firstIndex(of: "Copy"))
         XCTAssertEqual(Array(names[copy...(copy + 3)]), ["Copy", "Copy Link to Highlight", "Search Google for “next”", "Print…"])
+    }
+
+    /// B132: a right-click on a link selects its text (engine check in SmallGapsB132Conformance),
+    /// so the whole link menu reads as [05 §右键菜单] E29 observed, up to the items macOS appends
+    /// (Services ▸).
+    func testLinkMenuWithItsTextSelectedMatchesE29Spec05ContextMenu() throws {
+        let target = PageContextMenuTarget(linkURL: try url("https://b.example/next"), linkText: "next", selectionText: "next")
+        XCTAssertEqual(titles(layout.entries(for: menu(target))), [
+            "Open Link in New Tab", "Open Link in New Window", "Open Link in Split View", "Open Link in Little Arc",
+            "Open Link in Incognito Window", "‖", "Save Link As…", "Copy Link Address", "‖",
+            "Copy", "Copy Link to Highlight", "Search Google for “next”", "Print…", "‖", "Inspect", "‖", "Speech",
+        ])
     }
 
     /// [05 §右键菜单] E29 observed: Arc titles these "Copy Link to Highlight" and "Print…" even
