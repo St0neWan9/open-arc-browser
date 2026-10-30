@@ -120,6 +120,13 @@ extension ShellModel {
     /// Help ▸ Visit Help Center: the help site in a new tab.
     public func openHelpCenter() { openHelpLink(OpenArcLinks.helpCenter, title: "Help Center") }
 
+    /// The incognito bar's project row (our counterpart of Arc's "The Browser Company" row,
+    /// [06 §20.1] observed): the project's public page in a new tab. Plan B133.
+    func openProjectPage() { openHelpLink(OpenArcLinks.site, title: AppIdentity.displayName) }
+
+    /// The incognito bar's "Tips for Organizing" row ([06 §20.1] observed): our help page. B133.
+    func openOrganizingTips() { openHelpLink(OpenArcLinks.organizingTips, title: "Tips for Organizing") }
+
     /// Help ▸ Troubleshooting ▸ Reveal Open Arc Data: the app's data folder in Finder.
     public func revealAppData() {
         desktop.reveal(dependencies.persistence?.directory ?? AppDataLocation.directory())

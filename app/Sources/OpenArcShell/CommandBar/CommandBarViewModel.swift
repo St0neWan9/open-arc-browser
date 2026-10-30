@@ -6,9 +6,11 @@ import Combine
 //
 // Keyboard behavior:
 //   observed  [05 §command bar] the first row is selected by default; Escape closes.
-//   inferred  Up/Down wrap around; Shift-Tab = Up; Tab puts the selected row's completion text
-//             into the field; Enter before fresh results exist acts on the raw text.
-//   unknown   what Tab really does in the original.
+//   observed  [05 §命令栏] E30: Tab enters a site search while the field offers one ("Search
+//             YouTube Tab"); Backspace after an inline completion keeps the site row first.
+//   inferred  Up/Down wrap around; Shift-Tab = Up; without a site search on offer Tab puts the
+//             selected row's completion text into the field; Enter before fresh results exist
+//             acts on the raw text.
 
 @MainActor
 public final class CommandBarViewModel: ObservableObject {
@@ -20,7 +22,7 @@ public final class CommandBarViewModel: ObservableObject {
         didSet { queryTextDidChange(from: oldValue) }
     }
     @Published public private(set) var results: [CommandBarResult] = [] {
-        didSet { if results != oldValue { missingIconsRequester?(results) } }
+        didSet { if results != oldValue { requestMissingIcons() } }
     }
     @Published public private(set) var selectedIndex: Int = 0
     @Published public private(set) var mode: CommandBarMode
@@ -33,9 +35,47 @@ public final class CommandBarViewModel: ObservableObject {
     /// [05 §命令栏] observed). nil unless the first row is the site it opens and that row is
     /// selected; leaving the row and pressing Backspace clear it.
     @Published public private(set) var inlineCompletion: CommandBarInlineCompletion?
-    /// True after Backspace or a deletion: the completion stays away until text is added again.
-    /// inferred (Arc observed only that Backspace removes it, [05 §命令栏]).
+    /// True after Backspace or a deletion: the completion stays away until text is added again,
+    /// and the completing site row shows as "host — host" with a globe. [05 §命令栏] E30 observed
+    /// for Backspace; the same for further deletions is inferred.
     private var isInlineCompletionSuppressed = false
+
+    /// The site the field searches after Tab ("Tab to Search", plan B133): the field shows the
+    /// site's chip and the "Search…" placeholder, and lists no rows. [05 §命令栏] E30 observed.
+    @Published public private(set) var siteSearch: CommandBarSearchSite?
+    /// The sites the field can offer for "Tab to Search" (built-in list, inferred; see
+    /// `CommandBarSearchSites`).
+    public var searchSites: [CommandBarSearchSite] = CommandBarSearchSites.builtIn
+
+    /// The site the field's right-hand hint offers ("Search YouTube Tab"), nil for none: never
+    /// during a site search or over the unedited ⌘L prefill. [05 §命令栏] E30 observed hint.
+    public var siteSearchOffer: CommandBarSearchSite? {
+        guard siteSearch == nil, !isPrefillUnedited else { return nil }
+        let completedHost = inlineCompletion.flatMap { completion in
+            results.first { $0.id == completion.resultID }?.url.flatMap(CommandBarTextNormalizer.host)
+        }
+        return CommandBarSearchSites.match(typed: queryText, completedHost: completedHost, sites: searchSites)
+    }
+
+    /// The site of the profile's default search engine, whose icon the field's glyph shows while
+    /// one character is typed (plan B133, [05 §命令栏] E30 observed Google's "G"). Installed by
+    /// the window; nil keeps the magnifier.
+    public var searchEngineSite: (() -> URL?)?
+
+    /// A site row standing for the search engine's icon: what `faviconProvider` and the icon
+    /// loader take. Never listed.
+    public var searchEngineIconRow: CommandBarResult? {
+        guard let url = searchEngineSite?() else { return nil }
+        return CommandBarResult(
+            id: "search-engine:\(url.absoluteString)",
+            kind: .siteSuggestion,
+            title: url.host ?? url.absoluteString,
+            url: url,
+            iconHint: .site(faviconURL: nil),
+            actionLabel: nil,
+            action: .openURL(url, target: .newTab)
+        )
+    }
 
     /// The text the field shows: the typed text, or the typed text plus the completed suffix.
     public var displayedText: String { inlineCompletion?.completedText ?? queryText }
@@ -61,6 +101,12 @@ public final class CommandBarViewModel: ObservableObject {
     /// An icon the rows may show arrived (plan B132).
     public func faviconsDidChange() {
         faviconRevision &+= 1
+    }
+
+    /// Asks the window for the icons the rows and the field's glyph may show (plan B132, B133).
+    private func requestMissingIcons() {
+        guard let requester = missingIconsRequester else { return }
+        requester(results + (searchEngineIconRow.map { [$0] } ?? []))
     }
 
     public private(set) var currentSpaceID: UUID?
@@ -111,8 +157,10 @@ public final class CommandBarViewModel: ObservableObject {
         selectedIndex = 0
         inlineCompletion = nil
         isInlineCompletionSuppressed = false
+        siteSearch = nil
         setTextProgrammatically("")
         isPrefillUnedited = false
+        requestMissingIcons()
         if mode == .currentTab, let currentURL {
             setTextProgrammatically(currentURL.absoluteString)
             isPrefillUnedited = true
@@ -131,6 +179,7 @@ public final class CommandBarViewModel: ObservableObject {
         selectedIndex = 0
         inlineCompletion = nil
         isInlineCompletionSuppressed = false
+        siteSearch = nil
         setTextProgrammatically("")
         isPrefillUnedited = false
     }
@@ -156,29 +205,30 @@ public final class CommandBarViewModel: ObservableObject {
         let immediate = sources.enumerated().filter { !$0.element.isDeferred }
         let deferred = sources.enumerated().filter { $0.element.isDeferred }
         let first = await Self.collect(immediate, context: context)
-        guard ticket == generation, !Task.isCancelled else { return }
-        results = CommandBarRanker.rank(first.flatMap(\.1), context: context, limit: maxResults)
+        guard ticket == generation, !Task.isCancelled, siteSearch == nil else { return }
+        results = presented(CommandBarRanker.rank(first.flatMap(\.1), context: context, limit: maxResults))
         resultsQuery = context.text
-        selectedIndex = defaultSelectedIndex()
+        selectedIndex = 0
         updateInlineCompletion()
         guard !deferred.isEmpty, !context.trimmedText.isEmpty else { return }
         let late = await Self.collect(deferred, context: context)
-        guard ticket == generation, !Task.isCancelled, late.contains(where: { !$0.1.isEmpty }) else { return }
+        guard ticket == generation, !Task.isCancelled, siteSearch == nil,
+              late.contains(where: { !$0.1.isEmpty }) else { return }
         let all = (first + late).sorted { $0.0 < $1.0 }.flatMap(\.1)
         let selectedID = selectedResult?.id
-        results = CommandBarRanker.rank(all, context: context, limit: maxResults)
-        selectedIndex = selectedID.flatMap { id in results.firstIndex { $0.id == id } } ?? defaultSelectedIndex()
-        if selectedIndex == 0 { selectedIndex = defaultSelectedIndex() }
+        results = presented(CommandBarRanker.rank(all, context: context, limit: maxResults))
+        selectedIndex = selectedID.flatMap { id in results.firstIndex { $0.id == id } } ?? 0
         updateInlineCompletion()
     }
 
-    /// The row selected when a list arrives: the first one ([05 §command bar] observed), except
-    /// that a completing site row whose completion was taken back (Backspace or a deletion) gives
-    /// way to the plain search row, so the selected row matches what the field shows. inferred.
-    private func defaultSelectedIndex() -> Int {
-        guard isInlineCompletionSuppressed, results.first?.kind == .siteCompletion,
-              let search = results.firstIndex(where: { $0.kind == .webSearch || $0.kind == .typedURL }) else { return 0 }
-        return search
+    /// The ranked list as shown: after Backspace took the completion back, the completing site row
+    /// stays first and selected, as "host — host" with a globe. [05 §命令栏] E30 observed
+    /// ("youtube.com — youtube.com", globe, not the search row).
+    private func presented(_ ranked: [CommandBarResult]) -> [CommandBarResult] {
+        guard isInlineCompletionSuppressed, let first = ranked.first, first.kind == .siteCompletion else { return ranked }
+        var list = ranked
+        list[0] = CommandBarSiteCompletionRules.takenBackRow(first)
+        return list
     }
 
     /// Recomputes the inline completion from the current text, selection and list (pure rules in
@@ -230,6 +280,11 @@ public final class CommandBarViewModel: ObservableObject {
 
     private func scheduleRefresh() {
         refreshTask?.cancel()
+        // A site search lists no rows. [05 §命令栏] E30 observed.
+        guard siteSearch == nil else {
+            refreshTask = nil
+            return
+        }
         refreshTask = Task { [weak self] in
             await self?.refresh()
         }
@@ -239,6 +294,8 @@ public final class CommandBarViewModel: ObservableObject {
         guard !isSettingTextProgrammatically else { return }
         isPrefillUnedited = false
         selectedIndex = 0
+        // A site search only collects the query. [05 §命令栏] E30 observed: no rows.
+        guard siteSearch == nil else { return }
         // Deleting never brings a completion back; typing does. inferred.
         isInlineCompletionSuppressed = queryText.count < oldText.count
         inlineCompletion = isInlineCompletionSuppressed ? nil : CommandBarSiteCompletionRules.carriedCompletion(inlineCompletion, typed: queryText)
@@ -288,18 +345,31 @@ public final class CommandBarViewModel: ObservableObject {
             moveSelection(by: 1)
             return .handled
         case .deleteBackward:
+            // Backspace on the empty field of a site search leaves the site search (plan B133,
+            // inferred: the field stays empty and lists the empty-query rows again).
+            if siteSearch != nil {
+                guard queryText.isEmpty else { return .ignored }
+                leaveSiteSearch()
+                return .handled
+            }
             // Backspace removes the completion ([05 §命令栏] observed, B128). With a completion up
             // the key only drops it (the field shows the typed text again); otherwise the field
             // deletes as usual and the shorter text keeps completions away.
             guard inlineCompletion != nil else { return .ignored }
             isInlineCompletionSuppressed = true
             inlineCompletion = nil
-            // The completion shows exactly while the site row is selected ([05 §命令栏] observed
-            // with ↓), so the field reading the typed text selects the plain search row, and
-            // Return searches what is in the field. inferred.
-            selectedIndex = defaultSelectedIndex()
+            // The site row stays first and selected, as "host — host" with a globe, so Return
+            // still opens the site. [05 §命令栏] E30 observed (plan B133).
+            results = presented(results)
+            selectedIndex = 0
             return .handled
         case .tab:
+            // "Tab to Search": with a site on offer, Tab turns the field into that site's search.
+            // [05 §命令栏] E30 observed.
+            if let site = siteSearchOffer {
+                enterSiteSearch(site)
+                return .handled
+            }
             if let selected = selectedResult, resultsAreFresh {
                 queryText = selected.completion
             }
@@ -314,12 +384,40 @@ public final class CommandBarViewModel: ObservableObject {
         }
     }
 
+    // MARK: Site search
+
+    /// Turns the field into a search of `site`: empty field, no rows. [05 §命令栏] E30 observed.
+    public func enterSiteSearch(_ site: CommandBarSearchSite) {
+        refreshTask?.cancel()
+        generation &+= 1
+        siteSearch = site
+        inlineCompletion = nil
+        isInlineCompletionSuppressed = false
+        isPrefillUnedited = false
+        setTextProgrammatically("")
+        results = []
+        resultsQuery = nil
+        selectedIndex = 0
+    }
+
+    /// Back to the plain bar, listing the rows for what the field holds. inferred.
+    public func leaveSiteSearch() {
+        guard siteSearch != nil else { return }
+        siteSearch = nil
+        scheduleRefresh()
+    }
+
     // MARK: Activation
 
     /// The action for the selected row (or `index`). When the results are older than the typed
     /// text, Enter must still do what the text says, so the raw text is classified instead:
     /// URL → open it, otherwise search. Returns nil if there is nothing to do.
     public func activate(at index: Int? = nil) -> CommandBarAction? {
+        // Return in a site search opens the site's results for the typed query. [05 §命令栏] E30
+        // (the search itself is inferred from Chrome's keyword search). Nothing for an empty query.
+        if let site = siteSearch {
+            return site.searchURL(for: queryText).map { .openURL($0, target: mode.openTarget) }
+        }
         if let index {
             return results.indices.contains(index) ? results[index].action : nil
         }

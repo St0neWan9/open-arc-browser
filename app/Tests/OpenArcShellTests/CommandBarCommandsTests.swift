@@ -72,6 +72,8 @@ final class CommandBarCommandsTests: XCTestCase {
             .replacePinWithCurrentPage: "Replace Pin with Current Page",
             .resetTabToOriginalURL: "Reset Tab to Original URL", .duplicateTab: "Duplicate",
             .renameCurrentItem: "Rename Current Item",
+            // B133: [06 §20.1] observed help rows; "The Browser Company" becomes our app's name (ours).
+            .aboutProject: AppIdentity.displayName, .organizingTips: "Tips for Organizing", .helpCenter: "Help Center",
         ]
         XCTAssertEqual(Set(expected.keys), Set(CommandBarCommand.allCases), "every command has a spec title")
         for command in CommandBarCommand.allCases {
@@ -99,7 +101,8 @@ final class CommandBarCommandsTests: XCTestCase {
     func testCommandRowsHaveNoActionLabelAndCarryHint() async {
         let ctx = CommandBarQueryContext(text: "pin", mode: .newTab)
         let rows = await CommandBarCommandsSource().results(for: ctx)
-        XCTAssertEqual(rows.count, CommandBarCommand.allCases.count)
+        // The incognito-only help rows (B133) are not offered in the default state.
+        XCTAssertEqual(rows.count, CommandBarCommand.allCases.count - 3)
         XCTAssertTrue(rows.allSatisfy { $0.actionLabel == nil && $0.trailingLabel(for: .pane) == nil })
         XCTAssertEqual(rows.first { $0.action == .runCommand(.togglePin) }?.shortcutHint, "⌘D")
     }
@@ -357,6 +360,16 @@ final class CommandBarCommandsTests: XCTestCase {
             RoutingCase(command: .airTrafficControl) { m in
                 XCTAssertEqual(m.controller.airTrafficControlRequests, 1)
                 XCTAssertEqual(m.lastUnhandledCommand, .airTrafficControl)
+            },
+            // B133: the incognito help rows ([06 §20.1] observed) open our pages in a new tab.
+            RoutingCase(command: .aboutProject) { m in
+                XCTAssertEqual(m.selectedSpaceID.flatMap { m.workspace.today(spaceID: $0).first?.url }, OpenArcLinks.site)
+            },
+            RoutingCase(command: .organizingTips) { m in
+                XCTAssertEqual(m.selectedSpaceID.flatMap { m.workspace.today(spaceID: $0).first?.url }, OpenArcLinks.organizingTips)
+            },
+            RoutingCase(command: .helpCenter) { m in
+                XCTAssertEqual(m.selectedSpaceID.flatMap { m.workspace.today(spaceID: $0).first?.url }, OpenArcLinks.helpCenter)
             },
         ]
     }

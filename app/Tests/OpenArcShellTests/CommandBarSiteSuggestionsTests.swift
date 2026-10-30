@@ -262,29 +262,36 @@ final class CommandBarSiteSuggestionsTests: XCTestCase {
         XCTAssertEqual(model.handle(.returnKey), .activate(.openURL(weatherCom, target: .newTab)))
     }
 
-    /// Backspace removes the completion (the field shows the typed text, the search row is
-    /// selected, Return searches); the next Backspace deletes a letter and no completion returns
-    /// until a letter is typed again.
+    /// Backspace removes only the completed suffix; the site row stays first and selected, now
+    /// "weather.com — weather.com" with a globe, and Return still opens the site ([05 §命令栏] E30
+    /// observed, plan B133). The next Backspace deletes a letter and no completion returns until a
+    /// letter is typed again (inferred).
     func testBackspaceRemovesTheCompletion() async throws {
         let model = await typed("weather", sources: weatherSources())
         XCTAssertNotNil(model.inlineCompletion)
         XCTAssertEqual(model.handle(.deleteBackward), .handled, "the key only drops the completion")
         XCTAssertNil(model.inlineCompletion)
         XCTAssertEqual(model.displayedText, "weather")
-        XCTAssertEqual(model.selectedResult?.kind, .webSearch)
-        XCTAssertEqual(model.handle(.returnKey), .activate(.searchWeb(query: "weather", target: .newTab)))
+        XCTAssertEqual(model.selectedIndex, 0)
+        let site = try XCTUnwrap(model.selectedResult)
+        XCTAssertEqual(site.kind, .siteCompletion, "[05 §命令栏] E30: not the search row")
+        XCTAssertEqual(site.title, "weather.com")
+        XCTAssertEqual(site.displayedSubtitle, "weather.com", "reads “weather.com — weather.com”")
+        XCTAssertEqual(site.iconHint, .bareSite, "globe")
+        XCTAssertEqual(model.handle(.returnKey), .activate(.openURL(weatherCom, target: .newTab)))
 
         XCTAssertEqual(model.handle(.deleteBackward), .ignored, "without a completion the field deletes")
         model.queryText = "weathe"
         await model.waitForRefresh()
         XCTAssertNil(model.inlineCompletion, "deleting does not bring a completion back")
         XCTAssertEqual(model.results.first?.kind, .siteCompletion, "the site row stays listed")
-        XCTAssertEqual(model.selectedResult?.kind, .webSearch)
+        XCTAssertEqual(model.selectedResult?.title, "weather.com", "still first, as its host")
 
         model.queryText = "weather"
         await model.waitForRefresh()
         XCTAssertEqual(model.inlineCompletion?.completedText, "weather.com", "typing brings it back")
         XCTAssertEqual(model.selectedIndex, 0)
+        XCTAssertEqual(model.selectedResult?.title, "Weather.com", "the site's own title again")
     }
 
     /// Typing replaces the selected suffix: the field reports the new text, and a letter that

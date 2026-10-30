@@ -11,6 +11,14 @@ import OpenArcDesign
 enum CommandBarStyle {
     /// Field placeholder text. unknown (not recorded in the spec).
     static let placeholder = "Search or Enter URL…"
+    /// Placeholder of a site search ("Tab to Search"). [05 §命令栏] E30 observed.
+    static let siteSearchPlaceholder = "Search…"
+    /// The site search chip and the "Tab" key cap: height, radius, padding and the gap to the
+    /// field. inferred (E30 recorded only the chip's color and text).
+    static let siteSearchChipHeight: CGFloat = 20
+    static let siteSearchChipCornerRadius: CGFloat = 5
+    static let siteSearchChipHorizontalPadding: CGFloat = 7
+    static let siteSearchChipGap: CGFloat = 8
     /// Glyph point sizes that give the measured ink: input glyph 13 × 13 ([07 §5] observed ink),
     /// row icons in a 16 pt box (ink ≈ 12–13 [07 §5] observed). SF Symbols are our own icons.
     static let inputIconPointSize: CGFloat = 13
@@ -112,10 +120,21 @@ public struct CommandBarView: View {
                 .offset(x: c.inputIconCenter - iconBox / 2, y: c.inputIconCenter - iconBox / 2)
             // AppKit-backed so the field takes keyboard focus as soon as the bar is in a window
             // (B26); keys (arrows, Tab, Return, Escape) are routed in `CommandBarTextField`.
-            CommandBarTextField(viewModel: viewModel, style: fieldStyle)
-                .frame(width: max(0, layout.panelWidth - c.inputFieldLeading - (c.infoButtonTrailing + c.infoButtonSize) - 10),
-                       height: c.inputFieldHeight)
-                .offset(x: c.inputFieldLeading, y: c.inputFieldTop)
+            // A site search puts the site's chip before the field, and an offered one its hint
+            // after it ([05 §命令栏] E30 observed, plan B133).
+            HStack(spacing: CommandBarStyle.siteSearchChipGap) {
+                if let site = viewModel.siteSearch {
+                    siteSearchChip(site)
+                }
+                CommandBarTextField(viewModel: viewModel, style: fieldStyle)
+                    .frame(height: c.inputFieldHeight)
+                if let offer = viewModel.siteSearchOffer {
+                    siteSearchHint(offer)
+                }
+            }
+            .frame(width: max(0, layout.panelWidth - c.inputFieldLeading - (c.infoButtonTrailing + c.infoButtonSize) - 10),
+                   height: c.inputFieldHeight)
+            .offset(x: c.inputFieldLeading, y: c.inputFieldTop)
             accessoryButton
                 .frame(width: c.infoButtonSize, height: c.infoButtonSize)
                 .offset(x: layout.panelWidth - c.infoButtonTrailing - c.infoButtonSize, y: c.infoButtonTop)
@@ -130,14 +149,15 @@ public struct CommandBarView: View {
         CommandBarInputGlyph.forField(
             text: viewModel.effectiveQuery,
             firstResult: viewModel.results.first,
-            inlineCompletion: viewModel.inlineCompletion
+            inlineCompletion: viewModel.inlineCompletion,
+            searchEngine: viewModel.searchEngineIconRow
         )
     }
 
     @ViewBuilder
     private var inputGlyph: some View {
         let glyph = inputGlyphValue
-        if case .site(let row) = glyph, let image = SidebarFaviconView.image(viewModel.faviconProvider?(row)) {
+        if let row = glyph.iconRow, let image = SidebarFaviconView.image(viewModel.faviconProvider?(row)) {
             Image(nsImage: image).resizable().interpolation(.high)
         } else {
             Image(systemName: glyph.symbolName)
@@ -180,9 +200,57 @@ public struct CommandBarView: View {
         return CommandBarTextFieldStyle(
             font: Typography.commandBarInput.nsFont,
             textColor: input,
-            placeholder: CommandBarStyle.placeholder,
+            placeholder: viewModel.siteSearch == nil ? CommandBarStyle.placeholder : CommandBarStyle.siteSearchPlaceholder,
             placeholderColor: palette.commandBarSecondaryText.nsColor
         )
+    }
+
+    // MARK: Tab to Search (B133)
+
+    /// The searched site's chip: brand color with white text, else the theme's selection color.
+    /// [05 §命令栏] E30 observed YouTube's red chip with white text; the rest is inferred.
+    private func siteSearchChip(_ site: CommandBarSearchSite) -> some View {
+        let fill = site.brandColor ?? palette.commandBarSelection
+        return Text(site.name)
+            .font(Typography.commandBarActionLabel.font.weight(.semibold))
+            .foregroundStyle(Color.white)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, CommandBarStyle.siteSearchChipHorizontalPadding)
+            .frame(height: CommandBarStyle.siteSearchChipHeight)
+            .background(
+                RoundedRectangle(cornerRadius: CommandBarStyle.siteSearchChipCornerRadius, style: .continuous)
+                    .fill(fill.commandBarColor)
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(site.name)
+            .accessibilityIdentifier("openarc.commandbar.siteSearchChip")
+    }
+
+    /// "Search <Site>" and a "Tab" key cap at the field's right end. [05 §命令栏] E30 observed
+    /// wording; the key cap reuses the shortcut chip's look (inferred).
+    private func siteSearchHint(_ site: CommandBarSearchSite) -> some View {
+        let c = Metrics.CommandBar.self
+        return HStack(spacing: 6) {
+            Text(site.hintTitle)
+                .font(Typography.commandBarActionLabel.font)
+                .foregroundStyle(palette.commandBarSecondaryText.commandBarColor)
+                .lineLimit(1)
+                .fixedSize()
+            Text("Tab")
+                .font(Typography.commandBarActionLabel.font)
+                .foregroundStyle(palette.commandBarSecondaryText.commandBarColor)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, c.shortcutChipHorizontalPadding)
+                .frame(height: CommandBarStyle.siteSearchChipHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: c.resultArrowBoxCornerRadius, style: .continuous)
+                        .fill(palette.commandBarGlyphBoxFill.commandBarColor)
+                )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("openarc.commandbar.siteSearchHint")
     }
 
     // MARK: Results
@@ -299,7 +367,7 @@ struct CommandBarRow: View {
     /// observed the "— example.net" subtitle in the window bar too.
     @ViewBuilder
     private func titleView(primary: Color, secondary: Color) -> some View {
-        if let subtitle = result.subtitle, !subtitle.isEmpty, subtitle != result.title {
+        if let subtitle = result.displayedSubtitle {
             HStack(spacing: 4) {
                 Text(result.title)
                     .foregroundStyle(primary)
@@ -342,7 +410,7 @@ struct CommandBarRow: View {
 
     private var symbolName: String {
         switch result.iconHint {
-        case .site: return "globe"
+        case .site, .bareSite: return "globe"
         case .pinned: return "pin"
         case .archive: return "archivebox"
         case .history: return "clock"

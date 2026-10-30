@@ -37,6 +37,36 @@ final class IncognitoCommandBarTests: XCTestCase {
         }
     }
 
+    /// Plan B133 (F5-12): the five help rows of [06 §20.1] observed, in order: Contact the Team ·
+    /// The Browser Company (ours: the project page under our app's name) · Air Traffic Control ·
+    /// Tips for Organizing · Help Center. Each opens our counterpart; the normal bar lists none of
+    /// the three new rows (inferred).
+    func testIncognitoHelpRowsSpec06Section20_1() async throws {
+        await incognito.commandBar.waitForRefresh()
+        XCTAssertEqual(incognito.commandBar.results.map(\.title), [
+            "Contact the Team", AppIdentity.displayName, "Air Traffic Control", "Tips for Organizing", "Help Center",
+        ])
+        incognito.perform(.runCommand(.helpCenter))
+        incognito.perform(.runCommand(.organizingTips))
+        incognito.perform(.runCommand(.aboutProject))
+        await incognito.sidebar.settleEngineWork()
+        let opened = incognito.workspace.tabs.values.compactMap(\.url)
+        for url in [OpenArcLinks.helpCenter, OpenArcLinks.organizingTips, OpenArcLinks.site] {
+            XCTAssertTrue(opened.contains(url), "\(url)")
+        }
+
+        let normal = ShellModel.window(for: BrowserWindowRequest(kind: .newWindow), on: controller)
+        defer { normal.stop() }
+        normal.presentCommandBar(.newTab)
+        normal.commandBar.queryText = "help"
+        await normal.commandBar.waitForRefresh()
+        let listed = commands(normal.commandBar.results)
+        XCTAssertTrue(listed.contains(.contactTheTeam))
+        for row in [CommandBarCommand.aboutProject, .organizingTips, .helpCenter] {
+            XCTAssertFalse(listed.contains(row), "\(row) stays in the incognito bar")
+        }
+    }
+
     /// [06 §20.1] observed: opening the incognito window shows the command bar right away.
     func testIncognitoWindowOpensWithCommandBar() {
         XCTAssertTrue(incognito.isCommandBarPresented)
