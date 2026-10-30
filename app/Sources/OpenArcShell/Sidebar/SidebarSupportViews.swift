@@ -204,10 +204,15 @@ struct SidebarRootDropDelegate: DropDelegate {
 /// following the pointer inside the window. So the sidebar watches the left mouse button itself
 /// (a local event monitor that never consumes the press, so clicks, double-clicks and menus keep
 /// working) and starts an AppKit dragging session past the threshold.
+///
+/// A press on the blank list area below the last row moves the window once the mouse moves
+/// ([06 §15.1] observed, B110): the same monitor hands that drag to the window.
 struct SidebarDragSourceHost: NSViewRepresentable {
     let viewModel: SidebarViewModel
     /// What a press can pick up, computed at the press (rows move with the scroll offset).
     let items: @MainActor () -> [SidebarDragSourceItem]
+    /// The blank list area where a drag moves the window, computed at the press. B110.
+    var windowMoveArea: @MainActor () -> SidebarWindowMoveArea = { .none }
     /// The sidebar layout, for the drag image's shape zones (B44).
     var layout = SidebarLayout()
     /// False while something covers the sidebar (the window command bar, onboarding): presses
@@ -218,6 +223,7 @@ struct SidebarDragSourceHost: NSViewRepresentable {
         let view = SidebarDragSourceView()
         view.viewModel = viewModel
         view.items = pickable
+        view.windowMoveArea = movable
         view.layout = layout
         return view
     }
@@ -225,6 +231,7 @@ struct SidebarDragSourceHost: NSViewRepresentable {
     func updateNSView(_ nsView: SidebarDragSourceView, context: Context) {
         nsView.viewModel = viewModel
         nsView.items = pickable
+        nsView.windowMoveArea = movable
         nsView.layout = layout
     }
 
@@ -232,11 +239,17 @@ struct SidebarDragSourceHost: NSViewRepresentable {
         if acceptsPointer { return items }
         return { [] }
     }
+
+    private var movable: @MainActor () -> SidebarWindowMoveArea {
+        if acceptsPointer { return windowMoveArea }
+        return { .none }
+    }
 }
 
 final class SidebarDragSourceView: NSView, NSDraggingSource {
     weak var viewModel: SidebarViewModel?
     var items: @MainActor () -> [SidebarDragSourceItem] = { [] }
+    var windowMoveArea: @MainActor () -> SidebarWindowMoveArea = { .none }
     var layout = SidebarLayout()
     /// The lifted row that follows the pointer (B44, [06 §15.1] E17 observed).
     private let dragImage = SidebarDragImageController()
@@ -248,6 +261,11 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
     private var isDragging = false
     /// Frame of the pressed item (sidebar root space), for the drag image's start position.
     private var pendingFrame: CGRect = .zero
+    /// A press on the blank list area: its mouse-down event, handed to the window when the mouse
+    /// moves (B110).
+    private var pendingWindowMove: NSEvent?
+    /// The press that `handle` decided turns into a window move; `startPendingWindowMove` runs it.
+    private var windowMoveToStart: NSEvent?
 
     /// Top-left origin, like the sidebar's SwiftUI coordinate space this view covers.
     override var isFlipped: Bool { true }
@@ -265,7 +283,15 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
             let consumed = MainActor.assumeIsolated {
                 self?.handle(kind, location: location, clickCount: clicks, flags: flags, windowNumber: number) ?? false
             }
-            if consumed, let self { MainActor.assumeIsolated { self.startPendingDrag(with: event) } }
+            if kind == .leftMouseDown, let self {
+                MainActor.assumeIsolated { self.notePress(event) }
+            }
+            if consumed, let self {
+                MainActor.assumeIsolated {
+                    self.startPendingDrag(with: event)
+                    self.startPendingWindowMove()
+                }
+            }
             return consumed ? nil : event
         }
         monitor = token.map(SidebarEventMonitorToken.init)
@@ -281,10 +307,20 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
         switch kind {
         case .leftMouseDown:
             pending = nil
+            pendingWindowMove = nil
+            pressIsWindowMove = false
             guard bounds.contains(point), !isDragging,
-                  flags.intersection([.command, .control, .option, .shift]).isEmpty,
-                  let hit = SidebarDragSourceItem.item(at: point, in: items()),
-                  viewModel?.canStartDrag(hit.item) == true else { return false }
+                  flags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+            let hit: SidebarDragSourceItem
+            switch SidebarPressTarget.at(point, items: items(), windowMoveArea: windowMoveArea()) {
+            case .item(let item): hit = item
+            case .windowMove:
+                // Keeps the event for the move; the press itself still reaches the list.
+                pressIsWindowMove = true
+                return false
+            case .none: return false
+            }
+            guard viewModel?.canStartDrag(hit.item) == true else { return false }
             pending = (hit.item, point)
             pendingFrame = hit.frame
             // [06 §15.1] observed: the press alone selects the tab and brings it to the front.
@@ -295,6 +331,13 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
             }
             return false
         case .leftMouseDragged:
+            if let press = pendingWindowMove {
+                // [06 §15.1] observed: dragging from the blank list area moves the window. It
+                // starts with the first movement, like a title bar (inferred).
+                pendingWindowMove = nil
+                windowMoveToStart = press
+                return true
+            }
             guard let pending, !isDragging else { return false }
             guard SidebarDragThreshold.isExceeded(dx: point.x - pending.start.x, dy: point.y - pending.start.y) else { return false }
             self.pending = nil
@@ -303,11 +346,27 @@ final class SidebarDragSourceView: NSView, NSDraggingSource {
             return true
         case .leftMouseUp:
             pending = nil
+            pendingWindowMove = nil
             viewModel?.pressEnded()
             return false
         default:
             return false
         }
+    }
+
+    /// Set by `handle` for a press on the blank list area; `notePress` keeps its event.
+    private var pressIsWindowMove = false
+
+    private func notePress(_ event: NSEvent) {
+        if pressIsWindowMove { pendingWindowMove = event }
+        pressIsWindowMove = false
+    }
+
+    /// Moves the window from the press point; AppKit tracks the mouse until it goes up.
+    private func startPendingWindowMove() {
+        guard let press = windowMoveToStart else { return }
+        windowMoveToStart = nil
+        window?.performDrag(with: press)
     }
 
     private func startPendingDrag(with event: NSEvent) {

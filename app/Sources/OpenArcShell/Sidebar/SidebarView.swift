@@ -25,18 +25,37 @@ public struct SidebarView: View {
     }
 
     public var body: some View {
+        // An incognito window's controller has no updater of its own (the app's lives on the
+        // main controller), so it shows no update pill. inferred.
+        if viewModel.isIncognito {
+            content(isUpdateReady: false)
+        } else {
+            SidebarUpdateReadyReader(updates: viewModel.controller.updates) { content(isUpdateReady: $0) }
+        }
+    }
+
+    private func content(isUpdateReady: Bool) -> some View {
         let isIncognito = viewModel.isIncognito
         let tilesHeight = viewModel.favoritesTilesHeight
-        GeometryReader { proxy in
+        return GeometryReader { proxy in
             SidebarContent(viewModel: viewModel, listScroll: listScroll, isSidebarHovered: isSidebarHovered,
                            layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height),
                                                  isWebToolbarShown: isWebToolbarShown, hidesFavorites: isIncognito,
-                                                 favoritesTilesHeight: tilesHeight),
+                                                 favoritesTilesHeight: tilesHeight, showsUpdatePill: isUpdateReady),
                            onHover: { isSidebarHovered = $0 })
                 .equatable()
         }
         .frame(width: CGFloat(Metrics.Sidebar.width))
     }
+}
+
+/// Observes the update state only, so the sidebar's layout follows "update ready" (B111) without
+/// the sidebar observing anything else of the updater.
+private struct SidebarUpdateReadyReader<Content: View>: View {
+    @ObservedObject var updates: UpdatesModel
+    let content: (Bool) -> Content
+
+    var body: some View { content(updates.isUpdateReady) }
 }
 
 /// The sidebar's blocks at their measured positions. Equatable on its layout and hover: the view
@@ -97,6 +116,13 @@ private struct SidebarContent: View, Equatable {
                 SidebarDockHost(viewModel: viewModel, layout: layout)
                     .frame(width: layout.width, height: layout.dockFrame.height)
                     .offset(y: layout.dockFrame.minY)
+
+                // A downloaded update waits: the pill right above the dock. [07 §8.6] observed (B111).
+                if let pill = layout.updatePillFrame {
+                    SidebarUpdatePill { viewModel.controller.updates.installReadyUpdate() }
+                        .frame(width: pill.width, height: pill.height)
+                        .offset(x: pill.minX, y: pill.minY)
+                }
             }
             .frame(width: layout.width, height: layout.windowSize.height, alignment: .topLeading)
 
@@ -114,8 +140,11 @@ private struct SidebarContent: View, Equatable {
             // Starts drags past the per-axis threshold and selects on press. [06 §15.1] observed.
             // Transparent to clicks (it only watches the mouse events).
             // The pickable items are computed at the press, from the scroll offset of that moment.
+            // A drag from the blank list area below the rows moves the window (B110).
             SidebarDragSourceHost(viewModel: viewModel, items: {
                 listScroll.dragSourceItems(viewModel: viewModel, layout: layout)
+            }, windowMoveArea: {
+                listScroll.windowMoveArea(viewModel: viewModel, layout: layout)
             }, layout: layout)
                 .frame(width: layout.width, height: layout.windowSize.height)
                 .allowsHitTesting(false)
@@ -150,7 +179,7 @@ private struct SidebarContent: View, Equatable {
         let top = SidebarSpacePager.bandTop(layout)
         return SidebarSpacePagerHost(viewModel: viewModel, scroll: listScroll, isSidebarHovered: isSidebarHovered,
                                      layout: layout, surface: surface)
-            .frame(width: layout.width, height: max(0, layout.dockFrame.minY - top))
+            .frame(width: layout.width, height: max(0, layout.listBottom - top))
             .offset(y: top)
     }
 }

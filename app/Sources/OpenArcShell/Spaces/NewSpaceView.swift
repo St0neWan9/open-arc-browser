@@ -16,6 +16,7 @@ struct NewSpaceView: View {
     @FocusState private var nameFocused: Bool
 
     private typealias T = SpaceFlowLocalTokens
+    private typealias B = CreateSpaceButtonTokens
 
     var body: some View {
         VStack(spacing: 14) {
@@ -35,14 +36,16 @@ struct NewSpaceView: View {
             Button(action: { flow.create() }) {
                 Text("Create Space")
                     .font(Typography.dialogButton.font.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: T.primaryButtonHeight)
+                    .frame(width: CGFloat(B.width), height: CGFloat(B.height))
                     .foregroundStyle(Color.white)
                     .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(flow.canCreate ? palette.primaryButtonFill.swiftUI : Color.gray.opacity(0.4))
+                        RoundedRectangle(cornerRadius: CGFloat(B.cornerRadius), style: .continuous)
+                            .fill(flow.createButtonFill.swiftUI)
                     )
             }
             .buttonStyle(.plain)
+            // The button spans the sidebar content width (x 8–268), wider than the form. [07 §8.6] observed.
+            .padding(.horizontal, CGFloat(B.horizontalInset) - T.formHorizontalInset)
             .disabled(!flow.canCreate)
             .keyboardShortcut(.defaultAction)
             .accessibilityIdentifier("openarc.newSpace.create")
@@ -54,7 +57,7 @@ struct NewSpaceView: View {
                 .accessibilityIdentifier("openarc.newSpace.cancel")
             Spacer(minLength: 24)
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, T.formHorizontalInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { nameFocused = true }
         .accessibilityElement(children: .contain)
@@ -156,6 +159,16 @@ struct NewSpaceView: View {
                 onDismiss: { _ in isThemePopoverShown = false }
             )
         }.padding(.trailing, -T.themeRowAnchorOutset))
+    }
+}
+
+extension SpaceFlowModel {
+    /// Fill of the "Create Space" button for the draft theme and the name's state. [07 §8.6]:
+    /// no picked color observed (#2848FB enabled, #A6A8F5 disabled); with a picked color the
+    /// disabled fill follows the theme (inferred rule) and the enabled fill is unknown (our
+    /// derived `primaryButtonFill`). See `CreateSpaceButtonTokens.fill`.
+    var createButtonFill: RGBAColor {
+        CreateSpaceButtonTokens.fill(for: draftTheme.style, isEnabled: canCreate, systemAppearance: systemAppearance)
     }
 }
 
