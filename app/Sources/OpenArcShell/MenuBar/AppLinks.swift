@@ -32,9 +32,12 @@ public enum OpenArcLinks {
     /// Help ▸ Contact the Team ([01 §Help] observed item) and the command bar row of that name: the
     /// repository's issues (we publish no email address).
     public static let contactTheTeam = URL(string: "https://\(siteHost)/\(repository)/issues")!
+    /// The incognito command bar's "Tips for Organizing" help row ([06 §20.1] observed row; plan
+    /// B133). The page is ours (inferred target: a help page on Spaces, pins and folders).
+    public static let organizingTips = page("help/organizing.md")
 
     /// Every link above, for checks that all shipped links come from here.
-    public static let all: [URL] = [homepage, privacyPolicy, helpCenter, profilesHelp, contactTheTeam]
+    public static let all: [URL] = [homepage, privacyPolicy, helpCenter, profilesHelp, contactTheTeam, organizingTips]
 
     private static func page(_ path: String) -> URL {
         URL(string: "https://\(siteHost)/\(repository)/blob/updates/pages/\(path)")!

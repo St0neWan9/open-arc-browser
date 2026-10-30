@@ -18,7 +18,7 @@ final class AppLinksTests: XCTestCase {
     func testEveryLinkIsBuiltFromTheSiteConstant() {
         XCTAssertEqual(OpenArcLinks.all, [
             OpenArcLinks.homepage, OpenArcLinks.privacyPolicy, OpenArcLinks.helpCenter,
-            OpenArcLinks.profilesHelp, OpenArcLinks.contactTheTeam,
+            OpenArcLinks.profilesHelp, OpenArcLinks.contactTheTeam, OpenArcLinks.organizingTips,
         ])
         XCTAssertEqual(Set(OpenArcLinks.all).count, OpenArcLinks.all.count)
         for url in OpenArcLinks.all {
@@ -32,6 +32,8 @@ final class AppLinksTests: XCTestCase {
         XCTAssertEqual(OpenArcLinks.privacyPolicy.path, pages + "privacy.md")
         XCTAssertEqual(OpenArcLinks.helpCenter.path, pages + "help/README.md")
         XCTAssertEqual(OpenArcLinks.profilesHelp.path, pages + "help/profiles.md")
+        // B133: the incognito bar's "Tips for Organizing" row ([06 §20.1] observed row, our page).
+        XCTAssertEqual(OpenArcLinks.organizingTips.path, pages + "help/organizing.md")
         XCTAssertEqual(OpenArcLinks.contactTheTeam.path, "/\(OpenArcLinks.repository)/issues")
     }
 

@@ -131,6 +131,8 @@ public final class LittleArcModel: ObservableObject {
             guard let shell, let commandBar else { return }
             shell.controller.loadMissingCommandBarIcons(results, profileID: shell.sidebar.currentProfileID, bar: commandBar)
         }
+        // B133: one typed character shows the default search engine's icon ([05 §命令栏] E30).
+        commandBar.searchEngineSite = { [weak shell] in shell?.currentProfileSettings.searchEngine.siteURL }
         commandBar.onDismiss = { [weak self] in self?.close() }
         colorSchemeObservation = shell.controller.colorSchemeInputsChanged.sink { [weak self] in
             MainActor.assumeIsolated { self?.syncColorScheme() }

@@ -174,6 +174,8 @@ public final class ShellModel: ObservableObject {
                 guard let self, let bar else { return }
                 self.controller.loadMissingCommandBarIcons(results, profileID: self.sidebar.currentProfileID, bar: bar)
             }
+            // B133: one typed character shows the default search engine's icon ([05 §命令栏] E30).
+            bar.searchEngineSite = { [weak self] in self?.currentProfileSettings.searchEngine.siteURL }
         }
         // Menu enablement (split items, back/forward) reads sidebar state through this model.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -534,6 +536,10 @@ public final class ShellModel: ObservableObject {
             // Settings ▸ Links with the Air Traffic Control sheet ([06 §25] observed sheet). B61.
             controller.requestAirTrafficControl()
             if let open = openSettingsWindow { open() } else { lastUnhandledCommand = command }
+        // The other incognito help rows open our pages in a new tab ([06 §20.1] rows; B133).
+        case .aboutProject: openProjectPage()
+        case .organizingTips: openOrganizingTips()
+        case .helpCenter: openHelpCenter()
         }
     }
 

@@ -129,7 +129,15 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
     /// Opens Settings ▸ Links with the Air Traffic Control sheet. A help row of the incognito
     /// window's empty bar [06 §20.1] observed; the target is inferred from the name ([06 §25]).
     case airTrafficControl
-
+    /// Our counterpart of the incognito bar's "The Browser Company" help row ([06 §20.1] observed
+    /// row): the project's public page, titled with our app's name. Plan B133 (ours).
+    case aboutProject
+    /// "Tips for Organizing": our help page on Spaces, pins and folders. [06 §20.1] observed row
+    /// title; the page is ours (B133).
+    case organizingTips
+    /// "Help Center": the same page as Help ▸ Visit Help Center. [06 §20.1] observed row title;
+    /// [01 §Help] observed menu item (B133).
+    case helpCenter
     /// Row title. [01 §menus] observed menu item names; "Archive Tab", "Collapse All Folders" and
     /// "Expand All Folders" are not in a menu and use their [02] shortcut-list names (observed).
     /// "Contact the Team" is also observed in [04 §command bar].
@@ -185,6 +193,9 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .openSettings: return "Settings…"
         case .contactTheTeam: return "Contact the Team"
         case .airTrafficControl: return "Air Traffic Control"
+        case .aboutProject: return AppIdentity.displayName
+        case .organizingTips: return "Tips for Organizing"
+        case .helpCenter: return "Help Center"
         }
     }
 
@@ -253,6 +264,9 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
         case .openSettings: return ["preferences", "settings"]
         case .contactTheTeam: return ["help", "feedback", "support"]
         case .airTrafficControl: return ["links", "routes", "help"]
+        case .aboutProject: return ["about", "project", "website", "help"]
+        case .organizingTips: return ["tips", "organize", "help"]
+        case .helpCenter: return ["help", "support", "docs"]
         }
     }
 
@@ -289,7 +303,8 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
             return nil
         case .favoriteTab, .separateFromSplit, .expandSplit, .newSpace, .editTheme, .renameSpace,
              .manageSpaces, .newFolder, .collapseAllFolders, .expandAllFolders, .viewArchive,
-             .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .contactTheTeam, .airTrafficControl:
+             .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .contactTheTeam, .airTrafficControl,
+             .aboutProject, .organizingTips, .helpCenter:
             return nil
         }
     }
@@ -336,6 +351,10 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
              .openLibrary, .viewDownloads, .viewEasels, .viewMedia, .viewBoosts, .openSettings, .contactTheTeam,
              .airTrafficControl:
             return true
+        case .aboutProject, .organizingTips, .helpCenter:
+            // Rows of the incognito bar only ([06 §20.1] observed there); the normal bar was seen
+            // with Contact the Team alone ([04 §command bar]), so they stay out of it. inferred.
+            return state.isIncognito
         }
     }
 
@@ -351,9 +370,11 @@ public enum CommandBarCommand: String, CaseIterable, Hashable, Sendable {
 
     /// The help rows an incognito window's bar lists for an empty query, in the observed order.
     /// [06 §20.1] observed: Contact the Team · The Browser Company · Air Traffic Control · Tips for
-    /// Organizing · Help Center. Ours keeps the two that have a surface; the company page, the
-    /// tips and the help center have no Open Arc counterpart yet (B61, reported).
-    public static let helpCommands: [CommandBarCommand] = [.contactTheTeam, .airTrafficControl]
+    /// Organizing · Help Center. "The Browser Company" becomes our project page, titled with our
+    /// app's name (ours, B133).
+    public static let helpCommands: [CommandBarCommand] = [
+        .contactTheTeam, .aboutProject, .airTrafficControl, .organizingTips, .helpCenter,
+    ]
 }
 
 /// The window state the command rows depend on (availability and the sidebar title). A plain
@@ -493,6 +514,9 @@ public enum CommandBarIconHint: Hashable, Sendable {
     case space
     case search
     case globe
+    /// A site row drawn with the globe and never its favicon: the completing site row after
+    /// Backspace took its completion back. [05 §命令栏] E30 observed (plan B133).
+    case bareSite
 }
 
 /// Everything a source needs to know about the current query.
@@ -601,6 +625,14 @@ public struct CommandBarResult: Identifiable, Hashable, Sendable {
         return shortcutHint
     }
 
+    /// The "— subtitle" half the row draws, nil for none. A subtitle equal to the title is left
+    /// out, except on the completing site row, which reads "youtube.com — youtube.com" once
+    /// Backspace took its completion back ([05 §命令栏] E30 observed, plan B133).
+    public var displayedSubtitle: String? {
+        guard let subtitle, !subtitle.isEmpty else { return nil }
+        return subtitle != title || kind == .siteCompletion ? subtitle : nil
+    }
+
     /// Text shown on the right of the row for a presentation. [06 §6] observed: panes show the space name.
     ///
     /// In the window's bar (plan B109, F4 live E2 observed 2026-10-29 with an empty query): a tab
@@ -639,35 +671,53 @@ public enum CommandBarInputGlyph: Hashable, Sendable {
     /// [07 §5] / [05 §命令栏] observed (2026-10-30): with "weather" completed to ".com" the field's
     /// glyph is the site's icon.
     case site(CommandBarResult)
+    /// One character typed: the default search engine's icon (`row` stands for the engine's
+    /// site; Google's "G" with Google). [05 §命令栏] E30 observed (plan B133). Draws the magnifier
+    /// until the icon is cached.
+    case searchEngine(CommandBarResult)
 
     /// The glyph for the field's text and the list's first result (nil for an empty list).
     /// [07 §5] E27 observed: a command on top shows its glyph, anything else the magnifier, and
     /// [05 §命令栏] observed the site's favicon while the field shows an inline completion (B128).
-    /// An empty field keeps the magnifier even when a help command heads the list (incognito,
+    /// [05 §命令栏] E30 observed the search engine's icon while one character is typed (B133);
+    /// a command heading that list keeps its own glyph (inferred precedence, E30 saw a tab row on
+    /// top). An empty field keeps the magnifier even when a help command heads the list (incognito,
     /// [06 §20.1]): F4 live E3 observed the magnifier for the empty bar (B109). The globe of the
     /// earlier [07 §5] table capture is no longer drawn: E27 saw the magnifier for every first
     /// result that is not a command (plan B127).
     public static func forField(
         text: String,
         firstResult: CommandBarResult?,
-        inlineCompletion: CommandBarInlineCompletion? = nil
+        inlineCompletion: CommandBarInlineCompletion? = nil,
+        searchEngine: CommandBarResult? = nil
     ) -> CommandBarInputGlyph {
         if let inlineCompletion, let firstResult, inlineCompletion.resultID == firstResult.id {
             return .site(firstResult)
         }
-        guard !text.isEmpty, let firstResult, firstResult.drawsGlyphBox, let command = firstResult.command else {
-            return .magnifier
+        if !text.isEmpty, let firstResult, firstResult.drawsGlyphBox, let command = firstResult.command {
+            return .command(command)
         }
-        return .command(command)
+        if text.count == 1, !text.contains(where: \.isWhitespace), let searchEngine {
+            return .searchEngine(searchEngine)
+        }
+        return .magnifier
     }
 
-    /// SF Symbol drawn for the glyph (a site glyph falls back to the globe placeholder when the
-    /// window's favicon cache has no image).
+    /// SF Symbol drawn for the glyph (a site glyph falls back to the globe placeholder, the
+    /// search engine's to the magnifier, when the window's favicon cache has no image).
     public var symbolName: String {
         switch self {
-        case .magnifier: return "magnifyingglass"
+        case .magnifier, .searchEngine: return "magnifyingglass"
         case .command(let command): return command.glyphSymbol
         case .site: return "globe"
+        }
+    }
+
+    /// The row whose favicon the glyph draws, nil for symbol-only glyphs.
+    public var iconRow: CommandBarResult? {
+        switch self {
+        case .site(let row), .searchEngine(let row): return row
+        case .magnifier, .command: return nil
         }
     }
 }

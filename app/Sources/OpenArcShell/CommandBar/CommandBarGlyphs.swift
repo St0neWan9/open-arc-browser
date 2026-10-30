@@ -67,6 +67,9 @@ extension CommandBarCommand {
         case .viewMedia: return "photo.on.rectangle"
         case .viewBoosts: return "paintbrush"
         case .airTrafficControl: return "arrow.triangle.branch"
+        case .aboutProject: return "info.circle"
+        case .organizingTips: return "lightbulb"
+        case .helpCenter: return "questionmark.circle"
         }
     }
 

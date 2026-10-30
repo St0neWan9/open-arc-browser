@@ -124,6 +124,19 @@ public enum CommandBarSiteCompletionRules {
         )
     }
 
+    /// The completing site row after Backspace took its completion back: still first and still
+    /// opening the site, but titled with its host ("youtube.com — youtube.com") and drawn with a
+    /// globe instead of the site's icon. [05 §命令栏] E30 observed (plan B133).
+    public static func takenBackRow(_ row: CommandBarResult) -> CommandBarResult {
+        guard row.kind == .siteCompletion else { return row }
+        var copy = row
+        let host = row.url.flatMap(CommandBarTextNormalizer.host) ?? row.subtitle ?? row.title
+        copy.title = host
+        copy.subtitle = host
+        copy.iconHint = .bareSite
+        return copy
+    }
+
     /// The inline completion for the ranked list: only while the first row is the completing site
     /// row, it is selected and its host starts with the typed text. [05 §命令栏] observed: leaving
     /// the first row clears the completion. inferred: a typed text with surrounding spaces does
