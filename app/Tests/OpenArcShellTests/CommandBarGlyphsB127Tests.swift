@@ -94,11 +94,21 @@ final class CommandBarGlyphsB127Tests: XCTestCase {
         XCTAssertEqual(commandRow(.copyURL).trailingAccessory(for: .window), .shortcutChip("⇧⌘C"))
         XCTAssertEqual(commandRow(.addSplitView).trailingAccessory(for: .window), .shortcutChip("⌃⇧="))
         XCTAssertEqual(commandRow(.archiveTab).trailingAccessory(for: .pane), .shortcutChip("⌘W"))
-        XCTAssertEqual(commandRow(.viewArchive).trailingAccessory(for: .window), .arrowBox)
-        XCTAssertEqual(searchRow.trailingAccessory(for: .window), .arrowBox)
+        XCTAssertEqual(commandRow(.viewArchive).trailingAccessory(for: .pane), .arrowBox)
         var labelled = commandRow(.copyURL)
         labelled.actionLabel = "Switch to Tab"
-        XCTAssertEqual(labelled.trailingAccessory(for: .window), .arrowBox)
+        XCTAssertEqual(labelled.trailingAccessory(for: .pane), .arrowBox)
+    }
+
+    /// [07 §5] E27 follow-up observed (2026-10-30, Arc, typed "weather"): in the window's bar the
+    /// site, search, history and command rows show no action text and no arrow box, highlighted
+    /// or not; open-tab rows keep theirs.
+    func testWindowBarShowsTrailingOnlyForOpenTabsSpec07Section5() {
+        XCTAssertEqual(commandRow(.viewArchive).trailingAccessory(for: .window), CommandBarRowAccessory.none)
+        XCTAssertEqual(searchRow.trailingAccessory(for: .window), CommandBarRowAccessory.none)
+        XCTAssertNil(searchRow.trailingLabel(for: .window, isSelected: true))
+        XCTAssertNil(searchRow.trailingLabel(for: .window, isSelected: false))
+        XCTAssertEqual(commandRow(.copyURL).trailingAccessory(for: .window), .shortcutChip("⇧⌘C"))
     }
 
     /// [07 §5] E27 observed: unselected glyph box / chip ≈ #F0F0F0, ≈ 20 pt box; dark inferred.

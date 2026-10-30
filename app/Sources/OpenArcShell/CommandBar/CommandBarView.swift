@@ -263,6 +263,7 @@ struct CommandBarRow: View {
             switch result.trailingAccessory(for: presentation) {
             case .shortcutChip(let hint): shortcutChip(hint)
             case .arrowBox: arrowBox
+            case .none: EmptyView()
             }
         }
         .padding(.leading, c.resultIconLeading)
