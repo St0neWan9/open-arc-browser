@@ -168,7 +168,7 @@ final class WorkspaceStoreTests: XCTestCase {
             XCTFail("unexpected error \(error)")
         }
         XCTAssertEqual(try Data(contentsOf: dir.workspaceFile), before)
-        XCTAssertEqual(dir.contents(), [PersistenceDefaults.workspaceFileName], "no temp file left behind")
+        XCTAssertEqual(dir.contents().filter { $0 != WorkspaceBackups.directoryName }, [PersistenceDefaults.workspaceFileName], "no temp file left behind")
         let unsaved = await store.hasUnsavedChanges
         XCTAssertTrue(unsaved, "the change stays pending for the next save")
     }
@@ -181,7 +181,7 @@ final class WorkspaceStoreTests: XCTestCase {
         state = try TreeOps.renameTab(state, id: Sample.ids.todayTab, customTitle: "Renamed", now: Fx.t(50))
         await store.update(state)
         try await store.flush()
-        XCTAssertEqual(dir.contents(), [PersistenceDefaults.workspaceFileName])
+        XCTAssertEqual(dir.contents().filter { $0 != WorkspaceBackups.directoryName }, [PersistenceDefaults.workspaceFileName])
         XCTAssertEqual(makeStore().loadResult.workspace, state)
     }
 

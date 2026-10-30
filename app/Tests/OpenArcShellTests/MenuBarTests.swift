@@ -374,10 +374,10 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(MenuBarCatalog.appServicesGroupItems, ["Privacy Policy"])
         XCTAssertEqual(MenuBarCatalog.windowSystemGroupItems, ["Stay On Top"])
         XCTAssertEqual(MenuBarCatalog.helpGroups.flatMap { $0 }, ["Getting Started", "Essential Keyboard Shortcuts", "Contact the Team",
-                                                                 "Visit Help Center", "Troubleshooting"])
+                                                                 "Visit Help Center", "Restore Data", "Troubleshooting"])
         XCTAssertEqual(MenuBarCatalog.troubleshootingItems, ["Reveal Open Arc Data", "Copy Open Arc Info"])
         XCTAssertEqual(Set(MenuBarCatalog.omittedItems.keys),
-                       ["Sign Out", "Restore Data", "Export Arc Notes", "Record Trace", "Open Task Manager", "Find and Replace"])
+                       ["Sign Out", "Export Arc Notes", "Record Trace", "Open Task Manager", "Find and Replace"])
     }
 
     /// 01 §Help: Getting Started … Troubleshooting ▸ (Reveal Open Arc Data · Copy Open Arc Info);

@@ -76,6 +76,11 @@ public struct WorkspaceStoreEvent: Hashable, Sendable {
 ///   immediately (app termination).
 /// - Remote changes (`apply`) are merged under `ConflictPolicy` and written immediately, because
 ///   the sync backend may persist its change token right after `apply` returns.
+/// - Backups (plan B117, Help ▸ Restore Data): rolling copies in `<directory>/Backups/`
+///   (`WorkspaceBackups`): one at launch when the newest is a day old or more, then at most one a
+///   day, taken from a successful save; the last 7 are kept. They are written on a background task
+///   from bytes the save already encoded, so they never delay or fail a save. A read-only store
+///   writes none.
 public actor WorkspaceStore: SyncLocalDatabase {
 
     /// The directory holding the workspace and sync state files.
@@ -113,6 +118,8 @@ public actor WorkspaceStore: SyncLocalDatabase {
     private var subscribers: [UUID: AsyncStream<WorkspaceStoreEvent>.Continuation] = [:]
     /// Values handed over through the nonisolated `submit`, newest wins.
     private nonisolated let inbox = SubmissionInbox()
+    /// Writes the rolling backups; nil for a read-only store.
+    private nonisolated let backupWriter: WorkspaceBackupWriter?
 
     /// Creates the store and loads `workspace.json` from `directory` synchronously.
     public init(
@@ -132,6 +139,32 @@ public actor WorkspaceStore: SyncLocalDatabase {
         self.loadResult = result
         self.workspace = result.workspace
         if case .refused = result.outcome { isReadOnly = true } else { isReadOnly = false }
+        backupWriter = isReadOnly ? nil : WorkspaceBackupWriter(dataDirectory: directory)
+        // The launch backup: the file as loaded, when the newest backup is a day old or more.
+        if result.outcome == .loaded {
+            backupWriter?.backUpIfDue(now: now(), .file(directory.appendingPathComponent(PersistenceDefaults.workspaceFileName)))
+        }
+    }
+
+    // MARK: - Backups
+
+    /// The rolling backups in `directory`, newest first (`WorkspaceBackups.list`).
+    public nonisolated func backups() -> [WorkspaceBackup] {
+        WorkspaceBackups.list(in: directory)
+    }
+
+    /// True when a backup exists and the store can take a restored workspace (it is not
+    /// read-only). Lists the backup folder; cheap, but it does touch the disk.
+    public nonisolated var canRestoreBackup: Bool {
+        !isReadOnly && WorkspaceBackups.hasBackups(in: directory)
+    }
+
+    /// The last backup that failed to write, cleared by the next successful one (diagnostics).
+    public nonisolated var lastBackupError: PersistenceError? { backupWriter?.lastError }
+
+    /// Waits until every backup started so far is on disk (tests, quitting).
+    public func waitForBackups() async {
+        await backupWriter?.waitUntilIdle()
     }
 
     // MARK: - Local changes
@@ -350,6 +383,8 @@ public actor WorkspaceStore: SyncLocalDatabase {
         hasUnsavedChanges = false
         writeCount += 1
         lastSaveError = nil
+        // At most one backup a day, from the bytes just written (no second encode, no read back).
+        backupWriter?.backUpIfDue(now: envelope.savedAt, .data(data))
     }
 
     // MARK: - Loading
