@@ -773,6 +773,23 @@ public final class WorkspaceController: ObservableObject {
         }
     }
 
+    /// Runs `body` once tab `id`'s record holds the page its engine tab shows: after the tab's
+    /// queued commands (a load just issued), with the engine's own state written into the record.
+    /// The cached live state can lag behind the engine (its events are still on the tab's event
+    /// stream after `load(_:inLiveTab:)` wrote the new URL), so a command about "the current page"
+    /// must not read it (B129). Without an engine tab the record is the page and `body` runs now.
+    func afterContentSettles(of id: UUID, _ body: @escaping @MainActor () -> Void) {
+        guard let live = liveTabs[id] else { return body() }
+        enqueueTabCommand(live) { [weak self] tab in
+            let state = await tab.currentState()
+            guard let self else { return }
+            if self.liveTabs[id]?.id == tab.id {
+                self.syncContent([id], sources: [id: SidebarTabLiveState(snapshot: state)])
+            }
+            body()
+        }
+    }
+
     /// `syncContent` for several tabs, as one change. It touches only those records' content, so
     /// every sidebar updates just their rows (`ChangeKind.tabContent`, B107). `sources` replaces
     /// the live state a tab's values are read from (the engine's own state, read after a load).
