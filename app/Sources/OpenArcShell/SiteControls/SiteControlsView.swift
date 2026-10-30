@@ -274,6 +274,7 @@ struct SiteControlsView: View {
                     .help(ext.title)
                     .accessibilityLabel(ext.name)
                     .accessibilityIdentifier("openarc.siteControls.extension.\(ext.id)")
+                    .contextMenu { extensionMenu(ext) }
                     .offset(cellOffset(layout, index: index))
                 }
                 Button { model.addExtensionHandler?() } label: {
@@ -289,6 +290,17 @@ struct SiteControlsView: View {
                 .offset(cellOffset(layout, index: layout.extensionCount))
             }
             .frame(width: T.toolRowWidth, height: layout.extensionsGridHeight, alignment: .topLeading)
+        }
+    }
+
+    /// An action's right-click menu (B116): the extension's name, then Manage / Remove. inferred.
+    @ViewBuilder
+    private func extensionMenu(_ ext: SiteExtensionAction) -> some View {
+        Text(ext.name)
+        Divider()
+        ForEach(model.extensionMenuItems(for: ext.id), id: \.self) { item in
+            Button(item.title(extensionName: ext.name)) { model.perform(item, extensionID: ext.id) }
+                .disabled(!model.isEnabled(item, extensionID: ext.id))
         }
     }
 
