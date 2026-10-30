@@ -87,13 +87,12 @@ final class FirstSelectTests: XCTestCase {
     }
 
     /// B103: a page's URL, title and favicon reach the tab record after the pass that reported
-    /// them, as one change per burst.
+    /// them.
     func testPageContentReachesTheRecordAfterTheEventsPass() async throws {
         let model = window()
         model.sidebar.selectTab(f.today1)
         await model.sidebar.settleEngineWork()
         let live = try XCTUnwrap(model.selectedLiveTab as? FakeTab)
-        let changes = controller.workspaceGeneration
         let next = try url("https://next.example.com/a")
         live.simulateURLChange(next, title: "Next page")
         for _ in 0..<200 where controller.liveState(for: f.today1)?.title != "Next page" { await Task.yield() }
@@ -101,6 +100,24 @@ final class FirstSelectTests: XCTestCase {
         await controller.settleEngineWork()
         XCTAssertEqual(controller.workspace.tabs[f.today1]?.url, next)
         XCTAssertEqual(controller.workspace.tabs[f.today1]?.title, "Next page")
+    }
+
+    /// B103: events handled in one pass of the main run loop cost one record change. The events
+    /// are applied directly: through the tab's event stream each one may resume in a pass of its
+    /// own under load, and then the burst is split by design.
+    func testOnePassOfPageEventsIsOneRecordChange() async throws {
+        let model = window()
+        model.sidebar.selectTab(f.today1)
+        await model.sidebar.settleEngineWork()
+        let changes = controller.workspaceGeneration
+        let next = try url("https://burst.example.com/a")
+        controller.apply(.urlChanged(next), to: f.today1)
+        controller.apply(.committedURLChanged(next), to: f.today1)
+        controller.apply(.titleChanged("Burst page"), to: f.today1)
+        XCTAssertEqual(controller.workspaceGeneration, changes, "nothing in the events' pass")
+        await controller.settleEngineWork()
+        XCTAssertEqual(controller.workspace.tabs[f.today1]?.url, next)
+        XCTAssertEqual(controller.workspace.tabs[f.today1]?.title, "Burst page")
         XCTAssertEqual(controller.workspaceGeneration - changes, 1, "URL and title: one record change")
     }
 
