@@ -72,6 +72,11 @@ extension ShellModel {
 
     // MARK: Spaces
 
+    /// The Space rows of the Spaces menu. A regular window lists its dock's Spaces; an incognito
+    /// window, whose dock is empty, still lists every Space of the app, greyed with the rest of
+    /// the menu. [06 §20.2] observed (F5-4).
+    var menuSpaces: [Space] { isIncognito ? controller.menuSpaces : sidebar.dockSpaces }
+
     /// Spaces ▸ Change Profile ([01 §Spaces], [06 §16.3] observed): the sheet for the current Space.
     public func changeProfileOfCurrentSpace() {
         guard let id = selectedSpaceID else { return }

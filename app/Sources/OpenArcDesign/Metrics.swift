@@ -597,6 +597,9 @@ public enum Metrics {
     public enum Settings {
         /// Settings window size and toolbar. [07 §6] observed (684 × 650; toolbar 56; toggle rows 37 apart).
         public static let windowSize = Size2D(width: 684, height: 650)
+        /// Width of the wider pages: [07 §6] observed "some pages 701 × 650"; the Links page is
+        /// the one measured at 701 ([06 §25] observed). Which other pages are wide is unknown.
+        public static let wideWindowWidth: Double = 701
         public static let toolbarHeight: Double = 56
         public static let toggleRowPitch: Double = 37
         /// Title bar above the toolbar: the system's for a settings window (32 on macOS 26,

@@ -170,10 +170,11 @@ struct ViewMenuItems: View {
         Divider()
         Group {
             // ⌘. [01 §菜单项图标与缩进] view-crop.png observed.
-            Button("Stop Loading") { model.sidebar.reloadOrStop() }
+            Button("Stop Loading") { model.stopLoading() }
                 .appShortcut(.stopLoading)
                 .disabled(model.sidebar.reloadMode != .stop)
-            Button("Refresh the Page") { model.sidebar.reloadOrStop() }
+            // Always reloads, also while the page loads (F5-5); ⌘. stops. [02 §页面与导航] observed key.
+            Button("Refresh the Page") { model.reload() }
                 .appShortcut(.reload)
                 .disabled(model.selectedTabID == nil)
             Button("Force Refresh the Page") { model.forceReload() }
@@ -219,7 +220,8 @@ struct ViewMenuItems: View {
 
 /// Spaces ▸. [01 §Spaces] observed order; [02] lists no shortcut for New Space… / Edit Theme… /
 /// Rename Space, ⌥⌘→ / ⌥⌘← for Next / Previous Space and ⌃1…⌃9 for the Space items. An incognito
-/// window disables the whole menu ([06 §20.2] observed).
+/// window disables the whole menu, lists every Space greyed and has no Change Profile ([06 §20.2]
+/// observed; F5-3, F5-4).
 struct SpacesMenuItems: View {
     let model: ShellModel
     /// Rebuilds these items only when a value they show changed (`MenuBarState`, B103).
@@ -240,9 +242,12 @@ struct SpacesMenuItems: View {
                 .disabled(model.selectedSpaceID == nil || model.spaceFlow.isCreating)
             Button("Rename Space") { if let id = model.selectedSpaceID { model.spaceFlow.beginRename(spaceID: id) } }
                 .disabled(model.selectedSpaceID == nil)
-            // "Change <Space>'s Profile" sheet ([06 §16.3] observed). B72.
-            Button("Change Profile") { model.changeProfileOfCurrentSpace() }
-                .disabled(model.selectedSpaceID == nil)
+            // "Change <Space>'s Profile" sheet ([06 §16.3] observed). B72. An incognito window
+            // has none ([06 §20.2] observed, F5-3).
+            if !model.isIncognito {
+                Button("Change Profile") { model.changeProfileOfCurrentSpace() }
+                    .disabled(model.selectedSpaceID == nil)
+            }
             Divider()
             Button("Next Space") { model.sidebar.stepSpace(by: 1) }
                 .appShortcut(.nextSpace)
@@ -252,7 +257,8 @@ struct SpacesMenuItems: View {
             // One item per Space; the current one has a check, and each shows the Space's own icon
             // before its name ([01 §菜单项图标与缩进] observed; a Space without an icon shows none).
             // Items with ⌃1…⌃9 for the first nine ([02 §Space] observed); the rest have no key.
-            ForEach(Array(model.sidebar.dockSpaces.enumerated()), id: \.element.id) { index, space in
+            // An incognito window lists the app's Spaces, greyed and unchecked ([06 §20.2], F5-4).
+            ForEach(Array(model.menuSpaces.enumerated()), id: \.element.id) { index, space in
                 SpaceMenuItem(space: space, isCurrent: model.selectedSpaceID == space.id, number: index + 1) {
                     model.sidebar.selectSpace(space.id)
                 }

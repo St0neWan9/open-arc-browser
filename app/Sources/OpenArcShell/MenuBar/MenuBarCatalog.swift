@@ -108,7 +108,7 @@ enum MenuBarCatalog {
     ]
 
     /// Spaces. [01 §Spaces] observed order, [01 §菜单项图标与缩进] groups. The Space list sits
-    /// between Previous Space and Manage Spaces…. An incognito window has no Change Profile
+    /// between Previous Space and Manage Spaces…. An incognito window lists every Space greyed and has no Change Profile
     /// ([06 §20.2] observed).
     static let spacesGroups: [[String]] = [
         ["New Space…", "Edit Theme…", "Rename Space", "Change Profile"],

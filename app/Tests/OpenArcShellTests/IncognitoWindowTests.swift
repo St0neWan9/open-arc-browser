@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import AppKit
 import CoreGraphics
 import OpenArcModel
 import OpenArcDesign
@@ -161,5 +163,62 @@ final class IncognitoWindowTests: XCTestCase {
         XCTAssertFalse(incognito.library.isActive)
         sidebar.stepSpace(by: 1)
         XCTAssertEqual(sidebar.selectedSpace?.name, "Incognito Tabs")
+    }
+
+    /// The AppKit items SwiftUI makes for `content`.
+    private func menuItems<Content: View>(_ content: Content) throws -> [NSMenuItem] {
+        guard #available(macOS 15, *) else { throw XCTSkip("NSHostingMenu needs macOS 15") }
+        let menu = NSHostingMenu(rootView: content)
+        menu.update()
+        return menu.items
+    }
+
+    /// 06 §20.2 observed (F5-3, F5-4): with incognito in front the Spaces menu has no Change
+    /// Profile, and lists every Space of the app, all greyed, none checked.
+    func testSpacesMenuListsSpacesGreyedWithoutChangeProfile() throws {
+        let items = try menuItems(SpacesMenuItems(model: incognito, hasWindow: true)).filter { !$0.isSeparatorItem && !$0.isHidden }
+        let titles = items.map(\.title)
+        XCTAssertFalse(titles.contains("Change Profile"))
+        let spaceNames = controller.workspace.allLiveSpaces.map(\.name)
+        XCTAssertFalse(spaceNames.isEmpty)
+        XCTAssertEqual(titles, ["New Space…", "Edit Theme…", "Rename Space", "Next Space", "Previous Space"]
+                       + spaceNames + ["Manage Spaces…"])
+        XCTAssertTrue(items.allSatisfy { !$0.isEnabled }, "the whole menu is disabled")
+        XCTAssertTrue(items.allSatisfy { $0.state == .off }, "no Space is current in an incognito window")
+        // The dock stays empty ([06 §20.2] observed).
+        XCTAssertTrue(sidebar.dockSpaces.isEmpty)
+        // A regular window keeps Change Profile.
+        let regular = ShellModel(controller: controller, window: WindowUIState(selectedSpaceID: SidebarFixture().home))
+        defer { regular.stop() }
+        XCTAssertTrue(try menuItems(SpacesMenuItems(model: regular, hasWindow: true)).contains { $0.title == "Change Profile" })
+    }
+
+    /// 06 §20.2 observed (F5-42): the incognito tab menu's Copy Link shows ⌘C.
+    func testTabMenuCopyLinkShowsCommandC() throws {
+        let id = try XCTUnwrap(sidebar.newTab(url: URL(string: "https://incognito.example"), title: "x"))
+        let tab = try XCTUnwrap(incognito.workspace.tabs[id])
+        let items = try menuItems(IncognitoTabMenu(viewModel: sidebar, tab: tab))
+        let copy = try XCTUnwrap(items.first { $0.title == "Copy Link" })
+        XCTAssertEqual(copy.keyEquivalent, "c")
+        XCTAssertEqual(copy.keyEquivalentModifierMask, .command)
+    }
+
+    /// 06 §20.1 observed (F5-41): a new incognito window opens with the front window's size and
+    /// position; before a window reported its frame, the placement is left to the system.
+    func testNewIncognitoWindowTakesTheFrontWindowFrame() {
+        let regular = ShellModel(controller: controller, window: WindowUIState(selectedSpaceID: SidebarFixture().home))
+        defer { regular.stop() }
+        XCTAssertNil(regular.windowRequest(.incognito).frame)
+        regular.windowFrameDidChange(x: 0, y: 30, width: 1920, height: 985)
+        let request = regular.windowRequest(.incognito)
+        XCTAssertEqual(request.frame, CGRect(x: 0, y: 30, width: 1920, height: 985))
+        XCTAssertNil(regular.windowRequest(.newWindow).frame, "only the incognito window copies the frame")
+        let opened = ShellModel.window(for: request, on: controller)
+        defer { opened.stop() }
+        XCTAssertEqual(opened.takeOpeningFrame(), CGRect(x: 0, y: 30, width: 1920, height: 985))
+        XCTAssertNil(opened.takeOpeningFrame(), "applied once")
+        // The request still round-trips as the window's scene value.
+        let decoded = try? JSONDecoder().decode(BrowserWindowRequest.self, from: JSONEncoder().encode(request))
+        XCTAssertEqual(decoded, request)
     }
 }

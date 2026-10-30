@@ -79,9 +79,11 @@ struct IncognitoTabMenu: View {
         let canRequest = viewModel.canRequest
         let around = viewModel.todayTabs(around: id)
 
+        // Copy Link shows ⌘C like the Today tab menu ([06 §20.2] observed "Copy Link (⌘C)", F5-42).
         Button("Copy Link") {
             if let url = viewModel.linkURL(for: id) { SidebarPasteboard.copy(url) }
         }
+        .keyboardShortcut("c", modifiers: .command)
         .disabled(viewModel.linkURL(for: id) == nil)
         Button("Share") { viewModel.requestFromMenu(.share(tabID: id)) }.disabled(!canRequest)
         Divider()

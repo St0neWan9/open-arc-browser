@@ -86,6 +86,9 @@ public final class ShellModel: ObservableObject {
     let windowID = UUID()
     /// The window's frame (AppKit screen coordinates), set by the window's view (plan B126).
     private(set) var windowFrame = EngineWindowFrame()
+    /// Frame the AppKit window takes when it appears: an incognito window lies over the window it
+    /// was opened from ([06 §20.1] observed, F5-41). Consumed by `takeOpeningFrame()`.
+    private(set) var openingFrame: CGRect?
     /// Reports the window again when its Space, selection or tabs change (plan B126).
     private var engineWindowChanges: AnyCancellable?
 
@@ -194,6 +197,8 @@ public final class ShellModel: ObservableObject {
         case .incognito:
             let incognito = controller.makeIncognito()
             let model = ShellModel(controller: incognito, window: WindowUIState(), ownsController: true)
+            // Same size and position as the window it came from. [06 §20.1] observed (F5-41).
+            model.openingFrame = request.frame
             if let url = request.url {
                 // Open Link in Incognito Window (B124): the window shows the link.
                 model.sidebar.newTab(url: url, title: url.host ?? url.absoluteString)
@@ -455,7 +460,7 @@ public final class ShellModel: ObservableObject {
         case .copyURL: copySelectedURL()
         // View
         case .toggleSidebar: toggleSidebar()
-        case .reload: sidebar.reloadOrStop()
+        case .reload: reload()
         case .addSplitView: addSplitView()
         case .addTopSplit: addSplit(.top)
         case .addLeftSplit: addSplit(.left)
@@ -525,7 +530,21 @@ public final class ShellModel: ObservableObject {
     /// window's Space (inferred); an incognito window, or any window opened from one, uses the
     /// app's active Space.
     func windowRequest(_ kind: BrowserWindowRequest.Kind) -> BrowserWindowRequest {
-        BrowserWindowRequest(kind: kind, spaceID: kind == .incognito || isIncognito ? nil : selectedSpaceID)
+        BrowserWindowRequest(kind: kind, spaceID: kind == .incognito || isIncognito ? nil : selectedSpaceID,
+                             frame: kind == .incognito ? knownWindowFrame : nil)
+    }
+
+    /// This window's frame once its AppKit window reported one; nil before.
+    var knownWindowFrame: CGRect? {
+        let frame = windowFrame
+        guard frame.width > 0, frame.height > 0 else { return nil }
+        return CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+    }
+
+    /// The frame the AppKit window takes when it appears (`BrowserWindowRequest.frame`). Consumed.
+    func takeOpeningFrame() -> CGRect? {
+        defer { openingFrame = nil }
+        return openingFrame
     }
 
     // MARK: Little Arc

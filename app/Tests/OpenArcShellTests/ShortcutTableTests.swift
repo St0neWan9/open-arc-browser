@@ -121,11 +121,66 @@ final class ShortcutTableTests: XCTestCase {
         XCTAssertEqual(Set(definitions.map(\.id)), Set(AppShortcut.allCases))
         XCTAssertEqual(definitions.count, AppShortcut.allCases.count)
         XCTAssertEqual(ShortcutCatalog.groups.map(\.title), ShortcutCatalog.table.map(\.title))
-        XCTAssertEqual(ShortcutCatalog.groups.flatMap(\.entries).map(\.keys), definitions.map(\.keyText))
+        let keyed = ShortcutCatalog.groups.flatMap(\.entries).filter { $0.keys != ShortcutCatalog.noKey }
+        XCTAssertEqual(keyed.map(\.keys), definitions.map(\.keyText))
         let page = HelpPages.shortcutsHTML(ShortcutCatalog.groups)
         for definition in definitions {
             XCTAssertTrue(page.contains(definition.keyText), "\(definition.title) on the help page")
         }
+    }
+
+    /// [02] header and sections observed (F5-6): the actions without a default key are listed
+    /// with '---', after the keyed rows of their section; none of them binds a key.
+    func testActionsWithoutKeyAreListedWithDashes() {
+        let unbound = ShortcutCatalog.groups.map { group in
+            group.entries.filter { $0.keys == ShortcutCatalog.noKey }.map(\.action)
+        }
+        XCTAssertEqual(unbound, [
+            ["Rename Current Item", "Reset Tab to Original URL", "Duplicate", "Collapse All Folders",
+             "Expand All Folders", "New Folder…"],                                         // [02 §标签与侧边栏]
+            ["New Space…", "Manage Spaces…", "Reset all tabs in this Space"],              // [02 §Space]
+            [],                                                                              // [02 §分屏]
+            ["Capture Full Page", "Capture in Portrait Mode", "Cast", "Clear Cookies and Refresh"], // [02 §页面与导航]
+            [], [],                                                                          // [02 §复制链接], §窗口与应用
+            ["Network Inspector"],                                                           // [02 §开发者]
+        ])
+        for group in ShortcutCatalog.groups {
+            let firstUnbound = group.entries.firstIndex { $0.keys == ShortcutCatalog.noKey } ?? group.entries.count
+            XCTAssertTrue(group.entries[firstUnbound...].allSatisfy { $0.keys == ShortcutCatalog.noKey }, group.title)
+        }
+        XCTAssertEqual(ShortcutCatalog.filtered(ShortcutCatalog.groups, query: "Network").flatMap(\.entries).map(\.keys), ["---"])
+    }
+
+    /// [02 §标签与侧边栏] "Open Little Arc or Peek in…" ⌘O (F5-21); [02 §窗口与应用] the list calls ⌘,
+    /// "Preferences…" (F5-23).
+    func testRowNamesFrom02() {
+        let all = Dictionary(uniqueKeysWithValues: ShortcutCatalog.groups.flatMap(\.entries).map { ($0.action, $0.keys) })
+        XCTAssertEqual(all["Open Little Arc or Peek in…"], "⌘O")
+        XCTAssertNil(all["Open Little Arc in…"])
+        XCTAssertEqual(all["Preferences…"], "⌘,")
+        XCTAssertNil(all["Settings…"])
+    }
+
+    /// [02 §Space] header note observed (F5-22): one row per Space, "Go to “<name>”" with its ⌃N,
+    /// for the first nine; the Settings pane names them after the app's Spaces in dock order.
+    func testSpaceJumpRowsNameEachSpace() throws {
+        let names = (1...10).map { "S\($0)" }
+        let spaces = try XCTUnwrap(ShortcutCatalog.groups(spaceNames: names).first { $0.title == "Spaces" })
+        let jumps = spaces.entries.filter { $0.action.hasPrefix("Go to") }
+        XCTAssertEqual(jumps.map(\.action), (1...9).map { "Go to “S\($0)”" })
+        XCTAssertEqual(jumps.map(\.keys), (1...9).map { "⌃\($0)" })
+        XCTAssertEqual(Set(spaces.entries.map(\.id)).count, spaces.entries.count)
+        // Two Spaces with one name stay two rows.
+        let twins = try XCTUnwrap(ShortcutCatalog.groups(spaceNames: ["A", "A"]).first { $0.title == "Spaces" })
+        XCTAssertEqual(Set(twins.entries.map(\.id)).count, twins.entries.count)
+
+        let model = makeModel()
+        try addSpaces(model)
+        let settings = SettingsModel(shell: model)
+        let rows = settings.shortcutGroups.flatMap(\.entries).filter { $0.action.hasPrefix("Go to “") }
+        XCTAssertEqual(rows.map(\.action), model.sidebar.dockSpaces.prefix(9).map { "Go to “\($0.name)”" })
+        settings.shortcutQuery = "⌃3"
+        XCTAssertEqual(settings.shortcutGroups.flatMap(\.entries).map(\.action), ["Go to “\(model.sidebar.dockSpaces[2].name)”"])
     }
 
     /// [02] groups in order, its aliases written as alternatives, numbered items as ranges.
