@@ -151,6 +151,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // B132: site icons for never visited sites; the page menu's Services requestor.
         try await checkSmallGapsB132(engine, server: identityServer, profileID: UUID())
 
+        // Plan B138: the app's reserved keys come before the page; other keys after it.
+        try await checkReservedKeys(engine)
+
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
         let crashEvents = tab.events()

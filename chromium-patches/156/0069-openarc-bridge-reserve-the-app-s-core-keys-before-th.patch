@@ -1,0 +1,335 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Sat, 31 Oct 2026 04:29:44 +0700
+Subject: [PATCH] openarc: bridge: reserve the app's core keys before the page,
+ as Chrome does
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plan B138 (F5-7). PreHandleKeyboardEvent offers a fixed set of app keys
+(oac_reserved_keys.h: ⌘T ⇧⌘T ⌘W ⌘D ⌘L ⌘1-9 ⌘{ ⌘} ⌥⌘↑↓ ⌃Tab ⌃⇧Tab ⌃1-9
+⌥⌘←→ ⌘[ ⌘] ⌘R ⇧⌘R ⇧⌘C ⌘N ⇧⌘N ⇧⌘W ⌘, ⌘Q) to the shell before the page, so a
+page's preventDefault cannot block them. A key the shell does not take goes
+on to the page; other keys still reach the shell only when the page leaves
+them unhandled. Nothing but ⌘Q is reserved in HTML fullscreen; held ⌘T, ⌘N,
+⇧⌘N do not repeat.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ openarc/BUILD.gn                              |   2 +
+ openarc/bridge/oac_reserved_keys.h            |  60 +++++++++
+ openarc/bridge/oac_reserved_keys.mm           | 117 ++++++++++++++++++
+ openarc/bridge/oac_tab.mm                     |  44 +++++--
+ .../public/OpenArcCore/OACTabDelegate.h       |  10 +-
+ 5 files changed, 223 insertions(+), 10 deletions(-)
+ create mode 100644 openarc/bridge/oac_reserved_keys.h
+ create mode 100644 openarc/bridge/oac_reserved_keys.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 3d00edbbce0b..f884f8e85656 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -279,6 +279,8 @@ source_set("bridge") {
+               "bridge/oac_profile_internal.h",
+               "bridge/oac_requests.mm",
+               "bridge/oac_requests_internal.h",
++              "bridge/oac_reserved_keys.h",
++              "bridge/oac_reserved_keys.mm",
+               "bridge/oac_session_history.mm",
+               "bridge/oac_session_history_internal.h",
+               "bridge/oac_site_settings.mm",
+diff --git a/openarc/bridge/oac_reserved_keys.h b/openarc/bridge/oac_reserved_keys.h
+new file mode 100644
+index 000000000000..e3e025f6dc6e
+--- /dev/null
++++ b/openarc/bridge/oac_reserved_keys.h
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_RESERVED_KEYS_H_
++#define OPENARC_BRIDGE_OAC_RESERVED_KEYS_H_
++
++namespace content {
++class WebContents;
++}
++
++namespace input {
++struct NativeWebKeyboardEvent;
++}
++
++namespace openarc {
++
++// Plan B138 (decision: follow Chrome; docs/f5-review.md F5-7). The app's core
++// shortcuts are reserved: the shell gets them before the page, so a page that
++// calls preventDefault() on them cannot block them. Every other key goes to
++// the page first and reaches the shell only when the page leaves it unhandled
++// (WebContentsDelegate::HandleKeyboardEvent, -tab:handleUnhandledKeyEvent:).
++//
++// This is the one list of reserved keys. The shell binds the keys in its menus
++// (app/Sources/OpenArcShell/Settings/ShortcutCatalog.swift); a reserved key is
++// offered to the main menu (NSApp.mainMenu), and goes to the page as usual
++// when no enabled item there takes it.
++//
++//   Tabs        ⌘T  ⇧⌘T  ⌘W  ⌘D  ⌘L  ⌘1…⌘9  ⌘{  ⌘}  ⌥⌘↑  ⌥⌘↓  ⌃Tab  ⌃⇧Tab
++//   Spaces      ⌃1…⌃9  ⌥⌘←  ⌥⌘→
++//   Navigation  ⌘[  ⌘]  ⌘R  ⇧⌘R
++//   Copy URL    ⇧⌘C
++//   Windows     ⌘N  ⇧⌘N  ⇧⌘W
++//   App         ⌘,  ⌘Q
++//
++// Chrome reserves new tab / window / incognito window, close tab / window,
++// restore tab, next / previous tab and quit
++// (BrowserCommandController::IsReservedCommandOrKey). The rest are the keys an
++// Open Arc user moves around with (command bar, pin, sidebar items, Spaces,
++// back / forward, reload, copy URL, Settings). ⌃Tab / ⌃⇧Tab are Chrome's tab
++// keys; they stay with the page while no menu item of the shell binds them.
++//
++// As Chrome on macOS does with its toolbar hidden, nothing but ⌘Q is reserved
++// while the page is in HTML fullscreen. Keys a page locked with the Keyboard
++// Lock API skip this step (content never pre-handles them). As in Chrome, a
++// held-down ⌘T, ⌘N or ⇧⌘N does not repeat.
++bool IsReservedAppKey(const input::NativeWebKeyboardEvent& event);
++
++// Whether a key repeat of the reserved key |event| is dropped (⌘T, ⌘N, ⇧⌘N),
++// so a held key does not open a stream of tabs or windows.
++bool DropsReservedKeyRepeat(const input::NativeWebKeyboardEvent& event);
++
++// Whether |event| goes to the shell before |web_contents|' page: the raw
++// key-down of a reserved key, with its NSEvent, that the page did not lock.
++bool ShouldOfferKeyToShellFirst(content::WebContents* web_contents,
++                                const input::NativeWebKeyboardEvent& event);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BRIDGE_OAC_RESERVED_KEYS_H_
+diff --git a/openarc/bridge/oac_reserved_keys.mm b/openarc/bridge/oac_reserved_keys.mm
+new file mode 100644
+index 000000000000..379e964c27d9
+--- /dev/null
++++ b/openarc/bridge/oac_reserved_keys.mm
+@@ -0,0 +1,117 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "openarc/bridge/oac_reserved_keys.h"
++
++#include "components/input/native_web_keyboard_event.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/common/input/web_input_event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++
++namespace openarc {
++
++namespace {
++
++using blink::WebInputEvent;
++
++constexpr int kCommand = WebInputEvent::kMetaKey;
++constexpr int kShift = WebInputEvent::kShiftKey;
++constexpr int kControl = WebInputEvent::kControlKey;
++constexpr int kOption = WebInputEvent::kAltKey;
++// A reserved key matches these modifiers exactly; Caps Lock, Fn, keypad and
++// repeat bits do not count.
++constexpr int kModifierMask = kCommand | kShift | kControl | kOption;
++
++struct ReservedKey {
++  ui::KeyboardCode key;
++  int modifiers;
++};
++
++// The list in oac_reserved_keys.h, in the same order, except the numbered
++// keys (IsReservedAppKey). Keys are the Windows key codes content derives from
++// the NSEvent; ⌘{ and ⌘} are ⇧⌘[ and ⇧⌘].
++constexpr ReservedKey kReservedKeys[] = {
++    // Tabs.
++    {ui::VKEY_T, kCommand},               // New Tab… (command bar)
++    {ui::VKEY_T, kShift | kCommand},      // Restore Last Closed Tab
++    {ui::VKEY_W, kCommand},               // Archive Tab
++    {ui::VKEY_D, kCommand},               // Pin / Unpin Tab
++    {ui::VKEY_L, kCommand},               // Open Command Bar
++    {ui::VKEY_OEM_4, kShift | kCommand},  // ⌘{ Previous Tab
++    {ui::VKEY_OEM_6, kShift | kCommand},  // ⌘} Next Tab
++    {ui::VKEY_UP, kOption | kCommand},    // Previous Tab
++    {ui::VKEY_DOWN, kOption | kCommand},  // Next Tab
++    {ui::VKEY_TAB, kControl},             // Next Tab (Chrome's key)
++    {ui::VKEY_TAB, kShift | kControl},    // Previous Tab (Chrome's key)
++    // Spaces.
++    {ui::VKEY_LEFT, kOption | kCommand},   // Previous Space
++    {ui::VKEY_RIGHT, kOption | kCommand},  // Next Space
++    // Navigation.
++    {ui::VKEY_OEM_4, kCommand},       // ⌘[ Go Back
++    {ui::VKEY_OEM_6, kCommand},       // ⌘] Go Forward
++    {ui::VKEY_R, kCommand},           // Refresh the Page
++    {ui::VKEY_R, kShift | kCommand},  // Force Refresh
++    // Copy URL.
++    {ui::VKEY_C, kShift | kCommand},
++    // Windows.
++    {ui::VKEY_N, kCommand},           // New Window
++    {ui::VKEY_N, kShift | kCommand},  // New Incognito Window
++    {ui::VKEY_W, kShift | kCommand},  // Close Window
++    // App.
++    {ui::VKEY_OEM_COMMA, kCommand},  // Settings…
++    {ui::VKEY_Q, kCommand},          // Quit
++};
++
++int Modifiers(const input::NativeWebKeyboardEvent& event) {
++  return event.GetModifiers() & kModifierMask;
++}
++
++}  // namespace
++
++bool IsReservedAppKey(const input::NativeWebKeyboardEvent& event) {
++  const int modifiers = Modifiers(event);
++  const int key = event.windows_key_code;
++  // ⌘1…⌘9 Go to Sidebar Item, ⌃1…⌃9 Go to Space.
++  if (key >= ui::VKEY_1 && key <= ui::VKEY_9 &&
++      (modifiers == kCommand || modifiers == kControl)) {
++    return true;
++  }
++  for (const ReservedKey& reserved : kReservedKeys) {
++    if (reserved.key == key && reserved.modifiers == modifiers) {
++      return true;
++    }
++  }
++  return false;
++}
++
++bool DropsReservedKeyRepeat(const input::NativeWebKeyboardEvent& event) {
++  if (!(event.GetModifiers() & WebInputEvent::kIsAutoRepeat)) {
++    return false;
++  }
++  const int modifiers = Modifiers(event);
++  const int key = event.windows_key_code;
++  return (key == ui::VKEY_T && modifiers == kCommand) ||
++         (key == ui::VKEY_N &&
++          (modifiers == kCommand || modifiers == (kShift | kCommand)));
++}
++
++bool ShouldOfferKeyToShellFirst(content::WebContents* web_contents,
++                                const input::NativeWebKeyboardEvent& event) {
++  if (!web_contents || event.GetType() != WebInputEvent::Type::kRawKeyDown ||
++      event.skip_if_unhandled || !event.os_event) {
++    return false;
++  }
++  if (!IsReservedAppKey(event)) {
++    return false;
++  }
++  // HTML fullscreen: only Quit stays reserved (Chrome on macOS keeps only
++  // its exit and fullscreen commands while the toolbar is hidden).
++  if (web_contents->IsFullscreen()) {
++    return event.windows_key_code == ui::VKEY_Q &&
++           Modifiers(event) == kCommand;
++  }
++  return true;
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index b6dc1d5424cd..ab88837b0269 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -87,6 +87,7 @@
+ #import "openarc/bridge/oac_infobars_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_requests_internal.h"
++#import "openarc/bridge/oac_reserved_keys.h"
+ #import "openarc/bridge/oac_session_history_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
+ #import "openarc/bridge/oac_translation_internal.h"
+@@ -160,6 +161,8 @@ - (void)webContentsDidHoverURL:(const GURL&)url;
+ - (void)webContentsDidRequestActivation;
+ - (BOOL)webContentsHandleUnhandledKeyEvent:
+     (const input::NativeWebKeyboardEvent&)event;
++- (BOOL)webContentsHandleReservedKeyEvent:
++    (const input::NativeWebKeyboardEvent&)event;
+ - (void)webContentsDidReplyToFind:(int)requestId
+                           matches:(int)matches
+                     activeOrdinal:(int)activeOrdinal
+@@ -299,12 +302,26 @@ bool HandleKeyboardEvent(
+       const input::NativeWebKeyboardEvent& event) override {
+     return [tab_ webContentsHandleUnhandledKeyEvent:event];
+   }
+-  // Plan C26: extension keyboard commands come before the page, as Chrome's
+-  // FocusManager registers them at high priority.
++  // Before the page: extension keyboard commands (plan C26), as Chrome's
++  // FocusManager registers them at high priority; then the app's reserved
++  // keys (plan B138, oac_reserved_keys.h), as Chrome's BrowserView does with
++  // its reserved accelerators. A reserved key the shell does not take (no
++  // enabled menu item binds it) goes on to the page exactly as other keys.
+   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+       content::WebContents* source,
+       const input::NativeWebKeyboardEvent& event) override {
+-    return openarc::HandleExtensionCommandKeyEvent(source, event)
++    if (openarc::HandleExtensionCommandKeyEvent(source, event)) {
++      return content::KeyboardEventProcessingResult::HANDLED;
++    }
++    if (!openarc::ShouldOfferKeyToShellFirst(source, event)) {
++      return content::KeyboardEventProcessingResult::NOT_HANDLED;
++    }
++    if (openarc::DropsReservedKeyRepeat(event)) {
++      return content::KeyboardEventProcessingResult::HANDLED;
++    }
++    // The shell may close the tab from here (as Chrome's reserved ⌘W does);
++    // nothing of |this| is used afterwards.
++    return [tab_ webContentsHandleReservedKeyEvent:event]
+                ? content::KeyboardEventProcessingResult::HANDLED
+                : content::KeyboardEventProcessingResult::NOT_HANDLED;
+   }
+@@ -1114,15 +1131,28 @@ - (void)webContentsDidRequestActivation {
+   });
+ }
+ 
+-// Unconsumed key events reach the shell synchronously, so ⌘T, ⌘L and the
+-// other menu shortcuts keep working while the page has focus. The default
+-// (no delegate method) offers the event to the main menu, as content_shell
+-// does.
++// Unconsumed key events reach the shell synchronously, so the menu shortcuts
++// keep working while the page has focus. The default (no delegate method)
++// offers the event to the main menu, as content_shell does.
+ - (BOOL)webContentsHandleUnhandledKeyEvent:
+     (const input::NativeWebKeyboardEvent&)event {
+   if (event.skip_if_unhandled) {
+     return NO;
+   }
++  return [self offerKeyEventToShell:event];
++}
++
++// Plan B138: a reserved app key (oac_reserved_keys.h), before the page sees
++// it. Same delegate method and default as an unhandled key.
++- (BOOL)webContentsHandleReservedKeyEvent:
++    (const input::NativeWebKeyboardEvent&)event {
++  if (_closed) {
++    return NO;
++  }
++  return [self offerKeyEventToShell:event];
++}
++
++- (BOOL)offerKeyEventToShell:(const input::NativeWebKeyboardEvent&)event {
+   NSEvent* nsEvent = event.os_event.Get();
+   if (!nsEvent || nsEvent.type != NSEventTypeKeyDown) {
+     return NO;
+diff --git a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+index 962295ad2a1f..41c4c1e9c2ca 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+@@ -174,9 +174,13 @@ NS_SWIFT_UI_ACTOR
+ /// pointer leaves the link).
+ - (void)tab:(OACTab *)tab didHoverLinkURL:(nullable NSURL *)url;
+ 
+-/// A keyboard event the page did not consume. The shell returns YES when it handled it (so the
+-/// app's shortcuts such as ⌘T, ⌘L, ⌘S keep working while the page has focus). The event is the
+-/// `NSEvent`, typed `id` so this header stays free of AppKit.
++/// A key-down for the shell's menu shortcuts while the page has focus. The shell returns YES when
++/// it handled it. Two moments (plan B138, following Chrome's reserved keys): the app's core keys
++/// (⌘T, ⌘L, ⌘W, ⌘N, ⌘R, ⌘1…⌘9, ⌃1…⌃9 and the others listed in the bridge's
++/// oac_reserved_keys.h) come here before the page sees them, so a page cannot block them; NO hands
++/// the key on to the page. Every other key comes here only when the page did not consume it. The
++/// event is the `NSEvent`, typed `id` so this header stays free of AppKit. Without this method the
++/// bridge offers the event to `NSApp.mainMenu` at the same two moments.
+ - (BOOL)tab:(OACTab *)tab handleUnhandledKeyEvent:(id)event;
+ 
+ /// The user right-clicked the page (plan B124). The bridge draws no menu itself: `menu` holds

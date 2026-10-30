@@ -174,9 +174,13 @@ NS_SWIFT_UI_ACTOR
 /// pointer leaves the link).
 - (void)tab:(OACTab *)tab didHoverLinkURL:(nullable NSURL *)url;
 
-/// A keyboard event the page did not consume. The shell returns YES when it handled it (so the
-/// app's shortcuts such as ⌘T, ⌘L, ⌘S keep working while the page has focus). The event is the
-/// `NSEvent`, typed `id` so this header stays free of AppKit.
+/// A key-down for the shell's menu shortcuts while the page has focus. The shell returns YES when
+/// it handled it. Two moments (plan B138, following Chrome's reserved keys): the app's core keys
+/// (⌘T, ⌘L, ⌘W, ⌘N, ⌘R, ⌘1…⌘9, ⌃1…⌃9 and the others listed in the bridge's
+/// oac_reserved_keys.h) come here before the page sees them, so a page cannot block them; NO hands
+/// the key on to the page. Every other key comes here only when the page did not consume it. The
+/// event is the `NSEvent`, typed `id` so this header stays free of AppKit. Without this method the
+/// bridge offers the event to `NSApp.mainMenu` at the same two moments.
 - (BOOL)tab:(OACTab *)tab handleUnhandledKeyEvent:(id)event;
 
 /// The user right-clicked the page (plan B124). The bridge draws no menu itself: `menu` holds
