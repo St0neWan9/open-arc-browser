@@ -128,6 +128,7 @@ struct RestoreDataSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(T.title).font(Typography.dialogTitle.font)
             Text(T.message).font(Typography.settingsBody.font).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             List(selection: $model.selectedID) {
                 ForEach(model.rows) { row in
                     HStack {
