@@ -21,6 +21,9 @@ public protocol UpdateChecker: AnyObject, Sendable {
     var automaticallyDownloadsUpdates: Bool { get set }
     /// Called whenever `canCheckForUpdates` changes. Set by `UpdatesModel`.
     var canCheckForUpdatesDidChange: (@MainActor (Bool) -> Void)? { get set }
+    /// Called when a downloaded update starts or stops waiting to be installed (B111). Set by
+    /// `UpdatesModel`.
+    var updateReadinessDidChange: (@MainActor (UpdateReadiness) -> Void)? { get set }
     /// Starts the updater (schedules automatic checks). Called once, after the settings above
     /// were applied. Does nothing when unavailable.
     func start()
@@ -38,6 +41,7 @@ public final class UnavailableUpdateChecker: UpdateChecker {
     public var automaticallyChecksForUpdates = false
     public var automaticallyDownloadsUpdates = false
     public var canCheckForUpdatesDidChange: (@MainActor (Bool) -> Void)?
+    public var updateReadinessDidChange: (@MainActor (UpdateReadiness) -> Void)?
 
     public nonisolated init(reason: String = UpdateConfiguration.Problem.notAnAppBundle.message) {
         unavailableReason = reason
@@ -45,6 +49,14 @@ public final class UnavailableUpdateChecker: UpdateChecker {
 
     public func start() {}
     public func checkForUpdates() {}
+}
+
+/// Whether a downloaded update waits to be installed (B111).
+public enum UpdateReadiness {
+    /// Downloaded; `installNow` installs it and relaunches when the updater offered a direct way.
+    case ready(installNow: (@MainActor () -> Void)?)
+    /// Nothing waits (installed, dismissed or replaced).
+    case none
 }
 
 /// Reads the Sparkle keys of an Info.plist and says whether Sparkle may be started.

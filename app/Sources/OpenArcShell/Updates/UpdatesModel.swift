@@ -23,6 +23,12 @@ public final class UpdatesModel: ObservableObject {
         checker.automaticallyDownloadsUpdates = preferences.automaticallyDownloadsUpdates
         canCheckForUpdates = checker.canCheckForUpdates
         checker.canCheckForUpdatesDidChange = { [weak self] value in self?.canCheckForUpdates = value }
+        checker.updateReadinessDidChange = { [weak self] readiness in
+            switch readiness {
+            case .ready(let installNow): self?.noteUpdateReady(installNow: installNow)
+            case .none: self?.clearReadyUpdate()
+            }
+        }
         checker.start()
         canCheckForUpdates = checker.canCheckForUpdates
     }

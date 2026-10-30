@@ -136,6 +136,7 @@ private final class RecordingUpdateChecker: UpdateChecker {
     var automaticallyChecksForUpdates = false
     var automaticallyDownloadsUpdates = false
     var canCheckForUpdatesDidChange: (@MainActor (Bool) -> Void)?
+    var updateReadinessDidChange: (@MainActor (UpdateReadiness) -> Void)?
     private(set) var checkCount = 0
 
     func start() {}
