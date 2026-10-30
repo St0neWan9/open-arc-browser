@@ -169,6 +169,8 @@ struct SidebarTabRowView: View, Equatable {
                                 renameText = tab.displayTitle
                                 renameFocused = true
                             }
+                            // The rename never outlives its field (F5-1).
+                            .onDisappear { viewModel.renameFieldClosed(tab.id, text: renameText) }
                             .accessibilityIdentifier("openarc.sidebar.row.renameField")
                     } else {
                         VStack(alignment: .leading, spacing: 0) {
@@ -240,11 +242,17 @@ struct SidebarTabRowView: View, Equatable {
         return palette.ink(\.faviconPlaceholder).swiftUI
     }
 
+    /// Whether the row shows its ✕ / —: while hovered or selected, not while renaming. [06 §12]
+    /// observed (hover), [06 §20.2] observed ("hover / selected", same as Today rows). F5-13.
+    static func showsAccessory(isHovering: Bool, isSelected: Bool, isRenaming: Bool) -> Bool {
+        (isHovering || isSelected) && !isRenaming
+    }
+
     @ViewBuilder
     private func accessory(textColor: Color) -> some View {
-        if isHovering && !row.isRenaming {
-            // ✕ archives a Today tab; — on a pinned row unloads it (ambiguous in the spec, see
-            // `SidebarViewModel.unloadPinnedTab`). [06 §12] observed.
+        if Self.showsAccessory(isHovering: isHovering, isSelected: row.isSelected, isRenaming: row.isRenaming) {
+            // ✕ archives a Today tab; — on a pinned row unloads the page and keeps the pin
+            // (`SidebarViewModel.unloadPinnedTab`). [06 §12], [06 §16.1] observed.
             Button {
                 if area == .pinned { viewModel.unloadPinnedTab(tab.id) } else { viewModel.closeTab(tab.id) }
             } label: {
@@ -296,11 +304,12 @@ struct SidebarAudioGlyphButton: View {
     }
 }
 
-/// One row for the tabs of a split view. [06 §5] observed: "the two split tabs are treated as one
-/// group in the sidebar". Nothing else is specified, so the look is local: the row has the geometry
-/// and selected fill of a tab row and shows each member's favicon and title side by side. A click
+/// One row for the tabs of a split view: the geometry and selected fill of a tab row, holding one
+/// capsule per member side by side, each with the member's icon and truncated title. [06 §5]
+/// observed (one group in the sidebar), [06 §21.6] observed ("one row with two capsules side by
+/// side", row fill as a selected row); the capsule metrics are ours (`SidebarLocalTokens`). A click
 /// selects the focused pane tab; ✕ (— in the pinned area) acts on the whole group; the row drags as
-/// a unit. Per-member clicks, rename and the hover card are not part of the group row.
+/// a unit. Per-member clicks and the hover card are not part of the group row.
 struct SidebarSplitGroupRowView: View, Equatable {
     /// What the row draws; the row does not observe the view model (see `SidebarTabRowState`).
     struct State: Equatable {
@@ -349,15 +358,15 @@ struct SidebarSplitGroupRowView: View, Equatable {
                 // A named split row shows its own icon and title instead of the members'. inferred (B77).
                 namedCell(layout: layout, textColor: textColor)
             } else {
-                ForEach(Array(group.members.enumerated()), id: \.element.id) { index, member in
-                    if index > 0 {
-                        Rectangle()
-                            .fill(textColor.opacity(SidebarLocalTokens.splitGroupDividerOpacity))
-                            .frame(width: SidebarLocalTokens.separatorThickness, height: SidebarLocalTokens.splitGroupDividerHeight)
+                HStack(spacing: SidebarLocalTokens.splitGroupCapsuleGap) {
+                    ForEach(Array(group.members.enumerated()), id: \.element.id) { index, member in
+                        memberCapsule(member, state: index < row.members.count ? row.members[index] : State.Member(),
+                                      textColor: textColor)
                     }
-                    memberCell(member, state: index < row.members.count ? row.members[index] : State.Member(),
-                               textColor: textColor, isFirst: index == 0)
                 }
+                // The first icon stays at the row icon position (x 17).
+                .padding(.leading, -SidebarLocalTokens.splitGroupCapsuleLeading)
+                .padding(.trailing, SidebarLocalTokens.splitGroupCapsuleGap)
             }
             accessory(textColor: textColor)
         }
@@ -411,10 +420,11 @@ struct SidebarSplitGroupRowView: View, Equatable {
                 renameText = layout?.title ?? membersTitle
                 renameFocused = true
             }
+            .onDisappear { viewModel.renameFieldClosed(group.layoutID, text: renameText) }
             .accessibilityIdentifier("openarc.sidebar.splitGroup.renameField")
     }
 
-    private func memberCell(_ member: TabNode, state: State.Member, textColor: Color, isFirst: Bool) -> some View {
+    private func memberCapsule(_ member: TabNode, state: State.Member, textColor: Color) -> some View {
         let iconSize = SidebarLocalTokens.rowIconSize
         return HStack(spacing: SidebarLocalTokens.splitGroupMemberIconGap) {
             Group {
@@ -438,10 +448,13 @@ struct SidebarSplitGroupRowView: View, Equatable {
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        // The first member's icon stays at the row icon position (x 17).
-        .padding(.leading, isFirst ? 0 : SidebarLocalTokens.splitGroupMemberPadding)
-        .padding(.trailing, SidebarLocalTokens.splitGroupMemberPadding)
+        .padding(.leading, SidebarLocalTokens.splitGroupCapsuleLeading)
+        .padding(.trailing, SidebarLocalTokens.splitGroupCapsuleTrailing)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: SidebarLocalTokens.splitGroupCapsuleHeight)
+        .background(Capsule(style: .continuous).fill(textColor.opacity(SidebarLocalTokens.splitGroupCapsuleInkOpacity)))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("openarc.sidebar.splitGroup.member")
     }
 
     private func fill(isSelected: Bool, palette: ThemePalette) -> Color {
@@ -455,7 +468,8 @@ struct SidebarSplitGroupRowView: View, Equatable {
 
     @ViewBuilder
     private func accessory(textColor: Color) -> some View {
-        if isHovering {
+        // Hovered or selected, like a tab row. [06 §12], [06 §20.2] observed. F5-13.
+        if SidebarTabRowView.showsAccessory(isHovering: isHovering, isSelected: row.isSelected, isRenaming: row.isRenaming) {
             Button {
                 if area == .pinned { viewModel.unloadPinnedSplitGroup(group.layoutID) } else { viewModel.closeSplitGroup(group.layoutID) }
             } label: {
@@ -472,8 +486,9 @@ struct SidebarSplitGroupRowView: View, Equatable {
     }
 }
 
-/// A folder row: SF Semibold 14 title, folder icon (open when expanded) whose ink (≈ 22.5 × 16.5)
-/// is centered on the 18 pt icon cell. [07 §3, §4] observed; [06 §3] observed.
+/// A folder row: SF Semibold 14 title, folder icon (open when expanded) with its ink drawn at
+/// `Metrics.Sidebar.folderGlyph` (22.5 × 16.5) across x 16–38.5, vertically centered on the row.
+/// [07 §3, §4] observed; [06 §3] observed.
 struct SidebarFolderRowView: View, Equatable {
     /// What the row draws; the row does not observe the view model (see `SidebarTabRowState`).
     struct State: Equatable {
@@ -502,16 +517,14 @@ struct SidebarFolderRowView: View, Equatable {
         let style = Typography.folderRowTitle
 
         SidebarRowFrame(fill: isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear, depth: row.depth) {
-            // 18 pt symbol ≈ 21 × 16 ink; drawn in the 18 pt cell, overflowing it symmetrically
-            // like the measured 22.5 pt ink (x 16–38.5).
+            // The glyph's ink box is the measured 22.5 × 16.5, overflowing the 18 pt cell and
+            // shifted so it spans x 16–38.5 (`SidebarFolderGlyph`). F5-32/49/59.
             Group {
                 if let icon = folder.icon {
                     // Change Icon… replaces the folder glyph. [06 §21.5] observed item (B77).
-                    SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor.opacity(0.8))
+                    SidebarCustomIconView(icon: icon, size: iconSize, tint: textColor.opacity(SidebarLocalTokens.folderGlyphInkOpacity))
                 } else {
-                    Image(systemName: folder.isExpanded ? "folder" : "folder.fill")
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(textColor.opacity(0.8))
+                    SidebarFolderGlyph(isExpanded: folder.isExpanded, ink: textColor.opacity(SidebarLocalTokens.folderGlyphInkOpacity))
                 }
             }
                 .frame(width: iconSize, height: iconSize)
@@ -532,6 +545,7 @@ struct SidebarFolderRowView: View, Equatable {
                         renameText = folder.title
                         renameFocused = true
                     }
+                    .onDisappear { viewModel.renameFieldClosed(folder.id, text: renameText) }
             } else {
                 Text(folder.title)
                     .font(style.font)
@@ -598,21 +612,34 @@ struct SidebarDividerRowView: View {
     }
 }
 
-/// "+ New Tab" row at the top of Today, right under the divider: tab-row geometry, no fill, a "+"
-/// (ink ≈ 11.5 × 12 at x 20) in the icon cell, SF Regular 14 in black 30 % [07 §3, §4] observed;
-/// white ≈ 50 % with light ink (B32 round-1 PX, inferred).
+/// "+ New Tab" row at the top of Today, right under the divider: tab-row geometry, no fill while
+/// unselected, a "+" (ink ≈ 11.5 × 12 at x 20) in the icon cell, SF Regular 14 in black 30 %
+/// [07 §3, §4] observed; white ≈ 50 % with light ink (B32 round-1 PX, inferred). Selected (the
+/// window's new-tab command bar is open, inferred) it takes `selectedFill`.
 struct SidebarNewTabRowView: View {
     /// Used by the action only: the list passes everything it draws (B104).
     let viewModel: SidebarViewModel
     /// Its page's Space colors (B101).
     let palette: ThemePalette
     let isEmptySpace: Bool
+    var isSelected = false
+    var isIncognito = false
+    @Environment(\.windowSurface) private var surface
     @State private var isHovering = false
+
+    /// Fill of the selected row: the address box's fill ([04 §侧边栏] observed "填充与搜索框同色",
+    /// [07 §4] observed "无底色(未选中)"); the incognito window's observed ≈ #46494D
+    /// ([06 §20.1] observed). F5-66.
+    static func selectedFill(palette: ThemePalette, isIncognito: Bool, surface: WindowSurface = .opaque) -> RGBAColor {
+        isIncognito ? IncognitoTokens.newTabRowSelectedFill : palette.windowFills(on: surface).controlFill
+    }
 
     var body: some View {
         let ink = palette.ink(\.newTabRow).swiftUI
         let style = Typography.newTabRow
-        SidebarRowFrame(fill: isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear) {
+        let fill: Color = isSelected ? Self.selectedFill(palette: palette, isIncognito: isIncognito, surface: surface).swiftUI
+            : isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear
+        SidebarRowFrame(fill: fill) {
             Image(systemName: "plus")
                 .font(.system(size: SidebarLocalTokens.newTabPlusGlyphSize, weight: SidebarLocalTokens.newTabPlusGlyphWeight))
                 .frame(width: SidebarLocalTokens.rowIconSize, height: SidebarLocalTokens.rowIconSize)
@@ -629,8 +656,39 @@ struct SidebarNewTabRowView: View {
         .onTapGesture { viewModel.newTabRowClicked() }
         // Like the reference row: an element holding the icon and the title.
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { viewModel.newTabRowClicked() }
         .accessibilityIdentifier("openarc.sidebar.newTabRow")
+    }
+}
+
+/// The folder glyph of a folder row: the closed (filled) or open folder symbol stretched to the
+/// measured ink box `Metrics.Sidebar.folderGlyph` (22.5 × 16.5), centered on the row and spanning
+/// x 16–38.5 ([07 §4] observed), so it overflows the 18 pt icon cell (x 17–35) by `inkOffsetX`.
+/// The symbol itself is ours (icons may differ).
+struct SidebarFolderGlyph: View {
+    let isExpanded: Bool
+    let ink: Color
+
+    /// Ink box. [07 §4] observed.
+    static var inkSize: CGSize {
+        CGSize(width: Metrics.Sidebar.folderGlyph.width, height: Metrics.Sidebar.folderGlyph.height)
+    }
+    /// Left edge of the ink in the row (window x). [07 §4] observed (x 16–38.5).
+    static let inkLeading: CGFloat = 16
+    /// Shift of the ink's center from the icon cell's center: (16 + 38.5) / 2 − (17 + 35) / 2.
+    static var inkOffsetX: CGFloat {
+        let cellCenter = CGFloat(Metrics.Sidebar.rowIconLeading + Metrics.Sidebar.rowIconSize / 2)
+        return inkLeading + inkSize.width / 2 - cellCenter
+    }
+
+    var body: some View {
+        let size = Self.inkSize
+        Image(systemName: isExpanded ? "folder" : "folder.fill")
+            .resizable()
+            .frame(width: size.width, height: size.height)
+            .foregroundStyle(ink)
+            .offset(x: Self.inkOffsetX)
+            .accessibilityHidden(true)
     }
 }

@@ -48,7 +48,11 @@ public final class ShellModel: ObservableObject {
 
     /// Whether the command bar panel is showing. [05 §command bar] observed: floating, no scrim.
     /// Also true while the bar is shown inside a split pane.
-    @Published public private(set) var isCommandBarPresented = false
+    @Published public private(set) var isCommandBarPresented = false {
+        // The sidebar's "+ New Tab" row shows its selected fill while the window's new-tab bar is
+        // open. [06 §20.1] observed fill; the condition is inferred. F5-66.
+        didSet { updateNewTabRowSelection() }
+    }
     /// The split pane (its tab id) that hosts the command bar; nil when the bar floats over the
     /// window. [06 §5, §6] observed.
     @Published public internal(set) var commandBarPaneTabID: UUID?
@@ -357,6 +361,7 @@ public final class ShellModel: ObservableObject {
             commandBarPaneTabID = nil
             paneCommandBar.dismiss()
         }
+        commandBarIsForNewTab = mode == .newTab
         let url = mode == .currentTab ? sidebar.selectedURL : nil
         commandBar.open(
             mode: mode,
@@ -365,6 +370,14 @@ public final class ShellModel: ObservableObject {
             currentSpaceID: selectedSpaceID
         )
         isCommandBarPresented = true
+    }
+
+    /// The window's floating bar was opened for a new tab (⌘T, "+ New Tab").
+    private var commandBarIsForNewTab = false
+
+    private func updateNewTabRowSelection() {
+        let selected = isCommandBarPresented && commandBarPaneTabID == nil && commandBarIsForNewTab
+        if sidebar.isNewTabRowSelected != selected { sidebar.isNewTabRowSelected = selected }
     }
 
     public func dismissCommandBar() {

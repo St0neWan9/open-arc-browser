@@ -38,10 +38,24 @@ enum SidebarPeekTokens {
     static let shadowOffsetX: CGFloat = 2
     static let shadowOffsetY: CGFloat = 2
 
-    /// Panel fill relative to the pinned sidebar: "slightly deeper, more saturated".
-    /// [06 §14] observed; the factors are inferred.
-    static let fillShade: Double = 0.96
-    static let fillSaturationBoost: Double = 1.3
+    /// Panel fill relative to the pinned sidebar, dark appearance: shaded, then pushed away from
+    /// its gray. [06 §26.2] observed (dark, default theme): pinned #2C283E → panel ≈ #1D1B32; these
+    /// factors give #1E1A31 (≤ 1.3/255 per channel). inferred (fitted to that one sample). F5-8/17/19.
+    static let darkFillShade: Double = 0.67
+    static let darkFillSaturationBoost: Double = 1.6
+    /// Light appearance: "slightly deeper, more saturated" [06 §14] observed; not sampled, so the
+    /// earlier mild factors stay (inferred).
+    static let lightFillShade: Double = 0.96
+    static let lightFillSaturationBoost: Double = 1.3
+
+    /// The light rim around the panel. [06 §26.2] observed ≈ #5D5F70 (dark, default theme),
+    /// width ≈ 2 pt (inferred there). White at 29 % over the dark panel fill gives #5F5C6D on the
+    /// default theme (≤ 3/255). inferred rule. F5-18/30.
+    static let rimWidth: CGFloat = 2
+    static let darkRimWhite: Double = 0.29
+    /// Light appearance: a white rim would vanish on a light panel; a faint dark line keeps the
+    /// edge. unknown (not captured), our value.
+    static let lightRimBlack: Double = 0.08
 
     /// Time the pointer rests at the edge before the panel slides out. `Motion.sidebarPeekOpenDwell`:
     /// [07 §11] observed ≈ 0.11 s (≤ 100 ms never opens, ≥ 115 ms always does).
@@ -56,11 +70,29 @@ enum SidebarPeekTokens {
     static var slideDuration: Double { Motion.sidebarPeekSlide.curve.nominalDuration }
 
     /// The panel fill for a pinned-sidebar color: shaded and pushed away from its gray.
-    static func panelFill(for windowBackground: RGBAColor) -> RGBAColor {
-        let c = ThemeDerivation.shade(windowBackground, by: fillShade)
+    static func panelFill(for windowBackground: RGBAColor, isDark: Bool) -> RGBAColor {
+        let shade = isDark ? darkFillShade : lightFillShade
+        let saturation = isDark ? darkFillSaturationBoost : lightFillSaturationBoost
+        let c = ThemeDerivation.shade(windowBackground, by: shade)
         let gray = 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue
-        func boost(_ v: Double) -> Double { min(max(gray + (v - gray) * fillSaturationBoost, 0), 1) }
+        func boost(_ v: Double) -> Double { min(max(gray + (v - gray) * saturation, 0), 1) }
         return RGBAColor(red: boost(c.red), green: boost(c.green), blue: boost(c.blue), alpha: windowBackground.alpha)
+    }
+
+    /// The panel fill for a palette (its window color and appearance).
+    static func panelFill(for palette: ThemePalette) -> RGBAColor {
+        panelFill(for: palette.windowBackground, isDark: palette.isDark)
+    }
+
+    /// The rim color as a layer over the panel: white in the dark appearance, faint black in light.
+    static func rimColor(isDark: Bool) -> RGBAColor {
+        isDark ? RGBAColor(hex: 0xFFFFFF, alpha: darkRimWhite) : RGBAColor(hex: 0x000000, alpha: lightRimBlack)
+    }
+
+    /// The rim as seen over `fill` (opaque), for checks against the observed color.
+    static func rimOver(_ fill: RGBAColor, isDark: Bool) -> RGBAColor {
+        let rim = rimColor(isDark: isDark)
+        return ThemeDerivation.mix(fill, RGBAColor(red: rim.red, green: rim.green, blue: rim.blue), amount: rim.alpha)
     }
 }
 

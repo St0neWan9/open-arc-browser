@@ -228,6 +228,7 @@ final class SidebarViewModelTests: XCTestCase {
 
     /// [06 §11] observed: deleting a space needs a confirmation, archives its tabs, and the
     /// window falls back to another space. The last space cannot be deleted (inferred).
+    /// Home is first in the dock and was never left, so the fallback is its neighbour Work.
     func testDeleteSpaceConfirmation() {
         let f = SidebarFixture()
         let (vm, _) = makeSidebarViewModel(f)
@@ -238,12 +239,55 @@ final class SidebarViewModelTests: XCTestCase {
         vm.requestDeleteSpace(f.home)
         vm.confirmDeleteSpace()
         XCTAssertEqual(vm.workspace.spaces[f.home]?.meta.isTombstone, true)
-        XCTAssertEqual(vm.selectedSpaceID, f.work)
+        XCTAssertEqual(vm.selectedSpaceID, f.work, "no earlier Space: the only neighbour")
         XCTAssertNotNil(vm.workspace.archive[f.today1])
         XCTAssertEqual(vm.snapshot.favorites.count, 2, "favorites survive")
         XCTAssertFalse(vm.canDeleteSpace)
         vm.requestDeleteSpace(f.work)
         XCTAssertNil(vm.pendingSpaceDeletionID)
+    }
+
+    /// [06 §11] observed: after deleting the current Space the window goes back to the Space it
+    /// showed before. Dock Home, Work; a new Space T is created right after Home (Home, T, Work)
+    /// and shown; deleting T returns to Home, not to T's right neighbour Work. F5-14.
+    func testDeleteCurrentSpaceReturnsToPreviousSpace_06_11() throws {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        let t = SidebarFixture.id(900)
+        vm.replaceWorkspace(try TreeOps.createSpace(vm.workspace, id: t, profileID: f.profile, name: "T", afterSpaceID: f.home, now: f.now))
+        XCTAssertEqual(vm.dockSpaces.map(\.id), [f.home, t, f.work])
+        vm.selectSpace(t)
+        vm.requestDeleteSpace(t)
+        vm.confirmDeleteSpace()
+        XCTAssertEqual(vm.selectedSpaceID, f.home)
+        vm.stop()
+    }
+
+    /// [06 §11]: the Space shown before is the most recent live one; when it is gone too, the
+    /// previous dock neighbour (inferred fallback). F5-14.
+    func testDeleteSpaceFallsBackToPreviousDockNeighbour_06_11() throws {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        let t = SidebarFixture.id(901), u = SidebarFixture.id(902)
+        var ws = try TreeOps.createSpace(vm.workspace, id: t, profileID: f.profile, name: "T", now: f.now)
+        ws = try TreeOps.createSpace(ws, id: u, profileID: f.profile, name: "U", now: f.now)
+        vm.replaceWorkspace(ws)
+        XCTAssertEqual(vm.dockSpaces.map(\.id), [f.home, f.work, t, u])
+        // Home → Work → U: the history is Work, Home (most recent first).
+        vm.selectSpace(f.work)
+        vm.selectSpace(u)
+        XCTAssertEqual(vm.spaceAfterDeleting(u), f.work)
+        // Work is deleted elsewhere: the next remembered Space is Home.
+        vm.replaceWorkspace(try TreeOps.deleteSpace(vm.workspace, id: f.work, now: f.now))
+        XCTAssertEqual(vm.spaceAfterDeleting(u), f.home)
+        // No remembered Space left (Home deleted too): the previous dock neighbour of U is T.
+        vm.replaceWorkspace(try TreeOps.deleteSpace(vm.workspace, id: f.home, now: f.now))
+        XCTAssertEqual(vm.dockSpaces.map(\.id), [t, u])
+        XCTAssertEqual(vm.spaceAfterDeleting(u), t)
+        vm.requestDeleteSpace(u)
+        vm.confirmDeleteSpace()
+        XCTAssertEqual(vm.selectedSpaceID, t)
+        vm.stop()
     }
 
     /// [06 §5] observed: Add Split View keeps the current tab on the left, opens a new tab on

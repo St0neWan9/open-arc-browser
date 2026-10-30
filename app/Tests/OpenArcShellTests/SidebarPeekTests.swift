@@ -212,7 +212,7 @@ final class SidebarPeekTests: XCTestCase {
 
     func testPanelFillIsDeeperAndMoreSaturated() {
         let window = ThemeDerivation.lightWindow(RGBAColor(hex: 0x8E6FD8))
-        let fill = SidebarPeekTokens.panelFill(for: window)
+        let fill = SidebarPeekTokens.panelFill(for: window, isDark: false)
         XCTAssertLessThan(ThemeDerivation.luminance(fill), ThemeDerivation.luminance(window))
         func spread(_ c: RGBAColor) -> Double { max(c.red, c.green, c.blue) - min(c.red, c.green, c.blue) }
         XCTAssertGreaterThan(spread(fill), spread(window))

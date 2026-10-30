@@ -81,6 +81,41 @@ struct PinnedPageEditorSheet: View {
     private func save() { viewModel.commitEditPinnedPage(urlText: urlText, title: title) }
 }
 
+/// Favorite ▸ Rename…: one field and Cancel [ESC] / Rename [↵] on the New Folder card
+/// ([06 §3], [07 §6] observed card). A favorite tile shows only its icon ([06 §21.3] observed), so
+/// there is no title to edit in place; the card is inferred (F5-1). A blank field puts the page
+/// title back, like a tab row.
+struct FavoriteRenameSheet: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    @State private var title = ""
+
+    var body: some View {
+        let palette = viewModel.palette
+        ModalCard(size: Metrics.Dialog.newFolderSize, palette: palette) {
+            Text("Rename Favorite")
+                .textStyle(Typography.dialogTitle, ink: palette.dialogInk)
+                .padding(.top, ModalCardTokens.titleTop)
+            ModalCardTextField(placeholder: "Title", text: $title, palette: palette,
+                               identifier: "openarc.favoriteRename.titleField", onSubmit: save)
+                .padding(.top, ModalCardTokens.fieldGap)
+        } buttons: {
+            AnyView(Group {
+                ModalCardButton(title: "Cancel", keyCap: "ESC", role: .cancel, palette: palette) { viewModel.cancelFavoriteRename() }
+                    .keyboardShortcut(.cancelAction)
+                ModalCardButton(title: "Rename", keyCap: "↵", role: .primary, palette: palette, action: save)
+                    .keyboardShortcut(.defaultAction)
+            })
+        }
+        .onAppear {
+            guard let id = viewModel.favoriteRenameTabID, let tab = viewModel.workspace.tabs[id] else { return }
+            title = tab.displayTitle
+        }
+        .accessibilityIdentifier("openarc.favoriteRename")
+    }
+
+    private func save() { viewModel.commitFavoriteRename(text: title) }
+}
+
 /// The favorite's unread badge: a small count capsule at the tile's top-right corner while Show
 /// Unread Badge is on and the page has unread items. Look inferred (plan B77): the spec only names
 /// the menu item and the hover tip ([05 §context menus], [06 §12] observed).
