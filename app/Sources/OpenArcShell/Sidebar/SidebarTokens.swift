@@ -43,12 +43,14 @@ enum SidebarLocalTokens {
     /// opacity of the black overlay is unknown.
     static let rowHoverBlackOpacity: Double = 0.07
 
-    /// Edge of the ✕ / — button at a row's trailing end. [06 §12] observed that it exists;
-    /// the size is unknown (24, centered like the 18 pt icon cell).
-    static let rowAccessoryButtonSize: CGFloat = 24
+    /// Edge of the ✕ / — button at a row's trailing end. [06 §16.1] observed (26 × 26 on a pinned
+    /// row); the Today ✕ uses the same button (inferred). F5-37.
+    static let rowAccessoryButtonSize: CGFloat = 26
 
-    /// Trailing padding of the row accessory inside the selected fill. unknown.
-    static let rowAccessoryTrailingPadding: CGFloat = 6
+    /// Gap between the row accessory's right edge and the selected fill's right edge (x 268): the
+    /// button sits ≈ 13 pt inside the 276 pt row, so its right edge is at x 263. [06 §16.1]
+    /// observed (≈ 13 from the row's right edge); reading "row" as the 0–276 AX row is inferred.
+    static let rowAccessoryTrailingPadding: CGFloat = 5
 
     /// Glyph point size of the row accessories (✕ / —, the speaker) and the ink opacity they draw
     /// in, on top of the row text color. [06 §12] observed that they exist; size and ink unknown.
@@ -88,17 +90,36 @@ enum SidebarLocalTokens {
 
     // MARK: Split group row
 
-    /// Opacity of the thin vertical line between two members of a split-group row, and its height
-    /// as a fraction of the row icon size. [06 §5] says only that the split tabs are one group in
-    /// the sidebar; the look of that row is unknown (local placeholder).
-    static let splitGroupDividerOpacity: Double = 0.25
-    static let splitGroupDividerHeight: CGFloat = 16
+    /// A split row holds one capsule per member side by side, each with its icon and truncated
+    /// title. [06 §21.6] observed ("一行里并排两个胶囊"); the capsule's size, fill and gaps were
+    /// not measured (unknown, our values). F5-15.
+    /// Capsule height inside the 40 pt row button.
+    static let splitGroupCapsuleHeight: CGFloat = 28
+    /// Gap between two capsules.
+    static let splitGroupCapsuleGap: CGFloat = 4
+    /// Space between a capsule's left edge and its icon: the first icon stays at the row icon
+    /// position (x 17), so the first capsule starts at x 12, 4 pt inside the row fill.
+    static let splitGroupCapsuleLeading: CGFloat = 5
+    /// Space after the title inside a capsule.
+    static let splitGroupCapsuleTrailing: CGFloat = 8
+    /// Capsule fill: the row ink at this opacity, so it reads on the selected fill and on the
+    /// sidebar alike.
+    static let splitGroupCapsuleInkOpacity: Double = 0.08
 
-    /// Gap between a member's favicon and its title inside a split-group row. unknown.
+    /// Gap between a member's favicon and its title inside a split-group capsule. unknown.
     static let splitGroupMemberIconGap: CGFloat = 6
 
-    /// Horizontal padding of one member cell inside a split-group row. unknown.
-    static let splitGroupMemberPadding: CGFloat = 6
+    // MARK: Folder row
+
+    /// Ink opacity of the folder glyph over the row text color. unknown (looks lighter than the
+    /// title in the captures; not measured).
+    static let folderGlyphInkOpacity: Double = 0.8
+
+    // MARK: Space history
+
+    /// How many earlier Spaces a window remembers for "back to the previous Space" after a delete
+    /// ([06 §11] observed behavior; the depth is ours).
+    static let spaceHistoryLimit = 16
 
     // MARK: Space name row
 

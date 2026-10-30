@@ -69,6 +69,7 @@ public final class SidebarViewModel: ObservableObject {
         // Favorites follow the window's Space for their pages' color scheme (B21).
         didSet {
             guard oldValue != selectedSpaceID else { return }
+            noteSpaceLeft(oldValue, entering: selectedSpaceID)
             controller.syncWebColorSchemes()
             spacePager.show(selectedSpaceID, order: dockSpaces.map(\.id))
         }
@@ -85,8 +86,20 @@ public final class SidebarViewModel: ObservableObject {
     /// Spaces whose pinned area this window shows collapsed (View ▸ Collapse Pinned Tabs, B72).
     /// Window state, not saved (inferred).
     @Published var collapsedPinnedSpaceIDs: Set<UUID> = []
-    /// Item being renamed inline (tab or folder).
+    /// Item being renamed inline (tab, folder or split row). Only set for an item that has a row on
+    /// screen, and cleared when the field commits, cancels or loses its row (F5-1).
     @Published public internal(set) var renamingItemID: UUID?
+    /// Favorite whose Rename… card is open. A favorite tile has no title to edit in place
+    /// ([06 §21.3] observed: icon only), so its rename is a card. [06 §21.5] observed item; the
+    /// card is inferred (F5-1).
+    @Published var favoriteRenameTabID: UUID?
+    /// The inline rename a press elsewhere ended; its field commits as it closes. Not published.
+    private var renameEndedFromOutside: UUID?
+    /// The "+ New Tab" row shows its selected fill: the window's command bar is open for a new
+    /// tab. Set by the shell. [06 §20.1] observed fill "while selected"; when it counts as
+    /// selected is inferred (the incognito window opens with the new-tab command bar and the row
+    /// filled). F5-66.
+    @Published var isNewTabRowSelected = false
     @Published public var isNewFolderSheetPresented = false
     /// Parent for the folder the sheet creates (nil = top level).
     @Published var newFolderParentID: UUID?
@@ -191,6 +204,9 @@ public final class SidebarViewModel: ObservableObject {
     private var hoveredTabID: UUID?
     /// Last selected tab per space, restored when switching back. inferred.
     private var lastSelectedTab: [UUID: UUID] = [:]
+    /// Spaces this window showed before the current one, most recent first. Deleting the current
+    /// Space goes back to the newest live one. [06 §11] observed (F5-14).
+    private(set) var spaceHistory: [UUID] = []
     /// Last selected member per split layout, so selecting the group row returns to the pane that
     /// had focus. inferred: `SplitLayout` stores no focus; the selected tab is the focused pane.
     private var lastFocusedPane: [UUID: UUID] = [:]
@@ -471,6 +487,10 @@ public final class SidebarViewModel: ObservableObject {
     /// The shared workspace changed elsewhere (another window, auto-archive, sync).
     func workspaceDidChange() {
         repairSelection()
+        // A rename whose row went away (archived, moved, folded away) ends: nothing could commit
+        // or cancel it, and the flag turns off hover cards and press-to-select. F5-1.
+        if let id = renamingItemID, !hasListRow(id) { renamingItemID = nil }
+        if let id = favoriteRenameTabID, !isLiveFavorite(id) { favoriteRenameTabID = nil }
     }
 
     @discardableResult
@@ -1015,15 +1035,72 @@ public final class SidebarViewModel: ObservableObject {
 
     // MARK: Rename
 
+    /// Rename… / double-click / Rename Current Item. A row in the list gets its inline field; a
+    /// favorite gets the Rename card (its tile has no title, [06 §21.3] observed). Anything else
+    /// (a split member, a row hidden in a collapsed area) is ignored, so the rename flag is never
+    /// left set without a field to end it. [06 §21.5] observed items; F5-1.
     public func beginRename(_ id: UUID) {
         hoverEnded(id)
         dismissQuickList()
+        if isLiveFavorite(id) {
+            favoriteHoverEnded(id)
+            if renamingItemID != nil { renamingItemID = nil }
+            favoriteRenameTabID = id
+            return
+        }
+        guard hasListRow(id) else { return }
+        renameEndedFromOutside = nil
         // The hint has done its job once the user renames the tab. inferred (B76).
         if pinRenameHintTabID == id { pinRenameHintTabID = nil }
         renamingItemID = id
     }
 
     public func cancelRename() { renamingItemID = nil }
+
+    /// Ends the inline rename because the user pressed elsewhere in the sidebar. The row's field
+    /// commits its text when it closes (`renameFieldClosed`), like a field that lost focus.
+    /// inferred (the spec does not show how Arc ends a rename). F5-1.
+    func endRenameFromOutside() {
+        guard let id = renamingItemID else { return }
+        renameEndedFromOutside = id
+        renamingItemID = nil
+    }
+
+    /// A row's rename field went away with `text`. Commits it when a press elsewhere ended the
+    /// rename; a field that closes while its rename is still set (the row scrolled out of the
+    /// built band, the Space page changed) cancels, so the flag never outlives its field. F5-1.
+    func renameFieldClosed(_ id: UUID, text: String) {
+        if renameEndedFromOutside == id {
+            renameEndedFromOutside = nil
+            commitRename(id, text: text)
+        } else if renamingItemID == id {
+            renamingItemID = nil
+        }
+    }
+
+    /// Whether `id` is a row of the current list (tab, folder or split row).
+    func hasListRow(_ id: UUID) -> Bool {
+        let snap = snapshot
+        return snap.pinned.contains { $0.id == id } || snap.today.contains { $0.id == id }
+    }
+
+    private func isLiveFavorite(_ id: UUID) -> Bool {
+        guard let tab = workspace.tabs[id], !tab.meta.isTombstone, case .favorite = tab.location else { return false }
+        return true
+    }
+
+    /// The favorite Rename card's Cancel [ESC].
+    func cancelFavoriteRename() { favoriteRenameTabID = nil }
+
+    /// The favorite Rename card's Rename [↵]: the favorite's title, or its page title again when
+    /// the field is blank (same rule as a tab row, inferred). F5-1.
+    func commitFavoriteRename(text: String) {
+        guard let id = favoriteRenameTabID else { return }
+        favoriteRenameTabID = nil
+        guard isLiveFavorite(id) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        mutate { try TreeOps.renameTab($0, id: id, customTitle: trimmed.isEmpty ? nil : trimmed, now: now()) }
+    }
 
     /// Commits a rename. An empty (or whitespace) title resets a tab to its page title (inferred)
     /// and is ignored for folders.
@@ -1116,14 +1193,32 @@ public final class SidebarViewModel: ObservableObject {
     public func confirmDeleteSpace() {
         guard let id = pendingSpaceDeletionID else { return }
         pendingSpaceDeletionID = nil
-        let spaces = dockSpaces
-        let index = spaces.firstIndex(where: { $0.id == id }) ?? 0
-        let fallback = spaces.indices.contains(index + 1) ? spaces[index + 1].id : spaces.last(where: { $0.id != id })?.id
+        let fallback = spaceAfterDeleting(id)
         let doomed = workspace.allTabs(inSpace: id).map(\.id)
         guard mutate({ try TreeOps.deleteSpace($0, id: id, now: now()) }) else { return }
         doomed.forEach(closeLive)
         if selectedSpaceID == id { selectedSpaceID = fallback }
         if let tab = selectedTabID, workspace.tabs[tab]?.meta.isTombstone == true { selectedTabID = nil }
+    }
+
+    /// Where the window goes when Space `id` (the current one) is deleted: back to the Space it
+    /// showed before, else the previous Space in the dock, else the next. [06 §11] observed ("the
+    /// window goes back to the original Space"; a new Space is inserted right after the current
+    /// one, so that is also its left neighbour). The neighbour fallbacks are inferred. F5-14.
+    func spaceAfterDeleting(_ id: UUID) -> UUID? {
+        let spaces = dockSpaces
+        let live = Set(spaces.map(\.id))
+        if let previous = spaceHistory.first(where: { $0 != id && live.contains($0) }) { return previous }
+        guard let index = spaces.firstIndex(where: { $0.id == id }) else { return spaces.first?.id }
+        if index > 0 { return spaces[index - 1].id }
+        return spaces.indices.contains(index + 1) ? spaces[index + 1].id : nil
+    }
+
+    /// Records the Space the window left (`spaceHistory`).
+    private func noteSpaceLeft(_ old: UUID?, entering new: UUID?) {
+        spaceHistory.removeAll { $0 == old || $0 == new }
+        if let old { spaceHistory.insert(old, at: 0) }
+        if spaceHistory.count > SidebarLocalTokens.spaceHistoryLimit { spaceHistory.removeLast() }
     }
 
     // MARK: Clear Archive (B69)
@@ -1300,6 +1395,9 @@ public final class SidebarViewModel: ObservableObject {
     /// Mouse-down on an item, before any drag: a tab or split group is selected at once (and its
     /// page comes to the front). [06 §15.1] observed. Folders act on click only (toggle).
     func pressSelect(_ item: SidebarDragItem) {
+        // A press on another item ends a rename under way (its field commits as it closes), so the
+        // rename never holds the sidebar's presses and hover cards. F5-1.
+        if let renaming = renamingItemID, renaming != item.id { endRenameFromOutside() }
         guard draggingItem == nil, renamingItemID == nil else { return }
         selectionBeforePress = nil
         switch item {

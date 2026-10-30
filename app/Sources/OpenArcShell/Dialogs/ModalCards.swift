@@ -252,6 +252,9 @@ struct SidebarWindowModals: ViewModifier {
             .windowModal(id: "editPinnedPage", isPresented: sidebar.pinnedPageEditorTabID != nil, size: PinnedPageEditorTokens.size) {
                 PinnedPageEditorSheet(viewModel: sidebar)
             }
+            .windowModal(id: "renameFavorite", isPresented: sidebar.favoriteRenameTabID != nil, size: d.newFolderSize) {
+                FavoriteRenameSheet(viewModel: sidebar)
+            }
             .windowModal(id: "clearArchive", isPresented: sidebar.isClearArchiveConfirmationPresented, size: d.deleteSpaceSize) {
                 ClearArchiveSheet(palette: sidebar.palette) {
                     sidebar.cancelClearArchive()

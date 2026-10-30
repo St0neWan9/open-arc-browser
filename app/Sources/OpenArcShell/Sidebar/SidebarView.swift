@@ -389,8 +389,9 @@ private struct SidebarListRows: View {
                 .equatable()
         case .divider(let palette, let canClear):
             SidebarDividerRowView(viewModel: viewModel, palette: palette, canClear: canClear, isSidebarHovered: isSidebarHovered)
-        case .newTabRow(let palette, let isEmptySpace):
-            SidebarNewTabRowView(viewModel: viewModel, palette: palette, isEmptySpace: isEmptySpace)
+        case .newTabRow(let palette, let isEmptySpace, let isSelected, let isIncognito):
+            SidebarNewTabRowView(viewModel: viewModel, palette: palette, isEmptySpace: isEmptySpace,
+                                 isSelected: isSelected, isIncognito: isIncognito)
         }
     }
 }
@@ -402,7 +403,7 @@ enum SidebarListEntryLook: Equatable {
     case tab(SidebarTabRowState)
     case splitGroup(SidebarSplitGroupRowView.State)
     case divider(palette: ThemePalette, canClear: Bool)
-    case newTabRow(palette: ThemePalette, isEmptySpace: Bool)
+    case newTabRow(palette: ThemePalette, isEmptySpace: Bool, isSelected: Bool, isIncognito: Bool)
 }
 
 /// One built list entry and what it draws.
@@ -458,7 +459,8 @@ extension SidebarViewModel {
         case .divider:
             return .divider(palette: palette, canClear: snapshot.canClear)
         case .newTabRow:
-            return .newTabRow(palette: palette, isEmptySpace: snapshot.isEmptySpace)
+            return .newTabRow(palette: palette, isEmptySpace: snapshot.isEmptySpace,
+                              isSelected: isNewTabRowSelected, isIncognito: isIncognito)
         }
     }
 }

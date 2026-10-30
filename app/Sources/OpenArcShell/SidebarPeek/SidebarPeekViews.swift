@@ -7,8 +7,9 @@ import OpenArcDesign
 // [06 §14] observed.
 
 /// The sidebar floating over the web panel: a rounded, shadowed panel 5 pt from the window's top,
-/// bottom and left edges, in a slightly deeper fill than the pinned sidebar. The web panel under it
-/// keeps its frame. [06 §14] observed; radius, shadow and fill factors are local tokens.
+/// bottom and left edges, in a deeper, more saturated fill than the pinned sidebar, with a ≈ 2 pt
+/// light rim. The web panel under it keeps its frame. [06 §14], [06 §26.2] observed; radius, shadow
+/// and the fill / rim rules are local tokens.
 struct SidebarPeekOverlay: View {
     @ObservedObject var sidebar: SidebarViewModel
     let siteControls: SiteControlsModel
@@ -17,7 +18,8 @@ struct SidebarPeekOverlay: View {
     var body: some View {
         let layout = SidebarPeekLayout(windowSize: windowSize)
         let panel = layout.panelFrame
-        let fill = SidebarPeekTokens.panelFill(for: sidebar.palette.windowBackground)
+        let palette = sidebar.palette
+        let fill = SidebarPeekTokens.panelFill(for: palette)
         let shape = RoundedRectangle(cornerRadius: SidebarPeekTokens.panelCornerRadius, style: .continuous)
         ZStack(alignment: .topLeading) {
             // The sidebar moves with the panel by (5, 5), like the traffic lights the window
@@ -33,6 +35,9 @@ struct SidebarPeekOverlay: View {
         }
         .frame(width: panel.width, height: panel.height, alignment: .topLeading)
         .clipShape(shape)
+        // The rim sits inside the panel edge, over the sidebar's outer margin. [06 §26.2] observed.
+        .overlay(shape.strokeBorder(SidebarPeekTokens.rimColor(isDark: palette.isDark).swiftUI,
+                                    lineWidth: SidebarPeekTokens.rimWidth).allowsHitTesting(false))
         .contentShape(shape)
         .background(
             shape.fill(fill.swiftUI)
