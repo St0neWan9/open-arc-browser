@@ -949,7 +949,7 @@ struct ShortcutsPane: View {
                 CatalogButton(id: "shortcuts.reset")
                 Menu {
                     Picker(SettingsCatalog.control("shortcuts.priority").label, selection: .constant(0)) {
-                        Text("Open Arc first").tag(0)
+                        Text("Website first, except Open Arc's core keys").tag(0)
                     }
                     .disabled(true)
                 } label: {

@@ -197,7 +197,7 @@ public enum SettingsCatalog {
         SettingsControl("shortcuts.defaults", "Default Shortcuts", .list, .live),
         // No custom shortcuts in v1 (plan Q17): the list is read-only.
         SettingsControl("shortcuts.custom", "Custom Shortcuts", .button, .pending(task: "after v1")),
-        SettingsControl("shortcuts.priority", "Shortcut priority", .picker(defaultValue: "Open Arc first"), .pending(task: "after v1")),
+        SettingsControl("shortcuts.priority", "Shortcut priority", .picker(defaultValue: "Website first, except Open Arc's core keys"), .pending(task: "after v1")),
         SettingsControl("shortcuts.reset", "Reset All Shortcuts", .button, .pending(task: "after v1")),
         // Live (B85): opens Help ▸ Essential Keyboard Shortcuts ([02 §其他] observed).
         SettingsControl("shortcuts.basics", "Start with the basics", .button, .live),
