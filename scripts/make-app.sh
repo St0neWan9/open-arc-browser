@@ -73,6 +73,13 @@
 #                    passkeys created on this Mac. Without it (no profile, ad-hoc, a profile that
 #                    does not allow the group) the app still launches; WebAuthn then offers
 #                    security keys only.
+#                    iCloud Keychain passkeys (plan B131): when the profile allows
+#                    com.apple.developer.web-browser.public-key-credential = true (Apple grants it
+#                    on request, docs/passkey-entitlement.md), the app (the browser process; never
+#                    the helpers) is signed with it, and the release check reads it back with
+#                    codesign -d --entitlements. Without it the script warns and the app still
+#                    builds and launches: iCloud Keychain passkeys are then not offered. The key is
+#                    never in app/Bundle/OpenArc.entitlements: an ad-hoc build cannot carry it.
 #
 # Steps: release build of the OpenArcApp product, assemble build/Open Arc.app
 # (Contents/MacOS, Info.plist with the version filled in, Resources/AppIcon.icns and OpenArc.sdef,
@@ -108,6 +115,7 @@ keychain_password_file=""
 provisioning_profile=""
 aps_environment=""            # from the provisioning profile, when it allows push (plan B65)
 webauthn_keychain_group=""    # set when the provisioning profile allows it (plan C21)
+browser_passkeys=0            # 1 when the profile allows the browser passkey key (plan B131)
 icloud_container="iCloud.org.openarc.browser"   # CloudKitSyncStore.Configuration default
 
 while [[ $# -gt 0 ]]; do
@@ -222,6 +230,16 @@ if [[ -n "$provisioning_profile" ]]; then
     if [[ -z "$webauthn_keychain_group" ]]; then
         echo "warning: provisioning profile does not allow keychain group $wanted_group:" \
              "passkeys on this Mac are off (security keys still work)" >&2
+    fi
+    # plan B131: Apple's managed browser passkey capability. Only `true` counts; a key the profile
+    # does not allow would make AMFI kill the app at launch, so without it the app is signed
+    # without the key.
+    browser_passkey_key="com.apple.developer.web-browser.public-key-credential"
+    if [[ "$(profile_value ":Entitlements:$browser_passkey_key")" == "true" ]]; then
+        browser_passkeys=1
+    else
+        echo "warning: provisioning profile does not allow $browser_passkey_key:" \
+             "iCloud Keychain passkeys are off (request it from Apple, docs/passkey-entitlement.md)" >&2
     fi
     echo "provisioning profile: $(profile_value :Name) ($(profile_value :UUID)), expires $(plutil -extract ExpirationDate raw "$profile_plist")" >&2
     rm -f "$profile_plist"
@@ -458,6 +476,11 @@ if [[ -n "$provisioning_profile" ]]; then
         pb "Add :keychain-access-groups array"
         pb "Add :keychain-access-groups:0 string $webauthn_keychain_group"
     fi
+    # plan B131: iCloud Keychain passkeys. Chromium checks the browser process's own signature
+    # (SecTaskCreateFromSelf), so the helpers never get it.
+    if [[ $browser_passkeys -eq 1 ]]; then
+        pb "Add :com.apple.developer.web-browser.public-key-credential bool true"
+    fi
 fi
 sign --entitlements "$app_entitlements" "$app"
 
@@ -514,6 +537,27 @@ if [[ -n "$sign_identity" ]]; then
         else
             echo "passkeys: none on this Mac (security keys only)" >&2
         fi
+        # plan B131: the browser passkey key is on the app exactly when the profile allows it, and
+        # never on a helper.
+        browser_passkey_key="com.apple.developer.web-browser.public-key-credential"
+        app_entitlements_xml="$(codesign -d --entitlements :- "$app" 2>/dev/null)"
+        browser_passkey_signed="$(/usr/libexec/PlistBuddy -c "Print :$browser_passkey_key" /dev/stdin \
+            <<<"$app_entitlements_xml" 2>/dev/null || true)"
+        if [[ $browser_passkeys -eq 1 ]]; then
+            [[ "$browser_passkey_signed" == "true" ]] \
+                || { echo "missing entitlement $browser_passkey_key in $app" >&2; exit 1; }
+            echo "passkeys: iCloud Keychain ($browser_passkey_key)" >&2
+        else
+            [[ -z "$browser_passkey_signed" ]] \
+                || { echo "unexpected entitlement $browser_passkey_key in $app" >&2; exit 1; }
+            echo "passkeys: no iCloud Keychain (profile lacks $browser_passkey_key)" >&2
+        fi
+        for helper_app in "${helpers_dir:-/nonexistent}"/*.app; do
+            [[ -d "$helper_app" ]] || continue
+            if codesign -d --entitlements :- "$helper_app" 2>/dev/null | grep -q "$browser_passkey_key"; then
+                echo "helper must not carry $browser_passkey_key: $helper_app" >&2; exit 1
+            fi
+        done
         echo "iCloud: container $icloud_container (CloudKit, Production), profile embedded" >&2
     fi
 fi

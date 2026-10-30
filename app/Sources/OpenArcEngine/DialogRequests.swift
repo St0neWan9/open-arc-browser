@@ -769,6 +769,14 @@ public struct WebAuthnState: Hashable, Sendable {
         case thisMac
         case securityKey
         case other
+        /// Plan B130: save or use a passkey in iCloud Keychain (Passwords or another passkey app).
+        /// Choosing it hands over to macOS's sheet, and the engine withdraws the dialog. Offered
+        /// only with Apple's browser passkey entitlement (OACWebAuthn.h).
+        case iCloudKeychain
+        /// Plan B130: a passkey for one account in iCloud Keychain (`title`: the account;
+        /// `subtitle`: the app that holds it, may be empty). Hands over to macOS like
+        /// `iCloudKeychain`.
+        case passkeyInICloudKeychain
     }
 
     public struct Mechanism: Hashable, Sendable {

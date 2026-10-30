@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Fri, 30 Oct 2026 22:19:45 +0700
+Subject: [PATCH] openarc: chrome: let an embedder name the window of a
+ WebAuthn request
+
+Plan B130. ChromeAuthenticatorRequestDelegate::ConfigureNSWindow() finds
+a request's NSWindow through views::Widget::GetTopLevelWidgetForNativeView(),
+which only knows windows made by NativeWidgetMac. An app that embeds
+Chrome's browser process and shows tabs in its own AppKit windows
+(chrome::EmbedderOwnsUI()) has no widget, so the lookup returned null,
+FidoDiscoveryFactory never got a window, and
+MaybeCreatePlatformDiscovery() never created the iCloud Keychain
+discovery, even with Apple's browser passkey entitlement.
+
+SetEmbedderWindowGetter() (Mac) registers the embedder's lookup from a
+WebContents to its window; ConfigureNSWindow() uses it when Chrome's
+widget lookup finds nothing. macOS also anchors its passkey sheet to
+that window.
+
+Nothing changes when no embedder registers a getter.
+---
+ .../chrome_authenticator_request_delegate.cc  | 27 ++++++++++++++++---
+ .../chrome_authenticator_request_delegate.h   | 13 +++++++++
+ 2 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc b/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc
+index 64cc5836faf6..d1240bc2a2fa 100644
+--- a/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc
++++ b/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc
+@@ -129,6 +129,12 @@ namespace {
+ 
+ ChromeAuthenticatorRequestDelegate::TestObserver* g_observer = nullptr;
+ 
++#if BUILDFLAG(IS_MAC)
++// Open Arc: see ChromeAuthenticatorRequestDelegate::SetEmbedderWindowGetter.
++ChromeAuthenticatorRequestDelegate::EmbedderWindowGetter
++    g_embedder_window_getter = nullptr;
++#endif
++
+ static constexpr char kGoogleRpId[] = "google.com";
+ 
+ // Returns true iff the credential is reported as being present on the platform
+@@ -328,6 +334,14 @@ void ChromeAuthenticatorRequestDelegate::SetGlobalObserverForTesting(
+   g_observer = observer;
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++// static
++void ChromeAuthenticatorRequestDelegate::SetEmbedderWindowGetter(
++    EmbedderWindowGetter getter) {
++  g_embedder_window_getter = getter;
++}
++#endif
++
+ base::WeakPtr<ChromeAuthenticatorRequestDelegate>
+ ChromeAuthenticatorRequestDelegate::AsWeakPtr() {
+   return weak_ptr_factory_.GetWeakPtr();
+@@ -1251,11 +1265,16 @@ void ChromeAuthenticatorRequestDelegate::ConfigureNSWindow(
+   // into a new profile does not. Thus the NSWindow is fetched more directly.
+   const views::Widget* widget = views::Widget::GetTopLevelWidgetForNativeView(
+       web_contents->GetNativeView());
++  gfx::NativeWindow window;
+   if (widget) {
+-    const gfx::NativeWindow window = widget->GetNativeWindow();
+-    if (window) {
+-      discovery_factory->set_nswindow(window);
+-    }
++    window = widget->GetNativeWindow();
++  }
++  // Open Arc: an embedder's AppKit window has no widget.
++  if (!window && g_embedder_window_getter) {
++    window = g_embedder_window_getter(web_contents);
++  }
++  if (window) {
++    discovery_factory->set_nswindow(window);
+   }
+ }
+ void ChromeAuthenticatorRequestDelegate::ConfigureICloudKeychain(
+diff --git a/chrome/browser/webauthn/chrome_authenticator_request_delegate.h b/chrome/browser/webauthn/chrome_authenticator_request_delegate.h
+index 0546c8a7f0ab..9a73c82d31a9 100644
+--- a/chrome/browser/webauthn/chrome_authenticator_request_delegate.h
++++ b/chrome/browser/webauthn/chrome_authenticator_request_delegate.h
+@@ -35,6 +35,7 @@
+ #include "device/fido/public/fido_transport_protocol.h"
+ #include "device/fido/public/fido_types.h"
+ #include "third_party/blink/public/mojom/credentialmanagement/credential_type_flags.mojom.h"
++#include "ui/gfx/native_ui_types.h"
+ 
+ class AuthenticatorRequestDialogController;
+ class GPMEnclaveController;
+@@ -48,6 +49,7 @@ class TickClock;
+ namespace content {
+ class BrowserContext;
+ class RenderFrameHost;
++class WebContents;
+ }  // namespace content
+ 
+ namespace device {
+@@ -160,6 +162,17 @@ class ChromeAuthenticatorRequestDelegate
+   // while one is still installed.
+   static void SetGlobalObserverForTesting(TestObserver*);
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that embeds Chrome's browser process and shows tabs in
++  // its own AppKit windows (no views::Widget) names the window of a tab's
++  // WebContents. ConfigureNSWindow() asks it when Chrome's widget lookup finds
++  // nothing. Without a window the iCloud Keychain discovery is never created
++  // and macOS has no window for its passkey sheet. Without the call nothing
++  // changes.
++  using EmbedderWindowGetter = gfx::NativeWindow (*)(content::WebContents*);
++  static void SetEmbedderWindowGetter(EmbedderWindowGetter getter);
++#endif
++
+   base::WeakPtr<ChromeAuthenticatorRequestDelegate> AsWeakPtr();
+ 
+   AuthenticatorRequestDialogModel* dialog_model() const {

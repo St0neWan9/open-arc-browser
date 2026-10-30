@@ -29,8 +29,11 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // outside it. The app run checks the sandboxed path (plan C8 report).
         // --use-mock-keychain: the cookie store's key comes from a mock keychain (no keychain prompt
         // for a test process).
+        // --openarc-fake-icloud-keychain (plan B130, tests only): the bridge's stand-in for
+        // macOS's iCloud Keychain passkey API, which needs an entitlement this build lacks.
         let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: [
             "--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--use-mock-keychain",
+            "--openarc-fake-icloud-keychain",
         ])
         XCTAssertTrue(engine.engineVersion.hasPrefix("Chromium "))
 
@@ -141,6 +144,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         XCTAssertTrue(topSites.contains { $0.url.path == "/ua" }, "top sites: \(topSites.map(\.url))")
         XCTAssertTrue(topSites.allSatisfy { $0.url.scheme == "http" || $0.url.scheme == "https" })
         XCTAssertLessThanOrEqual(topSites.count, 5)
+
+        // Plan B130: iCloud Keychain passkeys through the tab's window, with the fake keychain.
+        try await checkICloudKeychainPasskeys(engine, server: identityServer)
 
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
