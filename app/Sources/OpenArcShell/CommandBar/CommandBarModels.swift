@@ -447,6 +447,9 @@ public enum CommandBarResultKind: Hashable, Sendable {
     case archivedItem
     /// A page of the profile's browsing history (plan B66): not open, not archived.
     case historyItem
+    /// One of the profile's most visited pages (plan B121), for an empty or short query.
+    /// [05 §command bar] inferred (analysis).
+    case topSite
     case command
     /// "Go to “<Space>”". inferred.
     case space
@@ -590,9 +593,39 @@ public struct CommandBarResult: Identifiable, Hashable, Sendable {
     }
 
     /// Text shown on the right of the row for a presentation. [06 §6] observed: panes show the space name.
-    public func trailingLabel(for presentation: CommandBarPresentation) -> String? {
+    ///
+    /// In the window's bar (plan B109, F4 live E2 observed 2026-10-29 with an empty query): a tab
+    /// of another Space shows that Space's name (gray, white when highlighted) instead of "Switch
+    /// to Tab"; a tab of the window's own Space (or a favorite, which belongs to no Space) shows
+    /// "Switch to Tab" only while it is the highlighted row, and nothing otherwise (the arrow box
+    /// stays). The same rule for typed queries and the Space name on a highlighted row are
+    /// inferred. `currentSpaceID` nil (unknown window Space) keeps the action label.
+    public func trailingLabel(
+        for presentation: CommandBarPresentation,
+        isSelected: Bool = true,
+        currentSpaceID: UUID? = nil
+    ) -> String? {
         if presentation == .pane, let spaceName, kind.isTab || kind == .archivedItem { return spaceName }
+        if presentation == .window, kind.isTab, let currentSpaceID {
+            if let spaceID, spaceID != currentSpaceID, let spaceName, !spaceName.isEmpty { return spaceName }
+            return isSelected ? actionLabel : nil
+        }
         return actionLabel
+    }
+}
+
+/// Leading glyph of the command bar's input row.
+public enum CommandBarInputGlyph: Hashable, Sendable {
+    /// Empty field. [04 §command bar] and [06 §7] observed a magnifier; F4 live E3 (2026-10-29)
+    /// observed it for the empty ⌘T bar (plan B109).
+    case magnifier
+    /// The field holds text (typed, or the ⌘L address). [07 §5] observed the globe in an earlier
+    /// capture; that it belongs to a field with text is inferred (plan B109).
+    case globe
+
+    /// The glyph for the field's literal text.
+    public static func forFieldText(_ text: String) -> CommandBarInputGlyph {
+        text.isEmpty ? .magnifier : .globe
     }
 }
 

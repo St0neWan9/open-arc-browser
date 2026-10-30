@@ -106,6 +106,15 @@ public final class FakeAutocomplete: EngineAutocomplete, @unchecked Sendable {
         return Array(HistoryMatch.sortedByFrecency(found, now: clock()).prefix(maxCount))
     }
 
+    /// The profile's recorded pages, most visited first (plan B121); none without `.history`.
+    public func topSites(profileID: Profile.ID, maxCount: Int) async -> [HistoryMatch] {
+        let (enabled, candidates): (Bool, [HistoryMatch]) = lock.withLock {
+            (supported.contains(.history), pages.filter { $0.key.profileID == profileID }.map(\.value))
+        }
+        guard enabled, maxCount > 0, !Task.isCancelled else { return [] }
+        return Array(HistoryMatch.sortedByVisits(candidates).prefix(maxCount))
+    }
+
     public func searchSuggestions(_ request: SearchSuggestionRequest) async -> [String] {
         let (enabled, provider, delay): (Bool, SuggestionProvider, Duration) = lock.withLock {
             requestLog.append(request)

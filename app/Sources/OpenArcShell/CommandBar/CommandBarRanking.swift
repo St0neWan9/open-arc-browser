@@ -10,7 +10,8 @@ import Foundation
 // commands and browsing history pages by match strength (a history page below an open tab or
 // archived item of the same match, raised by its frecency), and the engine's search suggestions
 // last, in the engine's order ([06 §16.2, §19.1, §23] observed: a word with no matching command
-// lists search suggestions).
+// lists search suggestions). Most visited pages (plan B121, [05 §command bar] inferred (analysis))
+// join an empty or short query: after the open tabs, before the app commands (inferred).
 
 public enum CommandBarRanker {
     /// Open tabs shown for an empty query (the fifth row is the closing command). inferred from the
@@ -18,6 +19,9 @@ public enum CommandBarRanker {
     public static let emptyQueryTabLimit = 4
     /// Command that closes the empty-query list. [04 §command bar] observed.
     public static let emptyQueryClosingCommand = CommandBarCommand.contactTheTeam
+    /// Most visited pages shown for an empty query, after the open tabs (plan B121). They only take
+    /// the open-tab slots left free, so the observed five-row shape holds. inferred.
+    public static let emptyQueryTopSiteLimit = 3
 
     // Score tiers, inferred. Higher is better.
     enum Score {
@@ -91,7 +95,8 @@ public enum CommandBarRanker {
         case .archivedItem:
             guard let value = textScore(query: query, title: result.title, url: result.url) else { return nil }
             return value - Score.archivePenalty
-        case .historyItem:
+        case .historyItem, .topSite:
+            // A most visited page of a short query scores like a history page (plan B121, inferred).
             guard let value = textScore(query: query, title: result.title, url: result.url) else { return nil }
             let frecency = min(max(result.frecency, 0), 1)
             return max(value - Score.historyPenalty + Score.historyFrecencyWeight * frecency, Score.historyFloor)
@@ -169,20 +174,25 @@ public enum CommandBarRanker {
     /// Drops rows that duplicate a better row (input is already sorted best first):
     /// - an archived item with the URL of an open tab;
     /// - a history page with the URL of an open tab, an archived item or the typed URL;
+    /// - a most visited page with the URL of an open tab, an archived item, the typed URL, a
+    ///   history row or a better ranked most visited row (B121);
     /// - a typed-URL row when a tab or archived item has the same URL (switch to it instead);
     /// - a suggestion equal to the typed text (the search row covers it).
     static func deduplicate(_ sorted: [CommandBarResult], query: String) -> [CommandBarResult] {
         var tabKeys = Set<String>()
         var archivedKeys = Set<String>()
         var typedKeys = Set<String>()
+        var historyKeys = Set<String>()
         for result in sorted {
             guard let url = result.url else { continue }
             if result.kind.isTab { tabKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .archivedItem { archivedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .typedURL { typedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
+            if result.kind == .historyItem { historyKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
         }
         let foldedQuery = CommandBarTextNormalizer.fold(query)
         var seenSuggestions = Set<String>()
+        var seenTopSites = Set<String>()
         var out: [CommandBarResult] = []
         for result in sorted {
             let key = result.url.map(CommandBarTextNormalizer.urlKey)
@@ -193,6 +203,9 @@ public enum CommandBarRanker {
                 // A visited page that is open, archived or exactly what was typed has its row
                 // already (switch / restore / open). inferred (B66).
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) { continue }
+            case .topSite:
+                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) || historyKeys.contains(key) { continue }
+                if let key, !seenTopSites.insert(key).inserted { continue }
             case .typedURL:
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) { continue }
             case .searchSuggestion:
@@ -206,8 +219,17 @@ public enum CommandBarRanker {
         return out
     }
 
-    /// Empty query: most recently used open tabs (current space first, never the tab being viewed),
-    /// then the closing app command. [04 §command bar] observed shape; ordering inferred.
+    /// Empty query: the most recently used open tabs of every Space of the window's profile (the
+    /// sources leave other profiles out), never the tab being viewed;
+    /// then the profile's most visited pages that are not open, in the tab slots left free (B121);
+    /// then the closing app command. [04 §command bar] observed shape (five rows: open tabs, then
+    /// an app command); F4 live E2 (2026-10-29) observed tabs of other Spaces in this list (plan
+    /// B109; most of its rows were other Spaces' tabs). Ordering by recency across Spaces (the
+    /// window's Space only breaks ties; before B109 it came first, which hid the other Spaces) and
+    /// the place of the most visited pages are inferred.
+    ///
+    /// Rows carry no subtitle here: the window's empty list reads the title alone, without
+    /// " — domain" (F4 live E2 observed). Little Arc keeps "title — domain" ([06 §7] observed).
     static func emptyQueryList(_ candidates: [CommandBarResult], context: CommandBarQueryContext, limit: Int) -> [CommandBarResult] {
         // The incognito window's bar: the help rows only, no history and no open tabs.
         // [06 §20.1] observed (B61).
@@ -224,14 +246,31 @@ public enum CommandBarRanker {
                 return true
             }
             .sorted { lhs, rhs in
+                let l = lhs.lastActiveAt ?? .distantPast
+                let r = rhs.lastActiveAt ?? .distantPast
+                if l != r { return l > r }
                 let lIn = lhs.spaceID != nil && lhs.spaceID == context.currentSpaceID
                 let rIn = rhs.spaceID != nil && rhs.spaceID == context.currentSpaceID
                 if lIn != rIn { return lIn }
                 return tieBreak(lhs, rhs)
             }
         var list = Array(tabs.prefix(emptyQueryTabLimit))
+        // Most visited pages that are not open tabs, in the engine's order (B121).
+        let openKeys = Set(candidates.filter(\.kind.isTab).compactMap { $0.url.map(CommandBarTextNormalizer.urlKey) })
+        var seen = Set<String>()
+        let topSites = candidates
+            .filter { $0.kind == .topSite }
+            .sorted { $0.sourceOrder < $1.sourceOrder }
+            .filter { row in
+                guard let key = row.url.map(CommandBarTextNormalizer.urlKey) else { return false }
+                return !openKeys.contains(key) && seen.insert(key).inserted
+            }
+        list += topSites.prefix(min(emptyQueryTopSiteLimit, max(0, emptyQueryTabLimit - list.count)))
         if let closing = candidates.first(where: { $0.action == .runCommand(emptyQueryClosingCommand) }) {
             list.append(closing)
+        }
+        if context.presentation != .littleArc {
+            for index in list.indices { list[index].subtitle = nil }
         }
         return Array(list.prefix(max(0, limit)))
     }

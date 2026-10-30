@@ -24,7 +24,11 @@ extension CommandBarSource {
 
 // MARK: - Workspace tabs (open, pinned, favorite)
 
-/// Tabs of the workspace: Today, pinned (in folders too) and favorites, across all spaces.
+/// Tabs of the workspace: Today, pinned (in folders too) and favorites, across every Space of the
+/// window's profile (plan B109, F4 live E2 observed 2026-10-29: the empty ⌘T bar lists open tabs of
+/// every Space, labelled with their Space's name). Tabs of another profile's Spaces are left out
+/// (inferred: profiles keep their browsing apart, [03 §Profiles]). The window's profile is the one
+/// of `context.currentSpaceID`; with no known Space every tab is listed.
 /// `BrowserEngine` cannot enumerate tabs, so the persisted workspace is the source of "open tabs".
 public struct CommandBarWorkspaceTabsSource: CommandBarSource {
     /// Label of the action on an open tab. [05 §command bar] observed.
@@ -42,8 +46,9 @@ public struct CommandBarWorkspaceTabsSource: CommandBarSource {
 
     public func results(for context: CommandBarQueryContext) async -> [CommandBarResult] {
         let state = await workspace()
+        let profileID = context.currentSpaceID.flatMap { state.profileID(ofSpace: $0) }
         let tabs = state.tabs.values
-            .filter { !$0.meta.isTombstone }
+            .filter { !$0.meta.isTombstone && Self.belongs($0, to: profileID, in: state) }
             .sorted { lhs, rhs in
                 if lhs.lastActiveAt != rhs.lastActiveAt { return lhs.lastActiveAt > rhs.lastActiveAt }
                 return lhs.id.uuidString < rhs.id.uuidString
@@ -75,6 +80,16 @@ public struct CommandBarWorkspaceTabsSource: CommandBarSource {
                 lastActiveAt: tab.lastActiveAt,
                 sourceOrder: index
             )
+        }
+    }
+
+    /// Whether a tab belongs to the window's profile: its Space's profile, or a favorite's own
+    /// profile (both resolved to this device's profiles). nil profile: every tab.
+    static func belongs(_ tab: TabNode, to profileID: UUID?, in state: WorkspaceState) -> Bool {
+        guard let profileID else { return true }
+        switch tab.location {
+        case .favorite(let owner): return state.localProfileID(for: owner) == profileID
+        case .pinned(let spaceID, _), .today(let spaceID): return state.profileID(ofSpace: spaceID) == profileID
         }
     }
 }
@@ -171,6 +186,65 @@ public struct CommandBarHistorySource: CommandBarSource {
                 subtitle: host,
                 url: page.url,
                 iconHint: .history,
+                actionLabel: Self.openLabel,
+                action: .openURL(page.url, target: context.mode.openTarget),
+                completion: page.url.absoluteString,
+                lastActiveAt: page.lastVisit,
+                sourceOrder: index
+            )
+            row.frecency = page.frecency(at: at)
+            return row
+        }
+    }
+}
+
+// MARK: - Most visited pages (plan B121)
+
+/// The profile's most visited pages ("top sites", `EngineAutocomplete.topSites`) for an empty or
+/// short query. [05 §command bar] inferred (analysis): the bar's results include most-visited pages;
+/// where they go is not recorded, so the ranker places them after the open tabs and before the app
+/// commands (inferred). Never in an incognito window (no history, [06 §20.1] observed). Activating
+/// a row opens the page like a history row.
+public struct CommandBarTopSitesSource: CommandBarSource {
+    /// Right-hand text of most-visited rows. unknown (not shown in the spec); the history rows' word.
+    public static let openLabel = CommandBarHistorySource.openLabel
+    /// Longest typed query (in characters, trimmed) that still lists most-visited pages. inferred.
+    public static let shortQueryMaxLength = 2
+    /// Pages asked from the engine per query. inferred.
+    public static let defaultMaxCount = 6
+
+    private let sites: @Sendable (_ maxCount: Int) async -> [HistoryMatch]
+    private let now: @Sendable () async -> Date
+    private let maxCount: Int
+
+    /// - Parameters:
+    ///   - now: the clock frecency is measured against (ranks the rows of a short query).
+    ///   - sites: the engine's most visited pages for the window's profile
+    ///     (`EngineAutocomplete.topSites`).
+    public init(
+        maxCount: Int = CommandBarTopSitesSource.defaultMaxCount,
+        now: @escaping @Sendable () async -> Date = { Date() },
+        sites: @escaping @Sendable (_ maxCount: Int) async -> [HistoryMatch]
+    ) {
+        self.sites = sites
+        self.now = now
+        self.maxCount = maxCount
+    }
+
+    public func results(for context: CommandBarQueryContext) async -> [CommandBarResult] {
+        guard !context.listsHelpOnlyWhenEmpty, context.trimmedText.count <= Self.shortQueryMaxLength else { return [] }
+        let found = await sites(maxCount)
+        guard !Task.isCancelled else { return [] }
+        let at = await now()
+        return found.prefix(maxCount).enumerated().map { index, page in
+            let host = CommandBarTextNormalizer.host(page.url)
+            var row = CommandBarResult(
+                id: "top-site:\(page.url.absoluteString)",
+                kind: .topSite,
+                title: page.title.isEmpty ? (host ?? page.url.absoluteString) : page.title,
+                subtitle: host,
+                url: page.url,
+                iconHint: .site(faviconURL: nil),
                 actionLabel: Self.openLabel,
                 action: .openURL(page.url, target: context.mode.openTarget),
                 completion: page.url.absoluteString,
@@ -421,11 +495,13 @@ public struct CommandBarWebSuggestionsSource: CommandBarSource {
 
 /// The default set of sources for a workspace. `commandState` is the window state the command and
 /// space rows depend on; the default offers every command and no move rows. `history` is the
-/// engine's history source (nil: no history rows); `suggestions` the web suggestion provider.
+/// engine's history source (nil: no history rows); `topSites` its most-visited source (nil: none);
+/// `suggestions` the web suggestion provider.
 public func commandBarDefaultSources(
     workspace: @escaping @Sendable () async -> WorkspaceState,
     commandState: @escaping @Sendable () async -> CommandBarCommandState = { .everything },
     history: CommandBarHistorySource? = nil,
+    topSites: CommandBarTopSitesSource? = nil,
     suggestions: any CommandBarSuggestionProviding = CommandBarStaticSuggestionProvider(phrases: []),
     suggestionsAreDeferred: Bool = false
 ) -> [any CommandBarSource] {
@@ -434,6 +510,7 @@ public func commandBarDefaultSources(
         CommandBarArchiveSource(workspace: workspace),
     ]
     if let history { sources.append(history) }
+    if let topSites { sources.append(topSites) }
     sources += [
         CommandBarCommandsSource(state: commandState),
         CommandBarSpacesSource(workspace: workspace, state: commandState),

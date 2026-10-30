@@ -62,6 +62,18 @@ public struct HistoryMatch: Hashable, Sendable {
             }
             .map(\.0)
     }
+
+    /// Most visited first: visits (a typed visit counts three times, as in `frecency`), then the
+    /// more recent visit, then the URL (deterministic). The order of `EngineAutocomplete.topSites`.
+    /// inferred: the spec does not record how most-visited pages are ordered.
+    public static func sortedByVisits(_ matches: [HistoryMatch]) -> [HistoryMatch] {
+        matches.sorted { lhs, rhs in
+            let l = lhs.visitCount + 2 * lhs.typedCount, r = rhs.visitCount + 2 * rhs.typedCount
+            if l != r { return l > r }
+            if lhs.lastVisit != rhs.lastVisit { return lhs.lastVisit > rhs.lastVisit }
+            return lhs.url.absoluteString < rhs.url.absoluteString
+        }
+    }
 }
 
 /// A search suggestion request: the typed text and the profile's search engine endpoint.
@@ -115,6 +127,17 @@ public protocol EngineAutocomplete: AnyObject, Sendable {
     /// query itself. Empty on any failure (offline, timeout, unreadable answer), for a cancelled
     /// task or an engine without `.searchSuggestions`.
     func searchSuggestions(_ request: SearchSuggestionRequest) async -> [String]
+    /// The most visited pages of the on-disk profile `profileID`, most visited first
+    /// (`HistoryMatch.sortedByVisits`), at most `maxCount` (plan B121; [05 §command bar] inferred
+    /// (analysis): the bar's results include most-visited pages). They come from the history, so an
+    /// engine without `.history` answers nothing, and so does a cancelled task.
+    func topSites(profileID: Profile.ID, maxCount: Int) async -> [HistoryMatch]
+}
+
+extension EngineAutocomplete {
+    /// Engines whose bridge has no most-visited query yet (the Chromium bridge as of B121) answer
+    /// nothing, so the command bar simply shows no most-visited rows.
+    public func topSites(profileID: Profile.ID, maxCount: Int) async -> [HistoryMatch] { [] }
 }
 
 /// An engine without history search or suggestions (test doubles that do not provide them).
