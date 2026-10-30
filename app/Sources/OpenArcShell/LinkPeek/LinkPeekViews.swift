@@ -120,14 +120,8 @@ private struct LinkPeekButton: View {
         }
     }
 
-    /// [06 §22.2] observed names: Close, Enter Full Screen (expand to a tab), split.
-    private var title: String {
-        switch kind {
-        case .close: "Close"
-        case .expand: "Open as Tab"
-        case .split: "Open in Split View"
-        }
-    }
+    /// [06 §22.2] observed names (`LinkPeekButtonKind.title`).
+    private var title: String { kind.title }
 
     private var identifier: String {
         switch kind {

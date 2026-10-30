@@ -12,6 +12,7 @@ import OpenArcEngine
 // - Open Link in Incognito Window: a new incognito window showing the link.
 // - Capture Image…: the capture tool's region selection on the page (File ▸ Capture…, [06 §24.1]);
 //   the engine reports no image box to preset it with (inferred).
+// - Search <engine> for Image: a new Today tab with the engine's image results (B139, inferred).
 // - Save As… / Print… / Translate / Search / Import Passwords: the shell's own commands
 //   (File ▸ Save Page As, File ▸ Print, the translation bubble's Translate, a new tab with the
 //   profile's search engine, Import from Another Browser…).
@@ -158,7 +159,9 @@ extension ShellModel {
     }
 
     var pageMenuLayout: PageContextMenuLayout {
-        PageContextMenuLayout(searchEngineName: currentProfileSettings.searchEngine.displayName, availableActions: pageMenuActions)
+        let engine = currentProfileSettings.searchEngine
+        return PageContextMenuLayout(searchEngineName: engine.displayName, imageSearchURLTemplate: engine.imageSearchURLTemplate,
+                                     availableActions: pageMenuActions)
     }
 
     /// Shows a page's right-click menu for model tab `tabID` (B124).
@@ -193,6 +196,8 @@ extension ShellModel {
         case .search(let text):
             guard let url = searchURL(for: text) else { return }
             sidebar.newTab(url: url, title: text)
+        case .searchImage(let url):
+            sidebar.newTab(url: url, title: url.host ?? url.absoluteString)
         case .importPasswords:
             BookmarkImportPresenter.present(controller: controller)
         }

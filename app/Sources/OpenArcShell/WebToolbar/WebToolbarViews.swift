@@ -369,10 +369,9 @@ struct WebToolbarContextMenu: View {
         let url = tabID.flatMap { model.sidebar.linkURL(for: $0) }
         Button("Copy URL") { model.webToolbarCopyLink(tabID) }
             .disabled(url == nil)
-        // The system share item (`ShareLink`). It always carries the system share icon, which
-        // indents this group; Arc's has none ([06 §28] observed). Listing the services ourselves
-        // needs the deprecated `NSSharingService.sharingServices(forItems:)`. B62 report.
-        SidebarShareMenu(url: url)
+        // A plain "Share ▸" with no icon, so nothing indents the group ([06 §28] observed; B139).
+        // `ShareLink` would add the system share icon.
+        WebToolbarShareMenu(url: url)
         Button("Capture…") { model.webToolbarCapture(tabID, fullPage: false) }
             .disabled(!model.canCapturePage)
         Button("Capture Full Page") { model.webToolbarCapture(tabID, fullPage: true) }
@@ -389,6 +388,50 @@ struct WebToolbarContextMenu: View {
 extension WebToolbarSettings {
     /// [06 §28] observed "Show Full URL"; "Hide Full URL" while on is inferred.
     var fullURLMenuTitle: String { showsFullURL ? "Hide Full URL" : "Show Full URL" }
+}
+
+/// The toolbar menu's "Share ▸": a submenu titled "Share" with no icon of its own ([06 §28]
+/// observed: no icons in the menu), holding the system share services for the URL with their
+/// icons (Arc's Share ▸ is the system share menu; [06 §21.5] observed "系统分享服务"). Disabled
+/// without a URL or a service. B139 (F5-48).
+struct WebToolbarShareMenu: View {
+    let url: URL?
+
+    var body: some View {
+        let services = url.map(WebToolbarShareServices.services(for:)) ?? []
+        Menu("Share") {
+            if let url {
+                ForEach(services, id: \.title) { service in
+                    Button {
+                        service.perform(withItems: [url])
+                    } label: {
+                        Label { Text(service.menuItemTitle) } icon: { Image(nsImage: service.image) }
+                    }
+                }
+            }
+        }
+        .disabled(services.isEmpty)
+    }
+}
+
+/// The system share services offered for a URL. The list is fixed and checked with
+/// `canPerform(withItems:)`: asking macOS for every service needs the deprecated
+/// `NSSharingService.sharingServices(forItems:)`, so third-party share extensions are not listed
+/// (inferred; the order follows the system share menu: AirDrop, Mail, Messages, Notes,
+/// Reminders, Freeform, Add to Reading List).
+enum WebToolbarShareServices {
+    static let names: [NSSharingService.Name] = [
+        .sendViaAirDrop, .composeEmail, .composeMessage,
+        NSSharingService.Name("com.apple.Notes.SharingExtension"),
+        NSSharingService.Name("com.apple.reminders.sharingextension"),
+        NSSharingService.Name("com.apple.freeform.sharingextension"),
+        .addToSafariReadingList,
+    ]
+
+    @MainActor
+    static func services(for url: URL) -> [NSSharingService] {
+        names.compactMap { NSSharingService(named: $0) }.filter { $0.canPerform(withItems: [url]) }
+    }
 }
 
 extension ShellModel {
