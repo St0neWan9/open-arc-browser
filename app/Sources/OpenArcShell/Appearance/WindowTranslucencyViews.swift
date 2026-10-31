@@ -10,9 +10,10 @@ import OpenArcDesign
 // channel, so no vibrancy, no saturation boost) [07 §8.4] observed. The web content, the command
 // bar and the bubbles stay opaque.
 //
-// Our window: a behind-window blur at the bottom (`BehindWindowBlurView`), the theme tint
-// (`ThemePalette.windowTint`, solved so that over the mid-gray reference desktop the window shows
-// the opaque palette) at `windowOpacity` above it, and the sidebar's controls drawn as layers
+// Our window, composited like Arc's (B146, [07 §8.2] inferred (analysis)): the light blur
+// material behind the window, untouched (`BehindWindowBlurView`), Arc's translucent theme layer
+// above it (`ThemePalette.windowThemeLayer`: the theme color over a white / black veil, which over
+// the reference desktop shows the opaque palette), and the sidebar's controls drawn as layers
 // (`WindowLayers`) on top. The window itself is non-opaque with a clear background.
 // Opaque instead (the palette's own colors, no blur) in full screen (no desktop behind the window;
 // Arc there is unknown, inferred), with Reduce Transparency on (system setting, inferred), and for
@@ -67,22 +68,12 @@ extension ThemePalette {
     }
 }
 
-/// A plain blur of what is behind the window: an `NSVisualEffectView` in behind-window blending,
-/// always active, with the material's own tint layers hidden and its saturation boost neutralized,
-/// so the theme tint above composites over the blurred desktop alone ([07 §8.4] observed: plain
-/// alpha over a blur). The layer names belong to AppKit's material and may change between macOS
-/// versions; if they are not found the material keeps its own (light or dark gray) tint, which is
-/// still readable, only less exact.
+/// The material under the theme layer, as Arc sets it up (B146, [07 §8.2] inferred (analysis)): an
+/// `NSVisualEffectView` blending behind the window, emphasized, following the window's active state,
+/// with the material the theme picks (`ThemeDerivation.windowBackdropMaterial`, the fixed light
+/// material) and left untouched. The theme layer painted above it is translucent itself, so the
+/// window shows layer + material + blurred desktop like Arc's.
 final class BehindWindowBlurView: NSVisualEffectView {
-    /// Names of the material's tint layers (observed on macOS 26 with a layer dump; not API).
-    static let tintLayerNames: Set<String> = ["fill", "tone"]
-    /// Backdrop saturation: 1 = unchanged colors (the materials boost it ≈ 2×).
-    static let backdropSaturation: Double = 1
-
-    /// Number of passes that changed a layer (for tests).
-    private(set) var stripCount = 0
-    private var isStripScheduled = false
-
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         configure()
@@ -93,85 +84,19 @@ final class BehindWindowBlurView: NSVisualEffectView {
         configure()
     }
 
+    /// AppKit's material for one of ours (the raw values are AppKit's public ones).
+    static func material(for backdrop: WindowBackdropMaterial) -> NSVisualEffectView.Material {
+        NSVisualEffectView.Material(rawValue: backdrop.rawValue) ?? .windowBackground
+    }
+
     private func configure() {
-        material = .underWindowBackground
+        material = Self.material(for: ThemeDerivation.windowBackdropMaterial)
         blendingMode = .behindWindow
-        // Active in background windows too: Arc's window stays see-through when not key
-        // ([07 §8.1] observed it lighter but still themed; the exact inactive look is unknown).
-        state = .active
-        isEmphasized = false
+        state = .followsWindowActiveState
+        isEmphasized = true
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func layout() {
-        super.layout()
-        stripMaterialTint()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        scheduleStrip()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        // The material rebuilds its layers for the new appearance after this call.
-        scheduleStrip()
-    }
-
-    override func viewDidChangeBackingProperties() {
-        super.viewDidChangeBackingProperties()
-        scheduleStrip()
-    }
-
-    private func scheduleStrip() {
-        stripMaterialTint()
-        guard !isStripScheduled else { return }
-        isStripScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                self?.isStripScheduled = false
-                self?.stripMaterialTint()
-            }
-        }
-    }
-
-    /// Hides the material's tint layers and sets the backdrop saturation to 1. Writes only what
-    /// differs, so repeated passes cost nothing.
-    func stripMaterialTint() {
-        guard let root = layer else { return }
-        var changed = false
-        func walk(_ layer: CALayer) {
-            for sub in layer.sublayers ?? [] {
-                if NSStringFromClass(type(of: sub)).hasSuffix("BackdropLayer") {
-                    let key = "filters.colorSaturate.inputAmount"
-                    if sub.filters?.isEmpty == false,
-                       let amount = sub.value(forKeyPath: key) as? NSNumber, amount.doubleValue != Self.backdropSaturation {
-                        sub.setValue(Self.backdropSaturation, forKeyPath: key)
-                        changed = true
-                    }
-                } else if let name = sub.name, Self.tintLayerNames.contains(name) || NSStringFromClass(type(of: sub)).hasSuffix("ChameleonLayer") {
-                    if !sub.isHidden { sub.isHidden = true; changed = true }
-                }
-                walk(sub)
-            }
-        }
-        walk(root)
-        if changed { stripCount += 1 }
-    }
-
-    /// Whether a visible tint layer is left (for tests).
-    var hasVisibleMaterialTint: Bool {
-        func visible(_ layer: CALayer) -> Bool {
-            for sub in layer.sublayers ?? [] {
-                if let name = sub.name, Self.tintLayerNames.contains(name), !sub.isHidden { return true }
-                if visible(sub) { return true }
-            }
-            return false
-        }
-        return layer.map(visible) ?? false
-    }
 }
 
 /// SwiftUI host of the blur.

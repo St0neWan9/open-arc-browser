@@ -5,10 +5,11 @@ import OpenArcModel
 // design-tokens.json `ThemeDerivation.windowTranslucency`: the window background, the sidebar, its
 // controls and separators let ≈ 11 % (light) / 19 % (dark) of the blurred desktop through; the web
 // content, the command bar and the bubbles are opaque. The opaque palette (`ThemePalette`) equals
-// Arc over a ≈ 83 % gray desktop, so the tint painted over the blur is solved from it here, and the
-// fills drawn on the window are expressed as layers on top of it (E8's layer split).
+// Arc over a ≈ 83 % gray desktop; the window paints Arc's translucent theme layer over the blur
+// material (B146, ThemeWindowLayer.swift), and the fills drawn on the window are expressed as
+// layers on top of it (E8's layer split).
 
-/// Opacity of the window tint and the solve between composited and painted colors.
+/// Measured see-through amounts and the plain alpha composite.
 public enum WindowTranslucency {
     /// Window tint opacity over the blurred desktop, light. [07 §8.4] observed (black / white
     /// backdrop readings differ by 29/255).
@@ -34,25 +35,6 @@ public enum WindowTranslucency {
         func channel(_ c: Double, _ b: Double) -> Double { a * c + (1 - a) * b }
         return RGBAColor(red: channel(tint.red, backdrop.red), green: channel(tint.green, backdrop.green),
                          blue: channel(tint.blue, backdrop.blue))
-    }
-
-    /// The tint that, painted at `opacity` over `backdrop`, shows `target`: solves
-    /// target = α·c + (1 − α)·backdrop for c and clamps it to the sRGB gamut. The result carries
-    /// `opacity` as its alpha. With `opacity` 1 it is `target` itself.
-    public static func tint(showing target: RGBAColor, opacity: Double,
-                            over backdrop: RGBAColor = referenceDesktop) -> RGBAColor {
-        let a = min(max(opacity, 0), 1)
-        guard a < 1, a > 0 else { return RGBAColor(red: target.red, green: target.green, blue: target.blue, alpha: a) }
-        func channel(_ t: Double, _ b: Double) -> Double { min(max((t - (1 - a) * b) / a, 0), 1) }
-        return RGBAColor(red: channel(target.red, backdrop.red), green: channel(target.green, backdrop.green),
-                         blue: channel(target.blue, backdrop.blue), alpha: a)
-    }
-
-    /// Whether `target` can be shown at `opacity` over `backdrop` without clamping (within half a
-    /// level). Colors darker than the backdrop's share, or brighter than α + that share, cannot.
-    public static func canShow(_ target: RGBAColor, opacity: Double, over backdrop: RGBAColor = referenceDesktop) -> Bool {
-        let shown = composite(tint(showing: target, opacity: opacity, over: backdrop), over: backdrop)
-        return max(abs(shown.red - target.red), abs(shown.green - target.green), abs(shown.blue - target.blue)) <= 0.5 / 255
     }
 }
 
@@ -101,15 +83,19 @@ public struct WindowLayers: Hashable, Sendable {
 }
 
 extension ThemePalette {
-    /// The color painted over the blur: `windowBackground` solved for `windowOpacity` over the
-    /// reference desktop. [07 §8.4] (alpha = `windowOpacity`). Opaque palettes return the window.
-    public var windowTint: RGBAColor {
-        WindowTranslucency.tint(showing: windowBackground, opacity: windowOpacity)
+    /// The theme layer the see-through window paints over the blur material (B146): Arc's
+    /// translucent layer (the theme color over a white / black veil, alpha = its coverage) that
+    /// over the reference backdrop shows `windowBackground`. [07 §8.2] inferred (analysis).
+    /// Opaque palettes return the window color itself.
+    public var windowThemeLayer: RGBAColor {
+        guard isWindowTranslucent else { return windowBackground }
+        return ThemeDerivation.windowLayer(showing: windowBackground, appearance: appearance)
     }
 
-    /// The gradient stops of a multi-dot theme, solved like `windowTint`.
-    public var backgroundGradientTints: [RGBAColor] {
-        backgroundGradientColors.map { WindowTranslucency.tint(showing: $0, opacity: windowOpacity) }
+    /// The gradient stops of a multi-dot theme or the no-color wash, as layers like `windowThemeLayer`.
+    public var backgroundGradientLayers: [RGBAColor] {
+        guard isWindowTranslucent else { return backgroundGradientColors }
+        return backgroundGradientColors.map { ThemeDerivation.windowLayer(showing: $0, appearance: appearance) }
     }
 
     /// Whether the window lets the desktop through.
@@ -124,7 +110,7 @@ extension ThemePalette {
 
     /// Makes the window opaque: no desktop shows through, and the window layers become the opaque
     /// colors. Used where the observed colors cannot be reached over the reference desktop
-    /// (incognito's near-black #0C0F14 needs more than the 81 % tint gives).
+    /// (incognito's near-black #0C0F14 is darker than the theme layer can show over the material).
     public mutating func makeWindowOpaque() {
         windowOpacity = 1
         windowLayers = opaqueWindowLayers

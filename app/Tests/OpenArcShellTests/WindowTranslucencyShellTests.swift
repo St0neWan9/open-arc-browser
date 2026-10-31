@@ -45,21 +45,21 @@ final class WindowTranslucencyShellTests: XCTestCase {
         XCTAssertEqual(p.sidebarBackground(on: .translucent), Color.clear)
     }
 
-    /// The window background paints the solved tint over the blur when see-through, the opaque
-    /// color otherwise; gradients map every stop. [07 §8.4]
+    /// The window background paints Arc's translucent theme layer over the blur material when
+    /// see-through, the opaque color otherwise; gradients map every stop. [07 §8.4], [07 §8.2] B146
     func testWindowBackgroundColors() {
         let p = palette(0x6CBAD9, .dark)
         let see = WindowBackgroundView(palette: p, surface: .translucent)
         XCTAssertTrue(see.showsBlur)
-        XCTAssertEqual(see.paintedColors, [p.windowTint])
-        XCTAssertEqual(see.paintedColors.first?.alpha, 0.812)
+        XCTAssertEqual(see.paintedColors, [p.windowThemeLayer])
+        XCTAssertEqual(see.paintedColors.first?.alpha ?? 0, ThemeDerivation.windowLayerCoverage(.dark), accuracy: 1e-12)
         let opaque = WindowBackgroundView(palette: p, surface: .opaque)
         XCTAssertFalse(opaque.showsBlur)
         XCTAssertEqual(opaque.paintedColors, [p.windowBackground])
 
         let multi = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .light, colors: [RGBAColor(hex: 0xF19CBB), RGBAColor(hex: 0x6CBAD9)]),
                                             appearance: .light)
-        XCTAssertEqual(WindowBackgroundView(palette: multi, surface: .translucent).paintedColors, multi.backgroundGradientTints)
+        XCTAssertEqual(WindowBackgroundView(palette: multi, surface: .translucent).paintedColors, multi.backgroundGradientLayers)
         XCTAssertEqual(WindowBackgroundView(palette: multi, surface: .translucent).paintedColors.count, 2)
 
         let host = NSHostingView(rootView: see.frame(width: 300, height: 200))
@@ -81,31 +81,22 @@ final class WindowTranslucencyShellTests: XCTestCase {
 
     // MARK: Blur view
 
-    /// A behind-window blur, always active, with the material's own tint layers hidden and its
-    /// saturation boost set to 1: plain alpha over a blur ([07 §8.4] observed: pure red / green /
-    /// blue backdrops move only their own channel).
-    func testBlurIsPlainBehindWindowBlur() {
+    /// Arc's material under the theme layer [07 §8.2] inferred (analysis): behind-window, the fixed
+    /// light material, emphasized, following the window's active state, never taking clicks; the
+    /// material is left as AppKit draws it.
+    func testBlurIsArcsBehindWindowMaterial() {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 200), styleMask: [.borderless], backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false
         let blur = BehindWindowBlurView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         window.contentView = blur
         XCTAssertEqual(blur.blendingMode, .behindWindow)
-        XCTAssertEqual(blur.state, .active)
+        XCTAssertEqual(blur.material.rawValue, 1, "AppKit's fixed light material (deprecated name, same raw value)")
+        XCTAssertEqual(blur.material.rawValue, ThemeDerivation.windowBackdropMaterial.rawValue)
+        XCTAssertEqual(blur.state, .followsWindowActiveState)
+        XCTAssertTrue(blur.isEmphasized)
         XCTAssertNil(blur.hitTest(CGPoint(x: 10, y: 10)), "never takes clicks")
-        blur.needsLayout = true
-        blur.layoutSubtreeIfNeeded()
-        blur.stripMaterialTint()
-        XCTAssertFalse(blur.hasVisibleMaterialTint)
-        // A second pass changes nothing.
-        let count = blur.stripCount
-        blur.stripMaterialTint()
-        XCTAssertEqual(blur.stripCount, count)
-        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
-            window.appearance = NSAppearance(named: appearance)
-            blur.layoutSubtreeIfNeeded()
-            blur.stripMaterialTint()
-            XCTAssertFalse(blur.hasVisibleMaterialTint, appearance.rawValue)
-        }
+        XCTAssertEqual(BehindWindowBlurView.material(for: .dark).rawValue, 2)
+        XCTAssertEqual(BehindWindowBlurView.material(for: .windowBackground), .windowBackground)
         window.close()
     }
 

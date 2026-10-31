@@ -47,29 +47,32 @@ final class WindowTranslucencyTests: XCTestCase {
         // Black vs white backdrop: (1 − α) × 255 = 29 / 48 levels, the E8 readings.
         for (appearance, levels) in [(ResolvedAppearance.light, 29.0), (.dark, 48.0)] {
             let p = palette(0x6CBAD9, appearance)
-            let overWhite = WindowTranslucency.composite(p.windowTint, over: RGBAColor(hex: 0xFFFFFF))
-            let overBlack = WindowTranslucency.composite(p.windowTint, over: RGBAColor(hex: 0x000000))
+            // B146: theme layer over the blur material; the desktop's share through both is solved
+            // from these readings, so the composite reproduces them (P3 compositing: ±1 level).
+            let overWhite = p.windowShown(over: RGBAColor(hex: 0xFFFFFF))
+            let overBlack = p.windowShown(over: RGBAColor(hex: 0x000000))
             for (w, b) in [(overWhite.red, overBlack.red), (overWhite.green, overBlack.green), (overWhite.blue, overBlack.blue)] {
-                XCTAssertEqual((w - b) * 255, levels, accuracy: 0.5, "[07 §8.4] \(appearance.rawValue)")
+                XCTAssertEqual((w - b) * 255, levels, accuracy: 1.0, "[07 §8.4] \(appearance.rawValue)")
             }
         }
     }
 
     // MARK: Composite over the reference reproduces the opaque (E8 / E12) palette
 
-    /// [07 §8.4]: the window tint at α over the ≈ 83 % gray reference desktop shows the opaque
-    /// window color (the E12 / E8 fit) within 1/255, for every measured preset, light and dark.
-    func testWindowTintOverReferenceReproducesThePalette() {
+    /// [07 §8.4], [07 §8.2] (B146): the theme layer over the material over the ≈ 83 % gray
+    /// reference desktop shows the opaque window color (the E12 / E8 fit) within 1/255, for every
+    /// measured preset, light and dark.
+    func testThemeLayerOverReferenceReproducesThePalette() {
         for hex in presets {
             for appearance in ResolvedAppearance.allCases {
                 let p = palette(hex, appearance)
                 let label = String(format: "%06X %@", hex, appearance.rawValue)
-                XCTAssertEqual(p.windowTint.alpha, p.windowOpacity, label)
-                XCTAssertTrue(WindowTranslucency.canShow(p.windowBackground, opacity: p.windowOpacity), "in gamut \(label)")
-                let shown = WindowTranslucency.composite(p.windowTint, over: WindowTranslucency.referenceDesktop)
-                assertWithin(shown, p.windowBackground, levels: 1, "window \(label)")
-                for (tint, color) in zip(p.backgroundGradientTints, p.backgroundGradientColors) {
-                    assertWithin(WindowTranslucency.composite(tint, over: WindowTranslucency.referenceDesktop), color, levels: 1, "stop \(label)")
+                XCTAssertEqual(p.windowThemeLayer.alpha, ThemeDerivation.windowLayerCoverage(appearance), accuracy: 1e-12, label)
+                XCTAssertLessThan(p.windowThemeLayer.alpha, 1, "translucent \(label)")
+                assertWithin(p.windowShown(over: WindowTranslucency.referenceDesktop), p.windowBackground, levels: 1, "window \(label)")
+                let backdrop = ThemeDerivation.backdropShown(over: WindowTranslucency.referenceDesktop, appearance: appearance)
+                for (layer, color) in zip(p.backgroundGradientLayers, p.backgroundGradientColors) {
+                    assertWithin(ThemeDerivation.compositeInDisplayP3(layer, over: backdrop), color, levels: 1, "stop \(label)")
                 }
             }
         }
@@ -82,7 +85,7 @@ final class WindowTranslucencyTests: XCTestCase {
             for appearance in ResolvedAppearance.allCases {
                 let p = palette(hex, appearance)
                 let label = String(format: "%06X %@", hex, appearance.rawValue)
-                let window = WindowTranslucency.composite(p.windowTint, over: WindowTranslucency.referenceDesktop)
+                let window = p.windowShown(over: WindowTranslucency.referenceDesktop)
                 let layers = p.windowLayers
                 assertWithin(WindowTranslucency.composite(layers.controlFill, over: window), p.controlFill, levels: 1, "control \(label)")
                 assertWithin(WindowTranslucency.composite(layers.separator, over: window), p.separator, levels: 1, "separator \(label)")
@@ -124,27 +127,32 @@ final class WindowTranslucencyTests: XCTestCase {
         for appearance in ResolvedAppearance.allCases {
             let p = ThemeDerivation.incognitoPalette(appearance: appearance)
             XCTAssertFalse(p.isWindowTranslucent, appearance.rawValue)
-            XCTAssertEqual(p.windowTint, p.windowBackground)
+            XCTAssertEqual(p.windowThemeLayer, p.windowBackground)
+            XCTAssertEqual(p.windowShown(over: RGBAColor(hex: 0xFFFFFF)), p.windowBackground)
             XCTAssertEqual(p.windowLayers.controlFill, p.controlFill)
             XCTAssertEqual(p.windowLayers.selectedRowFill, p.selectedTabFill)
         }
+        // #0C0F14 is out of the dark theme layer's reach over the material: the solve clamps.
         let dark = ThemeDerivation.incognitoPalette(appearance: .dark)
-        XCTAssertFalse(WindowTranslucency.canShow(dark.windowBackground, opacity: WindowTranslucency.darkOpacity))
+        let layer = ThemeDerivation.windowLayer(showing: dark.windowBackground, appearance: .dark)
+        let gray = ThemeDerivation.darkWindowBackdropGray
+        let shown = ThemeDerivation.compositeInDisplayP3(layer, over: RGBAColor(red: gray, green: gray, blue: gray))
+        XCTAssertGreaterThan(maxDifference(shown, dark.windowBackground) * 255, 10)
     }
 
     // MARK: Solve
 
-    /// Solving composite = α·c + (1 − α)·backdrop for c, clamped to the gamut.
-    func testTintSolveAndClamp() {
-        let target = RGBAColor(hex: 0x9ACBE0)
-        let tint = WindowTranslucency.tint(showing: target, opacity: 0.886)
-        assertWithin(WindowTranslucency.composite(tint, over: WindowTranslucency.referenceDesktop), target, levels: 1e-9, "round trip")
-        XCTAssertEqual(WindowTranslucency.tint(showing: target, opacity: 1), target, "opaque = the color itself")
-        // Pure black cannot be shown over a light desktop: clamped to 0, shows the desktop's share.
-        let black = WindowTranslucency.tint(showing: RGBAColor(hex: 0x000000), opacity: 0.812)
+    /// The layer solve (B146) inverts `windowColor`: a picked color's window gives back a layer
+    /// that shows it over the reference backdrop; pure black cannot be shown (clamped).
+    func testThemeLayerSolveAndClamp() {
+        for appearance in ResolvedAppearance.allCases {
+            let target = appearance == .dark ? ThemeDerivation.darkVariant(RGBAColor(hex: 0x6CBAD9)) : ThemeDerivation.lightWindow(RGBAColor(hex: 0x6CBAD9))
+            let layer = ThemeDerivation.windowLayer(showing: target, appearance: appearance)
+            let gray = ThemeDerivation.windowBackdropGray(appearance)
+            assertWithin(ThemeDerivation.compositeInDisplayP3(layer, over: RGBAColor(red: gray, green: gray, blue: gray)), target, levels: 1e-3, "round trip \(appearance.rawValue)")
+        }
+        let black = ThemeDerivation.windowLayer(showing: RGBAColor(hex: 0x000000), appearance: .dark)
         XCTAssertEqual(black.red, 0)
-        XCTAssertFalse(WindowTranslucency.canShow(RGBAColor(hex: 0x000000), opacity: 0.812))
-        XCTAssertFalse(WindowTranslucency.canShow(RGBAColor(hex: 0xFFFFFF), opacity: 0.886))
     }
 
     // MARK: Readability over any wallpaper
@@ -161,7 +169,7 @@ final class WindowTranslucencyTests: XCTestCase {
             for appearance in ResolvedAppearance.allCases {
                 let p = palette(hex, appearance)
                 func contrast(over wallpaper: RGBAColor) -> Double {
-                    let window = WindowTranslucency.composite(p.windowTint, over: wallpaper)
+                    let window = p.windowShown(over: wallpaper)
                     return ThemeDerivation.contrast(WindowTranslucency.composite(p.rowTitleText, over: window), window)
                 }
                 let reference = contrast(over: WindowTranslucency.referenceDesktop)
@@ -181,7 +189,7 @@ final class WindowTranslucencyTests: XCTestCase {
     func testWallpaperShiftIsBounded() {
         for appearance in ResolvedAppearance.allCases {
             let p = palette(0xF8D55A, appearance)
-            let overBlack = WindowTranslucency.composite(p.windowTint, over: RGBAColor(hex: 0x000000))
+            let overBlack = p.windowShown(over: RGBAColor(hex: 0x000000))
             let shift = 1 - ThemeDerivation.luminance(overBlack) / ThemeDerivation.luminance(p.windowBackground)
             XCTAssertGreaterThan(shift, 0)
             XCTAssertLessThan(shift, appearance == .dark ? 0.45 : 0.30, "relative luminance drop over black, \(appearance.rawValue)")

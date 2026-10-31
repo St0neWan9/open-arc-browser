@@ -7,8 +7,8 @@ import OpenArcDesign
 
 /// The themed window background: a solid color for a one-color theme, a gradient across the dots
 /// for several ([06 §2] observed several dots; the gradient direction is inferred), plus the grain
-/// overlay when `palette.grain > 0`. On a see-through surface (B64, [07 §8.4]) the colors are the
-/// solved tints at `windowOpacity` over a blur of what is behind the window.
+/// overlay when `palette.grain > 0`. On a see-through surface (B64, [07 §8.4]; B146 [07 §8.2]) the
+/// colors are Arc's translucent theme layers over the light blur material behind the window.
 struct WindowBackgroundView: View {
     let palette: ThemePalette
     var surface: WindowSurface = .opaque
@@ -18,10 +18,10 @@ struct WindowBackgroundView: View {
     /// The blur of the desktop is drawn (for tests).
     var showsBlur: Bool { surface.isTranslucent }
 
-    /// The colors painted: the opaque palette, or its tints over the blur.
+    /// The colors painted: the opaque palette, or its theme layers over the blur material.
     var paintedColors: [RGBAColor] {
         if surface.isTranslucent {
-            return palette.backgroundGradientColors.count > 1 ? palette.backgroundGradientTints : [palette.windowTint]
+            return palette.backgroundGradientColors.count > 1 ? palette.backgroundGradientLayers : [palette.windowThemeLayer]
         }
         return palette.backgroundGradientColors.count > 1 ? palette.backgroundGradientColors : [palette.windowBackground]
     }
