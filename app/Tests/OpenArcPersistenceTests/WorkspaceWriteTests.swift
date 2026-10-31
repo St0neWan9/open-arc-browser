@@ -24,8 +24,8 @@ final class WorkspaceWriteTests: XCTestCase {
     private var todayTab: SyncRecordID { SyncRecordID(type: .tab, uuid: Sample.ids.todayTab) }
 
     /// The server echoing this device's own upload changes only the record's system fields: the
-    /// workspace keeps them in memory and writes them with the next real save or flush, not on
-    /// their own. An hour of such echoes (one a minute) costs no write.
+    /// workspace keeps them in memory for the next send and writes nothing for them. An hour of
+    /// such echoes (one a minute) costs no write.
     func testSystemFieldsOnlyBatchesAreNotWrittenOnTheirOwn() async throws {
         let scheduler = ManualAutosaveScheduler()
         let store = makeStore(scheduler)
@@ -45,11 +45,13 @@ final class WorkspaceWriteTests: XCTestCase {
         let inMemory = await store.workspace.record(for: todayTab)?.meta.backendSystemFields
         XCTAssertEqual(inMemory, Data("tag-59".utf8), "kept in memory for the next send")
 
+        // B153: the files keep only a marker for system fields (the sync state owns them), and
+        // the record had one already, so even the quit writes nothing for the echoes.
         try await store.flush()
         writes = await store.writeCount
-        XCTAssertEqual(writes, writesBefore + 1, "flush (quit) writes them")
+        XCTAssertEqual(writes, writesBefore, "the files already hold the marker")
         let reloaded = makeStore().loadResult.workspace.record(for: todayTab)?.meta.backendSystemFields
-        XCTAssertEqual(reloaded, Data("tag-59".utf8))
+        XCTAssertEqual(reloaded, SystemFieldsOnDisk.marker)
     }
 
     /// A remote batch that changes what the user sees is still written before `apply` returns

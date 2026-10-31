@@ -30,7 +30,8 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(dir.contents(), [], "loading never creates files")
     }
 
-    /// Every record type, tombstones, nested folders, splits and backend blobs survive exactly.
+    /// Every record type, tombstones, nested folders and splits survive exactly; backend blobs
+    /// come back as the marker (`SystemFieldsOnDisk`, B153).
     func testRoundTripOfEveryEntityTypeIncludingTombstones() async throws {
         let original = try Sample.workspace()
         let i = Sample.ids
@@ -49,9 +50,9 @@ final class WorkspaceStoreTests: XCTestCase {
 
         let reloaded = makeStore()
         XCTAssertEqual(reloaded.loadResult.outcome, .loaded)
-        XCTAssertEqual(reloaded.loadResult.workspace, original)
+        XCTAssertEqual(reloaded.loadResult.workspace, original.diskForm)
         let current = await reloaded.workspace
-        XCTAssertEqual(current, original)
+        XCTAssertEqual(current, original.diskForm)
     }
 
     func testFileIsAnEnvelopeWithSchemaVersion() async throws {
@@ -83,7 +84,7 @@ final class WorkspaceStoreTests: XCTestCase {
 
         let reloaded = makeStore()
         XCTAssertEqual(reloaded.loadResult.outcome, .loaded)
-        XCTAssertEqual(reloaded.loadResult.workspace, original)
+        XCTAssertEqual(reloaded.loadResult.workspace, original.diskForm)
         XCTAssertTrue(reloaded.loadResult.workspace.easels.isEmpty)
     }
 
@@ -113,7 +114,7 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.loadResult.outcome, .loaded)
         var expected = original
         for id in expected.themes.keys { expected.themes[id]?.brightness = Theme.defaultBrightness }
-        XCTAssertEqual(reloaded.loadResult.workspace, expected)
+        XCTAssertEqual(reloaded.loadResult.workspace, expected.diskForm)
     }
 
     /// A file written before `Profile.settings` existed still loads with the defaults
@@ -124,7 +125,7 @@ final class WorkspaceStoreTests: XCTestCase {
         let store = makeStore()
         await store.update(original)
         try await store.flush()
-        XCTAssertEqual(makeStore().loadResult.workspace, original, "settings survive a save")
+        XCTAssertEqual(makeStore().loadResult.workspace, original.diskForm, "settings survive a save")
 
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: dir.workspaceFile)) as? [String: Any])
         var workspace = try XCTUnwrap(json["workspace"] as? [String: Any])
@@ -144,7 +145,7 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.loadResult.outcome, .loaded)
         var expected = original
         for id in expected.profiles.keys { expected.profiles[id]?.settings = .default }
-        XCTAssertEqual(reloaded.loadResult.workspace, expected)
+        XCTAssertEqual(reloaded.loadResult.workspace, expected.diskForm)
     }
 
     // MARK: Atomic writes
@@ -182,7 +183,7 @@ final class WorkspaceStoreTests: XCTestCase {
         await store.update(state)
         try await store.flush()
         XCTAssertEqual(dir.contents().filter { $0 != WorkspaceBackups.directoryName }, [PersistenceDefaults.workspaceFileName])
-        XCTAssertEqual(makeStore().loadResult.workspace, state)
+        XCTAssertEqual(makeStore().loadResult.workspace, state.diskForm)
     }
 
     // MARK: Recovery
@@ -278,7 +279,7 @@ final class WorkspaceStoreTests: XCTestCase {
         await scheduler.fireAll()
         writes = await store.writeCount
         XCTAssertEqual(writes, 1)
-        XCTAssertEqual(makeStore().loadResult.workspace, state, "the write holds the newest value")
+        XCTAssertEqual(makeStore().loadResult.workspace, state.diskForm, "the write holds the newest value")
 
         // The next change opens a new window.
         state = try TreeOps.renameTab(state, id: Sample.ids.todayTab, customTitle: "Later", now: Fx.t(500))
@@ -305,7 +306,7 @@ final class WorkspaceStoreTests: XCTestCase {
         try await store.flush()
         var writes = await store.writeCount
         XCTAssertEqual(writes, 1)
-        XCTAssertEqual(makeStore().loadResult.workspace, state)
+        XCTAssertEqual(makeStore().loadResult.workspace, state.diskForm)
 
         await scheduler.fireAll()
         writes = await store.writeCount
@@ -324,7 +325,7 @@ final class WorkspaceStoreTests: XCTestCase {
         store.submit(first)
         store.submit(second)
         try await store.flush()
-        XCTAssertEqual(makeStore().loadResult.workspace, second)
+        XCTAssertEqual(makeStore().loadResult.workspace, second.diskForm)
         await eventually { await store.workspace == second }
     }
 
@@ -343,7 +344,7 @@ final class WorkspaceStoreTests: XCTestCase {
         try await store.flush()
         let saved = makeStore().loadResult.workspace
         XCTAssertEqual(saved.folders[remote.id], remote, "the remote record survives")
-        XCTAssertEqual(saved.tabs[Sample.ids.todayTab], renamed.tabs[Sample.ids.todayTab], "the local edit is saved")
+        XCTAssertEqual(saved.tabs[Sample.ids.todayTab], renamed.diskForm.tabs[Sample.ids.todayTab], "the local edit is saved")
     }
 
     /// A19: a whole value followed by record changes applies both, in order; a purge in the

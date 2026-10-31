@@ -1,22 +1,52 @@
 import Foundation
 import OpenArcModel
 
-/// Top-level JSON envelope of `workspace.json`.
+/// Top-level JSON envelope of `workspace.json`, the workspace snapshot.
 ///
 /// ```json
-/// { "schemaVersion": 1, "savedAt": 0.0, "workspace": { "profiles": [...], "tabs": [...], ... } }
+/// { "generation": "…", "savedAt": 0.0, "schemaVersion": 1, "workspace": { "profiles": [...], "tabs": [...], ... } }
 /// ```
 ///
 /// Records are stored as arrays (sorted by id for stable output) instead of the id-keyed
 /// dictionaries of `WorkspaceState`; each record already carries its id. Tombstones are stored
 /// like any other record until the sync layer purges them.
+///
+/// B153: the snapshot is compact JSON (no indentation), records keep only a marker in place of
+/// the backend's system fields (`SystemFieldsOnDisk`), and changes made after the snapshot go to
+/// the journal (`WorkspaceJournal`), which names the snapshot it continues by `generation`. All
+/// three are additive, so the schema version stays 1: earlier builds read such a file as before
+/// (they ignore the unknown `generation` key and the journal).
 struct WorkspaceFileEnvelope: Codable, Sendable {
     /// Bump when the on-disk format changes incompatibly, and add a migration in `WorkspaceFileCodec`.
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
     var savedAt: Date
+    /// Identity of this snapshot; journal entries for it carry the same value (B153). nil in files
+    /// written before the journal existed, or by an earlier build: no journal entry applies then.
+    var generation: UUID?
     var workspace: PersistedWorkspace
+}
+
+/// The backend's system fields on disk (B153). The sync backend keeps them in its own state
+/// (`sync-state.bin`), the one place it reads them from first, so the workspace files keep only a
+/// marker: an empty value where a record has system fields, nothing where it has none.
+///
+/// The marker keeps "this record came back from the server" (`backendSystemFields != nil`) across
+/// a relaunch, which first-launch Space adoption relies on. To a backend an empty value is "no
+/// usable system fields": should its own copy be missing too, it saves the record as new and the
+/// server answers with its copy, which merges under the unchanged conflict policy. A missing
+/// value costs a round trip, never a different merge.
+enum SystemFieldsOnDisk {
+    static let marker = Data()
+
+    /// `value` as the workspace files store it.
+    static func diskForm<T: SyncableEntity>(_ value: T) -> T {
+        guard let fields = value.meta.backendSystemFields, fields != marker else { return value }
+        var copy = value
+        copy.meta.backendSystemFields = marker
+        return copy
+    }
 }
 
 /// Just the version field, decoded first so a newer file is recognized even if the rest of it
@@ -56,9 +86,10 @@ struct PersistedWorkspace: Codable, Hashable, Sendable {
         easelElements = try c.decodeIfPresent([EaselElement].self, forKey: .easelElements) ?? []
     }
 
+    /// The disk form of `state`: system fields reduced to the marker (`SystemFieldsOnDisk`, B153).
     init(_ state: WorkspaceState) {
-        func sorted<T: Identifiable>(_ values: Dictionary<UUID, T>.Values) -> [T] where T.ID == UUID {
-            values.sorted { $0.id.uuidString < $1.id.uuidString }
+        func sorted<T: SyncableEntity>(_ values: Dictionary<UUID, T>.Values) -> [T] {
+            values.sorted { $0.id.uuidString < $1.id.uuidString }.map(SystemFieldsOnDisk.diskForm)
         }
         profiles = sorted(state.profiles.values)
         themes = sorted(state.themes.values)
@@ -93,7 +124,7 @@ struct PersistedWorkspace: Codable, Hashable, Sendable {
 enum WorkspaceFileCodec {
     /// Outcome of decoding file contents.
     enum Decoded {
-        case workspace(WorkspaceState)
+        case workspace(WorkspaceState, generation: UUID?)
         /// The file is from a newer schema; it must not be overwritten.
         case newerSchema(Int)
         /// The contents are not a valid workspace file.
@@ -102,7 +133,9 @@ enum WorkspaceFileCodec {
 
     static func encode(_ envelope: WorkspaceFileEnvelope) throws -> Data {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Compact (B153): indentation was about a tenth of a large file. Sorted keys keep the
+        // output stable.
+        encoder.outputFormatting = [.sortedKeys]
         // Default date strategy (seconds since the reference date as a Double) round-trips exactly,
         // which keeps field-group timestamps identical after a reload.
         return try encoder.encode(envelope)
@@ -118,7 +151,7 @@ enum WorkspaceFileCodec {
         guard header.schemaVersion == WorkspaceFileEnvelope.currentSchemaVersion,
               let envelope = try? decoder.decode(WorkspaceFileEnvelope.self, from: data)
         else { return .corrupt }
-        return .workspace(envelope.workspace.state)
+        return .workspace(envelope.workspace.state, generation: envelope.generation)
     }
 }
 
@@ -152,6 +185,29 @@ enum AtomicFile {
             try? fileManager.removeItem(at: temp)
             throw PersistenceError.io("Cannot replace \(url.path): errno \(code)")
         }
+    }
+
+    /// Writes `data` at `offset` of `url` (created when missing), cutting the file at `offset`
+    /// first so whatever an interrupted earlier write left there is replaced, then flushes it to
+    /// disk. Returns the new length. For the journal (B153), where `offset` is the end of its last
+    /// complete entry.
+    static func append(_ data: Data, to url: URL, at offset: UInt64, fileManager: FileManager = .default) throws -> UInt64 {
+        if !fileManager.fileExists(atPath: url.path) {
+            guard fileManager.createFile(atPath: url.path, contents: nil) else {
+                throw PersistenceError.io("Cannot create \(url.path)")
+            }
+        }
+        do {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.truncate(atOffset: offset)
+            try handle.seek(toOffset: offset)
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+        } catch {
+            throw PersistenceError.io("Cannot append to \(url.path): \(error)")
+        }
+        return offset + UInt64(data.count)
     }
 
     static func remove(_ url: URL, fileManager: FileManager = .default) throws {

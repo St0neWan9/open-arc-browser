@@ -134,7 +134,7 @@ final class StampedDiffTests: XCTestCase {
             try await store.flush()
             let current = await store.workspace
             XCTAssertEqual(current, new, name)
-            XCTAssertEqual(makeStore().loadResult.workspace, new, "\(name) is on disk")
+            XCTAssertEqual(makeStore().loadResult.workspace, new.diskForm, "\(name) is on disk")
             var iterator = events.makeAsyncIterator()
             let event = await iterator.next()
             XCTAssertEqual(event?.origin, .local, name)
@@ -168,7 +168,7 @@ final class StampedDiffTests: XCTestCase {
         XCTAssertEqual(saved.folders[remoteFolder.id], remoteFolder, "a remote insert survives")
         XCTAssertEqual(saved.easelElements[otherElement], remoteElement, "a remote edit survives")
         XCTAssertNil(saved.splits[i.split], "a remote purge is not undone")
-        XCTAssertEqual(saved.tabs[i.todayTab], second.tabs[i.todayTab], "the first local change is saved")
+        XCTAssertEqual(saved.tabs[i.todayTab], second.diskForm.tabs[i.todayTab], "the first local change is saved")
         XCTAssertEqual(saved.easels[easel], second.easels[easel], "the second local change is saved")
         XCTAssertEqual(saved.tabs[easelRow], second.tabs[easelRow], "the renamed Easel's row is saved")
     }

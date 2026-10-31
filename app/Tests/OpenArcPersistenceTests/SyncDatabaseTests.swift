@@ -139,7 +139,7 @@ final class SyncDatabaseTests: XCTestCase {
 
         // apply persists before returning.
         let reloaded = WorkspaceStore(directory: dir.url, scheduler: ManualAutosaveScheduler())
-        XCTAssertEqual(reloaded.loadResult.workspace.tabs[tab.id], merged)
+        XCTAssertEqual(reloaded.loadResult.workspace.tabs[tab.id], SystemFieldsOnDisk.diskForm(merged))
     }
 
     /// Within one group the later write wins; ties go to the server.

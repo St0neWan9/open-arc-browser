@@ -6,7 +6,9 @@ import OpenArcModel
 // ([01 §Help] observed); everything here is our own design.
 //
 // Layout: `<data dir>/Backups/workspace-YYYYMMDD-HHMMSS.json` (UTC time of the backup), each a
-// byte-for-byte copy of a `workspace.json` the store wrote, so it decodes with the same codec.
+// complete workspace file (a copy of a `workspace.json` the store wrote, or the workspace encoded
+// the same way when the latest changes were in the journal, B153), so it decodes with the same
+// codec. A backup's generation is ignored: no journal applies to it.
 // At most one backup per `WorkspaceBackups.interval`; the newest `keepCount` are kept.
 
 /// One backup file.
@@ -91,7 +93,7 @@ public enum WorkspaceBackups {
             throw PersistenceError.io("Cannot read \(backup.url.path): \(error)")
         }
         switch WorkspaceFileCodec.decode(data) {
-        case .workspace(let state): return state
+        case .workspace(let state, _): return state
         case .newerSchema(let version):
             throw PersistenceError.unsupportedSchemaVersion(found: version, supported: WorkspaceFileEnvelope.currentSchemaVersion)
         case .corrupt:
@@ -126,6 +128,10 @@ final class WorkspaceBackupWriter: @unchecked Sendable {
         case data(Data)
         /// The workspace file as it is on disk (the launch backup).
         case file(URL)
+        /// A workspace to encode as a workspace file, on the backup task: the workspace after a
+        /// journal entry, or as loaded with journal entries applied (B153). Encoding here keeps
+        /// the cost off the save.
+        case workspace(WorkspaceState)
     }
 
     let dataDirectory: URL
@@ -192,6 +198,19 @@ final class WorkspaceBackupWriter: @unchecked Sendable {
         switch source {
         case .data(let bytes):
             data = bytes
+        case .workspace(let state):
+            // No generation: a backup is a complete file that no journal continues.
+            let envelope = WorkspaceFileEnvelope(
+                schemaVersion: WorkspaceFileEnvelope.currentSchemaVersion,
+                savedAt: createdAt,
+                generation: nil,
+                workspace: PersistedWorkspace(state)
+            )
+            do {
+                data = try WorkspaceFileCodec.encode(envelope)
+            } catch {
+                throw PersistenceError.encodingFailed(String(describing: error))
+            }
         case .file(let url):
             do {
                 data = try Data(contentsOf: url)

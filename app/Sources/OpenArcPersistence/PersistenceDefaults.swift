@@ -48,6 +48,9 @@ public enum PersistenceDefaults {
 
     /// The workspace file. Persisted name; never rename.
     public static let workspaceFileName = "workspace.json"
+    /// Changes made after the workspace file was written (B153, `WorkspaceJournal`). Persisted
+    /// name; never rename.
+    public static let workspaceJournalFileName = "workspace.journal"
     /// Opaque sync backend state, stored next to the workspace file. Persisted name; never rename.
     public static let syncStateFileName = "sync-state.bin"
     /// Prefix of a corrupt workspace file that was moved aside: `workspace.corrupt-<timestamp>.json`.
