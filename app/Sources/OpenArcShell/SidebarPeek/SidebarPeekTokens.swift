@@ -12,6 +12,14 @@ enum SidebarPeekTokens {
     /// (6 runs); supersedes the earlier "x ≈ 0–2" reading of [06 §14]. B54.
     static let edgeHotZoneWidth: CGFloat = 1
 
+    /// A strip outside the window, left of its left edge, that also opens the panel, so the
+    /// pointer only has to cross the window's left edge when the window does not touch the screen
+    /// edge. inferred (analysis): Arc's window hover tracker keeps an "off the left edge" zone left
+    /// of the window, as tall as it, 50 pt wide; once the pointer is in it (or over the traffic
+    /// lights) the zone grows to 250 pt, so moving further left does not drop it. B145.
+    static let outsideEdgeZoneWidth: CGFloat = 50
+    static let outsideEdgeZoneWidthWhileInside: CGFloat = 250
+
     /// Distance the floating panel travels between its collapsed and open positions: the panel
     /// view's x goes −291 → 0 [07 §11] observed, and the traffic lights inside it sit 291 left of
     /// their open spot while collapsed (close x −274 vs 17) [06 §26.1, §26.2] observed. B54.
@@ -117,21 +125,29 @@ struct SidebarPeekLayout: Equatable, Sendable {
         CGSize(width: CGFloat(Metrics.Sidebar.width), height: panelFrame.height)
     }
 
-    /// The left-edge hot zone: the x = 0 column. [06 §26.2] observed.
-    var edgeZone: CGRect {
-        CGRect(x: 0, y: 0, width: SidebarPeekTokens.edgeHotZoneWidth, height: windowSize.height)
+    /// The left-edge hot zone: the strip outside the window left of it (inferred (analysis), B145)
+    /// through the window's x = 0 column ([06 §26.2] observed), the window's height. The outside
+    /// strip is `outsideEdgeZoneWidthWhileInside` wide while the pointer is already in the zone,
+    /// else `outsideEdgeZoneWidth`.
+    func edgeZone(isInside: Bool) -> CGRect {
+        let outside = isInside ? SidebarPeekTokens.outsideEdgeZoneWidthWhileInside : SidebarPeekTokens.outsideEdgeZoneWidth
+        return CGRect(x: -outside, y: 0, width: outside + SidebarPeekTokens.edgeHotZoneWidth, height: windowSize.height)
     }
 
     /// Where the open panel counts as under the pointer: the panel and the strip left of it, the
-    /// full window height (inferred, so the 5 pt margins do not start a collapse).
+    /// window's height (inferred, so the 5 pt margins do not start a collapse). Left of the window
+    /// the edge zone keeps it open.
     var keepOpenZone: CGRect {
         CGRect(x: 0, y: 0, width: panelFrame.maxX, height: windowSize.height)
     }
 
-    /// The pointer region of a point in window coordinates (top-left origin).
-    func region(of point: CGPoint, presentation: SidebarPresentation) -> SidebarPeekPointerRegion {
+    /// The pointer region of a point in window coordinates (top-left origin); points left of the
+    /// window have a negative x. `wasAtEdge`: the previous point was in the edge zone
+    /// (`edgeZone(isInside:)`).
+    func region(of point: CGPoint, presentation: SidebarPresentation, wasAtEdge: Bool = false) -> SidebarPeekPointerRegion {
         // Exclusive on the right: x = 0 counts, x = 1 does not. [06 §26.2] observed.
-        if point.x >= edgeZone.minX, point.x < edgeZone.maxX, point.y >= 0, point.y <= windowSize.height { return .edge }
+        let zone = edgeZone(isInside: wasAtEdge)
+        if point.x >= zone.minX, point.x < zone.maxX, point.y >= 0, point.y <= windowSize.height { return .edge }
         if presentation == .peeking, keepOpenZone.contains(point) { return .overlay }
         return .outside
     }
