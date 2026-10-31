@@ -552,6 +552,21 @@ final class WebToolbarTests: XCTestCase {
         model.stop()
     }
 
+    /// 06 §4 observed (E34): the URL box and the toolbar drop only a leading "www."; other
+    /// subdomains and multi-part suffixes stay. The full URL keeps it.
+    func testDomainDropsOnlyLeadingWWW() throws {
+        let cases = ["https://www.github.com/": "github.com", "https://www.apple.com/mac/": "apple.com",
+                     "https://www.bbc.co.uk/news": "bbc.co.uk", "https://docs.github.com/en": "docs.github.com",
+                     "https://news.ycombinator.com/": "news.ycombinator.com"]
+        for (raw, shown) in cases {
+            let url = try XCTUnwrap(URL(string: raw))
+            XCTAssertEqual(SidebarURLBoxContent.make(url: url), .domain(shown, isSecure: true), raw)
+            XCTAssertEqual(WebToolbarText.display(url: url, showsFullURL: false), shown, raw)
+        }
+        let full = try XCTUnwrap(URL(string: "https://www.github.com/a"))
+        XCTAssertEqual(WebToolbarText.display(url: full, showsFullURL: true), "www.github.com/a")
+    }
+
     /// 06 §28 observed (E33): right-click on the sidebar URL box while a page is open shows the
     /// URL menu — Copy URL · Share ▸ · Capture… · Capture Full Page ‖ Show as Toolbar (Disable
     /// Shared Quotes is out of v1). No icons, no key hints. Show as Toolbar turns the toolbar on;

@@ -201,7 +201,7 @@ enum WebToolbarText {
     static func display(url: URL?, showsFullURL: Bool) -> String {
         guard let url else { return SidebarURLBoxContent.placeholderText }
         guard showsFullURL else {
-            if let host = url.host, !host.isEmpty { return host }
+            if let host = SidebarURLBoxContent.displayHost(url) { return host }
             return url.absoluteString
         }
         let text = url.absoluteString
