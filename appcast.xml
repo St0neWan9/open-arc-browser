@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Open Arc</title>
+        <item>
+            <title>0.1.2</title>
+            <pubDate>Sat, 31 Oct 2026 08:36:09 +0700</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.1.2-update-test/OpenArc-0.1.2.zip" length="202195334" type="application/octet-stream" sparkle:edSignature="Ovm2Z9VnPSGKwBp9hXN0dn3b+MUGr/UjAs2hUZNpheXkYsP4iBfm4NjoaMNPzFZAJBCwghqV/xPiRc+7VsCeDg=="/>
+        </item>
+    </channel>
+</rss>
