@@ -46,10 +46,17 @@ final class SidebarPeekController: ObservableObject {
         publish()
     }
 
-    /// The pointer is at `point` (window coordinates, top-left origin) in a window of
-    /// `windowSize`; nil when it left the window.
+    /// The previous pointer position was in the left-edge zone: the strip outside the window is
+    /// then the wide one (`SidebarPeekLayout.edgeZone(isInside:)`). B145.
+    private var wasAtEdge = false
+
+    /// The pointer is at `point` (window coordinates, top-left origin; negative x left of the
+    /// window) in a window of `windowSize`; nil when its position is unknown.
     func pointerMoved(to point: CGPoint?, windowSize: CGSize) {
-        let region = point.map { SidebarPeekLayout(windowSize: windowSize).region(of: $0, presentation: machine.presentation) } ?? .outside
+        let region = point.map {
+            SidebarPeekLayout(windowSize: windowSize).region(of: $0, presentation: machine.presentation, wasAtEdge: wasAtEdge)
+        } ?? .outside
+        wasAtEdge = region == .edge
         pointer(region)
     }
 

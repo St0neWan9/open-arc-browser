@@ -60,7 +60,9 @@ struct SidebarPeekOverlay: View {
 
 /// Reports the pointer position over the whole window, whatever view is under it (the engine's
 /// web content view included): tracking areas fire by geometry, not by hit testing. Transparent to
-/// clicks. Points are in window coordinates, top-left origin; nil when the pointer left the window.
+/// clicks. While it is in a window it also watches pointer moves outside the window (local and
+/// global mouse-moved monitors), because the left-edge zone reaches past the window's left edge
+/// (B145). Points are in window coordinates, top-left origin (negative x left of the window).
 struct SidebarPeekTracker: NSViewRepresentable {
     let onMove: @MainActor (CGPoint?, CGSize) -> Void
 
@@ -74,9 +76,14 @@ struct SidebarPeekTracker: NSViewRepresentable {
         nsView.onMove = onMove
     }
 
+    static func dismantleNSView(_ nsView: TrackingView, coordinator: ()) {
+        nsView.stopMonitoring()
+    }
+
     final class TrackingView: NSView {
         var onMove: (@MainActor (CGPoint?, CGSize) -> Void)?
         private var area: NSTrackingArea?
+        private var monitors: SidebarPeekMonitorBag?
 
         override var isFlipped: Bool { true }
 
@@ -91,23 +98,58 @@ struct SidebarPeekTracker: NSViewRepresentable {
             self.area = area
         }
 
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopMonitoring()
+            guard window != nil else { return }
+            // Moves outside the window: over the desktop or other apps (global) and over this
+            // app's other windows (local). Mouse-moved monitors need no extra permission.
+            let local = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+                MainActor.assumeIsolated { self?.reportScreenPointer(unlessIn: event.window) }
+                return event
+            }
+            let global = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reportScreenPointer(unlessIn: nil) }
+            }
+            monitors = SidebarPeekMonitorBag([local, global].compactMap { $0 })
+        }
+
+        func stopMonitoring() {
+            monitors = nil
+        }
+
         override func mouseEntered(with event: NSEvent) { report(event) }
         override func mouseMoved(with event: NSEvent) { report(event) }
         override func mouseDragged(with event: NSEvent) { report(event) }
-        override func mouseExited(with event: NSEvent) { onMove?(nil, windowSize) }
+        override func mouseExited(with event: NSEvent) { reportScreenPointer(unlessIn: nil) }
 
         private func report(_ event: NSEvent) {
             onMove?(windowPoint(event.locationInWindow), windowSize)
         }
 
+        /// The current pointer position, for moves this view's tracking area does not see. Events
+        /// of this window are left to the tracking area.
+        private func reportScreenPointer(unlessIn eventWindow: NSWindow?) {
+            guard let window, eventWindow !== window else { return }
+            let location = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+            onMove?(windowPoint(location), windowSize)
+        }
+
         /// The window's content size, the coordinate space the peek layout uses.
         private var windowSize: CGSize { window?.contentView?.bounds.size ?? bounds.size }
 
-        /// `locationInWindow` (bottom-left origin) as a top-left-origin window point.
+        /// A window location (bottom-left origin) as a top-left-origin window point.
         private func windowPoint(_ location: NSPoint) -> CGPoint {
             guard let content = window?.contentView else { return convert(location, from: nil) }
             let p = content.convert(location, from: nil)
             return CGPoint(x: p.x, y: content.isFlipped ? p.y : content.bounds.height - p.y)
         }
     }
+}
+
+/// Removes event monitors when released.
+private final class SidebarPeekMonitorBag {
+    private let monitors: [Any]
+    init(_ monitors: [Any]) { self.monitors = monitors }
+    deinit { monitors.forEach(NSEvent.removeMonitor) }
 }
