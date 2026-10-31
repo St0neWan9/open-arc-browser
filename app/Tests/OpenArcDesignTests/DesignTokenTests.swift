@@ -161,15 +161,20 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(ThemeDerivation.mix(black, white, amount: 0.36).green, 0.36, accuracy: 1e-9)
     }
 
-    /// [07 §8, §8.2]: window = mix(theme, #EBEBEB, 0.37); control = window × 0.96 (darker, not +10 %
-    /// white); selected row = mix(window, #F5F5F5, 0.9); command bar panel #F9F9F9 whatever the theme.
+    /// [07 §8, §8.2]: window = the light theme layer (B146; ≈ #BF9EB9, observed #BF9EB8); control =
+    /// window × 0.96 (darker, not +10 % white); selected row = mix(window, #F7F7F7, 0.894); command
+    /// bar panel #F9F9F9 whatever the theme.
     func testPaletteFollowsThemeRules() {
         // The E11 purple preset: a dark-ink theme [07 §8.3] (#6B4FD8 would take light ink).
         let purple = RGBAColor(hex: 0xA5729C)
         let theme = Theme(id: UUID(), appearance: .light, colors: [purple], now: Date(timeIntervalSince1970: 0))
         let palette = ThemeDerivation.palette(for: theme)
-        let window = ThemeDerivation.mix(purple, RGBAColor(hex: 0xEBEBEB), amount: 0.37)
+        let window = ThemeDerivation.lightWindow(purple)
         XCTAssertEqual(palette.windowBackground, window)
+        let observed = RGBAColor(hex: 0xBF9EB8)
+        XCTAssertEqual(window.red, observed.red, accuracy: 1.5 / 255)
+        XCTAssertEqual(window.green, observed.green, accuracy: 1.5 / 255)
+        XCTAssertEqual(window.blue, observed.blue, accuracy: 1.5 / 255)
         XCTAssertEqual(palette.controlFill, ThemeDerivation.shade(window, by: 0.96))
         XCTAssertLessThan(ThemeDerivation.luminance(palette.controlFill), ThemeDerivation.luminance(palette.windowBackground), "darker")
         XCTAssertEqual(palette.selectedTabFill, ThemeDerivation.mix(window, RGBAColor(hex: 0xF7F7F7), amount: 0.894), "[07 §8.4] E8 refit")

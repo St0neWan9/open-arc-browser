@@ -155,12 +155,14 @@ final class ThemeAppearanceTests: XCTestCase {
 
     // MARK: Dark ([07 §8] observed samples)
 
-    /// The dark window is a Display P3 blend of the theme toward gray 180/255 [07 §8.2]: the theme
-    /// color itself, darker than the light window, not black; the empty web panel shows its own tint.
-    func testDarkWindowIsTheP3BlendTowardGray() {
+    /// The dark window is the theme layer over a black veil on the reference backdrop [07 §8.2]
+    /// (B146): the theme color itself, darker than the light window, not black; the empty web panel
+    /// shows its own tint.
+    func testDarkWindowIsTheDarkThemeLayer() {
         let palette = ThemeDerivation.palette(for: theme(.dark), systemAppearance: .light)
         XCTAssertTrue(palette.isDark)
-        assertClose(palette.windowBackground, ThemeDerivation.mixInDisplayP3(purple, gray: 180.0 / 255, amount: 0.393))
+        assertClose(palette.windowBackground, ThemeDerivation.windowColor(purple, appearance: .dark, strength: ThemeDerivation.darkThemeStrength,
+                                                                          backdropGray: ThemeDerivation.darkWindowBackdropGray))
         XCTAssertEqual(palette.windowBackground, ThemeDerivation.darkVariant(purple))
         XCTAssertLessThan(ThemeDerivation.luminance(palette.windowBackground), ThemeDerivation.luminance(ThemeDerivation.lightWindow(purple)))
         let light = HSV(ThemeDerivation.lightWindow(purple)), dark = HSV(palette.windowBackground)
@@ -454,8 +456,8 @@ final class ThemeAppearanceTests: XCTestCase {
             ("p5-9", 0x010101, 0x585858, 0x484848),
     ]
 
-    /// [07 §8.2]: light window = mix(theme, #EBEBEB, 0.37) on sRGB (max 2.8/255) and dark window =
-    /// mixP3(theme, 180/255, 0.393) (max 3.1/255) over all 36 E12 presets; tolerance 3.5/255.
+    /// [07 §8.2] (B146): the theme layer over the reference backdrop, light (max 2.7/255) and dark
+    /// (max 3.1/255) over all 36 E12 presets; tolerance 3.5/255.
     func testWindowMatchesEveryE12Sample() {
         XCTAssertEqual(e12Windows.count, 36)
         for (name, themeHex, lightHex, darkHex) in e12Windows {
