@@ -84,10 +84,11 @@ public enum Metrics {
         /// (`SidebarLayout.trailingX`).
         public static let width: Double = 276
 
-        /// Width of a new window's sidebar. inferred (analysis): Arc's default is the favorites
-        /// grid's four 47 pt tiles with three 8 pt gaps between 8 pt insets (16 + 188 + 24 = 228);
-        /// a window without a stored width gets it, and the resize drag snaps to it. B144.
-        public static let defaultWidth: Double = 228
+        /// Width of a new window's sidebar, and the width the resize drag snaps to. [07 §1]
+        /// observed: a new Arc window opens with a 276 pt sidebar, and Arc's stored window state
+        /// holds 276 (E35, 2026-10-31). Arc's binary also has a 228 pt value (four 47 pt favorite
+        /// tiles with 8 pt gaps and insets); where Arc uses it is unknown (B144). Equal to `width`.
+        public static let defaultWidth: Double = width
         /// Narrowest and widest a drag can make the sidebar. inferred (analysis). B144.
         public static let minimumWidth: Double = 164
         public static let maximumWidth: Double = 500
