@@ -101,9 +101,50 @@ private final class AutofillInbox {
     func stop() { task?.cancel() }
 }
 
+/// Plan B152: "Touch ID before filling" (the engine's password setting) asks macOS to
+/// authenticate the user before a chosen saved password fills. The engine test answers that
+/// prompt with scripted results (`--openarc-fake-device-reauth=fail,pass`): the first choice is
+/// cancelled and fills nothing, leaving the page usable; the next one succeeds and fills; a choice
+/// within the engine's reuse period (Chromium's own 60 s) fills without asking again.
+enum PasswordFillReauth {
+    /// The engine offers the setting only on Macs that have had biometrics at some point (a Local
+    /// State flag it sets itself once it sees Touch ID). The test sets the flag before the engine
+    /// starts, so the check runs on any Mac.
+    static func prepareLocalState(in dataDirectory: URL) throws {
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try Data(#"{"password_manager":{"had_biometrics_available":true}}"#.utf8)
+            .write(to: dataDirectory.appendingPathComponent("Local State"))
+    }
+
+    /// A profile with the setting on, written before the engine loads the profile.
+    static func prepareProfile(_ profileID: UUID, in dataDirectory: URL) throws {
+        let folder = dataDirectory.appendingPathComponent(profileID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(#"{"password_manager":{"biometric_authentication_filling":true}}"#.utf8)
+            .write(to: folder.appendingPathComponent("Preferences"))
+    }
+}
+
+/// A sign-in page in its own window with the profile's saved credential, for the fill checks.
+@MainActor
+private struct SignInPage {
+    let tab: any BrowserTab
+    let host: FillTestSurfaceHost
+    let inbox: AutofillInbox
+
+    func close() {
+        inbox.stop()
+        tab.surface.detach()
+        host.window.close()
+    }
+}
+
 extension ChromiumEngineConformanceTests {
+    /// Saves test@example.com for the test site in `profileID` and opens its sign-in page.
     @MainActor
-    func checkPasswordFill(_ engine: ChromiumEngine, server: ProfileIsolationServer, profileID: UUID) async throws {
+    private func openSignInPage(
+        _ engine: ChromiumEngine, server: ProfileIsolationServer, profileID: UUID
+    ) async throws -> SignInPage {
         let origin = "http://localhost:\(server.port)"
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("openarc-b148-\(UUID().uuidString)", isDirectory: true)
@@ -122,15 +163,23 @@ extension ChromiumEngineConformanceTests {
         let tab = try await engine.makeTab(TabConfiguration(profileID: profileID))
         let host = FillTestSurfaceHost()
         tab.surface.attach(to: host)
-        defer {
-            tab.surface.detach()
-            host.window.close()
+        let page = SignInPage(tab: tab, host: host, inbox: AutofillInbox(tab.dialogRequests()))
+        do {
+            try await tab.load(try XCTUnwrap(URL(string: "\(origin)/signin")))
+            try await waitForState(tab) { $0.title == "signin" && !$0.loadState.isLoading }
+        } catch {
+            page.close()
+            throw error
         }
-        let inbox = AutofillInbox(tab.dialogRequests())
-        defer { inbox.stop() }
-        try await tab.load(try XCTUnwrap(URL(string: "\(origin)/signin")))
-        try await waitForState(tab) { $0.title == "signin" && !$0.loadState.isLoading }
         tab.surface.setFocused(true)
+        return page
+    }
+
+    @MainActor
+    func checkPasswordFill(_ engine: ChromiumEngine, server: ProfileIsolationServer, profileID: UUID) async throws {
+        let page = try await openSignInPage(engine, server: server, profileID: profileID)
+        defer { page.close() }
+        let (tab, inbox) = (page.tab, page.inbox)
 
         // Step 1: the identifier field offers the saved username.
         let first = try await passwordDropdown(tab, inbox, field: "identifierId", after: 0)
@@ -146,6 +195,38 @@ extension ChromiumEngineConformanceTests {
         // The browser is still alive and the page still answers.
         let title = try await tab.evaluateJavaScript("document.title")
         XCTAssertEqual(title, "signin")
+        await engine.closeTab(tab.id)
+    }
+
+    /// Plan B152 (see `PasswordFillReauth`). The engine runs with
+    /// `--openarc-fake-device-reauth=fail,pass`; only this profile has the setting on.
+    @MainActor
+    func checkPasswordFillReauth(
+        _ engine: ChromiumEngine, server: ProfileIsolationServer, dataDirectory: URL
+    ) async throws {
+        let profileID = UUID()
+        try PasswordFillReauth.prepareProfile(profileID, in: dataDirectory)
+        let page = try await openSignInPage(engine, server: server, profileID: profileID)
+        defer { page.close() }
+        let (tab, inbox) = (page.tab, page.inbox)
+
+        // Cancelled: the dropdown closes, nothing fills, the page still answers.
+        let cancelled = try await passwordDropdown(tab, inbox, field: "identifierId", after: 0)
+        try await choosePassword(in: cancelled)
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        let afterCancel = try await tab.evaluateJavaScript("values()")
+        XCTAssertEqual(afterCancel, "identifier=", "a cancelled reauth fills nothing")
+
+        // Authenticated: the next choice fills.
+        let passed = try await passwordDropdown(tab, inbox, field: "identifierId", after: inbox.popups.count)
+        try await choosePassword(in: passed)
+        try await waitForValues(tab, contains: "identifier=test@example.com")
+
+        // Within the reuse period the password step fills too.
+        _ = try await tab.evaluateJavaScript("step()")
+        let second = try await passwordDropdown(tab, inbox, field: "Passwd", after: inbox.popups.count)
+        try await choosePassword(in: second)
+        try await waitForValues(tab, contains: "Passwd=not-a-real-password")
         await engine.closeTab(tab.id)
     }
 

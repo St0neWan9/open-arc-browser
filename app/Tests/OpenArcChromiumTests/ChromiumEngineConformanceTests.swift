@@ -31,9 +31,13 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // for a test process).
         // --openarc-fake-icloud-keychain (plan B130, tests only): the bridge's stand-in for
         // macOS's iCloud Keychain passkey API, which needs an entitlement this build lacks.
+        // --openarc-fake-device-reauth (plan B152, tests only): scripted answers to the
+        // reauthentication before filling a saved password (cancel, then success). Only the
+        // profile that turns that setting on asks (`checkPasswordFillReauth`).
+        try PasswordFillReauth.prepareLocalState(in: dataDirectory)
         let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: [
             "--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--use-mock-keychain",
-            "--openarc-fake-icloud-keychain",
+            "--openarc-fake-icloud-keychain", "--openarc-fake-device-reauth=fail,pass",
         ])
         XCTAssertTrue(engine.engineVersion.hasPrefix("Chromium "))
 
@@ -156,6 +160,10 @@ final class ChromiumEngineConformanceTests: XCTestCase {
 
         // Plan B148: choosing a saved password on a two-step sign-in page fills it (no crash).
         try await checkPasswordFill(engine, server: identityServer, profileID: UUID())
+
+        // Plan B152: with "Touch ID before filling" on, a cancelled reauth fills nothing and
+        // leaves the page usable; a successful one fills.
+        try await checkPasswordFillReauth(engine, server: identityServer, dataDirectory: dataDirectory)
 
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
