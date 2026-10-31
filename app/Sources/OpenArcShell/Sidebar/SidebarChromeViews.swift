@@ -229,8 +229,15 @@ struct SidebarURLBoxView: View, Equatable {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .onTapGesture { viewModel.openCommandBar(.currentTab) }
-        // The current Space's menu, with or without a page. [06 §28] observed.
-        .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
+        // With a page: the URL menu ([06 §28] observed, E33). Without one: the current Space's
+        // menu, like the rest of the sidebar top (inferred; only the page case was captured).
+        .contextMenu {
+            if let tabID = state.selectedTabID, viewModel.selectedURL != nil {
+                SidebarURLBoxMenu(viewModel: viewModel, tabID: tabID)
+            } else {
+                SidebarSpaceMenu(viewModel: viewModel)
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityAction { viewModel.openCommandBar(.currentTab) }
         .accessibilityIdentifier("openarc.sidebar.urlBox")

@@ -552,8 +552,33 @@ final class WebToolbarTests: XCTestCase {
         model.stop()
     }
 
-    /// 06 §28 observed: right-click on the sidebar top (URL box, traffic-light row) opens the
-    /// current Space's menu, the same items as the Space name's "⋯".
+    /// 06 §28 observed (E33): right-click on the sidebar URL box while a page is open shows the
+    /// URL menu — Copy URL · Share ▸ · Capture… · Capture Full Page ‖ Show as Toolbar (Disable
+    /// Shared Quotes is out of v1). No icons, no key hints. Show as Toolbar turns the toolbar on;
+    /// Copy URL copies the page URL.
+    func testSidebarURLBoxContextMenu() async throws {
+        let model = makeModel()
+        let pasteboard = RecordingPasteboardWriter()
+        model.siteControls.pasteboard = pasteboard
+        let id = try await selectExample(model)
+        let items = try menuItems(SidebarURLBoxMenu(viewModel: model.sidebar, tabID: id))
+        XCTAssertEqual(titles(items), ["Copy URL", "Share", "Capture…", "Capture Full Page", "—", "Show as Toolbar"])
+        for item in items where !item.isSeparatorItem {
+            XCTAssertNil(item.image, "\(item.title): no icon (06 §28)")
+            XCTAssertEqual(item.keyEquivalent, "", "\(item.title): no key hint (06 §28)")
+        }
+        XCTAssertNotNil(items.first { $0.title == "Share" }?.submenu, "Share ▸ is a submenu (06 §28)")
+
+        model.sidebar.requestFromMenu(.copyURL(tabID: id))
+        XCTAssertEqual(pasteboard.written, [URL(string: "https://example.com")!])
+        XCTAssertFalse(model.isWebToolbarShown)
+        model.sidebar.requestFromMenu(.showToolbar)
+        XCTAssertTrue(model.isWebToolbarShown, "Show as Toolbar = View ▸ Show Toolbar on (06 §28)")
+        model.stop()
+    }
+
+    /// 06 §28 observed: right-click on the sidebar top (traffic-light row, and the URL box without
+    /// a page) opens the current Space's menu, the same items as the Space name's "⋯".
     func testSidebarTopContextMenuIsTheSpaceMenu() throws {
         let model = makeModel()
         let items = try menuItems(SidebarSpaceMenu(viewModel: model.sidebar))

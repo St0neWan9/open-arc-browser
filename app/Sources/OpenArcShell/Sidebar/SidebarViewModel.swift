@@ -50,6 +50,11 @@ public enum SidebarRequest: Equatable, Sendable {
     /// The dock's leftmost button (the Home button of [05 §window hierarchy], [07 §4] observed):
     /// opens the Library. inferred (its action was not recorded).
     case openLibrary
+    /// The URL box menu (a page is open): Copy URL, Capture… / Capture Full Page and Show as
+    /// Toolbar. [06 §28] observed (E33).
+    case copyURL(tabID: UUID)
+    case capturePage(fullPage: Bool)
+    case showToolbar
 }
 
 @MainActor

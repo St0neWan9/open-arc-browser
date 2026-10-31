@@ -653,6 +653,10 @@ public final class ShellModel: ObservableObject {
         case .openLibrary: openLibrary()
         case .showSiteControls: siteControls.present()
         case .newProfile(let spaceID): profileFlow.beginNewProfile(forSpace: spaceID)
+        // The sidebar URL box menu: the same actions as the web toolbar's menu. [06 §28] (E33).
+        case .copyURL(let tabID): webToolbarCopyLink(tabID)
+        case .capturePage(let fullPage): webToolbarCapture(selectedTabID, fullPage: fullPage)
+        case .showToolbar: if !isWebToolbarShown { toggleWebToolbar() }
         // Tab menu Share: the system share picker for the tab's link. [06 §20.2], [06 §21.5] B77.
         case .share(let tabID): sidebar.beginShare(tabID)
         case .changeIcon(let tabID): sidebar.beginChangeIcon(tabID)
