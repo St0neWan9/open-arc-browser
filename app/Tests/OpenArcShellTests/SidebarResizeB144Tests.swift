@@ -19,14 +19,12 @@ final class SidebarResizeB144Tests: XCTestCase {
 
     func testArcWidthValues_07_1() {
         let s = Metrics.Sidebar.self
-        XCTAssertEqual(s.defaultWidth, 228)
+        XCTAssertEqual(s.defaultWidth, 276, "07 §1 observed (E35)")
         XCTAssertEqual(s.minimumWidth, 164)
         XCTAssertEqual(s.maximumWidth, 500)
         XCTAssertEqual(s.collapseWidth, 82)
         XCTAssertEqual(s.defaultWidthSnapDistance, 14)
-        // The default is the favorites grid of four tiles: 2 × 8 inset + 4 × 47 + 3 × 8 gaps.
-        let g = Metrics.FavoritesGrid.self
-        XCTAssertEqual(s.defaultWidth, 2 * g.inset + Double(g.maxColumns) * g.tileHeight + Double(g.maxColumns - 1) * g.spacing)
+        XCTAssertEqual(s.defaultWidth, s.width, "the default is the reference width")
     }
 
     func testResizeClampsSnapsAndCollapses_07_1() {
@@ -36,12 +34,12 @@ final class SidebarResizeB144Tests: XCTestCase {
         XCTAssertEqual(SidebarWidth.resize(proposed: 120), .width(164))
         XCTAssertEqual(SidebarWidth.resize(proposed: 82), .width(164))
         XCTAssertEqual(SidebarWidth.resize(proposed: 81), .hidden)
-        XCTAssertEqual(SidebarWidth.resize(proposed: 240), .width(228), "snaps within 14 pt of the default")
-        XCTAssertEqual(SidebarWidth.resize(proposed: 215), .width(228))
+        XCTAssertEqual(SidebarWidth.resize(proposed: 288), .width(276), "snaps within 14 pt of the default")
+        XCTAssertEqual(SidebarWidth.resize(proposed: 263), .width(276))
         XCTAssertEqual(SidebarWidth.resize(proposed: 242), .width(242))
         XCTAssertEqual(SidebarWidth.resize(proposed: 214), .width(214))
-        XCTAssertEqual(SidebarWidth.sanitized(nil), 228)
-        XCTAssertEqual(SidebarWidth.sanitized(.nan), 228)
+        XCTAssertEqual(SidebarWidth.sanitized(nil), 276)
+        XCTAssertEqual(SidebarWidth.sanitized(.nan), 276)
         XCTAssertEqual(SidebarWidth.sanitized(900), 500)
     }
 
@@ -90,19 +88,19 @@ final class SidebarResizeB144Tests: XCTestCase {
     func testDragResizesCollapsesAndRestores_07_1() {
         let model = makeModel()
         defer { model.stop() }
-        XCTAssertEqual(model.sidebarWidth, 228, "a new window gets Arc's default")
+        XCTAssertEqual(model.sidebarWidth, 276, "a new window gets Arc's default (07 §1, E35)")
         model.beginSidebarResize()
         XCTAssertTrue(model.isResizingSidebar)
-        model.updateSidebarResize(translation: 72)
+        model.updateSidebarResize(translation: 24)
         XCTAssertEqual(model.sidebarWidth, 300)
         XCTAssertEqual(model.windowLayout(size: CGSize(width: 1200, height: 800)).webPanelFrame.minX, 300)
-        model.updateSidebarResize(translation: -100)
+        model.updateSidebarResize(translation: -150)
         XCTAssertTrue(model.isSidebarVisible)
         XCTAssertEqual(model.sidebarWidth, 164)
-        model.updateSidebarResize(translation: -150)
+        model.updateSidebarResize(translation: -200)
         XCTAssertFalse(model.isSidebarVisible, "past the collapse limit the sidebar hides")
         XCTAssertEqual(model.sidebarWidth, 164, "keeps its last width")
-        model.updateSidebarResize(translation: 30)
+        model.updateSidebarResize(translation: -18)
         XCTAssertTrue(model.isSidebarVisible, "dragging back shows it again")
         model.endSidebarResize()
         XCTAssertFalse(model.isResizingSidebar)
