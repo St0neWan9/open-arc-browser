@@ -45,6 +45,27 @@ struct TaskRetryScheduler: RetryScheduling {
     }
 }
 
+/// When the store writes its persisted state (B151). The state is a few hundred KB to a few MB
+/// (the cached system fields of every record), and the engine reports several events per sync,
+/// so writing it on every event dirtied gigabytes a day. Changes are classified by
+/// `PersistedSyncState.needsPromptSave(comparedTo:)`:
+/// - prompt (a local change queued for upload, server changes waiting to be applied, account and
+///   zone flags): written `promptDelay` seconds after the first such change;
+/// - lazy (caches the server can rebuild: engine state, poll token, system fields, shrinking
+///   queue): written `lazyDelay` seconds after the first such change, so at most one write per
+///   `lazyDelay` while only caches change;
+/// - `lastSyncedAt` alone: written with the next write for another reason, or by `flushState`.
+/// Nothing is written while the state equals what was last written. `stop`, `flushState`, an
+/// account switch and a reset write at once. Our own values.
+struct StateSavePolicy: Hashable, Sendable {
+    var promptDelay: TimeInterval
+    var lazyDelay: TimeInterval
+
+    /// A queued local change reaches disk within 5 s (the engine usually sends it within that
+    /// time too); caches at most every 5 min (12 writes an hour while only they change).
+    static let standard = StateSavePolicy(promptDelay: 5, lazyDelay: 300)
+}
+
 /// `SyncStore` backed by CloudKit: CKSyncEngine on the private database, one custom zone.
 ///
 /// Flow:
@@ -89,6 +110,9 @@ public actor CloudKitSyncStore: SyncStore {
     private let zoneDeleter: ZoneDeleter
     private let clock: @Sendable () -> Date
     private let retryScheduler: any RetryScheduling
+    /// Runs the coalesced state writes (`StateSavePolicy`).
+    private let saveScheduler: any RetryScheduling
+    private let savePolicy: StateSavePolicy
     /// Whether this process may use the container. Creating a `CKContainer` without the iCloud
     /// entitlement traps, so the driver is only built when this returns true.
     private let containerCheck: @Sendable (String) -> Bool
@@ -99,7 +123,19 @@ public actor CloudKitSyncStore: SyncStore {
     private var database: (any SyncLocalDatabase)?
     private var storage: (any SyncStateStorage)?
     private var driver: (any SyncEngineDriver)?
-    private var state = PersistedSyncState()
+    private var state = PersistedSyncState() {
+        didSet { stateMaybeChanged = true }
+    }
+    /// The state as last written to (or read from) storage; nil when unknown.
+    private var savedState: PersistedSyncState?
+    /// Set by every mutation of `state` (even one that changes nothing), cleared when the state
+    /// was compared with `savedState`. Spares the comparison for events that touched nothing.
+    private var stateMaybeChanged = false
+    /// The pending coalesced write: its generation, and whether it is a prompt one.
+    private var scheduledSave: (generation: Int, isPrompt: Bool)?
+    private var saveGeneration = 0
+    /// The last state write started; the next one waits for it.
+    private var stateWrite: Task<Void, Never>?
     /// Generation of each queue entry included in the batch being sent.
     private var inFlight: [SyncRecordID: UInt64] = [:]
     private var phase: SyncStatus.Phase = .disabled
@@ -125,6 +161,8 @@ public actor CloudKitSyncStore: SyncStore {
             zoneDeleter: CKSyncEngineDriver.zoneDeleter(containerIdentifier: configuration.containerIdentifier),
             clock: { Date() },
             retryScheduler: TaskRetryScheduler(),
+            saveScheduler: TaskRetryScheduler(),
+            savePolicy: .standard,
             containerCheck: CloudKitEntitlements.allowsContainer
         )
     }
@@ -136,6 +174,8 @@ public actor CloudKitSyncStore: SyncStore {
         zoneDeleter: @escaping ZoneDeleter = { _ in },
         clock: @escaping @Sendable () -> Date,
         retryScheduler: any RetryScheduling,
+        saveScheduler: any RetryScheduling = TaskRetryScheduler(),
+        savePolicy: StateSavePolicy = .standard,
         containerCheck: @escaping @Sendable (String) -> Bool = { _ in true }
     ) {
         self.configuration = configuration
@@ -147,17 +187,21 @@ public actor CloudKitSyncStore: SyncStore {
         self.zoneDeleter = zoneDeleter
         self.clock = clock
         self.retryScheduler = retryScheduler
+        self.saveScheduler = saveScheduler
+        self.savePolicy = savePolicy
         self.containerCheck = containerCheck
     }
 
     // MARK: - SyncStore
 
     public func start(database: any SyncLocalDatabase) async throws {
-        if driver != nil { await stop() }
+        if driver != nil { await stop() } else { await flushState() }
         self.database = database
         let storage = injectedStorage ?? LocalDatabaseSyncStateStorage(database: database)
         self.storage = storage
         state = PersistedSyncState.decode(try? await storage.loadState())
+        savedState = state
+        stateMaybeChanged = false
         // A queue persisted by an older build may still hold local-only records (B73): drop them.
         for entry in state.pending.entries where entry.id.type.isLocalOnly {
             state.pending.remove(entry.id)
@@ -177,7 +221,7 @@ public actor CloudKitSyncStore: SyncStore {
     }
 
     public func stop() async {
-        await persist()
+        await flushState()
         if let driver { await driver.cancel() }
         driver = nil
         database = nil
@@ -206,7 +250,7 @@ public actor CloudKitSyncStore: SyncStore {
             }
         }
         guard !driverChanges.isEmpty else {
-            await persist()
+            noteStateChange()
             publishStatus()
             return
         }
@@ -214,7 +258,7 @@ public actor CloudKitSyncStore: SyncStore {
             if !state.zoneSaved { driver.addPendingZoneSave(zone) }
             driver.addPending(driverChanges)
         }
-        await persist()
+        noteStateChange()
         publishStatus()
     }
 
@@ -237,12 +281,12 @@ public actor CloudKitSyncStore: SyncStore {
             try await driver.sendChanges()
         } catch {
             handleOperationError(error)
-            await persist()
+            noteStateChange()
             throw error
         }
         // Only here, with both halves returned without an error, is the cycle known to be good.
         finishConfirmedCycle()
-        await persist()
+        noteStateChange()
     }
 
     public func resetLocalSyncState() async {
@@ -251,7 +295,7 @@ public actor CloudKitSyncStore: SyncStore {
         inFlight.removeAll()
         cycleFailure = nil
         state = PersistedSyncState()
-        await persist()
+        await flushState()
         if database != nil {
             try? await bringUpDriver()
         } else {
@@ -290,12 +334,14 @@ public actor CloudKitSyncStore: SyncStore {
             throw error
         }
         SyncLog.logger.info("deleted the iCloud zone and the local sync state")
-        let storage = self.storage ?? injectedStorage ?? LocalDatabaseSyncStateStorage(database: database)
+        self.storage = self.storage ?? injectedStorage ?? LocalDatabaseSyncStateStorage(database: database)
         state = PersistedSyncState()
         state.deletedOwnZone = true
         cycleFailure = nil
         retryAttempt = 0
-        try? await storage.saveState(state.encoded())
+        // Always written: what is on disk may not be what this store last saw.
+        savedState = nil
+        await flushState()
         self.database = nil
         self.storage = nil
         setPhase(.disabled)
@@ -332,7 +378,7 @@ public actor CloudKitSyncStore: SyncStore {
         }
         if !pending.isEmpty { driver.addPending(pending) }
         await applyDeferredRemoteChanges()
-        await persist()
+        noteStateChange()
     }
 
     // MARK: - Status
@@ -454,11 +500,78 @@ public actor CloudKitSyncStore: SyncStore {
         try? await syncNow()
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (B151)
 
-    private func persist() async {
+    /// Writes the state now if it differs from what was last written, and drops the pending
+    /// coalesced write. `stop` calls it; the app calls it before quitting (`SyncStore.flushState`).
+    public func flushState() async {
+        scheduledSave = nil
+        await writeStateIfChanged()
+    }
+
+    /// Called after every change to `state`: schedules a coalesced write (`StateSavePolicy`).
+    private func noteStateChange() {
+        guard storage != nil, stateMaybeChanged else { return }
+        stateMaybeChanged = false
+        guard let savedState else { return scheduleSave(isPrompt: true) }
+        if state == savedState { return }
+        if state.needsPromptSave(comparedTo: savedState) {
+            scheduleSave(isPrompt: true)
+        } else if !state.differsOnlyInLastSyncedAt(from: savedState) {
+            scheduleSave(isPrompt: false)
+        }
+    }
+
+    /// Queues a write unless one as soon or sooner is already queued. A prompt change after a lazy
+    /// one queues a new, earlier write; the lazy one then finds its generation gone and does nothing.
+    private func scheduleSave(isPrompt: Bool) {
+        if let pending = scheduledSave, pending.isPrompt || !isPrompt { return }
+        saveGeneration += 1
+        let generation = saveGeneration
+        scheduledSave = (generation, isPrompt)
+        let delay = isPrompt ? savePolicy.promptDelay : savePolicy.lazyDelay
+        saveScheduler.schedule(after: delay) { [weak self] in
+            await self?.scheduledSaveFired(generation)
+        }
+    }
+
+    private func scheduledSaveFired(_ generation: Int) async {
+        guard scheduledSave?.generation == generation else { return }
+        scheduledSave = nil
+        await writeStateIfChanged()
+    }
+
+    /// Writes a snapshot of the state when it differs from the last one written. Writes run one
+    /// after another (a flush and a scheduled write may overlap), so an older snapshot can never
+    /// land on disk after a newer one.
+    private func writeStateIfChanged() async {
+        let previous = stateWrite
+        let write = Task {
+            await previous?.value
+            await self.performStateWrite()
+        }
+        stateWrite = write
+        await write.value
+    }
+
+    private func performStateWrite() async {
         guard let storage else { return }
-        try? await storage.saveState(state.encoded())
+        let snapshot = state
+        stateMaybeChanged = false
+        guard snapshot != savedState else { return }
+        do {
+            try await storage.saveState(snapshot.encoded())
+            savedState = snapshot
+        } catch {
+            // Keep `savedState` as it was: the next change (or flush) tries again.
+            stateMaybeChanged = true
+            SyncLog.logger.error("saving the sync state failed: \(String(describing: error), privacy: .public)")
+        }
+        // Changed while suspended: queue the next write.
+        if state != snapshot {
+            stateMaybeChanged = true
+            noteStateChange()
+        }
     }
 
     // MARK: - Errors outside record results
@@ -825,7 +938,7 @@ public actor CloudKitSyncStore: SyncStore {
             state.awaitingAccountReset = true
             inFlight.removeAll()
             setPhase(.unavailable(.accountChanged))
-            await persist()
+            await flushState()
             // This runs inside the engine's `handleEvent`: awaiting `cancelOperations` here would
             // trap in CKSyncEngine, so the old engine is cancelled outside the callback (B86).
             if let old = driver {
@@ -882,7 +995,7 @@ extension CloudKitSyncStore: SyncEngineDriverDelegate {
         case .didSendChanges(let reason):
             finishEngineCycle(reason)
         }
-        await persist()
+        noteStateChange()
         publishStatus()
     }
 

@@ -75,7 +75,10 @@ public struct WorkspaceStoreEvent: Hashable, Sendable {
 ///   changes within that window ride along, so a burst of edits costs one write. `flush()` writes
 ///   immediately (app termination).
 /// - Remote changes (`apply`) are merged under `ConflictPolicy` and written immediately, because
-///   the sync backend may persist its change token right after `apply` returns.
+///   the sync backend may persist its change token right after `apply` returns. A batch that only
+///   refreshes the backend's opaque system fields (the server echoing this device's own upload)
+///   is not written on its own; it rides on the next write or `flush` (B151). The backend keeps
+///   the same system fields in its own state, so a crash before then loses nothing.
 /// - Backups (plan B117, Help ▸ Restore Data): rolling copies in `<directory>/Backups/`
 ///   (`WorkspaceBackups`): one at launch when the newest is a day old or more, then at most one a
 ///   day, taken from a successful save; the last 7 are kept. They are written on a background task
@@ -104,6 +107,16 @@ public actor WorkspaceStore: SyncLocalDatabase {
     public private(set) var hasUnsavedChanges = false
     /// Number of successful workspace file writes (diagnostics and tests).
     public private(set) var writeCount = 0
+    /// Bytes written by those writes (diagnostics and tests, B151).
+    public private(set) var bytesWritten = 0
+    /// Number of sync state writes and their bytes (diagnostics and tests, B151).
+    public private(set) var syncStateWriteCount = 0
+    public private(set) var syncStateBytesWritten = 0
+    /// The workspace as the file on disk holds it (as loaded or last written); nil when unknown.
+    /// A save whose workspace equals it is skipped (B151).
+    private var lastWrittenWorkspace: WorkspaceState?
+    /// The sync state bytes on disk (as last written by this store); nil when unknown.
+    private var lastWrittenSyncState: Data?
     /// The last failed autosave, cleared by the next successful write.
     public private(set) var lastSaveError: PersistenceError?
     /// True if the file on disk must not be overwritten (see `WorkspaceLoadOutcome.refused`).
@@ -138,6 +151,7 @@ public actor WorkspaceStore: SyncLocalDatabase {
         )
         self.loadResult = result
         self.workspace = result.workspace
+        if result.outcome == .loaded { lastWrittenWorkspace = result.workspace }
         if case .refused = result.outcome { isReadOnly = true } else { isReadOnly = false }
         backupWriter = isReadOnly ? nil : WorkspaceBackupWriter(dataDirectory: directory)
         // The launch backup: the file as loaded, when the newest backup is a day old or more.
@@ -276,17 +290,24 @@ public actor WorkspaceStore: SyncLocalDatabase {
         for id in batch.deletions where !id.type.isLocalOnly { next.removeRecord(id) }
         guard next != old else { return }
 
+        let changes = WorkspaceDiff.changes(from: old, to: next)
         let wasUnsaved = hasUnsavedChanges
         workspace = next
         hasUnsavedChanges = true
-        do {
-            try writeWorkspace()
-        } catch {
-            workspace = old
-            hasUnsavedChanges = wasUnsaved
-            throw error
+        if Self.onlySystemFieldsChanged(changes, from: old, to: next) {
+            // Only the backend's opaque data changed (the server echoing this device's own
+            // upload with a new change tag). Nothing the user sees changed, and the backend keeps
+            // the same data in its own state, so the file is not rewritten for it: it rides on
+            // the next write (an edit's autosave, or `flush` at quit). B151.
+        } else {
+            do {
+                try writeWorkspace()
+            } catch {
+                workspace = old
+                hasUnsavedChanges = wasUnsaved
+                throw error
+            }
         }
-        let changes = WorkspaceDiff.changes(from: old, to: next)
         let pending = resend
             .sorted { $0.recordName < $1.recordName }
             .map(PendingChange.save)
@@ -301,13 +322,35 @@ public actor WorkspaceStore: SyncLocalDatabase {
     public func saveSyncState(_ data: Data?) async {
         guard !isReadOnly else { return }
         if let data {
-            try? AtomicFile.write(data, to: syncStateFileURL)
+            // The same bytes again (B151): nothing to write.
+            guard data != lastWrittenSyncState else { return }
+            do {
+                try AtomicFile.write(data, to: syncStateFileURL)
+                lastWrittenSyncState = data
+                syncStateWriteCount += 1
+                syncStateBytesWritten += data.count
+            } catch {
+                lastWrittenSyncState = nil
+            }
         } else {
+            lastWrittenSyncState = nil
             try? AtomicFile.remove(syncStateFileURL)
         }
     }
 
     // MARK: - Internals
+
+    /// True when records were only changed, none added or removed, and each differs from its
+    /// previous copy in `SyncMetadata.backendSystemFields` alone.
+    static func onlySystemFieldsChanged(_ changes: WorkspaceDiff.Changes, from old: WorkspaceState, to new: WorkspaceState) -> Bool {
+        guard changes.removed.isEmpty, !changes.saved.isEmpty else { return false }
+        for id in changes.saved {
+            guard let before = old.record(for: id), let after = new.record(for: id),
+                  before.withBackendSystemFields(nil) == after.withBackendSystemFields(nil)
+            else { return false }
+        }
+        return true
+    }
 
     private func drainInbox() {
         let (base, steps) = inbox.take()
@@ -368,6 +411,12 @@ public actor WorkspaceStore: SyncLocalDatabase {
 
     private func writeWorkspace() throws {
         guard !isReadOnly else { throw PersistenceError.readOnly }
+        // Changes that cancelled out (an edit undone within the autosave window) leave the file
+        // as it is (B151).
+        if workspace == lastWrittenWorkspace {
+            hasUnsavedChanges = false
+            return
+        }
         let envelope = WorkspaceFileEnvelope(
             schemaVersion: WorkspaceFileEnvelope.currentSchemaVersion,
             savedAt: now(),
@@ -381,7 +430,9 @@ public actor WorkspaceStore: SyncLocalDatabase {
         }
         try AtomicFile.write(data, to: workspaceFileURL)
         hasUnsavedChanges = false
+        lastWrittenWorkspace = workspace
         writeCount += 1
+        bytesWritten += data.count
         lastSaveError = nil
         // At most one backup a day, from the bytes just written (no second encode, no read back).
         backupWriter?.backUpIfDue(now: envelope.savedAt, .data(data))

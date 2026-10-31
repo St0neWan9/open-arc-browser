@@ -173,6 +173,9 @@ public enum UIStateFile {
         } catch {
             throw PersistenceError.encodingFailed(String(describing: error))
         }
-        try AtomicFile.write(data, to: url(in: directory))
+        let file = url(in: directory)
+        // The same state again (window events save often): leave the file alone (B151).
+        if let existing = try? Data(contentsOf: file), existing == data { return }
+        try AtomicFile.write(data, to: file)
     }
 }

@@ -243,9 +243,16 @@ actor FakeDatabase: SyncLocalDatabase {
 
 actor InMemoryStateStorage: SyncStateStorage {
     private(set) var data: Data?
+    /// Number of `saveState` calls and the bytes they wrote (B151).
+    private(set) var writeCount = 0
+    private(set) var bytesWritten = 0
 
     func loadState() async throws -> Data? { data }
-    func saveState(_ data: Data?) async throws { self.data = data }
+    func saveState(_ data: Data?) async throws {
+        self.data = data
+        writeCount += 1
+        bytesWritten += data?.count ?? 0
+    }
 
     var decoded: PersistedSyncState { PersistedSyncState.decode(data) }
 }
@@ -565,12 +572,14 @@ final class FakeZoneDeleter: @unchecked Sendable {
 
 // MARK: - Store harness
 
-/// A store wired to fakes: fixed clock, in-memory state, fake scheduler and driver.
+/// A store wired to fakes: fixed clock, in-memory state, fake schedulers and driver.
 struct StoreHarness {
     let store: CloudKitSyncStore
     let database: FakeDatabase
     let storage: InMemoryStateStorage
     let scheduler: FakeRetryScheduler
+    /// Runs the store's coalesced state writes (B151); tests fire them with `runNext`.
+    let saveScheduler: FakeRetryScheduler
     let drivers: FakeDriverFactory
     let zoneDeleter: FakeZoneDeleter
 
@@ -584,6 +593,7 @@ struct StoreHarness {
         database = FakeDatabase(records)
         self.storage = storage
         scheduler = FakeRetryScheduler()
+        saveScheduler = FakeRetryScheduler()
         drivers = FakeDriverFactory(configure: configureDriver)
         zoneDeleter = FakeZoneDeleter()
         store = CloudKitSyncStore(
@@ -593,6 +603,7 @@ struct StoreHarness {
             zoneDeleter: zoneDeleter.deleter,
             clock: { Fx.t(1000) },
             retryScheduler: scheduler,
+            saveScheduler: saveScheduler,
             containerCheck: { _ in isEntitled }
         )
     }
@@ -605,8 +616,12 @@ struct StoreHarness {
         try await store.start(database: database)
     }
 
+    /// The state as a flush leaves it on disk (the store coalesces its writes, B151).
     var persisted: PersistedSyncState {
-        get async { await storage.decoded }
+        get async {
+            await store.flushState()
+            return await storage.decoded
+        }
     }
 }
 

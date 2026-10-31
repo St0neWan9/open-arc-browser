@@ -105,6 +105,9 @@ public protocol SyncStore: AnyObject, Sendable {
     func start(database: any SyncLocalDatabase) async throws
     /// Stops syncing. Pending changes stay queued in the persisted sync state.
     func stop() async
+    /// Writes state the backend has not persisted yet (it may coalesce its writes, B151). The app
+    /// calls this before quitting; `stop` does it too.
+    func flushState() async
     /// Announces local changes. Cheap; never blocks on the network.
     func enqueue(_ changes: [PendingChange]) async
     /// Fetches and sends now (e.g. on app activation or a manual refresh).
@@ -128,6 +131,9 @@ public struct SyncServerDataDeletionUnsupported: Error, Hashable, Sendable {
 }
 
 extension SyncStore {
+    /// Default for backends that persist every change at once: nothing to write.
+    public func flushState() async {}
+
     /// Default for backends without server data deletion: throws, changing nothing.
     public func deleteServerData(database: any SyncLocalDatabase) async throws {
         throw SyncServerDataDeletionUnsupported()

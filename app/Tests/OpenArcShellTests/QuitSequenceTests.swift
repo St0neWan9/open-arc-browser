@@ -16,6 +16,21 @@ private struct HoldingScheduler: AutosaveScheduling {
     func schedule(after delay: TimeInterval, _ work: @escaping @Sendable () async -> Void) {}
 }
 
+/// A sync store that logs `flushState` (B151); everything else does nothing.
+private actor FlushProbeSyncStore: SyncStore {
+    let log: StepLog
+    init(log: StepLog) { self.log = log }
+
+    func start(database: any SyncLocalDatabase) async throws {}
+    func stop() async {}
+    func flushState() async { await log.append("sync flush") }
+    func enqueue(_ changes: [PendingChange]) async {}
+    func syncNow() async throws {}
+    func resetLocalSyncState() async {}
+    func currentStatus() async -> SyncStatus { .disabled }
+    nonisolated func statusUpdates() -> AsyncStream<SyncStatus> { AsyncStream { $0.finish() } }
+}
+
 /// How the fake engine's `shutdown()` behaves.
 private enum ShutdownBehavior: Sendable {
     /// Hops to the main actor to shut down (like an engine that tears down views, Q11).
@@ -78,9 +93,9 @@ final class QuitSequenceTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    private func makeModel(engine: any BrowserEngine, persistence: WorkspaceStore?, center: NotificationCenter = NotificationCenter()) -> ShellModel {
+    private func makeModel(engine: any BrowserEngine, persistence: WorkspaceStore?, sync: any SyncStore = DisabledSyncStore(), center: NotificationCenter = NotificationCenter()) -> ShellModel {
         let model = ShellModel(
-            dependencies: AppDependencies(engine: engine, sync: DisabledSyncStore(), persistence: persistence),
+            dependencies: AppDependencies(engine: engine, sync: sync, persistence: persistence),
             workspace: .firstLaunch(now: Date(timeIntervalSince1970: 0)),
             now: { Date(timeIntervalSince1970: 0) },
             notificationCenter: center
@@ -140,6 +155,26 @@ final class QuitSequenceTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(elapsed, 0.45)
         XCTAssertLessThan(elapsed, 2, "quit waited past its deadline")
         XCTAssertEqual(WorkspaceStore(directory: directory).loadResult.workspace.folders.values.map(\.title), ["Saved anyway"])
+    }
+
+    /// B151: the sync store coalesces its state writes, so quitting flushes it before the engine
+    /// shuts down; the `willTerminate` fallback flushes it too.
+    func testQuitFlushesTheSyncStateBeforeEngineShutdown() async throws {
+        let log = StepLog()
+        let engine = QuitProbeEngine(.needsMainActor) { await log.append("engine shutdown") }
+        let store = WorkspaceStore(directory: directory, scheduler: HoldingScheduler())
+        let model = makeModel(engine: engine, persistence: store, sync: FlushProbeSyncStore(log: log))
+        await model.controller.prepareForTermination(engineShutdownTimeout: 1)
+        var entries = await log.entries
+        XCTAssertEqual(entries, ["sync flush", "engine shutdown"])
+
+        let center = NotificationCenter()
+        let fallbackLog = StepLog()
+        let fallbackStore = WorkspaceStore(directory: directory, scheduler: HoldingScheduler())
+        _ = makeModel(engine: QuitProbeEngine(.needsMainActor), persistence: fallbackStore, sync: FlushProbeSyncStore(log: fallbackLog), center: center)
+        center.post(name: NSApplication.willTerminateNotification, object: nil)
+        entries = await fallbackLog.entries
+        XCTAssertEqual(entries, ["sync flush"])
     }
 
     /// The per-step engine limit applies within the overall deadline too.

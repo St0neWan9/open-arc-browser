@@ -196,3 +196,21 @@ public enum WorkspaceDiff {
         }
     }
 }
+
+extension SyncRecord {
+    /// A copy with `meta.backendSystemFields` replaced (B151: comparing records apart from the
+    /// backend's opaque data).
+    func withBackendSystemFields(_ data: Data?) -> SyncRecord {
+        switch self {
+        case .profile(var v): v.meta.backendSystemFields = data; return .profile(v)
+        case .theme(var v): v.meta.backendSystemFields = data; return .theme(v)
+        case .space(var v): v.meta.backendSystemFields = data; return .space(v)
+        case .folder(var v): v.meta.backendSystemFields = data; return .folder(v)
+        case .tab(var v): v.meta.backendSystemFields = data; return .tab(v)
+        case .archiveItem(var v): v.meta.backendSystemFields = data; return .archiveItem(v)
+        case .splitLayout(var v): v.meta.backendSystemFields = data; return .splitLayout(v)
+        case .easel(var v): v.meta.backendSystemFields = data; return .easel(v)
+        case .easelElement(var v): v.meta.backendSystemFields = data; return .easelElement(v)
+        }
+    }
+}

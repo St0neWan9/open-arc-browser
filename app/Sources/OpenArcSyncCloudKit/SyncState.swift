@@ -141,15 +141,97 @@ struct PersistedSyncState: Codable, Hashable, Sendable {
         set { newerRecordVersions = newValue.isEmpty ? nil : newValue }
     }
 
+    /// Reads either container: the compressed one (`encoded()`, B151) or the plain JSON written
+    /// by builds before it. Anything unreadable, or of another format version, is a fresh state.
     static func decode(_ data: Data?) -> PersistedSyncState {
-        guard let data,
-              let state = try? JSONDecoder().decode(PersistedSyncState.self, from: data),
+        guard let data, let json = SyncStateContainer.json(from: data),
+              let state = try? JSONDecoder().decode(PersistedSyncState.self, from: json),
               state.formatVersion == currentFormatVersion
         else { return PersistedSyncState() }
         return state
     }
 
+    /// The bytes to store: the JSON, compressed (`SyncStateContainer`). The engine's own
+    /// serialization travels inside unchanged; compression is lossless.
     func encoded() -> Data? {
-        try? JSONEncoder().encode(self)
+        guard let json = try? JSONEncoder().encode(self) else { return nil }
+        return SyncStateContainer.wrap(json)
+    }
+
+    /// True when the difference from `saved` (what is on disk) must reach disk soon (B151): a
+    /// local change queued for upload, server changes waiting to be applied again, or a flag that
+    /// changes what the store does next. Losing any of these in a crash loses data or misleads the
+    /// next launch.
+    ///
+    /// Everything else is a cache the server can rebuild, and is written lazily: the engine's
+    /// serialization and our zone poll token (a stale token only fetches again, and applying the
+    /// same server copy twice changes nothing), the cached system fields (a stale change tag ends
+    /// in `serverRecordChanged`, which merges), confirmations that shrink the queue (a change sent
+    /// twice merges to nothing) and `lastSyncedAt`.
+    func needsPromptSave(comparedTo saved: PersistedSyncState) -> Bool {
+        if formatVersion != saved.formatVersion
+            || awaitingAccountReset != saved.awaitingAccountReset
+            || zoneSaved != saved.zoneSaved
+            || deletedOwnZone != saved.deletedOwnZone
+            || newerRecordVersions != saved.newerRecordVersions
+            || deferredUpserts != saved.deferredUpserts
+            || deferredDeletions != saved.deferredDeletions {
+            return true
+        }
+        guard !pending.isEmpty else { return false }
+        // A record whose change is already on disk with the same operation is covered, whatever
+        // its generation: generations only guard confirmations of sends in flight, and after a
+        // relaunch nothing is in flight. So repeated edits of one record cost one prompt write.
+        let savedChanges = Set(saved.pending.entries.map { PendingChangeKey(id: $0.id, operation: $0.operation) })
+        return pending.entries.contains { !savedChanges.contains(PendingChangeKey(id: $0.id, operation: $0.operation)) }
+    }
+
+    private struct PendingChangeKey: Hashable {
+        var id: SyncRecordID
+        var operation: PendingQueue.Operation
+    }
+
+    /// True when `lastSyncedAt` is the only difference from `saved`. Such a change waits for the
+    /// next write that has another reason (or for `flushState` / `stop`): it only feeds the
+    /// "Last synced" line, and every confirmed sync moves it.
+    func differsOnlyInLastSyncedAt(from saved: PersistedSyncState) -> Bool {
+        guard lastSyncedAt != saved.lastSyncedAt else { return false }
+        var probe = self
+        probe.lastSyncedAt = saved.lastSyncedAt
+        return probe == saved
+    }
+}
+
+// MARK: - Container
+
+/// The bytes of `sync-state.bin` (B151): a 4-byte tag, a container version byte, then the
+/// `PersistedSyncState` JSON compressed with LZFSE.
+///
+/// Most of the state is the archived CloudKit system fields of every record (about 1.6 KB each,
+/// base64 in the JSON, so several MB for a few thousand records). Those archives repeat the same
+/// class names, zone and owner, and compress about 30:1, so every write of the state is a small
+/// fraction of the plain JSON. Plain JSON (what earlier builds wrote) is still read. An earlier
+/// build reading this container sees an unreadable state and starts sync from scratch.
+enum SyncStateContainer {
+    /// "OASS": Open Arc sync state.
+    static let tag = Data([0x4F, 0x41, 0x53, 0x53])
+    static let version: UInt8 = 1
+    private static var headerLength: Int { tag.count + 1 }
+
+    static func wrap(_ json: Data) -> Data? {
+        guard let compressed = try? (json as NSData).compressed(using: .lzfse) else { return nil }
+        var data = tag
+        data.append(version)
+        data.append(compressed as Data)
+        return data
+    }
+
+    /// The JSON inside `data`: decompressed from the container, or `data` itself when it is the
+    /// plain JSON of an earlier build. nil for a container this build cannot read.
+    static func json(from data: Data) -> Data? {
+        guard data.starts(with: tag) else { return data }
+        guard data.count > headerLength, data[data.startIndex + tag.count] == version else { return nil }
+        let body = data.subdata(in: (data.startIndex + headerLength)..<data.endIndex)
+        return try? (body as NSData).decompressed(using: .lzfse) as Data
     }
 }

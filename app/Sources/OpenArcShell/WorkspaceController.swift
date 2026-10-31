@@ -1236,7 +1236,13 @@ public final class WorkspaceController: ObservableObject {
         // The tabs' back/forward lists, read while the engine still runs (plan C20).
         _ = await TerminationDeadline.run(timeout: storeFlushTimeout) { [weak self] in await self?.saveTabHistories() }
         if let store = dependencies.persistence, !store.isReadOnly {
-            _ = await TerminationDeadline.run(timeout: storeFlushTimeout) { try? await store.flush() }
+            // The sync store coalesces its state writes (B151); its flush also writes the
+            // workspace changes the state depends on.
+            let sync = dependencies.sync
+            _ = await TerminationDeadline.run(timeout: storeFlushTimeout) {
+                await sync.flushState()
+                try? await store.flush()
+            }
         }
         guard !isOffTheRecord else { return }
         let engine = dependencies.engine
@@ -1265,7 +1271,9 @@ public final class WorkspaceController: ObservableObject {
         saveTabHistoriesBlocking(timeout: timeout)
         if let store = dependencies.persistence, !store.isReadOnly {
             let done = DispatchSemaphore(value: 0)
+            let sync = dependencies.sync
             Task.detached {
+                await sync.flushState()
                 try? await store.flush()
                 done.signal()
             }
