@@ -134,6 +134,10 @@ struct WindowAppearanceApplier: NSViewRepresentable {
             didSet { apply() }
         }
 
+        /// Transparent to the mouse: as the window content's background it would otherwise take
+        /// every press and right-click that lands on a gap between the sidebar's blocks (B147).
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             apply()

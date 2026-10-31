@@ -81,10 +81,11 @@ private struct SidebarContent: View, Equatable {
         ZStack(alignment: .topLeading) {
             SidebarBackgroundFill(viewModel: viewModel)
 
-            // Right-click anywhere on the sidebar top (traffic-light row, URL box) opens the current
-            // Space's menu, the same as the Space name's "⋯". [06 §28] observed.
+            // Right-click anywhere on the sidebar background (the top bar, the gaps between the
+            // blocks, around the dock) opens the current Space's menu, the same as the Space name's
+            // "⋯". [06 §21.5, §28] observed. Blocks above it with their own menu win.
             Color.clear
-                .frame(width: layout.width, height: layout.urlBoxFrame.maxY)
+                .frame(width: layout.width, height: layout.windowSize.height)
                 .contentShape(Rectangle())
                 .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
                 .accessibilityHidden(true)

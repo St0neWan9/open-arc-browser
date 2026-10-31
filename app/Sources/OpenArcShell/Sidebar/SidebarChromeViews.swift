@@ -581,26 +581,66 @@ struct SidebarSpaceNameRowView: View {
                 // The element spans the name line (x to 259, 18 tall), like the reference.
                 .accessibilityBox(label: look.name, identifier: "openarc.sidebar.spaceName")
                 .offset(x: nameLeading, y: CGFloat(s.spaceNameTop) - layout.contentShift)
-            Menu {
-                SidebarSpaceMenu(viewModel: viewModel)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(palette.ink(\.spaceName).swiftUI.opacity(isHovering ? 1 : 0))
-                    .frame(width: moreWidth, height: CGFloat(more.height))
-                    .contentShape(Rectangle())
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .frame(width: moreWidth, height: CGFloat(more.height))
+            // A press opens the header's own context menu (the Space menu) under the button: the
+            // same system menu as a right-click, in the window's appearance. A SwiftUI `Menu`
+            // drew its own darker panel here (B147). [06 §21.5, §28] observed.
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(palette.ink(\.spaceName).swiftUI.opacity(isHovering ? 1 : 0))
+                .frame(width: moreWidth, height: CGFloat(more.height))
+                .contentShape(Rectangle())
+                .overlay(SidebarContextMenuTrigger())
+                .frame(width: moreWidth, height: CGFloat(more.height))
             .accessibilityElement(children: .ignore)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("More")
             .accessibilityIdentifier("openarc.sidebar.spaceMoreButton")
             .offset(x: CGFloat(more.maxX) - moreWidth, y: CGFloat(more.y) - layout.contentShift)
         }
+        // The header row (band, icon and name) is Space background: a right-click anywhere on it
+        // opens the Space menu; the name text took the click and showed nothing. [06 §21.5]
+        // observed. B147.
+        .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
         .onHover { isHovering = $0 }
+    }
+}
+
+/// A transparent AppKit view that, on a left press, opens the context menu its enclosing SwiftUI
+/// views declare at that spot, anchored under itself. Used by the Space header's "…" button so it
+/// shows the very menu a right-click on the header shows (B147).
+struct SidebarContextMenuTrigger: NSViewRepresentable {
+    func makeNSView(context: Context) -> TriggerView { TriggerView() }
+    func updateNSView(_ nsView: TriggerView, context: Context) {}
+
+    final class TriggerView: NSView {
+        override func mouseDown(with event: NSEvent) {
+            guard let menu = contextMenu(like: event) else { return super.mouseDown(with: event) }
+            menu.popUp(positioning: nil, at: NSPoint(x: bounds.minX, y: isFlipped ? bounds.maxY : bounds.minY), in: self)
+        }
+
+        override func accessibilityPerformPress() -> Bool {
+            guard let window, let event = NSEvent.mouseEvent(
+                with: .leftMouseDown, location: convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1) else { return false }
+            mouseDown(with: event)
+            return true
+        }
+
+        /// The menu the view hierarchy gives a right-click at this view's center.
+        func contextMenu(like event: NSEvent) -> NSMenu? {
+            guard let window else { return nil }
+            let center = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil)
+            guard let rightClick = NSEvent.mouseEvent(
+                with: .rightMouseDown, location: center, modifierFlags: [], timestamp: event.timestamp,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return nil }
+            var view: NSView? = superview
+            while let current = view {
+                if let menu = current.menu(for: rightClick) { return menu }
+                view = current.superview
+            }
+            return nil
+        }
     }
 }
 
