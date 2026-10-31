@@ -68,5 +68,11 @@ final class SidebarSpaceMenuB147Tests: XCTestCase {
         let menu = try XCTUnwrap(trigger.contextMenu(like: press))
         XCTAssertEqual(menu.items.first?.title, "Change Space Icon…")
         XCTAssertEqual(trigger.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
+        // In the app the hierarchy may offer no menu for a synthesized right-click; the button
+        // then builds the Space menu itself.
+        if #available(macOS 15, *) {
+            let fallback = try XCTUnwrap(trigger.fallbackMenu?())
+            XCTAssertEqual(fallback.items.first?.title, "Change Space Icon…")
+        }
     }
 }

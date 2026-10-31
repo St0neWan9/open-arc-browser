@@ -593,7 +593,7 @@ struct SidebarSpaceNameRowView: View {
                 .foregroundStyle(palette.ink(\.spaceName).swiftUI.opacity(isHovering ? 1 : 0))
                 .frame(width: moreWidth, height: CGFloat(more.height))
                 .contentShape(Rectangle())
-                .overlay(SidebarContextMenuTrigger())
+                .overlay(SidebarContextMenuTrigger(viewModel: viewModel))
                 .frame(width: moreWidth, height: CGFloat(more.height))
             .accessibilityElement(children: .ignore)
             .accessibilityAddTraits(.isButton)
@@ -613,12 +613,34 @@ struct SidebarSpaceNameRowView: View {
 /// views declare at that spot, anchored under itself. Used by the Space header's "…" button so it
 /// shows the very menu a right-click on the header shows (B147).
 struct SidebarContextMenuTrigger: NSViewRepresentable {
-    func makeNSView(context: Context) -> TriggerView { TriggerView() }
-    func updateNSView(_ nsView: TriggerView, context: Context) {}
+    /// Builds the Space menu itself when no right-click menu is found (macOS 15+:
+    /// `NSHostingMenu`; on 14 the press then does nothing more than a right-click would).
+    var viewModel: SidebarViewModel?
+
+    func makeNSView(context: Context) -> TriggerView {
+        let view = TriggerView()
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ nsView: TriggerView, context: Context) {
+        guard let viewModel else { nsView.fallbackMenu = nil; return }
+        nsView.fallbackMenu = {
+            guard #available(macOS 15, *) else { return nil }
+            let menu = NSHostingMenu(rootView: SidebarSpaceMenu(viewModel: viewModel))
+            menu.update()
+            return menu
+        }
+    }
 
     final class TriggerView: NSView {
+        /// The Space menu to show when the view hierarchy offers none for a right-click here.
+        var fallbackMenu: (() -> NSMenu?)?
+
         override func mouseDown(with event: NSEvent) {
-            guard let menu = contextMenu(like: event) else { return super.mouseDown(with: event) }
+            // SwiftUI's `.contextMenu` is not always reachable through `menu(for:)`; then the
+            // Space menu is built directly (B147).
+            guard let menu = contextMenu(like: event) ?? fallbackMenu?() else { return super.mouseDown(with: event) }
             menu.popUp(positioning: nil, at: NSPoint(x: bounds.minX, y: isFlipped ? bounds.maxY : bounds.minY), in: self)
         }
 
