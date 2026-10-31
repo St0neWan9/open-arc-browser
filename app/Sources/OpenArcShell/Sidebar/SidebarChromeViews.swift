@@ -159,6 +159,7 @@ struct SidebarURLBoxView: View, Equatable {
     @Environment(\.siteControlsModel) private var siteControls
     @Environment(\.translationModel) private var translation
     @Environment(\.windowSurface) private var surface
+    @Environment(\.sidebarWidth) private var sidebarWidth
     @SwiftUI.State private var isHovering = false
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.state == rhs.state }
@@ -174,7 +175,8 @@ struct SidebarURLBoxView: View, Equatable {
         let showsLock = state.showsInsecureLock
         let textStart = showsMagnifier || showsLock ? s.addressFieldTextLeadingAfterIcon : s.addressFieldTextLeading
         let textLeading = CGFloat(textStart - s.addressFieldHorizontalInset)
-        let textWidth = CGFloat(s.addressFieldTextTrailing - textStart)
+        // The text ends at the same distance from the sidebar's right edge at any width. B144.
+        let textWidth = SidebarLayout(width: sidebarWidth).trailingX(s.addressFieldTextTrailing) - CGFloat(textStart)
         let style = showsMagnifier ? Typography.addressPlaceholder : Typography.addressField
         let icon = s.addressFieldIconFrame
         ZStack(alignment: .leading) {
@@ -553,6 +555,8 @@ struct SidebarSpaceNameRowView: View {
         let style = Typography.spaceName
         let nameLeading = CGFloat(icon == nil ? s.spaceNameLeadingWithoutIcon : s.spaceNameLeadingWithIcon)
         let more = s.spaceMoreButtonFrame
+        // The name and "…" keep their distance to the sidebar's right edge. B144.
+        let shift = layout.trailingShift
         let moreWidth = isHovering ? SidebarLocalTokens.spaceMoreHoverWidth : CGFloat(more.width)
         let isDropTarget = viewModel.dropTarget == .pinnedAreaTop && spaceID == viewModel.selectedSpaceID
         ZStack(alignment: .topLeading) {
@@ -577,7 +581,7 @@ struct SidebarSpaceNameRowView: View {
                 .foregroundStyle(palette.ink(\.spaceName).swiftUI)
                 .lineLimit(1)
                 .padding(.leading, SidebarLocalTokens.textInkInset)
-                .frame(width: CGFloat(s.spaceNameTrailing) - nameLeading, height: CGFloat(style.lineHeight), alignment: .leading)
+                .frame(width: CGFloat(s.spaceNameTrailing) + shift - nameLeading, height: CGFloat(style.lineHeight), alignment: .leading)
                 // The element spans the name line (x to 259, 18 tall), like the reference.
                 .accessibilityBox(label: look.name, identifier: "openarc.sidebar.spaceName")
                 .offset(x: nameLeading, y: CGFloat(s.spaceNameTop) - layout.contentShift)
@@ -595,7 +599,7 @@ struct SidebarSpaceNameRowView: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("More")
             .accessibilityIdentifier("openarc.sidebar.spaceMoreButton")
-            .offset(x: CGFloat(more.maxX) - moreWidth, y: CGFloat(more.y) - layout.contentShift)
+            .offset(x: CGFloat(more.maxX) + shift - moreWidth, y: CGFloat(more.y) - layout.contentShift)
         }
         // The header row (band, icon and name) is Space background: a right-click anywhere on it
         // opens the Space menu; the name text took the click and showed nothing. [06 §21.5]

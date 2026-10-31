@@ -21,9 +21,11 @@ struct SidebarRowFrame<Content: View>: View {
     /// Color of the split preview block: follows the theme. [06 §15.4] observed (E17).
     var splitPreviewFill: Color = RGBAColor(hex: SidebarLocalTokens.splitPreviewRGB).swiftUI
     @ViewBuilder let content: () -> Content
+    /// The window's sidebar width (B144): the row and its fill span it.
+    @Environment(\.sidebarWidth) private var sidebarWidth
 
     var body: some View {
-        let layout = SidebarLayout()
+        let layout = SidebarLayout(width: sidebarWidth)
         let fillFrame = layout.rowFillFrame
         let radius = CGFloat(Metrics.Sidebar.selectedRowCornerRadius)
         let block = (fillFrame.width * CGFloat(Metrics.SidebarDrag.splitPreviewWidthFraction)).rounded()
@@ -579,11 +581,14 @@ struct SidebarDividerRowView: View {
     let canClear: Bool
     let isSidebarHovered: Bool
     @Environment(\.windowSurface) private var surface
+    @Environment(\.sidebarWidth) private var sidebarWidth
 
     var body: some View {
         let s = Metrics.Sidebar.self
-        let layout = SidebarLayout()
-        let lineWidth = CGFloat(s.dividerLineTrailing - s.dividerLineLeading)
+        let layout = SidebarLayout(width: sidebarWidth)
+        // The hairline and "Clear" keep their distance to the sidebar's right edge. B144.
+        let lineTrailing = layout.trailingX(s.dividerLineTrailing)
+        let lineWidth = lineTrailing - CGFloat(s.dividerLineLeading)
         let showsClear = isSidebarHovered && canClear
         ZStack(alignment: .leading) {
             Rectangle()
@@ -601,7 +606,7 @@ struct SidebarDividerRowView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .offset(x: CGFloat(s.dividerLineTrailing) - SidebarLocalTokens.clearButtonWidth)
+                .offset(x: lineTrailing - SidebarLocalTokens.clearButtonWidth)
                 .accessibilityIdentifier("openarc.sidebar.clearButton")
             }
         }

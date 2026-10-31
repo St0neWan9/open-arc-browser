@@ -80,12 +80,25 @@ struct MainWindowContent: View {
                         WindowDragStripLayer(settings: model.controller.feedback.settings, layout: layout,
                                              isBlankPage: isBlankPage, palette: palette)
                     }
+                    // The seam between the sidebar and the web panel: resize cursor and drag. B144.
+                    if (model.isSidebarVisible || model.isResizingSidebar) && !model.spaceFlow.isCreating {
+                        // While a drag has collapsed the sidebar the handle waits at the left edge.
+                        let handle = model.isSidebarVisible ? layout.sidebarResizeHandleFrame
+                            : CGRect(x: 0, y: 0, width: Metrics.Sidebar.resizeHandleWidth, height: proxy.size.height)
+                        SidebarResizeHandle(onBegin: { model.beginSidebarResize() },
+                                            onDrag: { model.updateSidebarResize(translation: $0) },
+                                            onEnd: { model.endSidebarResize() })
+                            .frame(width: handle.width, height: handle.height)
+                            .offset(x: handle.minX, y: handle.minY)
+                            .accessibilityHidden(true)
+                    }
                 }
 
                 // Hidden sidebar: it floats out over the web panel from the left edge. [06 §14] B34.
                 if model.showsSidebarPeek {
-                    SidebarPeekOverlay(sidebar: sidebar, siteControls: model.siteControls, windowSize: proxy.size)
-                        .transition(SidebarPeekOverlay.transition(windowSize: proxy.size))
+                    SidebarPeekOverlay(sidebar: sidebar, siteControls: model.siteControls, windowSize: proxy.size,
+                                       sidebarWidth: CGFloat(model.sidebarWidth))
+                        .transition(SidebarPeekOverlay.transition(sidebarWidth: CGFloat(model.sidebarWidth)))
                 }
 
                 // Peek: the link preview over the dimmed page. [06 §22] B49.
@@ -214,7 +227,8 @@ struct MainWindowContent: View {
         let sidebarSize = layout.sidebarFrame.size
         if model.spaceFlow.isCreating {
             // The dock stays at the bottom with a "Create Space" placeholder item. [06 §1] observed.
-            let dockLayout = SidebarLayout(windowSize: sidebarSize, isWebToolbarShown: layout.isWebToolbarShown)
+            let dockLayout = SidebarLayout(windowSize: sidebarSize, isWebToolbarShown: layout.isWebToolbarShown,
+                                           width: sidebarSize.width)
             ZStack(alignment: .topLeading) {
                 NewSpaceView(flow: model.spaceFlow, palette: palette)
                     .frame(width: sidebarSize.width, height: max(0, dockLayout.dockFrame.minY))
@@ -225,7 +239,7 @@ struct MainWindowContent: View {
             .frame(width: sidebarSize.width, height: sidebarSize.height, alignment: .topLeading)
         } else if model.isSidebarVisible {
             // Slides out to the left while the web panel expands. Timing: `ShellMotion.sidebarToggle`.
-            SidebarView(viewModel: sidebar)
+            SidebarView(viewModel: sidebar, width: sidebarSize.width)
                 .environment(\.siteControlsModel, model.siteControls)
                 .frame(width: sidebarSize.width, height: sidebarSize.height)
                 .overlay(alignment: .topLeading) { newSpaceIllustration(sidebarSize: sidebarSize, layout: layout, palette: palette) }
@@ -272,7 +286,7 @@ struct MainWindowContent: View {
     private func newSpaceIllustration(sidebarSize: CGSize, layout: MainWindowLayout, palette: ThemePalette) -> some View {
         if let spaceID = greetedSpaceID, spaceID == sidebar.selectedSpaceID, sidebar.snapshot.isEmptySpace {
             let list = SidebarLayout(windowSize: sidebarSize, isWebToolbarShown: layout.isWebToolbarShown,
-                                     favoritesTilesHeight: sidebar.favoritesTilesHeight)
+                                     favoritesTilesHeight: sidebar.favoritesTilesHeight, width: sidebarSize.width)
             // Below the "+ New Tab" row, centered in the rest of the list. inferred.
             let top = list.firstRowTop + list.rowPitch
             NewSpaceIllustration(tint: palette.primaryText.swiftUI) {

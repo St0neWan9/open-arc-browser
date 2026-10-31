@@ -474,7 +474,7 @@ final class SidebarSpacePagerView: NSView {
             evict()
             return
         }
-        let incomingStart = incomingPresented ?? pager.offset(for: .insertion)
+        let incomingStart = incomingPresented ?? pager.offset(for: .insertion, width: inputs.layout.width)
         let outgoingStart = presentedOffset(outgoing.host) ?? 0
         // Any third page of an overtaken slide leaves at once.
         detachAll(except: [spaceID, previous])
@@ -491,7 +491,7 @@ final class SidebarSpacePagerView: NSView {
         incoming.host.layer?.add(slideIn, forKey: SpacePagerMotion.key)
         // The outgoing page moves the same way, by the same spring, and stays out until detached.
         let slideOut = SpacePagerMotion.slide(from: outgoingStart)
-        slideOut.toValue = pager.offset(for: .removal)
+        slideOut.toValue = pager.offset(for: .removal, width: inputs.layout.width)
         slideOut.fillMode = .forwards
         slideOut.isRemovedOnCompletion = false
         outgoing.host.layer?.add(slideOut, forKey: SpacePagerMotion.key)

@@ -63,6 +63,6 @@ extension ShellModel {
     /// keeps its own layout (inferred).
     func windowLayout(size: CGSize) -> MainWindowLayout {
         MainWindowLayout(windowSize: size, isSidebarVisible: showsSidebarColumn,
-                         isWebToolbarShown: isWebToolbarShown && !library.isActive)
+                         isWebToolbarShown: isWebToolbarShown && !library.isActive, sidebarWidth: sidebarWidth)
     }
 }

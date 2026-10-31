@@ -128,7 +128,7 @@ struct IncognitoClearButton: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("openarc.sidebar.incognitoClearButton")
-            .offset(x: CGFloat(s.spaceMoreButtonFrame.x) - SidebarLocalTokens.spaceMoreHoverWidth - width,
+            .offset(x: layout.trailingX(s.spaceMoreButtonFrame.x) - SidebarLocalTokens.spaceMoreHoverWidth - width,
                         y: CGFloat(s.spaceNameTop) - layout.contentShift)
         }
     }

@@ -118,7 +118,8 @@ enum SpaceSwitchDirection: Equatable, Sendable {
 final class SpacePagerState {
     private(set) var spaceID: UUID?
     private(set) var direction: SpaceSwitchDirection = .forward
-    /// Width of one page. [07 §11] observed: 276 pt, the sidebar width.
+    /// Width of one page. [07 §11] observed: 276 pt, the sidebar width; the window's sidebar width
+    /// once resized (B144: `SidebarSpacePagerView` passes it to `offset(for:width:)`).
     let pageWidth: CGFloat
 
     init(spaceID: UUID? = nil, pageWidth: CGFloat = CGFloat(Metrics.Sidebar.width)) {
@@ -135,10 +136,11 @@ final class SpacePagerState {
 
     /// Horizontal offset of a page at the inactive end of its slide: where the incoming page
     /// starts, where the outgoing page ends.
-    func offset(for role: SpacePageRole) -> CGFloat {
+    func offset(for role: SpacePageRole, width: CGFloat? = nil) -> CGFloat {
+        let distance = width ?? pageWidth
         switch (role, direction) {
-        case (.insertion, .forward), (.removal, .backward): return pageWidth
-        case (.insertion, .backward), (.removal, .forward): return -pageWidth
+        case (.insertion, .forward), (.removal, .backward): return distance
+        case (.insertion, .backward), (.removal, .forward): return -distance
         }
     }
 }

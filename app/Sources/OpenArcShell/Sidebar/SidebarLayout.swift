@@ -1,5 +1,19 @@
 import CoreGraphics
+import SwiftUI
 import OpenArcDesign
+
+private struct SidebarWidthKey: EnvironmentKey {
+    static let defaultValue = CGFloat(Metrics.Sidebar.width)
+}
+
+extension EnvironmentValues {
+    /// The window's sidebar width (B144), for views that lay themselves out with `SidebarLayout`
+    /// (rows, the divider, the drop fill). Set by `SidebarView`; 276 (the reference) elsewhere.
+    var sidebarWidth: CGFloat {
+        get { self[SidebarWidthKey.self] }
+        set { self[SidebarWidthKey.self] = newValue }
+    }
+}
 
 /// One entry of the scrolling list, for frame computation.
 enum SidebarListItemKind: Equatable {
@@ -30,12 +44,18 @@ struct SidebarLayout: Equatable {
     /// A downloaded update waits: its pill sits right above the dock and the list ends above it.
     /// [07 §8.6] observed (B111).
     var showsUpdatePill: Bool
+    /// Sidebar width including the right-hand gap: rows and the list span all of it. The window's
+    /// resizable width (B144); `Metrics.Sidebar.width` (276) is the width of the reference
+    /// captures [07 §1, §4] observed, the default here so layouts at the reference keep their
+    /// measured values.
+    var width: CGFloat
 
     init(windowSize: CGSize = CGSize(width: Metrics.referenceWindowSize.width, height: Metrics.referenceWindowSize.height),
          isWebToolbarShown: Bool = false, hidesFavorites: Bool = false,
          favoritesTilesHeight: CGFloat = CGFloat(Metrics.FavoritesGrid.tileHeight),
-         showsUpdatePill: Bool = false) {
+         showsUpdatePill: Bool = false, width: CGFloat = CGFloat(Metrics.Sidebar.width)) {
         self.windowSize = windowSize
+        self.width = width
         self.isWebToolbarShown = isWebToolbarShown
         self.hidesFavorites = hidesFavorites
         self.favoritesTilesHeight = favoritesTilesHeight
@@ -47,7 +67,17 @@ struct SidebarLayout: Equatable {
         hidesFavorites ? 0 : favoritesTilesHeight - CGFloat(Metrics.FavoritesGrid.tileHeight)
     }
 
-    private var window: MainWindowLayout { MainWindowLayout(windowSize: windowSize, isWebToolbarShown: isWebToolbarShown) }
+    private var window: MainWindowLayout {
+        MainWindowLayout(windowSize: windowSize, isWebToolbarShown: isWebToolbarShown, sidebarWidth: Double(width))
+    }
+
+    /// How far right of its reference spot a control measured against the sidebar's right edge
+    /// sits: the width minus the reference 276. B144 (the reference values are [07 §1, §2, §4]
+    /// observed at 276; keeping their distance to the right edge is inferred).
+    var trailingShift: CGFloat { width - CGFloat(Metrics.Sidebar.width) }
+
+    /// A reference window x right of the sidebar's middle, moved with the right edge.
+    func trailingX(_ referenceX: Double) -> CGFloat { CGFloat(referenceX) + trailingShift }
 
     /// Upward shift of the favorites, Space header and list (0 with the toolbar off). [06 §17.1] observed (46).
     /// Without favorites the header and list move up another 60. [06 §20.2] observed (B48).
@@ -57,9 +87,6 @@ struct SidebarLayout: Equatable {
 
     /// Whether the URL box and the back / forward / reload buttons are in the sidebar. [06 §17.1] observed.
     var showsAddressControls: Bool { !isWebToolbarShown }
-
-    /// Sidebar width including the right-hand gap: rows and the list span all of it. [07 §1, §4] observed.
-    var width: CGFloat { CGFloat(Metrics.Sidebar.width) }
 
     /// Width available to content: the whole sidebar; content is inset 8 on both sides.
     var contentWidth: CGFloat { CGFloat(window.sidebarContentWidth) }
@@ -79,9 +106,10 @@ struct SidebarLayout: Equatable {
         CGRect(x: x, y: toolbarButtonFrameY, width: toolbarButtonSize, height: toolbarButtonSize)
     }
     var hideSidebarButtonFrame: CGRect { toolbarButton(x: Metrics.Sidebar.hideSidebarButtonX) }
-    var backButtonFrame: CGRect { toolbarButton(x: Metrics.Sidebar.backButtonX) }
-    var forwardButtonFrame: CGRect { toolbarButton(x: Metrics.Sidebar.forwardButtonX) }
-    var reloadButtonFrame: CGRect { toolbarButton(x: Metrics.Sidebar.reloadButtonX) }
+    /// Back, forward and reload keep their distance to the sidebar's right edge. B144.
+    var backButtonFrame: CGRect { toolbarButton(x: Double(trailingX(Metrics.Sidebar.backButtonX))) }
+    var forwardButtonFrame: CGRect { toolbarButton(x: Double(trailingX(Metrics.Sidebar.forwardButtonX))) }
+    var reloadButtonFrame: CGRect { toolbarButton(x: Double(trailingX(Metrics.Sidebar.reloadButtonX))) }
 
     // MARK: Blocks
 
@@ -100,7 +128,7 @@ struct SidebarLayout: Equatable {
     /// "More" strip at 261. [07 §4] observed.
     var spaceNameRowFrame: CGRect {
         let icon = Metrics.Sidebar.spaceIconFrame
-        return CGRect(x: icon.x, y: icon.y - contentShift, width: Metrics.Sidebar.spaceMoreButtonFrame.maxX - icon.x, height: icon.height)
+        return CGRect(x: icon.x, y: icon.y - contentShift, width: trailingX(Metrics.Sidebar.spaceMoreButtonFrame.maxX) - icon.x, height: icon.height)
     }
 
     /// Top of the scrolling list. [07 §1] observed (181); 46 higher with the toolbar ([06 §17.1]).
@@ -126,7 +154,7 @@ struct SidebarLayout: Equatable {
         let s = Metrics.Sidebar.self
         return CGRect(
             x: s.selectedRowHorizontalInset, y: s.selectedRowVerticalInset,
-            width: s.width - 2 * s.selectedRowHorizontalInset, height: s.selectedRowHeight
+            width: Double(width) - 2 * s.selectedRowHorizontalInset, height: s.selectedRowHeight
         )
     }
 
@@ -184,21 +212,23 @@ struct SidebarLayout: Equatable {
     /// Home button at the far left (x 8–40).
     var dockHomeFrame: CGRect { dockButton(x: Metrics.Sidebar.dockHomeX) }
     /// "+" (New Space) at the right (x 236–268).
-    var dockPlusFrame: CGRect { dockButton(x: Metrics.Sidebar.dockPlusX) }
+    var dockPlusFrame: CGRect { dockButton(x: Double(trailingX(Metrics.Sidebar.dockPlusX))) }
 
     /// Distance between the Space icons: they share x 42–234 evenly, at most one button apart.
-    /// [07 §4] observed for 7 and 8 Spaces (27.5 / 24); the cap with few Spaces is inferred.
-    static func dockItemPitch(count: Int) -> CGFloat {
+    /// [07 §4] observed for 7 and 8 Spaces (27.5 / 24); the cap with few Spaces is inferred. The
+    /// band ends 42 pt left of the sidebar's right edge at any width (B144, inferred).
+    static func dockItemPitch(count: Int, trailingShift: CGFloat = 0) -> CGFloat {
         let s = Metrics.Sidebar.self
         guard count > 0 else { return CGFloat(s.dockMaxItemPitch) }
-        return CGFloat(min((s.dockIconsTrailing - s.dockIconsLeading) / Double(count), s.dockMaxItemPitch))
+        let band = max(0, s.dockIconsTrailing + Double(trailingShift) - s.dockIconsLeading)
+        return CGFloat(min(band / Double(count), s.dockMaxItemPitch))
     }
 
     /// Frames of the Space icons in the dock (left to right). Each frame is 2 pt wider than the
     /// pitch and 34 tall, so neighbors overlap by 2. [07 §4] observed.
     func dockItemFrames(count: Int) -> [CGRect] {
         let s = Metrics.Sidebar.self
-        let pitch = Self.dockItemPitch(count: count)
+        let pitch = Self.dockItemPitch(count: count, trailingShift: trailingShift)
         let overlap = CGFloat(s.dockItemOverlap)
         let height = CGFloat(s.dockItemHeight)
         return (0..<max(count, 0)).map {

@@ -4,7 +4,7 @@ import OpenArcModel
 import OpenArcEngine
 import OpenArcDesign
 
-/// The sidebar. Fixed width (`Metrics.Sidebar.width`), full window height. Every block sits at
+/// The sidebar. The window's sidebar width (B144; 276 in the reference), full window height. Every block sits at
 /// its measured window position [07 §1, §2, §4] observed: toolbar buttons (y 7.5–39.5), URL box
 /// (46–82), favorites (90–137), Space header (145–181), the scrolling list (181 to H − 50) and
 /// the dock (H − 50 to H).
@@ -20,8 +20,13 @@ public struct SidebarView: View {
     /// View ▸ Show Toolbar: no URL box or navigation buttons here, content 46 pt higher. [06 §17.1] B43.
     @Environment(\.isWebToolbarShown) private var isWebToolbarShown
 
-    public init(viewModel: SidebarViewModel) {
+    /// Width of the sidebar area. 276 is the reference width [07 §1] observed; a window passes
+    /// its resizable width (B144).
+    private let width: CGFloat
+
+    public init(viewModel: SidebarViewModel, width: CGFloat = CGFloat(Metrics.Sidebar.width)) {
         self.viewModel = viewModel
+        self.width = width
     }
 
     public var body: some View {
@@ -41,11 +46,13 @@ public struct SidebarView: View {
             SidebarContent(viewModel: viewModel, listScroll: listScroll, isSidebarHovered: isSidebarHovered,
                            layout: SidebarLayout(windowSize: CGSize(width: proxy.size.width, height: proxy.size.height),
                                                  isWebToolbarShown: isWebToolbarShown, hidesFavorites: isIncognito,
-                                                 favoritesTilesHeight: tilesHeight, showsUpdatePill: isUpdateReady),
+                                                 favoritesTilesHeight: tilesHeight, showsUpdatePill: isUpdateReady,
+                                                 width: width),
                            onHover: { isSidebarHovered = $0 })
                 .equatable()
         }
-        .frame(width: CGFloat(Metrics.Sidebar.width))
+        .frame(width: width)
+        .environment(\.sidebarWidth, width)
     }
 }
 
