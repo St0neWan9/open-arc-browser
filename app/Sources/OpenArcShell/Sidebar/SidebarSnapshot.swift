@@ -507,8 +507,17 @@ enum SidebarURLBoxContent: Equatable {
     static let placeholderText = "Search or Enter URL…"
 
     static func make(url: URL?) -> SidebarURLBoxContent {
-        guard let url, let host = url.host, !host.isEmpty else { return .placeholder }
+        guard let url, let host = displayHost(url) else { return .placeholder }
         return .domain(host, isSecure: url.scheme?.lowercased() == "https")
+    }
+
+    /// The host as the URL box and the toolbar show it: a leading "www." is dropped, every other
+    /// subdomain stays ("www.github.com" → "github.com", "docs.github.com" stays). [06 §4]
+    /// observed (E34). nil without a host.
+    static func displayHost(_ url: URL) -> String? {
+        guard var host = url.host, !host.isEmpty else { return nil }
+        if host.lowercased().hasPrefix("www."), host.count > 4 { host.removeFirst(4) }
+        return host
     }
 
     /// Plain http pages get the red struck-through lock before the domain, in the toolbar and in
