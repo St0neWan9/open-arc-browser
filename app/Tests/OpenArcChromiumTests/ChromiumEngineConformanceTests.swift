@@ -154,6 +154,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // Plan B138: the app's reserved keys come before the page; other keys after it.
         try await checkReservedKeys(engine)
 
+        // Plan B148: choosing a saved password on a two-step sign-in page fills it (no crash).
+        try await checkPasswordFill(engine, server: identityServer, profileID: UUID())
+
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
         let crashEvents = tab.events()
