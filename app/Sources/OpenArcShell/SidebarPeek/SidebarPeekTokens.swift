@@ -25,6 +25,12 @@ enum SidebarPeekTokens {
     /// their open spot while collapsed (close x −274 vs 17) [06 §26.1, §26.2] observed. B54.
     static let collapsedOffset: CGFloat = 291
 
+    /// The travel for a resized sidebar: the panel's width plus the same 15 pt beyond it (291 at
+    /// the reference 276), so a wider panel still starts fully out of the window. B144, inferred.
+    static func collapsedOffset(sidebarWidth: CGFloat) -> CGFloat {
+        collapsedOffset + max(0, sidebarWidth - CGFloat(Metrics.Sidebar.width))
+    }
+
     /// Inset of the floating panel from the window's top, bottom and left edges.
     /// [06 §14] observed (≈ 5 pt).
     static let panelInset: CGFloat = 5
@@ -107,6 +113,8 @@ enum SidebarPeekTokens {
 /// Pure geometry of the floating panel, in window coordinates (top-left origin).
 struct SidebarPeekLayout: Equatable, Sendable {
     var windowSize: CGSize
+    /// The window's sidebar width (B144); the panel carries the sidebar at that width.
+    var sidebarWidth: CGFloat = CGFloat(Metrics.Sidebar.width)
 
     /// The rounded panel: 5 pt from the top, bottom and left edges [06 §14] observed. The whole
     /// sidebar moves with it by (5, 5): the traffic lights and the "Lock sidebar" button keep
@@ -115,14 +123,14 @@ struct SidebarPeekLayout: Equatable, Sendable {
     /// was not measured). B54.
     var panelFrame: CGRect {
         let inset = SidebarPeekTokens.panelInset
-        let width = min(CGFloat(Metrics.Sidebar.width), max(0, windowSize.width - inset))
+        let width = min(sidebarWidth, max(0, windowSize.width - inset))
         return CGRect(x: inset, y: inset, width: width, height: max(0, windowSize.height - 2 * inset))
     }
 
     /// Size of the sidebar drawn inside the panel: the panel's own size, laid out from the
     /// panel's top left like the pinned sidebar from the window's. [06 §26.2] observed. B54.
     var sidebarSize: CGSize {
-        CGSize(width: CGFloat(Metrics.Sidebar.width), height: panelFrame.height)
+        CGSize(width: sidebarWidth, height: panelFrame.height)
     }
 
     /// The left-edge hot zone: the strip outside the window left of it (inferred (analysis), B145)

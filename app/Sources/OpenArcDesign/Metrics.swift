@@ -77,9 +77,29 @@ public enum Metrics {
     // MARK: Sidebar
 
     public enum Sidebar {
-        /// Width of the sidebar area, including its right-hand gap: the web panel's left edge is
-        /// at x = 276. [07 §1] observed.
+        /// Width of the sidebar area in the reference captures, including its right-hand gap: the
+        /// web panel's left edge is at x = 276. [07 §1] observed. The sidebar is resizable (B144):
+        /// this is the width every observed x below was measured at, not the default. Controls
+        /// measured right of the middle keep their distance to the sidebar's right edge
+        /// (`SidebarLayout.trailingX`).
         public static let width: Double = 276
+
+        /// Width of a new window's sidebar. inferred (analysis): Arc's default is the favorites
+        /// grid's four 47 pt tiles with three 8 pt gaps between 8 pt insets (16 + 188 + 24 = 228);
+        /// a window without a stored width gets it, and the resize drag snaps to it. B144.
+        public static let defaultWidth: Double = 228
+        /// Narrowest and widest a drag can make the sidebar. inferred (analysis). B144.
+        public static let minimumWidth: Double = 164
+        public static let maximumWidth: Double = 500
+        /// A drag that would make the sidebar narrower than this hides it instead (dragging back
+        /// out shows it again). inferred (analysis). B144.
+        public static let collapseWidth: Double = 82
+        /// Within this distance of `defaultWidth` the drag snaps to it. inferred (analysis). B144.
+        public static let defaultWidthSnapDistance: Double = 14
+        /// The seam's drag area: 8 pt wide, centered on the sidebar's right edge (the web panel's
+        /// left edge), inset 11 pt from the window's top and bottom. inferred (analysis). B144.
+        public static let resizeHandleWidth: Double = 8
+        public static let resizeHandleVerticalInset: Double = 11
         /// Left and right inset of the sidebar content (URL box, favorites, selected row): the
         /// content spans x 8–268. [07 §1] observed.
         public static let contentInset: Double = 8

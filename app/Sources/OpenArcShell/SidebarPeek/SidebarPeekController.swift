@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import CoreGraphics
+import OpenArcDesign
 
 // Drives `SidebarPeekMachine` from pointer events and a timer. One per window, owned by
 // `ShellModel` and kept in step with `isSidebarVisible`. [06 §14] observed behavior.
@@ -49,12 +50,16 @@ final class SidebarPeekController: ObservableObject {
     /// The previous pointer position was in the left-edge zone: the strip outside the window is
     /// then the wide one (`SidebarPeekLayout.edgeZone(isInside:)`). B145.
     private var wasAtEdge = false
+    /// The window's sidebar width (B144): the floating panel, and so the zone that keeps it open,
+    /// is that wide.
+    var sidebarWidth: CGFloat = CGFloat(Metrics.Sidebar.width)
 
     /// The pointer is at `point` (window coordinates, top-left origin; negative x left of the
     /// window) in a window of `windowSize`; nil when its position is unknown.
     func pointerMoved(to point: CGPoint?, windowSize: CGSize) {
         let region = point.map {
-            SidebarPeekLayout(windowSize: windowSize).region(of: $0, presentation: machine.presentation, wasAtEdge: wasAtEdge)
+            SidebarPeekLayout(windowSize: windowSize, sidebarWidth: sidebarWidth)
+                .region(of: $0, presentation: machine.presentation, wasAtEdge: wasAtEdge)
         } ?? .outside
         wasAtEdge = region == .edge
         pointer(region)

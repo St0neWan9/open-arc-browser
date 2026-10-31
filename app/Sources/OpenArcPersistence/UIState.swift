@@ -113,16 +113,22 @@ public struct WindowUIState: Codable, Hashable, Sendable {
     public var selectedSpaceID: UUID?
     public var selectedTabID: UUID?
     public var isSidebarVisible: Bool
+    /// The window's sidebar width in points, set by dragging the seam (B144); nil = the default
+    /// width (files written before B144, or never resized). Per window, like Arc's window data
+    /// (inferred (analysis): Arc keeps the sidebar width with each window's saved state).
+    public var sidebarWidth: Double?
 
-    public init(selectedSpaceID: UUID? = nil, selectedTabID: UUID? = nil, isSidebarVisible: Bool = true) {
+    public init(selectedSpaceID: UUID? = nil, selectedTabID: UUID? = nil, isSidebarVisible: Bool = true,
+                sidebarWidth: Double? = nil) {
         self.selectedSpaceID = selectedSpaceID
         self.selectedTabID = selectedTabID
         self.isSidebarVisible = isSidebarVisible
+        self.sidebarWidth = sidebarWidth
     }
 
     /// Persisted key names; never rename.
     private enum CodingKeys: String, CodingKey {
-        case selectedSpaceID, selectedTabID, isSidebarVisible
+        case selectedSpaceID, selectedTabID, isSidebarVisible, sidebarWidth
     }
 
     /// Missing keys fall back to defaults.
@@ -131,6 +137,7 @@ public struct WindowUIState: Codable, Hashable, Sendable {
         selectedSpaceID = try c.decodeIfPresent(UUID.self, forKey: .selectedSpaceID)
         selectedTabID = try c.decodeIfPresent(UUID.self, forKey: .selectedTabID)
         isSidebarVisible = try c.decodeIfPresent(Bool.self, forKey: .isSidebarVisible) ?? true
+        sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth)
     }
 }
 

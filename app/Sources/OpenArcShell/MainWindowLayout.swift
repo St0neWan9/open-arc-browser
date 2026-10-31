@@ -15,10 +15,16 @@ public struct MainWindowLayout: Equatable, Sendable {
     /// (B49, `PeekMetrics.backgroundInset`); 0 otherwise.
     public var peekBackgroundInset: Double = 0
 
-    public init(windowSize: CGSize, isSidebarVisible: Bool = true, isWebToolbarShown: Bool = false) {
+    /// The window's sidebar width (B144): resizable by dragging the seam (`SidebarWidth`).
+    /// Defaults to the 276 of the reference captures, so the measured frames below hold there.
+    public var sidebarWidth: Double
+
+    public init(windowSize: CGSize, isSidebarVisible: Bool = true, isWebToolbarShown: Bool = false,
+                sidebarWidth: Double = Metrics.Sidebar.width) {
         self.windowSize = windowSize
         self.isSidebarVisible = isSidebarVisible
         self.isWebToolbarShown = isWebToolbarShown
+        self.sidebarWidth = sidebarWidth
     }
 
     /// The toolbar strip: the top 32 pt of the web panel, inside its rounded corners. Empty while
@@ -74,10 +80,21 @@ public struct MainWindowLayout: Equatable, Sendable {
         isWebToolbarShown ? Metrics.WebToolbar.sidebarContentShift : 0
     }
 
-    /// Sidebar area (includes its right-hand gap). [07 §1] observed
+    /// Sidebar area (includes its right-hand gap): 276 wide in the reference [07 §1] observed;
+    /// the window's `sidebarWidth` (B144).
     public var sidebarFrame: CGRect {
         guard isSidebarVisible else { return .zero }
-        return CGRect(x: 0, y: 0, width: min(Metrics.Sidebar.width, windowSize.width), height: windowSize.height)
+        return CGRect(x: 0, y: 0, width: min(sidebarWidth, windowSize.width), height: windowSize.height)
+    }
+
+    /// The seam's drag area: 8 pt centered on the sidebar's right edge, inset 11 pt from the top
+    /// and bottom. inferred (analysis), B144. Empty while the sidebar is hidden.
+    public var sidebarResizeHandleFrame: CGRect {
+        guard isSidebarVisible else { return .zero }
+        let s = Metrics.Sidebar.self
+        let height = max(0, windowSize.height - 2 * s.resizeHandleVerticalInset)
+        return CGRect(x: sidebarFrame.maxX - s.resizeHandleWidth / 2, y: s.resizeHandleVerticalInset,
+                      width: s.resizeHandleWidth, height: height)
     }
 
     /// Web panel: 10 pt from the top, right and bottom edges, flush with the sidebar on the left.
@@ -148,6 +165,6 @@ public struct MainWindowLayout: Equatable, Sendable {
     /// Width of the sidebar content area: the whole sidebar; the URL box, favorites and selected
     /// rows are inset 8 on both sides (x 8–268 of 276). [07 §1] observed.
     var sidebarContentWidth: Double {
-        Metrics.Sidebar.width
+        sidebarWidth
     }
 }

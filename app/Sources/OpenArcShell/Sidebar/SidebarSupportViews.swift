@@ -449,10 +449,11 @@ private final class SidebarEventMonitorToken {
 struct SidebarRowInteraction: ViewModifier {
     /// The row is the target of a drop *into* it (a folder receiving the dragged item).
     let isDropInto: Bool
+    @Environment(\.sidebarWidth) private var sidebarWidth
 
     func body(content: Content) -> some View {
         let radius = CGFloat(Metrics.Sidebar.selectedRowCornerRadius)
-        let fill = SidebarLayout().rowFillFrame
+        let fill = SidebarLayout(width: sidebarWidth).rowFillFrame
         content
             // The source row stays as it is (not dimmed, no gap). [06 §15.1] observed.
             .background(alignment: .topLeading) {

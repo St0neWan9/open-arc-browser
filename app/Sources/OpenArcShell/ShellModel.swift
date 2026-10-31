@@ -63,6 +63,16 @@ public final class ShellModel: ObservableObject {
     @Published public internal(set) var splitResizePreview: SplitResizePreview?
     /// Sidebar visibility (View ▸ Hide Sidebar). [01 §View] observed.
     @Published public private(set) var isSidebarVisible = true
+    /// This window's sidebar width (B144): `SidebarWidth.defaultWidth` for a new window, changed by
+    /// dragging the seam, saved with the window's UI state. inferred (analysis).
+    @Published public private(set) var sidebarWidth: Double = SidebarWidth.defaultWidth
+    /// The width when the current seam drag started; nil outside a drag.
+    private var sidebarWidthAtResizeStart: Double?
+    /// A seam drag is in progress: its handle stays on screen even while the drag has collapsed
+    /// the sidebar, so dragging back out shows it again (inferred (analysis)). B144.
+    @Published public private(set) var isResizingSidebar = false
+    /// Whether the sidebar showed when the current seam drag started.
+    private var sidebarWasVisibleAtResizeStart = true
     /// Last command the shell could not run itself (no surface for it yet). For tests/diagnostics.
     @Published public private(set) var lastUnhandledCommand: CommandBarCommand?
     /// One-time alert after launch, e.g. the workspace file was refused and nothing is saved.
@@ -185,6 +195,8 @@ public final class ShellModel: ObservableObject {
         peekChanges = sidebarPeek.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         linkPeekChanges = linkPeek.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         isSidebarVisible = window.isSidebarVisible
+        sidebarWidth = SidebarWidth.sanitized(window.sidebarWidth)
+        sidebarPeek.sidebarWidth = CGFloat(sidebarWidth)
         if let tabID = window.selectedTabID { restoreSelectedTab(tabID) }
         connectLibraryFlags()
         let preferences = controller.dependencies.preferences
@@ -260,7 +272,8 @@ public final class ShellModel: ObservableObject {
 
     /// This window's entry in `ui-state.json`.
     var windowUIState: WindowUIState {
-        WindowUIState(selectedSpaceID: selectedSpaceID, selectedTabID: selectedTabID, isSidebarVisible: isSidebarVisible)
+        WindowUIState(selectedSpaceID: selectedSpaceID, selectedTabID: selectedTabID, isSidebarVisible: isSidebarVisible,
+                      sidebarWidth: sidebarWidth == SidebarWidth.defaultWidth ? nil : sidebarWidth)
     }
 
     /// Another window asked for a tab this window shows: bring this window to the front.
@@ -627,6 +640,46 @@ public final class ShellModel: ObservableObject {
     public func toggleSidebar() {
         isSidebarVisible.toggle()
         sidebarPeek.setPinned(isSidebarVisible)
+    }
+
+    // MARK: Sidebar width (B144)
+
+    /// A drag on the seam between the sidebar and the web panel started.
+    func beginSidebarResize() {
+        sidebarWidthAtResizeStart = sidebarWidth
+        sidebarWasVisibleAtResizeStart = isSidebarVisible
+        isResizingSidebar = true
+    }
+
+    /// The seam was dragged `translation` points to the right of where the drag started.
+    /// Clamps, snaps and collapses as `SidebarWidth.resize` says; dragging back out of a collapse
+    /// shows the sidebar again. inferred (analysis).
+    func updateSidebarResize(translation: Double) {
+        guard let start = sidebarWidthAtResizeStart, sidebarWasVisibleAtResizeStart else { return }
+        switch SidebarWidth.resize(proposed: start + translation) {
+        case .width(let width):
+            if sidebarWidth != width {
+                sidebarWidth = width
+                sidebarPeek.sidebarWidth = CGFloat(width)
+            }
+            if !isSidebarVisible { toggleSidebar() }
+        case .hidden:
+            if isSidebarVisible { toggleSidebar() }
+        }
+    }
+
+    /// The seam drag ended: the width is saved with the window's UI state.
+    func endSidebarResize() {
+        guard sidebarWidthAtResizeStart != nil else { return }
+        sidebarWidthAtResizeStart = nil
+        isResizingSidebar = false
+        controller.saveUIState()
+    }
+
+    /// Sets the sidebar width directly (clamped). For restoring and tests.
+    func setSidebarWidth(_ width: Double) {
+        sidebarWidth = SidebarWidth.sanitized(width)
+        sidebarPeek.sidebarWidth = CGFloat(sidebarWidth)
     }
 
     func handle(_ request: SidebarRequest) {
