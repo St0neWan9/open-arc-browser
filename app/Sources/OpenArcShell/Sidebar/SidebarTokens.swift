@@ -111,9 +111,13 @@ enum SidebarLocalTokens {
 
     // MARK: Folder row
 
-    /// Ink opacity of the folder glyph over the row text color. unknown (looks lighter than the
-    /// title in the captures; not measured).
-    static let folderGlyphInkOpacity: Double = 0.8
+    /// Ink opacity of the folder glyph over the row text color: the closed folder's outline sits
+    /// at ≈ 70 % of the title's contrast against the sidebar (luminance 84 vs title 19 on 235).
+    /// B149 observed (2× capture, light theme).
+    static let folderGlyphInkOpacity: Double = 0.7
+    /// The closed folder's tab band (between its top edge and the flap line) is filled with the
+    /// glyph ink at this opacity. B149 observed (band luminance 182 between ink 84 and 235).
+    static let closedFolderTabFillOpacity: Double = 0.35
 
     // MARK: Space history
 

@@ -196,8 +196,17 @@ public enum Metrics {
         public static let faviconPlaceholderCornerRadius: Double = 3.5
         /// Row title right edge (window x). [07 §4] observed (text frame width 216, to 259).
         public static let rowTitleTrailing: Double = 259
-        /// Folder icon ink, centered on the row icon cell. [07 §4] observed (22.5 × 16.5, x 16–38.5).
+        /// Folder icon ink of an expanded folder (the open folder glyph), centered on the row.
+        /// [07 §4] observed (22.5 × 16.5, x 16–38.5). The capture did not record the folder's
+        /// state; since the closed glyph measures 18 × 18 (B149), this box is kept for the open
+        /// glyph (inferred).
         public static let folderGlyph = Size2D(width: 22.5, height: 16.5)
+        /// Folder icon ink of a closed folder: an outlined folder filling the 18 pt icon cell
+        /// (x 17–35), vertically centered on the row. B149 observed on a 2× Arc capture (12 closed
+        /// folders: solid ink 36 × 36 px, x 34–69 px; AA edges reach x 16.5–35.25 pt).
+        public static let closedFolderGlyph = Size2D(width: 18, height: 18)
+        /// Stroke of the closed folder outline. B149 observed (≈ 3.1 px coverage on the 2× capture).
+        public static let closedFolderStroke: Double = 1.5
         /// "+" ink of the New Tab row (x 20–31.5). [07 §4] observed.
         public static let newTabGlyph = Size2D(width: 11.5, height: 12)
         /// Extra indent per folder level. [07 §11] unknown (not measured); placeholder.
