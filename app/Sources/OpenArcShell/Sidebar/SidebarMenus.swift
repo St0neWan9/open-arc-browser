@@ -203,6 +203,25 @@ struct SidebarProfileItems: View {
     }
 }
 
+/// The sidebar URL box's menu while a page is open. [06 §28] observed (E33): Copy URL · Share ▸ ·
+/// Capture… · Capture Full Page · — · Show as Toolbar · Disable Shared Quotes; no icons, no key
+/// hints. Disable Shared Quotes is left out (the feature is not in v1, as in the toolbar menu).
+/// The web toolbar's own menu has Manage Extensions… and Show Full URL / Hide Toolbar instead.
+struct SidebarURLBoxMenu: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let tabID: UUID
+
+    var body: some View {
+        let canRequest = viewModel.canRequest
+        Button("Copy URL") { viewModel.requestFromMenu(.copyURL(tabID: tabID)) }.disabled(!canRequest)
+        WebToolbarShareMenu(url: viewModel.linkURL(for: tabID))
+        Button("Capture…") { viewModel.requestFromMenu(.capturePage(fullPage: false)) }.disabled(!canRequest)
+        Button("Capture Full Page") { viewModel.requestFromMenu(.capturePage(fullPage: true)) }.disabled(!canRequest)
+        Divider()
+        Button("Show as Toolbar") { viewModel.requestFromMenu(.showToolbar) }.disabled(!canRequest)
+    }
+}
+
 /// Space background menu (the empty sidebar, including the 8 pt gaps between favorite tiles), also
 /// behind the Space name row's "More" button (inferred). [06 §21.5] observed:
 /// Change Space Icon… · Rename Space… · Edit Theme Color… · Set Profile ▸ · — · New Folder ·
