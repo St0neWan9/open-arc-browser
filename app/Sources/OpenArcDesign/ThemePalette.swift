@@ -39,8 +39,10 @@ public struct GradientAxis: Hashable, Sendable {
 /// Window, sidebar, controls and separators are one color family per Space [07 §8] observed; the
 /// command bar, sheets and menus do not follow the theme color, only light or dark [07 §8] observed.
 public struct ThemePalette: Hashable, Sendable {
-    /// Window and sidebar background (the same color everywhere in a Space). [07 §8] inferred rule:
-    /// light = mix(theme, #EBEBEB, 0.37) on sRGB; dark = mixP3(theme, gray 180/255, 0.393).
+    /// Window and sidebar background (the same color everywhere in a Space). [07 §8.2] inferred
+    /// (analysis, B146): Arc's theme layer (the color over a white / black veil, see-through) over
+    /// the reference desktop's blur, composited in Display P3 (`ThemeDerivation.lightWindow`,
+    /// `darkVariant`, ThemeWindowLayer.swift).
     public var windowBackground: RGBAColor
     /// Fill for the address field, favorites blocks and dock highlights: window × 0.96 (darker, not
     /// lighter). [07 §8] inferred, light and dark.
@@ -282,17 +284,10 @@ public struct ChromeInkOpacities: Hashable, Sendable {
 }
 
 public enum ThemeDerivation {
-    /// Light window color = mix(theme, `windowMixGray`, `windowMixAmount`) on sRGB components.
-    /// [07 §8, §8.2] inferred: refitted over the 36 E12 presets (B38), max 2.8/255 per channel
-    /// (0.36 from the three E11 presets missed saturated green by 4.5/255). The same blend in
-    /// Display P3 fits worse (≥ 7.4/255), so the light window stays an sRGB blend.
-    public static let windowMixGray = RGBAColor(hex: 0xEBEBEB)
-    public static let windowMixAmount: Double = 0.37
-    /// Dark window color = mixP3(theme, `darkWindowGray`, `darkWindowAmount`): not black, not
-    /// desaturated. [07 §8, §8.2] inferred: fitted over the 36 E12 presets (B38), max 3.1/255 per
-    /// channel; the former "light window × 0.90" missed saturated green by 8.3/255.
-    public static let darkWindowGray: Double = 180.0 / 255
-    public static let darkWindowAmount: Double = 0.393
+    // The window colors themselves (light and dark) follow Arc's layer stack: see
+    // ThemeWindowLayer.swift (B146; replaces the fitted B38 blends mix(theme, #EBEBEB, 0.37) and
+    // mixP3(theme, 180/255, 0.393)).
+
     /// Control fill = window × 0.96. [07 §8, §10] inferred (≤ 1.4/255).
     public static let controlFillScale: Double = 0.96
     /// Separator = window × 0.87. [07 §8] inferred (thin lines on a JPEG: up to ≈ 13/255 off).
@@ -407,7 +402,8 @@ public enum ThemeDerivation {
     public static let defaultWindowStopLocations: [Double] = [0, 0.25, 0.32, 0.5, 0.75, 1]
 
     /// Theme color that the default window stops would come from under the light window rule
-    /// (`lightWindow`): the first stop solved back through mix(·, #EBEBEB, 0.37). It drives the
+    /// (`lightWindow`): the first stop solved back through the light window rule (B38's
+    /// mix(·, #EBEBEB, 0.37); B146's layer rule gives #DEDEF6 from it, 1/255 off). It drives the
     /// derived fills (controls, text, command bar selection) of a Space with no picked color.
     /// [07 §8.5] inferred; the derived control fill lands on the observed address box #D8D8EB.
     public static let defaultBaseColor = RGBAColor(hex: 0xD6D6FB)
@@ -487,14 +483,17 @@ public enum ThemeDerivation {
         return shade(color, by: 1 - amount)
     }
 
-    /// Light window color of one theme color. [07 §8] inferred.
+    /// Light window color of one theme color: the theme layer (preset strength 0.8, white veil)
+    /// over the reference backdrop, composited in Display P3. [07 §8.2] inferred (analysis: layer
+    /// math; fitted: backdrop gray). E12 max 2.7/255, E8 max 1.3/255.
     public static func lightWindow(_ color: RGBAColor) -> RGBAColor {
-        mix(color, windowMixGray, amount: windowMixAmount)
+        windowColor(color, appearance: .light, strength: presetThemeStrength, backdropGray: lightWindowBackdropGray)
     }
 
-    /// Dark window color of one theme color: a Display P3 blend toward gray 180/255. [07 §8.2] inferred.
+    /// Dark window color of one theme color: the theme layer (strength 0.74, black veil) over the
+    /// reference backdrop, composited in Display P3. [07 §8.2] inferred. E12 max 3.1/255, E8 2.5/255.
     public static func darkVariant(_ color: RGBAColor) -> RGBAColor {
-        mixInDisplayP3(color, gray: darkWindowGray, amount: darkWindowAmount)
+        windowColor(color, appearance: .dark, strength: darkThemeStrength, backdropGray: darkWindowBackdropGray)
     }
 
     /// The theme hue at a given OKLCH lightness, with the theme's chroma scaled by `chromaFactor`.
