@@ -3,6 +3,7 @@ import CoreGraphics
 import OpenArcModel
 import OpenArcEngine
 import OpenArcSyncAPI
+import OpenArcDesign
 @testable import OpenArcShell
 
 /// Plan C13: the shell draws the password save prompt and the autofill dropdown.
@@ -225,10 +226,53 @@ final class PasswordAutofillShellTests: XCTestCase {
             AutofillDropdownPlacement.height(of: [row, separator, row]),
             2 * AutofillDropdownTokens.singleLineRowHeight + AutofillDropdownTokens.separatorHeight + 2 * AutofillDropdownTokens.padding
         )
+        let credential = AutofillSuggestion(kind: .password, mainText: "ada", label: "••••")
+        XCTAssertEqual(AutofillDropdownPlacement.rowHeight(of: credential), AutofillDropdownTokens.rowHeight)
         let many = Array(repeating: row, count: 20)
         XCTAssertEqual(
             AutofillDropdownPlacement.height(of: many),
             CGFloat(AutofillDropdownTokens.maxVisibleRows) * AutofillDropdownTokens.singleLineRowHeight + 2 * AutofillDropdownTokens.padding
         )
+    }
+
+    /// Plan B148: the dropdown looks like the engine's own, which Arc ships ([00 §A]: prompts drawn
+    /// for the engine; the popup views are in Arc's engine framework, inferred (analysis)): an
+    /// 8 pt card with a 4 pt inset, 36 pt one-line rows and 52 pt two-line rows, 156–456 pt wide,
+    /// 1 pt below the field, Medium 13 credentials over a Regular 13 secondary line.
+    func testDropdownMetricsFollowTheEnginePopup() {
+        XCTAssertEqual(AutofillDropdownTokens.cornerRadius, 8)
+        XCTAssertEqual(AutofillDropdownTokens.padding, 4)
+        XCTAssertEqual(AutofillDropdownTokens.rowCornerRadius, 4)
+        XCTAssertEqual(AutofillDropdownTokens.singleLineRowHeight, 36)
+        XCTAssertEqual(AutofillDropdownTokens.rowHeight, 52)
+        XCTAssertEqual(AutofillDropdownTokens.minWidth, 156)
+        XCTAssertEqual(AutofillDropdownTokens.maxWidth, 456)
+        XCTAssertEqual(AutofillDropdownTokens.gap, 1)
+        XCTAssertEqual(AutofillDropdownTokens.iconSize, 16)
+        XCTAssertEqual(AutofillDropdownTokens.mainText, TextStyle(size: 13, weight: .medium))
+        XCTAssertEqual(AutofillDropdownTokens.secondaryText, TextStyle(size: 13))
+
+        // A sign-in dropdown: a password, a passkey (a command with a second line), a divider and
+        // a footer action. Credentials show the site globe; footer actions a gear and lighter text.
+        let password = AutofillSuggestion(kind: .password, mainText: "ada@example.com", label: "••••••")
+        let passkey = AutofillSuggestion(kind: .action, mainText: "ada@example.com", label: "Passkey")
+        let footer = AutofillSuggestion(kind: .action, mainText: "Manage Passwords…")
+        XCTAssertEqual(AutofillDropdownView.symbol(for: password), "globe")
+        XCTAssertEqual(AutofillDropdownView.symbol(for: passkey), "globe")
+        XCTAssertEqual(AutofillDropdownView.symbol(for: footer), "gearshape")
+        XCTAssertFalse(AutofillDropdownView.isFooter(passkey))
+        XCTAssertTrue(AutofillDropdownView.isFooter(footer))
+    }
+
+    /// Plan B148, inferred (analysis): with no room below the field the dropdown opens above it
+    /// only when there is more room above; otherwise it stays below (and scrolls).
+    func testDropdownOpensAboveOnlyWithMoreRoomThere() {
+        let rows = Array(repeating: AutofillSuggestion(kind: .password, mainText: "ada", label: "••••"), count: 6)
+        let panel = CGSize(width: 800, height: 400)
+        var state = AutofillPopupState(suggestions: rows, elementBounds: EngineRect(x: 20, y: 120, width: 300, height: 30))
+        XCTAssertEqual(AutofillDropdownPlacement.frame(for: state, in: panel).minY, 150 + AutofillDropdownTokens.gap, "more room below")
+        state.elementBounds = EngineRect(x: 20, y: 330, width: 300, height: 30)
+        let frame = AutofillDropdownPlacement.frame(for: state, in: panel)
+        XCTAssertEqual(frame.maxY, 330 - AutofillDropdownTokens.gap, accuracy: 0.001, "more room above")
     }
 }

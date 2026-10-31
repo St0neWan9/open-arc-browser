@@ -140,6 +140,9 @@ final class ProfileIsolationServer: @unchecked Sendable {
             case "/ua": (status, type, body) = ("200 OK", "text/html; charset=utf-8", ProfileIsolationSite.identityHTML)
             case "/webauthn": (status, type, body) = ("200 OK", "text/html; charset=utf-8", WebAuthnTestPage.html)
             // B132: a link page over http (Copy Link to Highlight is offered on http(s) pages only).
+            // B148: a two-step sign-in page (identifier, then password) for saved-password filling.
+            case "/signin", "/signin/challenge/pwd":
+                (status, type, body) = ("200 OK", "text/html; charset=utf-8", PasswordFillTestPage.html)
             case "/link": (status, type, body) = ("200 OK", "text/html; charset=utf-8", SiteIconTestImage.linkHTML)
             // B132: the site icon the command bar fetches for a never visited site.
             case "/favicon.ico":

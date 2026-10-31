@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Sat, 31 Oct 2026 16:50:34 +0700
+Subject: [PATCH] openarc: bridge: re-arm the autofill accept guard when the
+ shell's dropdown gets new rows
+
+Plan B148. AutofillPopupControllerImpl ignores a choice until its
+accidental-click guard (barrier_for_accepting_) has run, and Show() resets
+the guard whenever the dropdown is shown again for new rows (a two-step
+sign-in's password field, passkeys that arrive after the passwords).
+Chrome re-arms it from PopupViewViews::OnPaint(); the shell's dropdown has
+no Views paint, and ShellAutofillPopupView called OnPopupPainted() only
+from Show(). So after any row update every choice was ignored: the form
+was filled by the preview at most, and the dropdown stayed open over the
+page, taking clicks meant for the page.
+
+OnSuggestionsChanged() now re-arms the guard after publishing the new
+rows, as a repaint would.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ openarc/bridge/oac_autofill.mm | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/openarc/bridge/oac_autofill.mm b/openarc/bridge/oac_autofill.mm
+index d0086fe9059e..c29e02b3300c 100644
+--- a/openarc/bridge/oac_autofill.mm
++++ b/openarc/bridge/oac_autofill.mm
+@@ -615,6 +615,13 @@ void OnSuggestionsChanged(bool prefer_prev_arrow_side) override {
+       selected_ = -1;
+     }
+     Publish(/*notify=*/true);
++    // Plan B148: new rows for a dropdown that is already showing (Chrome
++    // reuses the view, for example when a sign-in page's passkeys arrive after
++    // its passwords) reset the controller's accidental-click guard, and Chrome
++    // re-arms it when its view paints the new rows. The shell redraws them, so
++    // re-arm it here as Show() does; otherwise every later choice was ignored
++    // and the dropdown stayed open.
++    controller_->OnPopupPainted();
+   }
+ 
+   bool OverlapsWithPictureInPictureWindow() const override { return false; }

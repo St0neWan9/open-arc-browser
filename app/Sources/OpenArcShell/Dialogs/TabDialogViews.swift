@@ -292,24 +292,74 @@ struct FileChooserPresenter: View {
 
 // MARK: - Autofill dropdown (C13)
 
-/// Local tokens of the autofill dropdown. Arc's dropdown is not recorded ([00 §A]: "style not
-/// captured"): all unknown, sized like a macOS menu.
+/// Local tokens of the autofill dropdown (plan B148). Arc draws the engine's own dropdown: its
+/// engine framework carries Chromium's autofill popup views (the popup, row and row-content views
+/// and Arc's own `autofill_popup_view.cc` next to them), inferred (analysis). So the look is
+/// Chromium 156's desktop popup (Arc's engine is 156.0.8078.48), restated here: a light card with
+/// an 8 pt radius and a soft shadow, a 4 pt inset around the list, 36 pt rows (52 pt with a
+/// second line), each row inset 4 pt with a 4 pt rounded hover fill, a 16 pt leading icon, the
+/// main text Medium 13 and the second line Regular 13 secondary, and a thin divider between the
+/// credentials and the footer actions ("Manage Passwords…"). inferred (analysis); the exact
+/// colors in Arc's light and dark themes need a live capture (B148 report).
 enum AutofillDropdownTokens {
-    static let minWidth: CGFloat = 220
-    static let maxWidth: CGFloat = 420
-    static let rowHeight: CGFloat = 36
-    static let singleLineRowHeight: CGFloat = 26
+    /// Narrowest dropdown; it is otherwise as wide as the field. inferred (analysis).
+    static let minWidth: CGFloat = 156
+    /// Widest dropdown. inferred (analysis).
+    static let maxWidth: CGFloat = 456
+    /// A row with one line. inferred (analysis).
+    static let singleLineRowHeight: CGFloat = 36
+    /// A row with a second line (the masked password, an address summary). inferred (analysis).
+    static let rowHeight: CGFloat = 52
+    /// A divider row: a 1 pt line with `padding` above and below. inferred (analysis).
     static let separatorHeight: CGFloat = 9
+    /// Rows shown before the list scrolls (ours; Chromium sizes by the screen). unknown.
     static let maxVisibleRows = 8
-    static let gap: CGFloat = 2
+    /// Space between the field and the dropdown (the field is taken 1 pt taller). inferred (analysis).
+    static let gap: CGFloat = 1
+    /// Card corner radius. inferred (analysis).
     static let cornerRadius: CGFloat = 8
+    /// Inset of the list inside the card, and of each row's hover fill. inferred (analysis).
     static let padding: CGFloat = 4
+    /// Hover fill corner radius. inferred (analysis).
+    static let rowCornerRadius: CGFloat = 4
+    /// Text inset from the row's hover fill (the row content's horizontal padding). inferred (analysis).
+    static let rowContentInset: CGFloat = 8
+    /// Leading icon size. inferred (analysis).
+    static let iconSize: CGFloat = 16
+    /// Space between the icon and the text. inferred (analysis).
+    static let iconSpacing: CGFloat = 12
+    /// Space between the two text lines. inferred (analysis).
+    static let lineSpacing: CGFloat = 2
+    /// Main text: Medium 13. inferred (analysis).
+    static let mainText = TextStyle(size: 13, weight: .medium)
+    /// Second line and footer actions: Regular 13. inferred (analysis).
+    static let secondaryText = TextStyle(size: 13)
+    /// Section headings: Bold 9, secondary. inferred (analysis).
+    static let titleText = TextStyle(size: 9, weight: .bold)
+    /// Hover fill: the label color at this opacity (a subtle neutral wash, not the accent).
+    /// inferred (analysis).
+    static let hoverOpacity: Double = 0.06
+    /// Shadow under the card. inferred (analysis), restated as a SwiftUI shadow.
+    static let shadowOpacity: Double = 0.18
+    static let shadowRadius: CGFloat = 6
+    static let shadowY: CGFloat = 2
 }
 
-/// Where the dropdown goes: under the field (above it when there is no room below), left-aligned
-/// (right-aligned for right-to-left fields), kept inside the panel. inferred (Chromium's popup
-/// placement).
+/// Where the dropdown goes and how big it is. inferred (analysis): Chromium's popup placement.
+/// Under the field (above it when it does not fit below and there is more room above), as wide as
+/// the field within the minimum and maximum, starting at the field's left edge (right edge for a
+/// right-to-left field), kept inside the panel.
 enum AutofillDropdownPlacement {
+    /// Height of one row.
+    static func rowHeight(of suggestion: AutofillSuggestion) -> CGFloat {
+        switch suggestion.kind {
+        case .separator: AutofillDropdownTokens.separatorHeight
+        case .title: AutofillDropdownTokens.singleLineRowHeight
+        default: suggestion.label.isEmpty ? AutofillDropdownTokens.singleLineRowHeight : AutofillDropdownTokens.rowHeight
+        }
+    }
+
+    /// The card's height: every row up to `maxVisibleRows` non-divider rows, plus the inset.
     static func height(of suggestions: [AutofillSuggestion]) -> CGFloat {
         var height: CGFloat = 0
         var rows = 0
@@ -320,7 +370,7 @@ enum AutofillDropdownPlacement {
             }
             guard rows < AutofillDropdownTokens.maxVisibleRows else { break }
             rows += 1
-            height += suggestion.label.isEmpty ? AutofillDropdownTokens.singleLineRowHeight : AutofillDropdownTokens.rowHeight
+            height += rowHeight(of: suggestion)
         }
         return height + 2 * AutofillDropdownTokens.padding
     }
@@ -334,7 +384,9 @@ enum AutofillDropdownPlacement {
         x = min(max(x, 0), max(panel.width - width, 0))
         let below = field.maxY + AutofillDropdownTokens.gap
         let above = field.minY - AutofillDropdownTokens.gap - height
-        let y = below + height <= panel.height || above < 0 ? below : above
+        let fitsBelow = below + height <= panel.height
+        let moreRoomAbove = field.minY > panel.height - field.maxY
+        let y = fitsBelow || above < 0 || !moreRoomAbove ? below : above
         return CGRect(x: x, y: y, width: width, height: height)
     }
 }
@@ -367,8 +419,11 @@ struct AutofillDropdownView: View {
             .frame(width: frame.width, height: frame.height)
             .background(
                 RoundedRectangle(cornerRadius: AutofillDropdownTokens.cornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-                    .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+                    .fill(Color(nsColor: .textBackgroundColor))
+                    .shadow(
+                        color: .black.opacity(AutofillDropdownTokens.shadowOpacity),
+                        radius: AutofillDropdownTokens.shadowRadius, y: AutofillDropdownTokens.shadowY
+                    )
             )
             .clipShape(RoundedRectangle(cornerRadius: AutofillDropdownTokens.cornerRadius, style: .continuous))
             .onHover { inside in
@@ -388,43 +443,51 @@ struct AutofillDropdownView: View {
     private func row(_ suggestion: AutofillSuggestion, index: Int) -> some View {
         switch suggestion.kind {
         case .separator:
-            Divider().frame(height: AutofillDropdownTokens.separatorHeight)
+            Divider()
+                .padding(.vertical, AutofillDropdownTokens.padding)
+                .frame(height: AutofillDropdownTokens.separatorHeight)
         case .title:
             Text(suggestion.mainText)
-                .font(Typography.settingsBody.font.weight(.semibold))
+                .font(AutofillDropdownTokens.titleText.font)
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, AutofillDropdownTokens.rowContentInset)
                 .frame(height: AutofillDropdownTokens.singleLineRowHeight, alignment: .leading)
         default:
             let highlighted = state.selectedIndex == index
-            HStack(spacing: 8) {
-                Image(systemName: Self.symbol(for: suggestion.kind))
-                    .foregroundStyle(highlighted ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 1) {
+            let isFooter = Self.isFooter(suggestion)
+            HStack(spacing: AutofillDropdownTokens.iconSpacing) {
+                Image(systemName: Self.symbol(for: suggestion))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: AutofillDropdownTokens.iconSize, height: AutofillDropdownTokens.iconSize)
+                VStack(alignment: .leading, spacing: AutofillDropdownTokens.lineSpacing) {
                     HStack(spacing: 6) {
-                        Text(suggestion.mainText).lineLimit(1)
+                        Text(suggestion.mainText)
+                            .font((isFooter ? AutofillDropdownTokens.secondaryText : AutofillDropdownTokens.mainText).font)
+                            .foregroundStyle(isFooter ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                            .lineLimit(1)
                         if !suggestion.minorText.isEmpty {
-                            Text(suggestion.minorText).lineLimit(1).foregroundStyle(highlighted ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                            Text(suggestion.minorText)
+                                .font(AutofillDropdownTokens.secondaryText.font)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
-                    .font(Typography.settingsBody.font)
                     if !suggestion.label.isEmpty {
                         Text(suggestion.label)
-                            .font(Typography.settingsBody.font)
-                            .foregroundStyle(highlighted ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                            .font(AutofillDropdownTokens.secondaryText.font)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(highlighted ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-            .padding(.horizontal, 8)
-            .frame(height: suggestion.label.isEmpty ? AutofillDropdownTokens.singleLineRowHeight : AutofillDropdownTokens.rowHeight)
+            .padding(.horizontal, AutofillDropdownTokens.rowContentInset)
+            .frame(height: AutofillDropdownPlacement.rowHeight(of: suggestion))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(highlighted ? Color.accentColor : Color.clear)
+                RoundedRectangle(cornerRadius: AutofillDropdownTokens.rowCornerRadius, style: .continuous)
+                    .fill(Color.primary.opacity(highlighted ? AutofillDropdownTokens.hoverOpacity : 0))
             )
             .contentShape(Rectangle())
             .onHover { inside in
@@ -438,14 +501,22 @@ struct AutofillDropdownView: View {
         }
     }
 
-    /// Row icon (SF Symbols; Chrome's icons are not ours to copy). unknown.
-    static func symbol(for kind: AutofillSuggestion.Kind) -> String {
-        switch kind {
-        case .password: "key.fill"
+    /// A footer action ("Manage Passwords…", "Use Passkey from Another Device", "Clear form"): a
+    /// command row with one line, drawn lighter than the credentials above it. inferred (analysis).
+    static func isFooter(_ suggestion: AutofillSuggestion) -> Bool {
+        suggestion.kind == .action && suggestion.label.isEmpty
+    }
+
+    /// Row icon (SF Symbols; the engine's icons are not ours to copy). A saved credential (a
+    /// password, or a passkey, which the engine reports as a command with a second line) shows the
+    /// site's globe, footer actions a gear, as the engine's own dropdown does. inferred (analysis).
+    static func symbol(for suggestion: AutofillSuggestion) -> String {
+        switch suggestion.kind {
+        case .password: "globe"
         case .address: "mappin.and.ellipse"
         case .creditCard: "creditcard"
         case .autocomplete, .dataList: "clock.arrow.circlepath"
-        case .action: "gearshape"
+        case .action: isFooter(suggestion) ? "gearshape" : "globe"
         case .title, .separator: "circle"
         }
     }
