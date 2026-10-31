@@ -486,9 +486,9 @@ struct SidebarSplitGroupRowView: View, Equatable {
     }
 }
 
-/// A folder row: SF Semibold 14 title, folder icon (open when expanded) with its ink drawn at
-/// `Metrics.Sidebar.folderGlyph` (22.5 × 16.5) across x 16–38.5, vertically centered on the row.
-/// [07 §3, §4] observed; [06 §3] observed.
+/// A folder row: SF Semibold 14 title, folder icon (open when expanded) vertically centered on the
+/// row: closed in the 18 pt icon cell (B149 observed), open at 22.5 × 16.5 across x 16–38.5
+/// ([07 §4] observed). [07 §3] observed; [06 §3] observed.
 struct SidebarFolderRowView: View, Equatable {
     /// What the row draws; the row does not observe the view model (see `SidebarTabRowState`).
     struct State: Equatable {
@@ -517,8 +517,8 @@ struct SidebarFolderRowView: View, Equatable {
         let style = Typography.folderRowTitle
 
         SidebarRowFrame(fill: isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear, depth: row.depth) {
-            // The glyph's ink box is the measured 22.5 × 16.5, overflowing the 18 pt cell and
-            // shifted so it spans x 16–38.5 (`SidebarFolderGlyph`). F5-32/49/59.
+            // Closed: ink fills the 18 pt cell (B149). Open: the measured 22.5 × 16.5, overflowing
+            // the cell and shifted so it spans x 16–38.5 (`SidebarFolderGlyph`). F5-32/49/59.
             Group {
                 if let icon = folder.icon {
                     // Change Icon… replaces the folder glyph. [06 §21.5] observed item (B77).
@@ -662,33 +662,95 @@ struct SidebarNewTabRowView: View {
     }
 }
 
-/// The folder glyph of a folder row: the closed (filled) or open folder symbol stretched to the
-/// measured ink box `Metrics.Sidebar.folderGlyph` (22.5 × 16.5), centered on the row and spanning
-/// x 16–38.5 ([07 §4] observed), so it overflows the 18 pt icon cell (x 17–35) by `inkOffsetX`.
-/// The symbol itself is ours (icons may differ).
+/// The folder glyph of a folder row.
+/// - Closed: our outlined folder (`SidebarClosedFolderShape`) whose ink fills the 18 pt icon cell
+///   (x 17–35), 1.5 pt stroke, the tab band lightly filled. B149 observed on a 2× Arc capture.
+/// - Expanded: the open folder symbol stretched to `Metrics.Sidebar.folderGlyph` (22.5 × 16.5),
+///   spanning x 16–38.5 ([07 §4] observed), so it overflows the cell by `inkOffsetX`.
+/// The drawings are ours (icons may differ); only the ink boxes and weights follow Arc.
 struct SidebarFolderGlyph: View {
     let isExpanded: Bool
     let ink: Color
 
-    /// Ink box. [07 §4] observed.
+    /// Ink box of the expanded glyph. [07 §4] observed.
     static var inkSize: CGSize {
         CGSize(width: Metrics.Sidebar.folderGlyph.width, height: Metrics.Sidebar.folderGlyph.height)
     }
-    /// Left edge of the ink in the row (window x). [07 §4] observed (x 16–38.5).
+    /// Ink box of the closed glyph: the icon cell. B149 observed.
+    static var closedInkSize: CGSize {
+        CGSize(width: Metrics.Sidebar.closedFolderGlyph.width, height: Metrics.Sidebar.closedFolderGlyph.height)
+    }
+    /// Left edge of the expanded ink in the row (window x). [07 §4] observed (x 16–38.5).
     static let inkLeading: CGFloat = 16
-    /// Shift of the ink's center from the icon cell's center: (16 + 38.5) / 2 − (17 + 35) / 2.
+    /// Shift of the expanded ink's center from the icon cell's center: (16 + 38.5) / 2 − (17 + 35) / 2.
     static var inkOffsetX: CGFloat {
         let cellCenter = CGFloat(Metrics.Sidebar.rowIconLeading + Metrics.Sidebar.rowIconSize / 2)
         return inkLeading + inkSize.width / 2 - cellCenter
     }
 
+    /// Ink box of the glyph for a folder state.
+    static func inkBox(isExpanded: Bool) -> CGSize { isExpanded ? inkSize : closedInkSize }
+
     var body: some View {
-        let size = Self.inkSize
-        Image(systemName: isExpanded ? "folder" : "folder.fill")
-            .resizable()
+        if isExpanded {
+            let size = Self.inkSize
+            Image(systemName: "folder")
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .foregroundStyle(ink)
+                .offset(x: Self.inkOffsetX)
+                .accessibilityHidden(true)
+        } else {
+            let size = Self.closedInkSize
+            let line = CGFloat(Metrics.Sidebar.closedFolderStroke)
+            ZStack {
+                SidebarClosedFolderShape(part: .tabBand).fill(ink.opacity(SidebarLocalTokens.closedFolderTabFillOpacity))
+                SidebarClosedFolderShape(part: .outline).stroke(ink, style: StrokeStyle(lineWidth: line, lineJoin: .round))
+            }
             .frame(width: size.width, height: size.height)
-            .foregroundStyle(ink)
-            .offset(x: Self.inkOffsetX)
             .accessibilityHidden(true)
+        }
+    }
+}
+
+/// Our closed folder drawing in a square box: a rounded body with a tab on the upper left, a flap
+/// line across under the tab, and the band between the top outline and the flap. Stroke centers sit
+/// half a stroke inside the box, so a 1.5 pt stroke inks the whole box. Proportions follow the
+/// B149 capture (tab top over the left ≈ 45 % of the width, shelf ≈ 2 pt lower, flap ≈ 4 pt below
+/// the top), in our own geometry.
+struct SidebarClosedFolderShape: Shape {
+    enum Part { case outline, tabBand }
+    var part: Part
+
+    func path(in rect: CGRect) -> Path {
+        let u = rect.width / 18, v = rect.height / 18
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * u, y: rect.minY + y * v) }
+        let edge: CGFloat = 0.75, far: CGFloat = 17.25, radius: CGFloat = 2.25
+        let tabTop = edge, shelf: CGFloat = 2.75, flap: CGFloat = 4.75
+        let tabEnd: CGFloat = 8, slopeEnd: CGFloat = 10.5
+        var top = Path()
+        top.move(to: p(edge, flap))
+        top.addLine(to: p(edge, tabTop + radius))
+        top.addQuadCurve(to: p(edge + radius, tabTop), control: p(edge, tabTop))
+        top.addLine(to: p(tabEnd, tabTop))
+        top.addLine(to: p(slopeEnd, shelf))
+        top.addLine(to: p(far - radius, shelf))
+        top.addQuadCurve(to: p(far, shelf + radius), control: p(far, shelf))
+        top.addLine(to: p(far, flap))
+        switch part {
+        case .tabBand:
+            top.closeSubpath()
+            return top
+        case .outline:
+            var path = top
+            path.addLine(to: p(far, far - radius))
+            path.addQuadCurve(to: p(far - radius, far), control: p(far, far))
+            path.addLine(to: p(edge + radius, far))
+            path.addQuadCurve(to: p(edge, far - radius), control: p(edge, far))
+            path.closeSubpath()
+            path.move(to: p(edge, flap))
+            path.addLine(to: p(far, flap))
+            return path
+        }
     }
 }
