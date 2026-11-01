@@ -181,5 +181,18 @@
 	<string>Websites you visit in Open Arc can ask for your location, for example to show nearby results.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Websites you visit in Open Arc can ask for your location, for example to show nearby results.</string>
+	<!-- macOS ends an app at once (TCC) when the engine touches these without a description.
+	     Bluetooth: passkey sign-in with a phone or security key (hybrid caBLE), and Web Bluetooth;
+	     Chromium checks the Bluetooth permission when a site asks for a passkey (e.g. Google
+	     sign-in), which crashed 0.1.0–0.1.5 (B154). Audio capture: Web Audio / screen capture with
+	     sound. Local network: WebRTC and local devices. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Websites you visit in Open Arc can use Bluetooth, for example to sign in with a passkey on your phone or a security key.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Websites you visit in Open Arc can use Bluetooth, for example to sign in with a passkey on your phone or a security key.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Websites you visit in Open Arc can ask to record audio from your Mac, for example when you share your screen with sound.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Websites you visit in Open Arc can connect to devices on your local network, for example for video calls or casting.</string>
 </dict>
 </plist>

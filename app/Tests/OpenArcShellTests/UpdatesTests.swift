@@ -224,6 +224,19 @@ final class UpdatesTests: XCTestCase {
         XCTAssertEqual(UpdateConfiguration(infoDictionary: plist), .ready(feedURL: UpdateConfiguration.hostedFeedURL))
     }
 
+    /// Every privacy-sensitive service the engine can touch has a usage description: without one
+    /// macOS ends the app at once (B154: Bluetooth, reached through the passkey check on Google
+    /// sign-in, crashed 0.1.0–0.1.5).
+    func testInfoPlistTemplateHasUsageDescriptions() throws {
+        let plist = try bundleInfoPlist()
+        for key in ["NSBluetoothAlwaysUsageDescription", "NSBluetoothPeripheralUsageDescription",
+                    "NSCameraUsageDescription", "NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription",
+                    "NSLocationUsageDescription", "NSLocationWhenInUseUsageDescription", "NSLocalNetworkUsageDescription"] {
+            let text = try XCTUnwrap(plist[key] as? String, key)
+            XCTAssertFalse(text.isEmpty, key)
+        }
+    }
+
     /// The template is the release build: its id, and exported drag types named `<id>.<name>`,
     /// the prefix make-app.sh --dev rewrites (plan B37).
     func testInfoPlistTemplateExportsTypesUnderTheReleaseIdentifier() throws {
