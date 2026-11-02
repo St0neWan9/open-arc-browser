@@ -28,10 +28,13 @@
 //   it when the provisioning profile allows it) and the tab is in a window. Without the
 //   entitlement the engine never offers them. Choosing one hands over to macOS's own passkey
 //   sheet (first: its "Passkeys Access for Web Browsers" consent), and this dialog closes.
+// - Phones and tablets (hybrid / caBLE, plan B155): the dialog shows a QR code (`phoneQRCode`)
+//   that the phone's camera scans; the phone then talks to this Mac over Bluetooth and the
+//   internet. Needs the app's NSBluetoothAlwaysUsageDescription (B154) and the user's Bluetooth
+//   permission; the steps before the QR code ask to turn Bluetooth on or to allow it.
 // Not supported:
-// - Phones and tablets as security keys (hybrid / caBLE, needs Bluetooth and the QR flow); the
-//   bridge leaves that method out.
-// - Google Password Manager passkeys (need a signed-in Google account).
+// - Google Password Manager passkeys (need a signed-in Google account). Such steps arrive as
+//   `OACWebAuthnErrorKindUnsupported`.
 //
 // The look is not in docs/arc-spec (00 §A records the dialog exists; style unknown).
 
@@ -77,6 +80,22 @@ typedef NS_ENUM(NSInteger, OACWebAuthnStep) {
     OACWebAuthnStepPrivateWindowWarning = 12,
     /// The request failed (`errorKind`); accept retries when `canRetry`.
     OACWebAuthnStepError = 13,
+    /// Plan B155: scan `phoneQRCode` with a phone or tablet (no button; the phone answers). When
+    /// `phoneStepAcceptsSecurityKey`, a security key can be used here too.
+    OACWebAuthnStepPhoneQRCode = 14,
+    /// The phone was found; connecting to it (no button).
+    OACWebAuthnStepPhoneConnecting = 15,
+    /// Connected: the user continues on the phone (no button).
+    OACWebAuthnStepPhoneConnected = 16,
+    /// Bluetooth is off and the app can turn it on: accept turns it on (then `isBusy` until the
+    /// engine moves on by itself).
+    OACWebAuthnStepTurnOnBluetooth = 17,
+    /// Bluetooth is off and only the user can turn it on: accept continues once
+    /// `bluetoothIsPowered` (the dialog updates when the power changes).
+    OACWebAuthnStepBluetoothOff = 18,
+    /// macOS denied this app Bluetooth: accept opens System Settings ▸ Privacy & Security ▸
+    /// Bluetooth. A permission granted there applies after the app is reopened.
+    OACWebAuthnStepBluetoothPermission = 19,
 };
 
 typedef NS_ENUM(NSInteger, OACWebAuthnErrorKind) {
@@ -101,10 +120,12 @@ typedef NS_ENUM(NSInteger, OACWebAuthnErrorKind) {
     OACWebAuthnErrorKindMissingCapability = 9,
     /// The key has no room for another passkey.
     OACWebAuthnErrorKindStorageFull = 10,
-    /// A method this app does not support (phone, Bluetooth, cloud passkeys).
+    /// A step this app has no view for (Google Password Manager, Windows Hello).
     OACWebAuthnErrorKindUnsupported = 11,
     /// Any other failure.
     OACWebAuthnErrorKindOther = 12,
+    /// Plan B155: the phone or tablet could not be reached (Bluetooth or internet on either side).
+    OACWebAuthnErrorKindPhoneConnectionFailed = 13,
 };
 
 typedef NS_ENUM(NSInteger, OACWebAuthnPINError) {
@@ -132,6 +153,9 @@ typedef NS_ENUM(NSInteger, OACWebAuthnMechanismKind) {
     /// A passkey for one account in iCloud Keychain (`title`: the account; `subtitle`: the app
     /// that holds it, may be empty). macOS shows its own sheet next.
     OACWebAuthnMechanismKindPasskeyInICloudKeychain = 5,
+    /// Plan B155: use a phone or tablet (shows a QR code next; with `phoneStepAcceptsSecurityKey`
+    /// a security key works there too).
+    OACWebAuthnMechanismKindPhone = 6,
 };
 
 /// One way to continue (a row of the method list).
@@ -192,8 +216,16 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 @property (nonatomic, readonly) NSInteger bioSamplesTotal;
 /// The engine is busy (no input until the next update).
 @property (nonatomic, readonly) BOOL isBusy;
+/// Plan B155: the text of the QR code for `OACWebAuthnStepPhoneQRCode` ("FIDO:/…"); empty in other
+/// steps.
+@property (nonatomic, readonly, copy) NSString *phoneQRCode;
+/// The phone step (and the phone method) also takes a security key.
+@property (nonatomic, readonly) BOOL phoneStepAcceptsSecurityKey;
+/// Bluetooth is on (`OACWebAuthnStepBluetoothOff` can continue).
+@property (nonatomic, readonly) BOOL bluetoothIsPowered;
 
-/// The step's main button: continue, create, try again, done (see `OACWebAuthnStep`).
+/// The step's main button: continue, create, try again, done, turn on Bluetooth, open System
+/// Settings (see `OACWebAuthnStep`).
 - (void)accept;
 /// Chooses `mechanisms[index]`.
 - (void)selectMechanismAtIndex:(NSInteger)index NS_SWIFT_NAME(selectMechanism(at:));

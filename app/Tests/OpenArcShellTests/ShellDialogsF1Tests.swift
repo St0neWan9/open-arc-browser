@@ -208,6 +208,105 @@ final class ShellDialogsF1Tests: XCTestCase {
         XCTAssertEqual(WebAuthnPresentation.rowCommand(for: state, row: 2), .selectMechanism(2))
     }
 
+    /// Plan B155 ([00 §A] inferred; look unknown in docs/arc-spec, layout inferred from
+    /// Chromium's sheet): phones and tablets. The method row, the QR step (code drawn from the
+    /// engine's text, no main button), connecting / connected (no "use another method"), and the
+    /// Bluetooth steps with what their main button does.
+    func testWebAuthnPresentationPhoneSteps() throws {
+        var state = WebAuthnState(
+            operation: .signIn, relyingPartyID: "accounts.google.com", step: .chooseMethod,
+            mechanisms: [.init(kind: .phone), .init(kind: .securityKey)]
+        )
+        var presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.rows.map(\.title), ["Phone or tablet", "Security key"])
+        XCTAssertEqual(presentation.rows.first?.detail, "Scan a QR code")
+        XCTAssertEqual(WebAuthnPresentation.rowCommand(for: state, row: 0), .selectMechanism(0))
+        state.phoneStepAcceptsSecurityKey = true
+        XCTAssertEqual(WebAuthnPresentation(state).rows.first?.title, "Phone, tablet or security key")
+
+        // QR code shown.
+        let code = "FIDO:/1234567890123456789012345678901234567890"
+        state.step = .phoneQRCode
+        state.phoneQRCode = code
+        state.canChooseAnotherMethod = true
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.title, "Use a phone or tablet")
+        XCTAssertEqual(presentation.qrCode, code)
+        XCTAssertTrue(presentation.message.contains("accounts.google.com"))
+        XCTAssertTrue(presentation.message.contains("security key"))
+        XCTAssertNil(presentation.acceptTitle)
+        XCTAssertTrue(presentation.showsChooseAnotherMethod)
+        XCTAssertTrue(presentation.rows.isEmpty)
+        let image = try XCTUnwrap(WebAuthnQRCodeView.image(for: code), "CoreImage encodes the caBLE text")
+        XCTAssertEqual(image.width, image.height)
+        XCTAssertGreaterThanOrEqual(image.width, 21, "at least a version 1 QR code")
+        // No text yet: no code is drawn (never an empty or stale one).
+        state.phoneQRCode = ""
+        XCTAssertNil(WebAuthnPresentation(state).qrCode)
+
+        // Connecting, connected: the phone is in charge.
+        state.step = .phoneConnecting
+        state.canChooseAnotherMethod = false
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.title, "Connecting to your device")
+        XCTAssertTrue(presentation.showsProgress)
+        XCTAssertNil(presentation.qrCode)
+        XCTAssertFalse(presentation.showsChooseAnotherMethod)
+        state.step = .phoneConnected
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.title, "Continue on your device")
+        XCTAssertNil(presentation.acceptTitle)
+
+        // The phone could not be reached: a real reason, not "this method isn't available".
+        state.step = .error(.phoneConnectionFailed)
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.title, "Couldn’t connect to your device")
+        XCTAssertTrue(presentation.message.contains("Bluetooth"))
+        XCTAssertNil(presentation.acceptTitle)
+
+        // Bluetooth off, the app can turn it on.
+        state.step = .turnOnBluetooth
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.acceptTitle, "Turn On")
+        XCTAssertTrue(presentation.acceptEnabled)
+        XCTAssertEqual(try WebAuthnPresentation.acceptCommand(for: state, pin: "", confirmation: "").get(), .accept)
+
+        // Bluetooth off, only the user can turn it on: Continue waits for power.
+        state.step = .bluetoothOff
+        state.bluetoothIsPowered = false
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.title, "Bluetooth is off")
+        XCTAssertFalse(presentation.acceptEnabled)
+        state.bluetoothIsPowered = true
+        XCTAssertTrue(WebAuthnPresentation(state).acceptEnabled)
+
+        // Permission denied: the main button opens System Settings, and the text names the pane.
+        state.step = .bluetoothPermission
+        presentation = WebAuthnPresentation(state)
+        XCTAssertEqual(presentation.acceptTitle, "Open System Settings")
+        XCTAssertTrue(presentation.message.contains("Privacy & Security ▸ Bluetooth"))
+
+        // Steps without a view say so without blaming the method the user chose.
+        state.step = .error(.unsupported)
+        XCTAssertFalse(WebAuthnPresentation(state).message.contains("This method isn’t available"))
+    }
+
+    /// Plan B155: the QR sheet in the queue follows the session (QR, then connecting), and Cancel
+    /// answers the request.
+    func testWebAuthnPhoneSheetFollowsTheSession() async throws {
+        let live = try await openPage("https://accounts.google.com")
+        let center = model.controller.dialogs
+        let (id, session) = live.simulateWebAuthnDialog(WebAuthnState(
+            operation: .signIn, relyingPartyID: "google.com", step: .phoneQRCode, phoneQRCode: "FIDO:/42"
+        ))
+        try await waitUntil { center.current(for: live.id)?.id == id }
+        XCTAssertEqual(DialogPresentation(try XCTUnwrap(center.current(for: live.id))).title, "Use a phone or tablet")
+        session.update(WebAuthnState(operation: .signIn, relyingPartyID: "google.com", step: .phoneConnecting))
+        XCTAssertEqual(DialogPresentation(try XCTUnwrap(center.current(for: live.id))).title, "Connecting to your device")
+        XCTAssertTrue(center.answer(id, with: .webAuthn(.cancel)))
+        XCTAssertEqual(live.dialogAnswers[id], .webAuthn(.cancel))
+    }
+
     /// The live sheet: queued like the other tab-modal dialogs, Cancel answers it, and the engine
     /// withdrawing it (macOS took over) removes it.
     func testWebAuthnSheetInTheQueue() async throws {

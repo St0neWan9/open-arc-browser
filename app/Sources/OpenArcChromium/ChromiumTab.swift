@@ -1026,7 +1026,10 @@ extension WebAuthnState {
             minimumPINLength: dialog.minimumPINLength,
             bioSamplesRemaining: dialog.bioSamplesRemaining >= 0 ? dialog.bioSamplesRemaining : nil,
             bioSamplesTotal: dialog.bioSamplesTotal >= 0 ? dialog.bioSamplesTotal : nil,
-            isBusy: dialog.isBusy
+            isBusy: dialog.isBusy,
+            phoneQRCode: dialog.phoneQRCode,
+            phoneStepAcceptsSecurityKey: dialog.phoneStepAcceptsSecurityKey,
+            bluetoothIsPowered: dialog.bluetoothIsPowered
         )
     }
 
@@ -1047,6 +1050,12 @@ extension WebAuthnState {
         case .createPasskey: .createPasskey
         case .privateWindowWarning: .privateWindowWarning
         case .error: .error(error(dialog.errorKind))
+        case .phoneQRCode: .phoneQRCode
+        case .phoneConnecting: .phoneConnecting
+        case .phoneConnected: .phoneConnected
+        case .turnOnBluetooth: .turnOnBluetooth
+        case .bluetoothOff: .bluetoothOff
+        case .bluetoothPermission: .bluetoothPermission
         @unknown default: .error(.other)
         }
     }
@@ -1064,6 +1073,7 @@ extension WebAuthnState {
         case .missingCapability: .missingCapability
         case .storageFull: .storageFull
         case .unsupported: .unsupported
+        case .phoneConnectionFailed: .phoneConnectionFailed
         case .none, .other: .other
         @unknown default: .other
         }
@@ -1077,6 +1087,7 @@ extension WebAuthnState {
         case .other: .other
         case .iCloudKeychain: .iCloudKeychain
         case .passkeyInICloudKeychain: .passkeyInICloudKeychain
+        case .phone: .phone
         @unknown default: .other
         }
     }

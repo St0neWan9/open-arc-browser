@@ -35,6 +35,13 @@ enum WebAuthnTestPage {
         challenge: challenge(), rpId: 'localhost', allowCredentials: [], userVerification: 'preferred'}}));
       return 'started';
     }
+    // B155: a credential that may live on a phone, with the hybrid hint: Chrome goes to the QR code.
+    function runPhone() {
+      report('phone:', navigator.credentials.get({publicKey: {
+        challenge: challenge(), rpId: 'localhost', userVerification: 'preferred', hints: ['hybrid'],
+        allowCredentials: [{type: 'public-key', id: new Uint8Array([1, 5, 5]), transports: ['hybrid']}]}}));
+      return 'started';
+    }
     function runCreate() {
       report('create:', navigator.credentials.create({publicKey: {
         challenge: challenge(), rp: {id: 'localhost', name: 'B130'},
@@ -144,6 +151,70 @@ extension ChromiumEngineConformanceTests {
         try await chooseICloudKeychain(in: create)
         try await waitUntil("the engine withdraws the create dialog") { create.reply.isFinished }
         try await waitForState(tab) { $0.title == "create:InvalidStateError" }
+
+        await engine.closeTab(tab.id)
+    }
+
+    /// Plan B155: the phone / tablet (hybrid) path with the bridge's stand-in Bluetooth adapter
+    /// (`--openarc-fake-bluetooth=off`: present, allowed, off until turned on, never finds a phone).
+    /// The real handshake needs a phone, so this checks what the engine owns: "turn on Bluetooth"
+    /// turns it on, the QR step arrives with Chrome's caBLE QR text, the phone method is in the
+    /// list, and Cancel answers the page. Runs after `checkICloudKeychainPasskeys` (whose requests
+    /// leave Bluetooth off).
+    /// Look: unknown in docs/arc-spec; behavior inferred from Chromium's flow.
+    @MainActor
+    func checkPhonePasskeys(_ engine: ChromiumEngine, server: ProfileIsolationServer) async throws {
+        let tab = try await engine.makeTab(TabConfiguration(profileID: UUID()))
+        let host = WindowSurfaceHost()
+        tab.surface.attach(to: host)
+        defer {
+            tab.surface.detach()
+            host.window.close()
+        }
+        let url = try XCTUnwrap(URL(string: "http://localhost:\(server.port)/webauthn"))
+        try await tab.load(url)
+        try await waitForState(tab) { $0.title == "webauthn" && !$0.loadState.isLoading }
+
+        let inbox = DialogInbox(tab.dialogRequests())
+        defer { inbox.stop() }
+
+        // The hybrid hint takes Chrome to the phone; Bluetooth is off, so it asks to turn it on.
+        let started = try await tab.evaluateJavaScript("runPhone()")
+        XCTAssertEqual(started, "started")
+        let dialog = try await nextWebAuthnDialog(inbox, after: 0)
+        try await waitUntil("turn-on step: \(dialog.session.state.step)") {
+            dialog.session.state.step == .turnOnBluetooth
+        }
+        XCTAssertFalse(dialog.session.state.bluetoothIsPowered)
+        dialog.session.send(.accept)
+        // Powered on: //chrome continues to the QR code by itself.
+        try await waitUntil("QR step: \(dialog.session.state.step)") {
+            dialog.session.state.step == .phoneQRCode
+        }
+        let qr = dialog.session.state
+        XCTAssertTrue(qr.phoneQRCode.hasPrefix("FIDO:/"), "caBLE QR text: \(qr.phoneQRCode)")
+        XCTAssertGreaterThan(qr.phoneQRCode.count, 20)
+        XCTAssertTrue(qr.bluetoothIsPowered)
+
+        // Back to the list: the phone is one of the methods, and choosing it shows a QR code again.
+        if qr.canChooseAnotherMethod {
+            dialog.session.send(.chooseAnotherMethod)
+            try await waitUntil("method list: \(dialog.session.state.step)") {
+                dialog.session.state.step == .chooseMethod
+            }
+            let phone = try XCTUnwrap(dialog.session.state.mechanisms.firstIndex { $0.kind == .phone },
+                                      "no phone method in \(dialog.session.state.mechanisms)")
+            dialog.session.send(.selectMechanism(phone))
+            try await waitUntil("QR step again: \(dialog.session.state.step)") {
+                dialog.session.state.step == .phoneQRCode && !dialog.session.state.phoneQRCode.isEmpty
+            }
+        } else {
+            XCTAssertEqual(qr.mechanisms.map(\.kind).filter { $0 == .phone }.count, 1, "\(qr.mechanisms)")
+        }
+
+        // Cancel answers the page.
+        XCTAssertTrue(dialog.reply.send(.cancel))
+        try await waitForState(tab) { $0.title == "phone:NotAllowedError" }
 
         await engine.closeTab(tab.id)
     }

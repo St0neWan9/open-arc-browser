@@ -34,10 +34,14 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // --openarc-fake-device-reauth (plan B152, tests only): scripted answers to the
         // reauthentication before filling a saved password (cancel, then success). Only the
         // profile that turns that setting on asks (`checkPasswordFillReauth`).
+        // --openarc-fake-bluetooth=off (plan B155, tests only): a Bluetooth adapter that is allowed,
+        // starts off and turns on when asked, so the phone (hybrid) path shows "turn on Bluetooth"
+        // and then its QR code without real Bluetooth.
         try PasswordFillReauth.prepareLocalState(in: dataDirectory)
         let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: [
             "--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--use-mock-keychain",
             "--openarc-fake-icloud-keychain", "--openarc-fake-device-reauth=fail,pass",
+            "--openarc-fake-bluetooth=off",
         ])
         XCTAssertTrue(engine.engineVersion.hasPrefix("Chromium "))
 
@@ -151,6 +155,8 @@ final class ChromiumEngineConformanceTests: XCTestCase {
 
         // Plan B130: iCloud Keychain passkeys through the tab's window, with the fake keychain.
         try await checkICloudKeychainPasskeys(engine, server: identityServer)
+        // Plan B155: phones and tablets (QR code), with the stand-in Bluetooth adapter.
+        try await checkPhonePasskeys(engine, server: identityServer)
 
         // B132: site icons for never visited sites; the page menu's Services requestor.
         try await checkSmallGapsB132(engine, server: identityServer, profileID: UUID())

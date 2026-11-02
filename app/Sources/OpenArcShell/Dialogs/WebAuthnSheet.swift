@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreImage
 import OpenArcEngine
 import OpenArcDesign
 
@@ -7,6 +8,12 @@ import OpenArcDesign
 // ours (unknown). Behavior is the engine's: each step of its flow arrives as a `WebAuthnState`
 // (OACWebAuthn.h), and the buttons send `WebAuthnCommand`s. Cancel answers the request (the page gets
 // NotAllowedError); everything else keeps it open until the engine withdraws it.
+//
+// Plan B155, phones and tablets (hybrid): the method list offers "Phone or tablet"; its step shows a
+// QR code the phone's camera scans, then "connecting" and "continue on your phone". Bluetooth must
+// be allowed and on first; those steps say how. Arc's look of these steps is not recorded in
+// docs/arc-spec (unknown); the layout follows the rest of this sheet with the QR code centered,
+// inferred from Chromium's own sheet.
 
 /// What the sheet shows for one state. No UI types, so it is unit-testable.
 public struct WebAuthnPresentation: Equatable, Sendable {
@@ -31,6 +38,10 @@ public struct WebAuthnPresentation: Equatable, Sendable {
     public var rows: [Row]
     /// The main button, if the step has one (Return).
     public var acceptTitle: String?
+    /// The main button can be pressed (besides `isBusy`): Bluetooth's "Continue" waits for power.
+    public var acceptEnabled: Bool
+    /// Plan B155: the text to draw as a QR code (`.phoneQRCode`), else nil.
+    public var qrCode: String?
     public var showsChooseAnotherMethod: Bool
     /// The step waits for the security key or the engine (a spinner).
     public var showsProgress: Bool
@@ -42,6 +53,8 @@ public struct WebAuthnPresentation: Equatable, Sendable {
         input = .none
         rows = []
         acceptTitle = nil
+        acceptEnabled = true
+        qrCode = nil
         showsChooseAnotherMethod = state.canChooseAnotherMethod
         showsProgress = state.isBusy
         errorText = nil
@@ -56,7 +69,7 @@ public struct WebAuthnPresentation: Equatable, Sendable {
             } else {
                 shown = state.mechanisms
             }
-            rows = shown.map { Self.row(for: $0) }
+            rows = shown.map { Self.row(for: $0, acceptsSecurityKey: state.phoneStepAcceptsSecurityKey) }
         case .securityKey:
             title = "Use your security key"
             message = "Insert your security key and touch it."
@@ -115,6 +128,35 @@ public struct WebAuthnPresentation: Equatable, Sendable {
             title = "You’re in a private window"
             message = "A passkey you save will stay on this Mac after you close the window."
             acceptTitle = "Continue"
+        case .phoneQRCode:
+            title = "Use a phone or tablet"
+            let action = creating ? "save a passkey for \(site)" : "sign in to \(site)"
+            message = "Scan this QR code with the camera of your phone or tablet to \(action)."
+            if state.phoneStepAcceptsSecurityKey {
+                message += " You can also use a security key."
+            }
+            qrCode = state.phoneQRCode.isEmpty ? nil : state.phoneQRCode
+        case .phoneConnecting:
+            title = "Connecting to your device"
+            message = "Keep your phone or tablet nearby with Bluetooth on."
+            showsProgress = true
+        case .phoneConnected:
+            title = "Continue on your device"
+            message = "Follow the steps on your phone or tablet."
+        case .turnOnBluetooth:
+            title = "Turn on Bluetooth?"
+            message = "Bluetooth must be on to use a passkey from your phone or tablet."
+            acceptTitle = "Turn On"
+        case .bluetoothOff:
+            title = "Bluetooth is off"
+            message = "Turn on Bluetooth in Control Center or System Settings ▸ Bluetooth, then continue."
+            acceptTitle = "Continue"
+            acceptEnabled = state.bluetoothIsPowered
+        case .bluetoothPermission:
+            title = "Allow Bluetooth"
+            message = "Open Arc needs Bluetooth to connect to your phone or tablet. Turn on Open Arc in "
+                + "System Settings ▸ Privacy & Security ▸ Bluetooth, then reopen Open Arc."
+            acceptTitle = "Open System Settings"
         case .error(let error):
             title = Self.errorTitle(error)
             message = Self.errorMessage(error, site: site)
@@ -126,7 +168,7 @@ public struct WebAuthnPresentation: Equatable, Sendable {
         }
     }
 
-    static func row(for mechanism: WebAuthnState.Mechanism) -> Row {
+    static func row(for mechanism: WebAuthnState.Mechanism, acceptsSecurityKey: Bool = false) -> Row {
         switch mechanism.kind {
         case .passkeyOnThisMac:
             Row(symbol: "person.badge.key", title: mechanism.title, detail: "Passkey on this Mac")
@@ -141,6 +183,10 @@ public struct WebAuthnPresentation: Equatable, Sendable {
         case .passkeyInICloudKeychain:
             Row(symbol: "key.icloud", title: mechanism.title,
                 detail: mechanism.subtitle.isEmpty ? "Passkey in iCloud Keychain" : "Passkey in \(mechanism.subtitle)")
+        case .phone:
+            Row(symbol: "iphone",
+                title: acceptsSecurityKey ? "Phone, tablet or security key" : "Phone or tablet",
+                detail: "Scan a QR code")
         }
     }
 
@@ -149,6 +195,7 @@ public struct WebAuthnPresentation: Equatable, Sendable {
         case .timedOut: "The request timed out"
         case .noPasskeys: "No passkeys found"
         case .pinTemporarilyLocked, .pinLocked: "Security key locked"
+        case .phoneConnectionFailed: "Couldn’t connect to your device"
         default: "Something went wrong"
         }
     }
@@ -165,8 +212,10 @@ public struct WebAuthnPresentation: Equatable, Sendable {
         case .keyRemoved: "Your security key was removed."
         case .missingCapability: "Your security key doesn’t support what \(site) asks for."
         case .storageFull: "Your security key has no room for another passkey."
-        case .unsupported: "This method isn’t available in Open Arc. Use a passkey on this Mac or a security key."
+        case .unsupported: "This sign-in method isn’t available in Open Arc. Choose another way to sign in on the page."
         case .other: "The request couldn’t be completed."
+        case .phoneConnectionFailed:
+            "Check that Bluetooth and the internet are on, on this Mac and on your phone or tablet. Then try again from the page."
         }
     }
 
@@ -245,6 +294,10 @@ struct WebAuthnSheetView: View {
             if !presentation.rows.isEmpty {
                 rows(presentation.rows)
             }
+            if let code = presentation.qrCode {
+                WebAuthnQRCodeView(text: code)
+                    .frame(maxWidth: .infinity)
+            }
             switch presentation.input {
             case .none:
                 EmptyView()
@@ -275,7 +328,7 @@ struct WebAuthnSheetView: View {
                     Button(accept, action: self.accept)
                         .keyboardShortcut(.defaultAction)
                         .controlSize(.small)
-                        .disabled(state.isBusy)
+                        .disabled(state.isBusy || !presentation.acceptEnabled)
                 }
             }
         }
@@ -340,5 +393,40 @@ struct WebAuthnSheetView: View {
         case .failure(let mismatch):
             localError = mismatch.message
         }
+    }
+}
+
+/// Plan B155: the hybrid QR code, drawn with CoreImage's QR generator. Black modules on a white
+/// quiet zone in both appearances, so phone cameras read it in dark mode too. Size inferred
+/// (Chromium's sheet draws a code of about this size); Arc's is unknown.
+struct WebAuthnQRCodeView: View {
+    let text: String
+
+    var body: some View {
+        if let image = Self.image(for: text) {
+            Image(decorative: image, scale: 1)
+                .interpolation(.none)
+                .resizable()
+                .frame(width: Self.side, height: Self.side)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white))
+                .accessibilityLabel("QR code")
+                .accessibilityIdentifier("openarc.dialog.webauthn.qrcode")
+        }
+    }
+
+    /// Points. Inferred from Chromium's sheet; Arc's size is unknown.
+    static let side: CGFloat = 176
+
+    /// The QR code with one pixel per module (drawn scaled without smoothing), or nil when
+    /// CoreImage cannot encode `text`. Error correction "M": caBLE codes are long.
+    static func image(for text: String) -> CGImage? {
+        guard let data = text.data(using: .utf8), let filter = CIFilter(name: "CIQRCodeGenerator") else {
+            return nil
+        }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        return CIContext(options: [.useSoftwareRenderer: true]).createCGImage(output, from: output.extent)
     }
 }

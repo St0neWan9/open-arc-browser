@@ -254,4 +254,31 @@ final class EngineDialogsF1Tests: XCTestCase {
         XCTAssertTrue(dialog.reply.isFinished)
         XCTAssertNil(tab.dialogAnswers[id], "macOS's sheet answers the page, not the shell")
     }
+
+    /// Plan B155 (inferred from Chromium's flow; Arc's look unknown): the phone path's steps carry
+    /// the QR text and the Bluetooth power through the session; turning Bluetooth on is `.accept`.
+    func testWebAuthnPhoneStepsCarryQRCodeAndBluetoothState() async throws {
+        let engine = FakeEngine()
+        let tab = try await makeTab(engine, url: "https://accounts.example")
+        let stream = tab.dialogRequests()
+        let off = WebAuthnState(operation: .signIn, relyingPartyID: "accounts.example", step: .turnOnBluetooth,
+                                mechanisms: [.init(kind: .phone)], phoneStepAcceptsSecurityKey: true)
+        let (_, session) = tab.simulateWebAuthnDialog(off)
+        guard case .webAuthn(let dialog) = await take(1, from: stream).first else { return XCTFail("expected the dialog") }
+        XCTAssertEqual(dialog.session.state.step, .turnOnBluetooth)
+        XCTAssertFalse(dialog.session.state.bluetoothIsPowered)
+        XCTAssertTrue(dialog.session.state.phoneStepAcceptsSecurityKey)
+        let updates = dialog.session.updates()
+        dialog.session.send(.accept)
+        var qr = off
+        qr.step = .phoneQRCode
+        qr.phoneQRCode = "FIDO:/0123"
+        qr.bluetoothIsPowered = true
+        session.update(qr)
+        let seen = await take(2, from: updates)
+        XCTAssertEqual(seen.map(\.step), [.turnOnBluetooth, .phoneQRCode])
+        XCTAssertEqual(seen.last?.phoneQRCode, "FIDO:/0123")
+        XCTAssertEqual(tab.webAuthnCommands, [.accept])
+        XCTAssertTrue(dialog.reply.send(.cancel))
+    }
 }

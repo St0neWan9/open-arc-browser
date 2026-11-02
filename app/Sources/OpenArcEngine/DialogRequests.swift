@@ -760,6 +760,21 @@ public struct WebAuthnState: Hashable, Sendable {
         case createPasskey
         case privateWindowWarning
         case error(WebAuthnError)
+        /// Plan B155: scan `phoneQRCode` with a phone or tablet (no button; the phone answers).
+        case phoneQRCode
+        /// The phone was found; connecting (no button, no "use another method").
+        case phoneConnecting
+        /// Connected: continue on the phone (no button, no "use another method").
+        case phoneConnected
+        /// Bluetooth is off and the app can turn it on: `.accept` turns it on (busy until the
+        /// engine moves on by itself).
+        case turnOnBluetooth
+        /// Bluetooth is off and only the user can turn it on (Control Center or System Settings):
+        /// `.accept` continues once `bluetoothIsPowered`.
+        case bluetoothOff
+        /// macOS denied this app Bluetooth: `.accept` opens System Settings ▸ Privacy & Security ▸
+        /// Bluetooth (a change there applies after reopening the app).
+        case bluetoothPermission
     }
 
     public enum MechanismKind: Hashable, Sendable {
@@ -777,6 +792,9 @@ public struct WebAuthnState: Hashable, Sendable {
         /// `subtitle`: the app that holds it, may be empty). Hands over to macOS like
         /// `iCloudKeychain`.
         case passkeyInICloudKeychain
+        /// Plan B155: use a phone or tablet (a QR code next; with `phoneStepAcceptsSecurityKey`
+        /// a security key works there too).
+        case phone
     }
 
     public struct Mechanism: Hashable, Sendable {
@@ -825,13 +843,20 @@ public struct WebAuthnState: Hashable, Sendable {
     public var bioSamplesTotal: Int?
     /// The engine is busy: no input until the next update.
     public var isBusy: Bool
+    /// Plan B155: the QR code's text for `.phoneQRCode` ("FIDO:/…"); empty in other steps.
+    public var phoneQRCode: String
+    /// The phone step (and the phone method) also takes a security key.
+    public var phoneStepAcceptsSecurityKey: Bool
+    /// Bluetooth is on (`.bluetoothOff` can continue).
+    public var bluetoothIsPowered: Bool
 
     public init(
         operation: Operation, relyingPartyID: String, userName: String = "", step: Step,
         mechanisms: [Mechanism] = [], priorityMechanismIndex: Int? = nil, accounts: [Account] = [],
         canChooseAnotherMethod: Bool = false, canRetry: Bool = false, pinError: PINError = .none,
         pinAttemptsRemaining: Int? = nil, minimumPINLength: Int = 4, bioSamplesRemaining: Int? = nil,
-        bioSamplesTotal: Int? = nil, isBusy: Bool = false
+        bioSamplesTotal: Int? = nil, isBusy: Bool = false, phoneQRCode: String = "",
+        phoneStepAcceptsSecurityKey: Bool = false, bluetoothIsPowered: Bool = false
     ) {
         self.operation = operation
         self.relyingPartyID = relyingPartyID
@@ -848,6 +873,9 @@ public struct WebAuthnState: Hashable, Sendable {
         self.bioSamplesRemaining = bioSamplesRemaining
         self.bioSamplesTotal = bioSamplesTotal
         self.isBusy = isBusy
+        self.phoneQRCode = phoneQRCode
+        self.phoneStepAcceptsSecurityKey = phoneStepAcceptsSecurityKey
+        self.bluetoothIsPowered = bluetoothIsPowered
     }
 }
 
@@ -863,9 +891,11 @@ public enum WebAuthnError: Hashable, Sendable {
     case keyRemoved
     case missingCapability
     case storageFull
-    /// A method this app does not support (phone, Bluetooth, cloud passkeys).
+    /// A step this app has no view for (Google Password Manager, Windows Hello).
     case unsupported
     case other
+    /// Plan B155: the phone or tablet could not be reached (Bluetooth or internet on either side).
+    case phoneConnectionFailed
 }
 
 /// What the shell tells a live WebAuthn dialog.

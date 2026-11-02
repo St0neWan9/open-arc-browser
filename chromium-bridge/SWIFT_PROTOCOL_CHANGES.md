@@ -220,3 +220,13 @@ Found while wiring engine events end to end in the shell (plan C9). The Swift si
 **Status: applied (B130), needs Opus review.** Two cases added to `WebAuthnState.MechanismKind` (`DialogRequests.swift`): `iCloudKeychain` (save or use a passkey in iCloud Keychain, no account yet) and `passkeyInICloudKeychain` (one account's passkey; `title` the account, `subtitle` the app that holds it, may be empty). No other type changes; choosing either is the existing `.selectMechanism(_:)`, and macOS taking over is the existing withdrawal (`.dialogCancelled`). FakeEngine needs nothing new (`simulateWebAuthnDialog` carries any kinds); `EngineDialogsF1Tests.testWebAuthnICloudKeychainMechanismsHandOverToMacOS` covers it.
 
 **Bridge.** `OACWebAuthnMechanismKindICloudKeychain = 4` and `OACWebAuthnMechanismKindPasskeyInICloudKeychain = 5` (`OACWebAuthn.h`), mapped in `ChromiumTab.swift`. **Shell.** `WebAuthnPresentation.row(for:)` draws both (look unknown, [00 §A] inferred).
+
+## §17 Phones and tablets (hybrid / QR code) in the WebAuthn dialog — P1, B155
+
+**Status: applied (B155, patch 0072), needs Opus review.** After B154 the engine offers the phone path; its steps had no view and showed the "unsupported" error. Additive changes in `DialogRequests.swift`:
+- `WebAuthnState.Step`: `phoneQRCode`, `phoneConnecting`, `phoneConnected`, `turnOnBluetooth`, `bluetoothOff`, `bluetoothPermission`.
+- `WebAuthnState.MechanismKind.phone`; `WebAuthnError.phoneConnectionFailed`.
+- `WebAuthnState`: `phoneQRCode` (the caBLE text, only in `.phoneQRCode`), `phoneStepAcceptsSecurityKey`, `bluetoothIsPowered` (init parameters with defaults, so existing callers compile).
+No new commands: turning Bluetooth on, continuing once it is on and opening System Settings are `.accept` in their steps. FakeEngine needs nothing new.
+
+**Bridge.** `OACWebAuthnStepPhoneQRCode = 14` … `OACWebAuthnStepBluetoothPermission = 19`, `OACWebAuthnMechanismKindPhone = 6`, `OACWebAuthnErrorKindPhoneConnectionFailed = 13`, properties `phoneQRCode`, `phoneStepAcceptsSecurityKey`, `bluetoothIsPowered` (`OACWebAuthn.h`), mapped in `ChromiumTab.swift`. Test-only switch `--openarc-fake-bluetooth[=off]` (stand-in adapter for the engine conformance test). **Shell.** `WebAuthnPresentation` draws the steps; `WebAuthnQRCodeView` renders the QR code with CoreImage (look unknown, [00 §A] inferred).
