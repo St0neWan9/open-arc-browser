@@ -48,6 +48,8 @@ final class SidebarResizeHandleView: NSView {
 
     static let cursor: NSCursor = .resizeLeftRight
 
+    private var tracking: NSTrackingArea?
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: Self.cursor)
     }
@@ -55,6 +57,37 @@ final class SidebarResizeHandleView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         window?.invalidateCursorRects(for: self)
+    }
+
+    // A cursor rect alone is not enough: the views under the seam (the engine's page view and the
+    // sidebar's scroll view) get mouse-moved events through their own tracking areas and set their
+    // cursor on each one. The seam sets its cursor on every move as well, and once more after the
+    // event is handled, so it wins over them.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate,
+                                                         .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { claimCursor() }
+    override func mouseMoved(with event: NSEvent) { claimCursor() }
+    override func cursorUpdate(with event: NSEvent) { claimCursor() }
+
+    private func claimCursor() {
+        Self.cursor.set()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isPointerInside else { return }
+            Self.cursor.set()
+        }
+    }
+
+    private var isPointerInside: Bool {
+        guard let window, !isHiddenOrHasHiddenAncestor else { return false }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return bounds.contains(point)
     }
 
     override func mouseDown(with event: NSEvent) {

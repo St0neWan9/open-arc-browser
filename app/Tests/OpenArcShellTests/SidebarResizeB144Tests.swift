@@ -129,4 +129,17 @@ final class SidebarResizeB144Tests: XCTestCase {
         let view = SidebarResizeHandleView(frame: CGRect(x: 0, y: 0, width: 8, height: 400))
         XCTAssertFalse(view.mouseDownCanMoveWindow, "a press on the seam never moves the window")
     }
+
+    /// The page view and the sidebar's scroll view under the seam set their own cursor on every
+    /// mouse move, so the seam must hear every move too (user: no resize cursor on the seam).
+    func testSeamTracksEveryMoveToKeepItsCursor_07_1() throws {
+        let view = SidebarResizeHandleView(frame: CGRect(x: 0, y: 0, width: 8, height: 400))
+        view.updateTrackingAreas()
+        let area = try XCTUnwrap(view.trackingAreas.first)
+        XCTAssertTrue(area.options.contains(.mouseMoved))
+        XCTAssertTrue(area.options.contains(.cursorUpdate))
+        XCTAssertTrue(area.options.contains(.inVisibleRect))
+        view.updateTrackingAreas()
+        XCTAssertEqual(view.trackingAreas.count, 1, "no duplicate areas on relayout")
+    }
 }
