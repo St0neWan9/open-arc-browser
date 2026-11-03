@@ -142,4 +142,52 @@ final class SidebarResizeB144Tests: XCTestCase {
         view.updateTrackingAreas()
         XCTAssertEqual(view.trackingAreas.count, 1, "no duplicate areas on relayout")
     }
+
+    // MARK: Seam line (B157)
+
+    /// 4 pt wide around the drag area's left edge, 3.5 pt in from its ends. [07 §1] inferred.
+    func testSeamLineGeometry_07_1() {
+        let frame = SidebarResizeHandleView.indicatorFrame(in: CGRect(x: 0, y: 0, width: 8, height: 963))
+        XCTAssertEqual(frame, CGRect(x: -2, y: 3.5, width: 4, height: 956))
+        let view = SidebarResizeHandleView(frame: CGRect(x: 0, y: 0, width: 8, height: 400))
+        XCTAssertEqual(view.indicator.cornerRadius, 2, "round ends")
+        XCTAssertFalse(view.layer?.masksToBounds ?? true, "half the line lies left of the view")
+    }
+
+    func testSeamLineShowsOnPressAndHidesWhenIdle_07_1() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = SidebarResizeHandleView(frame: CGRect(x: 100, y: 0, width: 8, height: 400))
+        window.contentView?.addSubview(view)
+        XCTAssertTrue(view.indicator.isHidden)
+        XCTAssertEqual(view.indicator.opacity, 0)
+        let press = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 104, y: 200), modifierFlags: [],
+                                                     timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                     eventNumber: 0, clickCount: 1, pressure: 1))
+        view.mouseDown(with: press)
+        XCTAssertFalse(view.indicator.isHidden, "a press shows the line at once")
+        XCTAssertEqual(view.indicator.opacity, 0.5)
+    }
+
+    /// Landing on the default width by snapping counts once; pointing at it exactly does not.
+    func testSnapToTheDefaultWidthPulses_07_1() {
+        let model = makeModel()
+        defer { model.stop() }
+        model.setSidebarWidth(320)
+        model.beginSidebarResize()
+        model.updateSidebarResize(translation: -36)
+        XCTAssertEqual(model.sidebarWidth, 276)
+        XCTAssertEqual(model.sidebarResizeSnapCount, 1)
+        model.updateSidebarResize(translation: -40)
+        XCTAssertEqual(model.sidebarResizeSnapCount, 1, "staying in the snap zone does not pulse again")
+        model.updateSidebarResize(translation: 0)
+        model.updateSidebarResize(translation: -44)
+        XCTAssertEqual(model.sidebarResizeSnapCount, 1, "dragging exactly to the default is no snap")
+        model.updateSidebarResize(translation: 0)
+        model.updateSidebarResize(translation: -50)
+        XCTAssertEqual(model.sidebarResizeSnapCount, 2)
+        model.endSidebarResize()
+    }
 }

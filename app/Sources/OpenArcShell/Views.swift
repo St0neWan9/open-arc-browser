@@ -85,7 +85,9 @@ struct MainWindowContent: View {
                         // While a drag has collapsed the sidebar the handle waits at the left edge.
                         let handle = model.isSidebarVisible ? layout.sidebarResizeHandleFrame
                             : CGRect(x: 0, y: 0, width: Metrics.Sidebar.resizeHandleWidth, height: proxy.size.height)
-                        SidebarResizeHandle(onBegin: { model.beginSidebarResize() },
+                        SidebarResizeHandle(indicatorColor: palette.seamIndicator,
+                                            snapCount: model.sidebarResizeSnapCount,
+                                            onBegin: { model.beginSidebarResize() },
                                             onDrag: { model.updateSidebarResize(translation: $0) },
                                             onEnd: { model.endSidebarResize() })
                             .frame(width: handle.width, height: handle.height)

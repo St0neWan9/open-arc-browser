@@ -4,6 +4,7 @@ import OpenArcModel
 import OpenArcEngine
 import OpenArcSyncAPI
 import OpenArcPersistence
+import OpenArcDesign
 
 /// Per-window coordinator (B14): one per browser window. The window's `SidebarViewModel` holds its
 /// selection; the shared workspace, persistence, sync, live engine tabs and auto-archive belong to
@@ -71,6 +72,8 @@ public final class ShellModel: ObservableObject {
     /// A seam drag is in progress: its handle stays on screen even while the drag has collapsed
     /// the sidebar, so dragging back out shows it again (inferred). B144.
     @Published public private(set) var isResizingSidebar = false
+    /// Counts the times a seam drag snapped to the default width; the seam line pulses on each (B157).
+    @Published private(set) var sidebarResizeSnapCount = 0
     /// Whether the sidebar showed when the current seam drag started.
     private var sidebarWasVisibleAtResizeStart = true
     /// Last command the shell could not run itself (no surface for it yet). For tests/diagnostics.
@@ -658,6 +661,11 @@ public final class ShellModel: ObservableObject {
         guard let start = sidebarWidthAtResizeStart, sidebarWasVisibleAtResizeStart else { return }
         switch SidebarWidth.resize(proposed: start + translation) {
         case .width(let width):
+            // Snapped: the drag landed on the default width from elsewhere without pointing at it.
+            if width == Metrics.Sidebar.defaultWidth, sidebarWidth != width,
+               (start + translation).rounded() != width {
+                sidebarResizeSnapCount += 1
+            }
             if sidebarWidth != width {
                 sidebarWidth = width
                 sidebarPeek.sidebarWidth = CGFloat(width)

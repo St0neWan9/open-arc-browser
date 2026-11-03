@@ -115,6 +115,10 @@ public struct ThemePalette: Hashable, Sendable {
     /// themes a saturated tone (lavender #838BFE), dark themes a light gray (navy dark #B7B7C9).
     /// [06 §15.2, §15.4] observed samples; rule `ThemeDerivation.splitPreviewFill` inferred.
     public var splitPreviewFill: RGBAColor = RGBAColor(hex: 0x838BFE)
+    /// The line on the sidebar / web panel seam while it is hovered or dragged (drawn at
+    /// `Metrics.Sidebar.resizeIndicatorOpacity`): the theme's strongest tone, `seamIndicatorTone`.
+    /// [07 §1] B157: theme-driven, inferred; light tone fitted to an observed sample.
+    public var seamIndicator: RGBAColor = RGBAColor(hex: 0x5350CC)
     /// Ink on floating panels, used with opacities: black in light, white in dark.
     /// [04 §dark mode] observed; exact values inferred.
     public var floatingPanelInk: RGBAColor = RGBAColor(hex: 0x000000)
@@ -318,6 +322,14 @@ public enum ThemeDerivation {
     /// colors of 8 dark-ink presets (E8) and the E11 samples, max 10.6/255 (the former L 0.258 ×
     /// 0.45 missed by 14). Arc's colors keep a near-constant luminance (Y ≈ 0.016) and reach the
     /// sRGB gamut edge for saturated themes; no simple rule matched them better (unknown).
+    /// Seam indicator = OKLCH(L, chroma × factor, theme hue). Arc takes it from the Space's
+    /// highest-contrast theme color (inferred, B157). Light: fitted to one observed peach
+    /// Space: the line #C8A582 at 50 % over the sidebar #F8ECE2 puts the full color at ≈ #985E22
+    /// (L 0.536, 1.09 × the theme chroma recovered from its row text #361C00). Dark: unknown
+    /// (placeholder: a light tone of the same chroma).
+    public static let seamIndicatorLightness: Double = 0.536
+    public static let darkSeamIndicatorLightness: Double = 0.80
+    public static let seamIndicatorChromaFactor: Double = 1.09
     public static let rowTextLightness: Double = 0.252
     public static let rowTextChromaFactor: Double = 0.60
     /// Command bar selection = OKLCH(L, chroma × factor, theme hue). [07 §8, §8.4]: values observed
@@ -615,6 +627,8 @@ public enum ThemeDerivation {
         palette.selectedTabText = lightInk ? withAlpha(white, inkOpacity.rowTitle) : rowText
         palette.dropTargetFill = dropTargetFill(window: window, isDark: isDark)
         palette.splitPreviewFill = splitPreviewFill(window: window, isDark: isDark)
+        palette.seamIndicator = tone(of: theme, lightness: isDark ? darkSeamIndicatorLightness : seamIndicatorLightness,
+                                     chromaFactor: seamIndicatorChromaFactor)
         palette.floatingPanelBackground = isDark
             ? tone(of: theme, lightness: darkFloatingPanelLightness, chromaFactor: darkFloatingPanelChromaFactor)
             : tone(of: theme, lightness: floatingPanelLightness, chromaFactor: floatingPanelChromaFactor)

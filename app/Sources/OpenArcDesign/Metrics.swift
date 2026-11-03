@@ -101,6 +101,21 @@ public enum Metrics {
         /// left edge), inset 11 pt from the window's top and bottom. inferred. B144.
         public static let resizeHandleWidth: Double = 8
         public static let resizeHandleVerticalInset: Double = 11
+        /// The line shown on the seam while it is hovered or dragged (B157), all inferred
+        /// unless noted: a 3 pt rounded bar plus a 1 pt outline of the same color (4 pt
+        /// as drawn, observed ≈ 4 pt in a 2x capture), centered on the drag area's left edge,
+        /// 4 pt shorter than the drag area at each end (before the outline), drawn at 50 %.
+        public static let resizeIndicatorWidth: Double = 4
+        public static let resizeIndicatorEndInset: Double = 3.5
+        public static let resizeIndicatorOpacity: Double = 0.5
+        /// Hover shows it after 0.25 s with a 0.2 s linear fade; leaving fades it out over 0.2 s at
+        /// once; a press shows it at once. inferred.
+        public static let resizeIndicatorHoverDelay: Double = 0.25
+        public static let resizeIndicatorFadeDuration: Double = 0.2
+        /// Snapping to `defaultWidth` pulses the line: horizontal scale 1 → 1.7 → 1, 0.08 s each way,
+        /// ease-out cubic-bezier(0.215, 0.61, 0.355, 1), with a haptic tap. inferred.
+        public static let resizeIndicatorSnapScale: Double = 1.7
+        public static let resizeIndicatorSnapHalfDuration: Double = 0.08
         /// Left and right inset of the sidebar content (URL box, favorites, selected row): the
         /// content spans x 8–268. [07 §1] observed.
         public static let contentInset: Double = 8
