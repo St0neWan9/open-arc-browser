@@ -400,3 +400,44 @@ final class ThemeEditorTests: XCTestCase {
         XCTAssertEqual(palette.windowBackground, ThemeDerivation.lightWindow(colors[0]))
     }
 }
+
+/// B158: the theme bubble's layout and look per a 2x capture of Arc 1.170. [06 §2], [07 §6] observed.
+@MainActor
+final class ThemeEditorLookB158Tests: XCTestCase {
+    func testBubbleLayoutMatchesArc_07_6() {
+        let m = ThemeEditorMetrics.self
+        XCTAssertEqual(m.size, CGSize(width: 356, height: 508))
+        XCTAssertEqual(m.padding + m.segmentCenterY, 48.5, "segments inside the pad, centered 48.5 below the bubble top")
+        XCTAssertEqual(m.padding + m.padSize - m.padButtonsBottom, 316.5, "− / + centered 316.5 below the top")
+        XCTAssertEqual(m.presetRowTop + m.swatchSize / 2, 380.5)
+        XCTAssertEqual(m.controlsTop + m.knobSize / 2, 452)
+        XCTAssertEqual(m.pointSize, 44)
+        XCTAssertEqual(m.pointRing, 5)
+        XCTAssertEqual(m.padSize / m.dotPitch, 80, accuracy: 0.01, "a dense dot grid")
+        // Page arrows centered 23 pt from either bubble edge.
+        let row = 9 * m.swatchSize + 8 * (m.swatchPitch - m.swatchSize) + 2 * (m.arrowWidth + m.arrowGap)
+        XCTAssertEqual((m.size.width - row) / 2 + m.arrowWidth / 2, 23)
+    }
+
+    func testSwatchRimIsItsOwnColorDarkened_07_6() {
+        let rim = ThemeEditorView.swatchRim([RGBAColor(hex: 0xECB1C6)])
+        XCTAssertEqual(rim.red * 255, 0xD9, accuracy: 2)
+        XCTAssertEqual(rim.green * 255, 0xA2, accuracy: 2)
+        XCTAssertEqual(rim.blue * 255, 0xB6, accuracy: 2)
+    }
+
+    /// A 44 pt point at the pad's edge stays inside the pad, and a press maps back to the same spot.
+    func testPointsStayInsideThePad_07_6() {
+        let size = CGSize(width: 340, height: 340)
+        XCTAssertEqual(ThemeEditorView.padPoint(.zero, in: size), CGPoint(x: 22, y: 22))
+        XCTAssertEqual(ThemeEditorView.padPoint(CGPoint(x: 1, y: 1), in: size), CGPoint(x: 318, y: 318))
+        let unit = CGPoint(x: 0.3, y: 0.7)
+        let back = ThemeEditorView.padUnit(ThemeEditorView.padPoint(unit, in: size), in: size)
+        XCTAssertEqual(back.x, unit.x, accuracy: 1e-9)
+        XCTAssertEqual(back.y, unit.y, accuracy: 1e-9)
+    }
+
+    func testBubbleIsAFlatTint_07_6() {
+        XCTAssertFalse(ThemeEditorView.bubbleStyle(for: SpaceThemeDraft(), systemAppearance: .light).usesGradient)
+    }
+}

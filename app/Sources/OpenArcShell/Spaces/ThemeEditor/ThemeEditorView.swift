@@ -2,15 +2,18 @@ import SwiftUI
 import OpenArcModel
 import OpenArcDesign
 
-/// The theme bubble. [06 §2] observed, top to bottom: three icon segments (automatic / light /
-/// dark), a dot-grid color pad with the hint "Tap to pick a color for this space" and − / + buttons
-/// at its bottom, one row of nine round swatches with left and right arrows that page through named
-/// groups, and at the bottom a wavy slider (grain, inferred) and a ring knob (brightness, inferred).
+/// The theme bubble. [06 §2] observed: three icon segments (automatic / light / dark), a dot-grid
+/// color pad with the hint "Tap to pick a color for this space" and − / + buttons, one row of nine
+/// round swatches with left and right arrows that page through named groups, and at the bottom a
+/// wavy slider (grain, inferred) and a ring knob (brightness, inferred).
 /// [07 §6] observed: visible bubble ≈ 356 × 508, radius 20, padding 8, a 340 × 340 dot pad,
-/// 24 pt preset swatches at a 29.5 pitch, 32 pt segment buttons at a 40 pitch; light ≈ #FDF1FA
-/// (near white tinted by the theme).
+/// 24 pt preset swatches at a 29.5 pitch, 32 pt segment buttons at a 40 pitch. B158 (2x capture of
+/// Arc 1.170, 2026-11-03, observed): the segments and the − / + sit inside the pad, a flat
+/// near-white fill tinted by the theme, a dense dot grid, a large ringed color point, a thick wave
+/// on a gray track with a tall pill thumb, a thin ring knob with 20 dots and a pill marker
+/// (`ThemeEditorMetrics`).
 /// With the dark segment (or automatic on a dark system) the bubble goes dark: the theme color
-/// darkened, light icons, a pale theme-colored block on the selected segment, a dimmed dot grid.
+/// darkened, light icons, a pale block on the selected segment, a dimmed dot grid.
 /// [04 §dark mode (E7)] observed; values from `ThemePalette` (approximate).
 ///
 /// The view edits `theme` through the binding; the owner applies each change right away, so the
@@ -45,28 +48,32 @@ struct ThemeEditorView: View {
         ThemeDerivation.palette(forStyle: theme.style, systemAppearance: systemAppearance)
     }
 
-    /// Floating-bubble chrome for this bubble ([07 §6] size and radius, [07 §12] tint).
+    /// Floating-bubble chrome for this bubble ([07 §6] size and radius, [07 §12] tint). A flat
+    /// tint: the B158 capture shows one fill from top to bottom (#FDF9F6 on a peach Space), not
+    /// the E8 glow ([07 §8.4] finding 3), observed.
     static func bubbleStyle(for theme: SpaceThemeDraft, systemAppearance: ResolvedAppearance) -> FloatingBubbleStyle {
         let palette = palette(for: theme, systemAppearance: systemAppearance)
         return FloatingBubbleStyle(width: ThemeEditorMetrics.size.width, height: ThemeEditorMetrics.size.height,
                                    cornerRadius: ThemeEditorMetrics.cornerRadius,
-                                   tint: palette.floatingPanelBackground, isDark: palette.isDark, usesGradient: true)
+                                   tint: palette.floatingPanelBackground, isDark: palette.isDark, usesGradient: false)
     }
 
     /// Ink for icons, labels and tracks: black in light, white in dark.
     private var ink: Color { palette.floatingPanelInk.swiftUI }
 
     var body: some View {
-        VStack(spacing: M.sectionSpacing) {
-            appearanceSegments
+        VStack(spacing: 0) {
             colorPad
             presetRow
+                .frame(height: M.swatchSize)
+                .padding(.top, M.presetRowTop - M.padding - M.padSize)
             bottomControls
+                .padding(.top, M.controlsTop - M.presetRowTop - M.swatchSize)
+            Spacer(minLength: 0)
         }
         .padding(M.padding)
         .frame(width: M.size.width, height: M.size.height)
-        // Opaque here (no blur behind): the gradient's fills at full opacity. [07 §8.4] finding 3.
-        .background(drawsBackground ? AnyShapeStyle(palette.floatingPanelGradient(opacity: 1).swiftUI) : AnyShapeStyle(Color.clear))
+        .background(drawsBackground ? AnyShapeStyle(palette.floatingPanelBackground.swiftUI) : AnyShapeStyle(Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: M.cornerRadius, style: .continuous))
         .environment(\.colorScheme, palette.isDark ? .dark : .light)
         .accessibilityElement(children: .contain)
@@ -75,25 +82,25 @@ struct ThemeEditorView: View {
 
     // MARK: Appearance
 
+    /// Inside the pad, near its top, centered. B158 observed.
     private var appearanceSegments: some View {
         HStack(spacing: M.segmentPitch - M.segmentSize) {
             segment(.automatic, symbol: "sparkles", label: "Automatic")
-            segment(.light, symbol: "sun.max", label: "Light")
-            segment(.dark, symbol: "moon", label: "Dark")
+            segment(.light, symbol: "sun.max.fill", label: "Light")
+            segment(.dark, symbol: "moon.stars.fill", label: "Dark")
         }
-        .frame(maxWidth: .infinity)
     }
 
     private func segment(_ appearance: ThemeAppearance, symbol: String, label: String) -> some View {
         let selected = theme.appearance == appearance
         return Button { theme.appearance = appearance } label: {
             Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(ink.opacity(selected ? 0.85 : 0.5))
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(ink.opacity(M.iconInk))
                 .frame(width: M.segmentSize, height: M.segmentSize)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(selected ? palette.floatingPanelSelection.swiftUI : Color.clear)
+                        .fill(selected ? (palette.isDark ? palette.floatingPanelSelection.swiftUI : ink.opacity(M.selectedSegmentInk)) : Color.clear)
                 )
                 .contentShape(Rectangle())
         }
@@ -109,8 +116,8 @@ struct ThemeEditorView: View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack {
-                RoundedRectangle(cornerRadius: M.padCornerRadius, style: .continuous).fill(ink.opacity(0.04))
-                DotGrid(ink: ink, opacity: palette.isDark ? 0.12 : 0.18)
+                RoundedRectangle(cornerRadius: M.padCornerRadius, style: .continuous).fill(ink.opacity(M.padInk))
+                DotGrid(ink: ink, opacity: palette.isDark ? 0.14 : M.dotInk)
                 if theme.colors.isEmpty {
                     Text("Tap to pick a color for this space")
                         .font(Typography.panelRowTitle.font)
@@ -123,21 +130,22 @@ struct ThemeEditorView: View {
                     let p = ThemePad.position(of: color)
                     Circle()
                         .fill(color.swiftUI)
-                        .overlay(Circle().strokeBorder(Color.white, lineWidth: 2))
-                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                        .overlay(Circle().strokeBorder(Color.white, lineWidth: M.pointRing))
+                        .shadow(color: .black.opacity(0.14), radius: 3, y: 1)
                         .frame(width: M.pointSize, height: M.pointSize)
-                        .position(x: p.x * size.width, y: p.y * size.height)
+                        .position(Self.padPoint(p, in: size))
                         .allowsHitTesting(false)
                 }
+                appearanceSegments
+                    .position(x: size.width / 2, y: M.segmentCenterY)
                 padButtons
+                    .position(x: size.width / 2, y: size.height - M.padButtonsBottom)
             }
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .local)
                     .onChanged { value in
-                        let position = ThemePad.clamped(CGPoint(
-                            x: value.location.x / max(size.width, 1), y: value.location.y / max(size.height, 1)
-                        ))
+                        let position = ThemePad.clamped(Self.padUnit(value.location, in: size))
                         if let index = draggedPoint {
                             theme.movePoint(index, to: position)
                         } else {
@@ -153,27 +161,34 @@ struct ThemeEditorView: View {
         .accessibilityIdentifier("openarc.themeEditor.pad")
     }
 
-    /// − and + at the bottom of the pad; both gray when no point is placed. [06 §2] observed.
+    /// Unit pad positions map onto the pad inset by half a point's size, so a 44 pt point at an
+    /// edge stays inside the pad (inferred; Arc's edge behavior was not captured). B158.
+    static func padPoint(_ unit: CGPoint, in size: CGSize) -> CGPoint {
+        let inset = M.pointSize / 2
+        return CGPoint(x: inset + unit.x * max(size.width - 2 * inset, 1), y: inset + unit.y * max(size.height - 2 * inset, 1))
+    }
+
+    static func padUnit(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        let inset = M.pointSize / 2
+        return CGPoint(x: (point.x - inset) / max(size.width - 2 * inset, 1), y: (point.y - inset) / max(size.height - 2 * inset, 1))
+    }
+
+    /// − and + centered near the bottom of the pad, plain gray glyphs; both dimmed when no point is
+    /// placed. [06 §2] observed; place and look B158 observed.
     private var padButtons: some View {
-        VStack {
-            Spacer()
-            HStack(spacing: 4) {
-                Spacer()
-                padButton("minus", label: "Remove color", enabled: theme.canRemovePoint) { theme.removeLastPoint() }
-                padButton("plus", label: "Add color", enabled: theme.canAddPoint) { theme.addPoint() }
-            }
-            .padding(8)
+        HStack(spacing: M.padButtonPitch - M.padButtonSize) {
+            padButton("minus", label: "Remove color", enabled: theme.canRemovePoint) { theme.removeLastPoint() }
+            padButton("plus", label: "Add color", enabled: theme.canAddPoint) { theme.addPoint() }
         }
     }
 
     private func padButton(_ symbol: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color.black.opacity(enabled ? 0.7 : 0.25))
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(Color.white.opacity(enabled ? 0.95 : 0.6)))
-                .contentShape(Circle())
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(ink.opacity(enabled ? M.glyphInk : M.disabledGlyphInk))
+                .frame(width: M.padButtonSize, height: M.padButtonSize)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -187,18 +202,26 @@ struct ThemeEditorView: View {
         // [07 §8.5] observed: one row of nine swatches between two arrows, no group name under it.
         return HStack(spacing: M.swatchPitch - M.swatchSize) {
             pageArrow("chevron.left", step: -1)
+                .padding(.trailing, M.arrowGap - (M.swatchPitch - M.swatchSize))
             ForEach(Array(group.swatches.enumerated()), id: \.offset) { _, swatch in
                 Button { theme.applyPreset(swatch) } label: {
                     swatchFill(swatch)
                         .frame(width: M.swatchSize, height: M.swatchSize)
-                        .overlay(Circle().strokeBorder(ink.opacity(0.12), lineWidth: 0.5))
+                        .overlay(Circle().strokeBorder(Self.swatchRim(swatch).swiftUI, lineWidth: 1))
                         .overlay(Circle().strokeBorder(ink.opacity(theme.colors == swatch ? 0.8 : 0), lineWidth: 1.5).padding(-2))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(group.name) color")
             }
             pageArrow("chevron.right", step: 1)
+                .padding(.leading, M.arrowGap - (M.swatchPitch - M.swatchSize))
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// A 1 pt rim of the swatch's own color, darkened (#ECB1C6 → #D9A2B6). B158 observed.
+    static func swatchRim(_ swatch: [RGBAColor]) -> RGBAColor {
+        ThemeDerivation.shade(swatch.first ?? RGBAColor(hex: 0xFFFFFF), by: ThemeEditorMetrics.swatchRimShade)
     }
 
     /// A plain swatch is one color; a gradient swatch runs from its first color at the top left
@@ -233,9 +256,9 @@ struct ThemeEditorView: View {
         let target = ThemePresets.page(after: presetPage, step: step)
         return Button { presetPage = target } label: {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(ink.opacity(target == presetPage ? 0.2 : 0.6))
-                .frame(width: 16, height: M.swatchSize)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(ink.opacity(target == presetPage ? M.disabledGlyphInk : M.glyphInk))
+                .frame(width: M.arrowWidth, height: M.swatchSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -245,12 +268,17 @@ struct ThemeEditorView: View {
 
     // MARK: Bottom controls
 
+    /// The wave slider from x 10 of the content, the knob 16 from its right edge. B158 observed.
     private var bottomControls: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 0) {
             WavySlider(value: $theme.grain, ink: ink)
+                .frame(width: M.sliderWidth)
+                .padding(.leading, M.sliderLeading)
                 .accessibilityLabel("Texture")
                 .accessibilityIdentifier("openarc.themeEditor.grain")
+            Spacer(minLength: 0)
             RingKnob(value: $theme.brightness, ink: ink)
+                .padding(.trailing, M.knobTrailing)
                 .accessibilityLabel("Brightness")
                 .accessibilityIdentifier("openarc.themeEditor.brightness")
         }
@@ -258,21 +286,55 @@ struct ThemeEditorView: View {
     }
 }
 
-/// Sizes of the bubble. [07 §6] observed (size, radius, padding, pad, swatches, segments); the
-/// rest is our own layout to fit that size (unknown).
+/// Sizes of the bubble, in bubble points. [07 §6] observed (size, radius, padding, pad, swatches,
+/// segments); the rest B158 observed in a 2x capture of Arc 1.170 (2026-11-03) unless noted.
 enum ThemeEditorMetrics {
     static var size: CGSize { CGSize(width: Metrics.ThemePicker.size.width, height: Metrics.ThemePicker.size.height) }
     static var cornerRadius: CGFloat { CGFloat(Metrics.ThemePicker.cornerRadius) }
     static var padding: CGFloat { CGFloat(Metrics.ThemePicker.padding) }
-    static let sectionSpacing: CGFloat = 12
     static var segmentSize: CGFloat { CGFloat(Metrics.ThemePicker.segmentButtonSize) }
     static var segmentPitch: CGFloat { CGFloat(Metrics.ThemePicker.segmentButtonPitch) }
     static var padSize: CGFloat { CGFloat(Metrics.ThemePicker.dotGridSize) }
-    static let padCornerRadius: CGFloat = 14
-    static let pointSize: CGFloat = 24
+    static let padCornerRadius: CGFloat = 8.5
+    /// Segment row center, from the pad's top.
+    static let segmentCenterY: CGFloat = 40.5
+    /// Dot grid: 1.1 pt dots at a 4.25 pt pitch (80 per row), black ≈ 19 % at their center.
+    static let dotPitch: CGFloat = 4.25
+    static let dotSize: CGFloat = 1.1
+    /// A color point: 44 pt across with a 5 pt white ring.
+    static let pointSize: CGFloat = 44
+    static let pointRing: CGFloat = 5
+    /// − and +: 13 pt glyphs, centers 40 apart, 31.5 above the pad's bottom.
+    static let padButtonSize: CGFloat = 24
+    static let padButtonPitch: CGFloat = 40
+    static let padButtonsBottom: CGFloat = 31.5
     static var swatchSize: CGFloat { CGFloat(Metrics.ThemePicker.swatchSize) }
     static var swatchPitch: CGFloat { CGFloat(Metrics.ThemePicker.swatchPitch) }
-    static let knobSize: CGFloat = 36
+    /// Swatch rim: the swatch color × 0.92.
+    static let swatchRimShade = 0.92
+    /// Top of the swatch row (bubble y): center 380.5.
+    static let presetRowTop: CGFloat = 368.5
+    /// Page arrows: centers 23 and 333 (bubble x), so 25 pt between an arrow's center and the
+    /// nearest swatch's edge.
+    static let arrowWidth: CGFloat = 14
+    static let arrowGap: CGFloat = 18
+    /// Top of the slider / knob row (bubble y): center 452.
+    static let controlsTop: CGFloat = 418
+    static let knobSize: CGFloat = 68
+    static let knobTrailing: CGFloat = 16
+    /// The slider's track starts 10 pt into the content (bubble x 18); its thumb travel ends
+    /// before the knob (inferred).
+    static let sliderLeading: CGFloat = 10
+    static let sliderWidth: CGFloat = 234
+    /// Ink opacities over the light fill: icons ≈ 48 % (#7F7D7C), − / + and arrows 43 %
+    /// (#8C8988), dimmed arrow 13 % (#DBD7D5), selected segment block 8 % (#E0DDDB on the pad),
+    /// pad 3.5 % (#F4F1EE on #FDF9F6). The dimmed − / + is inferred.
+    static let iconInk = 0.48
+    static let glyphInk = 0.43
+    static let disabledGlyphInk = 0.13
+    static let selectedSegmentInk = 0.08
+    static let padInk = 0.035
+    static let dotInk = 0.19
     /// Span of the gradient (0...1, top left to bottom right) between the first and last color of
     /// a gradient swatch: the read points sat 6.8 pt either side of the center along the 33.9 pt
     /// diagonal of a 24 pt swatch. [07 §8.5] inferred.
@@ -281,23 +343,25 @@ enum ThemeEditorMetrics {
 
 // MARK: - Pad background
 
-/// Gray dot grid behind the color points. [06 §2] observed ("灰色点阵背景").
+/// Gray dot grid behind the color points. [06 §2] observed ("灰色点阵背景"); dense, B158 observed.
 private struct DotGrid: View {
     let ink: Color
     let opacity: Double
 
     var body: some View {
         Canvas { context, size in
-            let step: CGFloat = 17
+            let step = ThemeEditorMetrics.dotPitch, dot = ThemeEditorMetrics.dotSize
+            var dots = Path()
             var y = step / 2
             while y < size.height {
                 var x = step / 2
                 while x < size.width {
-                    context.fill(Path(ellipseIn: CGRect(x: x - 0.9, y: y - 0.9, width: 1.8, height: 1.8)), with: .color(ink.opacity(opacity)))
+                    dots.addEllipse(in: CGRect(x: x - dot / 2, y: y - dot / 2, width: dot, height: dot))
                     x += step
                 }
                 y += step
             }
+            context.fill(dots, with: .color(ink.opacity(opacity)))
         }
         .allowsHitTesting(false)
     }
@@ -306,28 +370,33 @@ private struct DotGrid: View {
 // MARK: - Wavy slider
 
 /// Slider whose track is a sine wave. [06 §2] observed: "a wavy slider"; its meaning (texture/grain
-/// strength) is inferred. The part left of the thumb is drawn dark, the rest gray.
+/// strength) is inferred. B158 observed: a 16 pt gray capsule track up to the thumb with a thick
+/// gray wave on it (4 pt stroke, 15.5 pt amplitude, 37.5 pt wavelength), and a tall white pill
+/// thumb (27 × 58.5); nothing is drawn right of the thumb.
 private struct WavySlider: View {
     @Binding var value: Double
     let ink: Color
 
-    private let thumb: CGFloat = 12
+    private let thumb = CGSize(width: 27, height: 58.5)
+    private let trackHeight: CGFloat = 16
+    private let waveInset: CGFloat = 5.5
 
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width, height = proxy.size.height
-            let inset = thumb / 2
+            let inset = thumb.width / 2
             let x = inset + CGFloat(value) * (width - 2 * inset)
             ZStack(alignment: .topLeading) {
-                wave(width: width, height: height).stroke(ink.opacity(0.18), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                wave(width: width, height: height)
-                    .stroke(ink.opacity(0.75), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .mask(alignment: .leading) { Rectangle().frame(width: x) }
-                Circle()
+                Capsule()
+                    .fill(ink.opacity(0.06))
+                    .frame(width: x, height: trackHeight)
+                    .offset(y: (height - trackHeight) / 2)
+                wave(from: waveInset, to: x, height: height)
+                    .stroke(ink.opacity(0.38), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                Capsule()
                     .fill(Color.white)
-                    .overlay(Circle().strokeBorder(Color.black.opacity(0.25), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
-                    .frame(width: thumb, height: thumb)
+                    .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+                    .frame(width: thumb.width, height: thumb.height)
                     .position(x: x, y: height / 2)
             }
             .contentShape(Rectangle())
@@ -336,7 +405,7 @@ private struct WavySlider: View {
                     .onChanged { value = ThemeControlMath.sliderValue(x: $0.location.x, width: width, inset: inset) }
             )
         }
-        .frame(height: 24)
+        .frame(height: thumb.height)
         .accessibilityElement()
         .accessibilityValue("\(Int((value * 100).rounded())) percent")
         .accessibilityAdjustableAction { direction in
@@ -348,14 +417,15 @@ private struct WavySlider: View {
         }
     }
 
-    private func wave(width: CGFloat, height: CGFloat) -> Path {
+    private func wave(from start: CGFloat, to end: CGFloat, height: CGFloat) -> Path {
         Path { path in
-            let amplitude: CGFloat = 3.5, wavelength: CGFloat = 16, mid = height / 2
-            path.move(to: CGPoint(x: 0, y: mid))
-            var x: CGFloat = 0
-            while x <= width {
-                path.addLine(to: CGPoint(x: x, y: mid + sin(x / wavelength * 2 * .pi) * amplitude))
-                x += 1
+            let amplitude: CGFloat = 15.5, wavelength: CGFloat = 37.5, mid = height / 2
+            guard end > start else { return }
+            path.move(to: CGPoint(x: start, y: mid))
+            var x = start
+            while x < end {
+                x = min(x + 0.5, end)
+                path.addLine(to: CGPoint(x: x, y: mid - sin((x - start) / wavelength * 2 * .pi) * amplitude))
             }
         }
     }
@@ -364,37 +434,39 @@ private struct WavySlider: View {
 // MARK: - Ring knob
 
 /// Round knob with a ring of dots. [06 §2] observed: "a round knob with a dotted ring"; its meaning
-/// (brightness/contrast) is inferred. Dots up to the current value are dark.
+/// (brightness/contrast) is inferred. B158 observed: a 40 pt circle outline (1 pt, black ≈ 12 %),
+/// 20 light gray 4.5 pt dots on a 31.75 pt radius all around, and a white 8 × 15.5 pill on the
+/// ring that marks the value (at the top for the middle value; the 270° sweep is inferred).
 private struct RingKnob: View {
     @Binding var value: Double
     let ink: Color
 
-    private let dotCount = 12
+    private let dotCount = 20
+    private let ringRadius: CGFloat = 31.75
 
     var body: some View {
-        GeometryReader { proxy in
-            let side = min(proxy.size.width, proxy.size.height)
-            let radius = side / 2 - 2.5
+        let markerAngle = ThemeControlMath.knobAngle(value: value)
+        return GeometryReader { proxy in
             ZStack {
                 ForEach(0..<dotCount, id: \.self) { index in
-                    let fraction = Double(index) / Double(dotCount - 1)
-                    let angle = Angle.degrees(ThemeControlMath.knobAngle(value: fraction))
+                    let angle = Double(index) * 360 / Double(dotCount)
                     Circle()
-                        .fill(ink.opacity(fraction <= value + 0.001 ? 0.7 : 0.18))
-                        .frame(width: 3, height: 3)
-                        .offset(y: -radius)
-                        .rotationEffect(angle)
+                        .fill(ink.opacity(0.11))
+                        .frame(width: 4.5, height: 4.5)
+                        .offset(y: -ringRadius)
+                        .rotationEffect(.degrees(angle))
+                        // The marker covers the dot under it.
+                        .opacity(Self.angularDistance(angle, markerAngle) < 360 / Double(dotCount) / 2 ? 0 : 1)
                 }
                 Circle()
-                    .fill(Color.white)
-                    .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.2), radius: 1.5, y: 1)
-                    .frame(width: side - 12, height: side - 12)
+                    .strokeBorder(ink.opacity(0.12), lineWidth: 1)
+                    .frame(width: 40, height: 40)
                 Capsule()
-                    .fill(Color.black.opacity(0.7))
-                    .frame(width: 2, height: 5)
-                    .offset(y: -(side - 12) / 2 + 4)
-                    .rotationEffect(.degrees(ThemeControlMath.knobAngle(value: value)))
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
+                    .frame(width: 8, height: 15.5)
+                    .offset(y: -ringRadius)
+                    .rotationEffect(.degrees(markerAngle))
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .contentShape(Circle())
@@ -416,5 +488,10 @@ private struct RingKnob: View {
             @unknown default: break
             }
         }
+    }
+
+    static func angularDistance(_ a: Double, _ b: Double) -> Double {
+        let d = abs((a - b).truncatingRemainder(dividingBy: 360))
+        return min(d, 360 - d)
     }
 }
