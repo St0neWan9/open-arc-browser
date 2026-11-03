@@ -480,32 +480,19 @@ public enum ThemeDerivation {
         return RGBAColor(red: color.red * f, green: color.green * f, blue: color.blue * f, alpha: color.alpha)
     }
 
-    /// Strongest lightening or darkening the brightness knob applies at its ends (0 or 1).
-    /// inferred: [06 §2] shows the knob ("brightness/contrast", inferred) but not its range.
-    public static let maxBrightnessShift: Double = 0.5
-
-    /// Applies `Theme.brightness` to one theme color. 0.5 is neutral and returns the color unchanged;
-    /// above it the color is blended toward white, below it toward black, linearly up to
-    /// `maxBrightnessShift` at the ends. inferred (the original mapping is unknown).
-    public static func applyBrightness(_ color: RGBAColor, brightness: Double) -> RGBAColor {
-        let b = min(max(brightness, 0), 1)
-        guard b != Theme.defaultBrightness else { return color }
-        let amount = abs(b - 0.5) * 2 * maxBrightnessShift
-        if b > 0.5 { return overlayWhite(color, amount: amount) }
-        return shade(color, by: 1 - amount)
+    /// Light window color of one theme color: the theme layer (strength = the theme's intensity,
+    /// 0.8 for presets; white veil) over the reference backdrop, composited in Display P3. [07 §8.2]
+    /// inferred (layer math; fitted: backdrop gray). E12 max 2.7/255, E8 max 1.3/255.
+    public static func lightWindow(_ color: RGBAColor, intensity: Double = Theme.defaultIntensity) -> RGBAColor {
+        windowColor(color, appearance: .light, strength: intensity, backdropGray: lightWindowBackdropGray)
     }
 
-    /// Light window color of one theme color: the theme layer (preset strength 0.8, white veil)
-    /// over the reference backdrop, composited in Display P3. [07 §8.2] inferred (layer
-    /// math; fitted: backdrop gray). E12 max 2.7/255, E8 max 1.3/255.
-    public static func lightWindow(_ color: RGBAColor) -> RGBAColor {
-        windowColor(color, appearance: .light, strength: presetThemeStrength, backdropGray: lightWindowBackdropGray)
-    }
-
-    /// Dark window color of one theme color: the theme layer (strength 0.74, black veil) over the
-    /// reference backdrop, composited in Display P3. [07 §8.2] inferred. E12 max 3.1/255, E8 2.5/255.
-    public static func darkVariant(_ color: RGBAColor) -> RGBAColor {
-        windowColor(color, appearance: .dark, strength: darkThemeStrength, backdropGray: darkWindowBackdropGray)
+    /// Dark window color of one theme color: the theme layer (strength 0.74 at the preset intensity,
+    /// scaled with it; black veil) over the reference backdrop, composited in Display P3. [07 §8.2]
+    /// inferred (the scaling is inferred, B159). E12 max 3.1/255, E8 2.5/255.
+    public static func darkVariant(_ color: RGBAColor, intensity: Double = Theme.defaultIntensity) -> RGBAColor {
+        windowColor(color, appearance: .dark, strength: darkThemeStrength * intensity / presetThemeStrength,
+                    backdropGray: darkWindowBackdropGray)
     }
 
     /// The theme hue at a given OKLCH lightness, with the theme's chroma scaled by `chromaFactor`.
@@ -571,13 +558,15 @@ public enum ThemeDerivation {
 
     /// Derives the palette for a theme in an already resolved appearance ([07 §8]). With several
     /// color dots only the first drives the fills (how several colors blend is unknown).
-    /// `Theme.brightness` lightens or darkens the theme colors first (`applyBrightness`, inferred).
+    /// `Theme.intensity` (the wavy slider) sets how strongly the theme colors cover the window (B159).
     public static func palette(forStyle style: ThemeStyle?, appearance: ResolvedAppearance) -> ThemePalette {
-        let brightness = style?.brightness ?? Theme.defaultBrightness
-        let picked = (style?.colors ?? []).map { applyBrightness($0, brightness: brightness) }
+        let intensity = min(max(style?.intensity ?? Theme.defaultIntensity, 0), 1)
+        let picked = style?.colors ?? []
         let theme = picked.first ?? defaultBaseColor
         let isDark = appearance == .dark
-        let windowOf: (RGBAColor) -> RGBAColor = { isDark ? darkVariant($0) : lightWindow($0) }
+        let windowOf: (RGBAColor) -> RGBAColor = {
+            isDark ? darkVariant($0, intensity: intensity) : lightWindow($0, intensity: intensity)
+        }
         let window = windowOf(theme)
         let white = RGBAColor(hex: 0xFFFFFF), black = RGBAColor(hex: 0x000000)
 
@@ -604,7 +593,7 @@ public enum ThemeDerivation {
             primaryText: primaryText,
             secondaryText: withAlpha(chromeInk, inkOpacity.spaceName),
             backgroundGradientColors: picked.isEmpty
-                ? (isDark ? defaultWindowStops.map(darkVariant) : defaultWindowStops)
+                ? (isDark ? defaultWindowStops.map { darkVariant($0) } : defaultWindowStops)
                 : picked.map(windowOf)
         )
         // Default wash: diagonal at the sampled places [07 §8.5]; several dots: top → bottom [07 §8.4].

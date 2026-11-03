@@ -230,7 +230,7 @@ private struct IDMaps {
 
     func theme(_ v: Theme) -> Theme? {
         guard let id = themes[v.id] else { return nil }
-        var r = Theme(id: id, appearance: v.appearance, colors: v.colors, grain: v.grain, brightness: v.brightness, now: v.meta.createdAt)
+        var r = Theme(id: id, appearance: v.appearance, colors: v.colors, grain: v.grain, brightness: v.brightness, intensity: v.intensity, now: v.meta.createdAt)
         r.meta = v.meta
         return r
     }

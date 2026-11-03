@@ -227,20 +227,19 @@ enum ThemeControlMath {
         return min(max((x - inset) / span, 0), 1)
     }
 
-    /// The ring knob sweeps 270 degrees, clockwise from the lower left (value 0) over the top
-    /// (0.5) to the lower right (1). The sweep is inferred; [06 §2] only shows a ring with dots.
-    static let knobSweepDegrees = 270.0
+    /// The grain knob turns once around, clockwise from 12 o'clock (value 0). B159: Arc shows grain
+    /// 0 with the marker at the top (observed); the full turn is inferred.
+    static let knobSweepDegrees = 360.0
 
-    /// Value for a pointer at `point` relative to the knob's center (y grows downwards). Points in
-    /// the gap at the bottom snap to the nearer end.
+    /// Value for a pointer at `point` relative to the knob's center (y grows downwards).
     static func knobValue(dx: Double, dy: Double) -> Double {
-        let degrees = atan2(dx, -dy) * 180 / .pi   // clockwise from 12 o'clock, -180...180
-        let half = knobSweepDegrees / 2
-        return (min(max(degrees, -half), half) + half) / knobSweepDegrees
+        var degrees = atan2(dx, -dy) * 180 / .pi   // clockwise from 12 o'clock, -180...180
+        if degrees < 0 { degrees += 360 }
+        return min(max(degrees / knobSweepDegrees, 0), 1)
     }
 
-    /// Angle in degrees, clockwise from 12 o'clock, of the knob indicator for `value`.
+    /// Angle in degrees, clockwise from 12 o'clock, of the knob marker for `value`.
     static func knobAngle(value: Double) -> Double {
-        (min(max(value, 0), 1) - 0.5) * knobSweepDegrees
+        min(max(value, 0), 1) * knobSweepDegrees
     }
 }

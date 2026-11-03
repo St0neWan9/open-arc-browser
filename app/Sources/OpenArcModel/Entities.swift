@@ -92,17 +92,20 @@ public struct ThemeStyle: Hashable, Sendable {
     public var colors: [RGBAColor]
     public var grain: Double
     public var brightness: Double
+    public var intensity: Double
 
     public init(
         appearance: ThemeAppearance = .automatic,
         colors: [RGBAColor],
         grain: Double = 0,
-        brightness: Double = Theme.defaultBrightness
+        brightness: Double = Theme.defaultBrightness,
+        intensity: Double = Theme.defaultIntensity
     ) {
         self.appearance = appearance
         self.colors = colors
         self.grain = grain
         self.brightness = brightness
+        self.intensity = intensity
     }
 }
 
@@ -117,16 +120,23 @@ public struct Theme: SyncableEntity, Hashable {
     public var appearance: ThemeAppearance
     /// Color dots on the picker; there can be several (06 §2, observed). The first one is the primary.
     public var colors: [RGBAColor]
-    /// Texture/grain strength 0...1 (06 §2 wavy slider; purpose inferred).
+    /// Grain (noise overlay) strength 0...1, set with the ring knob (06 §2; B159: Arc stores the
+    /// knob as its noise factor, 0 with the marker at the top, observed in its sidebar data).
     public var grain: Double
-    /// Brightness 0...1 set with the ring knob; 0.5 is neutral (06 §2 ring knob, "brightness/contrast",
-    /// inferred). Part of the `style` group. Files and records written before this field existed
-    /// decode with the neutral default.
+    /// Legacy: the value the ring knob set before B159, when it was read as a brightness control.
+    /// Nothing sets or applies it any more; it is kept so records round-trip between builds.
     public var brightness: Double
+    /// Strength of the theme color over the window, 0...1, set with the wavy slider (06 §2). B159:
+    /// Arc stores it as its intensity factor (0.8 for preset picks, 1 also occurs; observed in its
+    /// sidebar data) and the slider thumb sits at that share of the track (observed). Part of the
+    /// `style` group; data written before the field existed decodes with `defaultIntensity`.
+    public var intensity: Double
     public var meta: SyncMetadata
 
-    /// Neutral brightness: the theme colors are used as picked. inferred.
+    /// Neutral brightness (legacy, see `brightness`).
     public static let defaultBrightness = 0.5
+    /// Intensity of a new theme: Arc's value for preset picks. [07 §8.2] observed (data).
+    public static let defaultIntensity = 0.8
 
     public init(
         id: UUID,
@@ -134,6 +144,7 @@ public struct Theme: SyncableEntity, Hashable {
         colors: [RGBAColor],
         grain: Double = 0,
         brightness: Double = Theme.defaultBrightness,
+        intensity: Double = Theme.defaultIntensity,
         now: Date
     ) {
         self.id = id
@@ -141,25 +152,28 @@ public struct Theme: SyncableEntity, Hashable {
         self.colors = colors
         self.grain = grain
         self.brightness = brightness
+        self.intensity = intensity
         self.meta = .new(at: now, groups: FieldGroup.self)
     }
 
     /// The `style` group's values. Setting it does not stamp; use `TreeOps.editTheme`.
     public var style: ThemeStyle {
-        get { ThemeStyle(appearance: appearance, colors: colors, grain: grain, brightness: brightness) }
+        get { ThemeStyle(appearance: appearance, colors: colors, grain: grain, brightness: brightness, intensity: intensity) }
         set {
             appearance = newValue.appearance
             colors = newValue.colors
             grain = newValue.grain
             brightness = newValue.brightness
+            intensity = newValue.intensity
         }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, appearance, colors, grain, brightness, meta
+        case id, appearance, colors, grain, brightness, intensity, meta
     }
 
-    /// Decodes a theme; a missing `brightness` (data written before the field existed) becomes the default.
+    /// Decodes a theme; a missing `brightness` or `intensity` (data written before the field
+    /// existed) becomes its default.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -167,6 +181,7 @@ public struct Theme: SyncableEntity, Hashable {
         colors = try c.decode([RGBAColor].self, forKey: .colors)
         grain = try c.decode(Double.self, forKey: .grain)
         brightness = try c.decodeIfPresent(Double.self, forKey: .brightness) ?? Theme.defaultBrightness
+        intensity = try c.decodeIfPresent(Double.self, forKey: .intensity) ?? Theme.defaultIntensity
         meta = try c.decode(SyncMetadata.self, forKey: .meta)
     }
 }

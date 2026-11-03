@@ -237,24 +237,31 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertFalse(palette.usesLightInk)
     }
 
-    /// `Theme.brightness` (the [06 §2] ring knob, inferred): 0.5 leaves the colors exactly as
-    /// picked, higher lightens and lower darkens every color dot before the [07 §8] mapping.
-    func testBrightnessShiftsThemeColors() {
+    /// B159: `Theme.intensity` (the [06 §2] wavy slider) is the theme layer's strength. The
+    /// default 0.8 is the preset strength the window colors were fitted with; more intensity gives
+    /// a more colorful window, less a paler one; the legacy `brightness` no longer changes anything.
+    func testIntensitySetsTheThemeLayerStrength_06_2() {
         let color = RGBAColor(hex: 0x6E5BD6)
         var theme = Theme(id: UUID(), appearance: .light, colors: [color, RGBAColor(hex: 0x3FAE6A)], now: Date(timeIntervalSince1970: 0))
-        XCTAssertEqual(ThemeDerivation.palette(for: theme).windowBackground, ThemeDerivation.lightWindow(color))
-        XCTAssertEqual(ThemeDerivation.applyBrightness(color, brightness: 0.5), color)
+        XCTAssertEqual(theme.intensity, 0.8)
+        let base = ThemeDerivation.palette(for: theme).windowBackground
+        XCTAssertEqual(base, ThemeDerivation.lightWindow(color))
+        XCTAssertEqual(ThemeDerivation.lightWindow(color, intensity: ThemeDerivation.presetThemeStrength), base)
 
         theme.brightness = 1
-        let bright = ThemeDerivation.palette(for: theme)
-        let lifted = ThemeDerivation.overlayWhite(color, amount: ThemeDerivation.maxBrightnessShift)
-        XCTAssertEqual(bright.windowBackground, ThemeDerivation.lightWindow(lifted))
-        XCTAssertEqual(bright.backgroundGradientColors.count, 2)
+        XCTAssertEqual(ThemeDerivation.palette(for: theme).windowBackground, base, "brightness is legacy")
 
-        theme.brightness = 0
-        let dark = ThemeDerivation.palette(for: theme)
-        XCTAssertLessThan(ThemeDerivation.luminance(dark.windowBackground), ThemeDerivation.luminance(ThemeDerivation.lightWindow(color)))
-        XCTAssertEqual(dark.windowBackground.alpha, color.alpha)
+        func chroma(_ c: RGBAColor) -> Double { max(c.red, c.green, c.blue) - min(c.red, c.green, c.blue) }
+        theme.intensity = 1
+        let strong = ThemeDerivation.palette(for: theme)
+        XCTAssertGreaterThan(chroma(strong.windowBackground), chroma(base))
+        XCTAssertEqual(strong.backgroundGradientColors.count, 2)
+        theme.intensity = 0.2
+        XCTAssertLessThan(chroma(ThemeDerivation.palette(for: theme).windowBackground), chroma(base))
+
+        theme.appearance = .dark
+        theme.intensity = 0.8
+        XCTAssertEqual(ThemeDerivation.palette(for: theme).windowBackground, ThemeDerivation.darkVariant(color))
     }
 
     /// [07 §7.1] E14: the web panel edge shadow per appearance (calibrated against Arc on white

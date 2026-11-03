@@ -74,6 +74,7 @@ DEFINE SCHEMA
         style_colorsEnc         ENCRYPTED BYTES,
         style_grainEnc          ENCRYPTED DOUBLE,
         style_brightnessEnc     ENCRYPTED DOUBLE,
+        style_intensityEnc      ENCRYPTED DOUBLE,
         meta_createdAt          TIMESTAMP,
         meta_modifiedAt         TIMESTAMP,
         meta_version            INT64,

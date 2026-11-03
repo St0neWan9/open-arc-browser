@@ -128,7 +128,10 @@ enum ThemeFields {
     /// Records saved before brightness existed have neither key and decode with
     /// `Theme.defaultBrightness`.
     static let brightness = FieldSpec("style_brightnessEnc", G.style, encrypted: true, replacing: "style_brightness")
-    static let all = [appearance, colors, grain, brightness]
+    /// B159, encrypted from the start. Records saved before it existed lack the key and decode
+    /// with `Theme.defaultIntensity`.
+    static let intensity = FieldSpec("style_intensityEnc", G.style, encrypted: true)
+    static let all = [appearance, colors, grain, brightness, intensity]
 }
 
 enum SpaceFields {

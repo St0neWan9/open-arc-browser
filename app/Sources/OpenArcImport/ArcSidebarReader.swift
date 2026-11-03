@@ -257,6 +257,9 @@ public enum ArcSidebarReader {
         if let noise = ((blended?["modifiers"] as? [String: Any])?["noiseFactor"] as? NSNumber)?.doubleValue, noise.isFinite {
             style.grain = min(max(noise, 0), 1)
         }
+        if let intensity = ((blended?["modifiers"] as? [String: Any])?["intensityFactor"] as? NSNumber)?.doubleValue, intensity.isFinite {
+            style.intensity = min(max(intensity, 0), 1)
+        }
         return style
     }
 

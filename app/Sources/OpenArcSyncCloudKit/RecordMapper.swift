@@ -85,6 +85,7 @@ struct RecordMapper: Sendable {
             w.set(ThemeFields.colors, Self.json(v.colors))
             w.set(ThemeFields.grain, v.grain)
             w.set(ThemeFields.brightness, v.brightness)
+            w.set(ThemeFields.intensity, v.intensity)
         case .space(let v):
             w.set(SpaceFields.name, v.name)
             w.set(SpaceFields.icon, v.icon)
@@ -202,7 +203,8 @@ struct RecordMapper: Sendable {
             let colors: [RGBAColor] = try r.json(ThemeFields.colors)
             var v = Theme(
                 id: uuid, appearance: appearance, colors: colors, grain: try r.required(ThemeFields.grain),
-                brightness: r.optional(ThemeFields.brightness) ?? Theme.defaultBrightness, now: now
+                brightness: r.optional(ThemeFields.brightness) ?? Theme.defaultBrightness,
+                intensity: r.optional(ThemeFields.intensity) ?? Theme.defaultIntensity, now: now
             )
             v.meta = meta
             return .theme(v)

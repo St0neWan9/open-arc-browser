@@ -231,7 +231,7 @@ public enum TreeOps {
         var s = state
         s.themes[id] = Theme(
             id: id, appearance: style.appearance, colors: style.colors,
-            grain: style.grain, brightness: style.brightness, now: now
+            grain: style.grain, brightness: style.brightness, intensity: style.intensity, now: now
         )
         return s
     }
@@ -249,7 +249,7 @@ public enum TreeOps {
         return s
     }
 
-    /// Replaces a theme's `style` group (appearance, colors, grain, brightness). Stamps only
+    /// Replaces a theme's `style` group (appearance, colors, grain, brightness, intensity). Stamps only
     /// `Theme.style`. An unchanged style returns the state untouched (no stamp, no version bump),
     /// because the editor applies every change live. [06 §2] observed.
     public static func editTheme(_ state: WorkspaceState, id: UUID, style: ThemeStyle, now: Date) throws -> WorkspaceState {

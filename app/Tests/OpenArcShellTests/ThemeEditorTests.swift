@@ -183,15 +183,15 @@ final class ThemeEditorTests: XCTestCase {
         XCTAssertEqual(ThemeControlMath.sliderValue(x: 5, width: 8, inset: 6), 0, "a track with no room is 0")
     }
 
-    func testKnobSweepsFromLowerLeftOverTheTopToLowerRight() {
-        XCTAssertEqual(ThemeControlMath.knobValue(dx: 0, dy: -10), 0.5, accuracy: 1e-9)   // 12 o'clock
-        XCTAssertEqual(ThemeControlMath.knobValue(dx: -10, dy: 10), 0, accuracy: 1e-9)    // 7:30
-        XCTAssertEqual(ThemeControlMath.knobValue(dx: 10, dy: 10), 1, accuracy: 1e-9)     // 4:30
-        XCTAssertEqual(ThemeControlMath.knobValue(dx: -1, dy: 10), 0, accuracy: 1e-9)     // gap snaps to nearer end
-        XCTAssertEqual(ThemeControlMath.knobValue(dx: 1, dy: 10), 1, accuracy: 1e-9)
-        XCTAssertEqual(ThemeControlMath.knobAngle(value: 0), -135, accuracy: 1e-9)
-        XCTAssertEqual(ThemeControlMath.knobAngle(value: 1), 135, accuracy: 1e-9)
-        for v in stride(from: 0.0, through: 1.0, by: 0.1) {
+    /// B159: the grain knob starts at 12 o'clock (0) and turns once clockwise to 1.
+    func testKnobTurnsOnceClockwiseFromTheTop() {
+        XCTAssertEqual(ThemeControlMath.knobValue(dx: 0, dy: -10), 0, accuracy: 1e-9)    // 12 o'clock
+        XCTAssertEqual(ThemeControlMath.knobValue(dx: 10, dy: 0), 0.25, accuracy: 1e-9)  // 3 o'clock
+        XCTAssertEqual(ThemeControlMath.knobValue(dx: 0, dy: 10), 0.5, accuracy: 1e-9)   // 6 o'clock
+        XCTAssertEqual(ThemeControlMath.knobValue(dx: -10, dy: 0), 0.75, accuracy: 1e-9) // 9 o'clock
+        XCTAssertEqual(ThemeControlMath.knobAngle(value: 0), 0, accuracy: 1e-9)
+        XCTAssertEqual(ThemeControlMath.knobAngle(value: 1), 360, accuracy: 1e-9)
+        for v in stride(from: 0.0, to: 1.0, by: 0.1) {
             let a = ThemeControlMath.knobAngle(value: v) * .pi / 180
             XCTAssertEqual(ThemeControlMath.knobValue(dx: sin(a) * 10, dy: -cos(a) * 10), v, accuracy: 1e-9)
         }
@@ -261,7 +261,7 @@ final class ThemeEditorTests: XCTestCase {
         XCTAssertEqual(model.workspace.spaces[id]?.themeID, themeID)
         XCTAssertEqual(model.workspace.themes.count, before.themes.count)
         XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0]))
-        XCTAssertNotEqual(model.sidebar.palette.windowBackground, before.themes[themeID]?.colors.first.map(ThemeDerivation.lightWindow))
+        XCTAssertNotEqual(model.sidebar.palette.windowBackground, before.themes[themeID]?.colors.first.map { ThemeDerivation.lightWindow($0) })
         model.stop()
     }
 
@@ -285,28 +285,24 @@ final class ThemeEditorTests: XCTestCase {
         model.stop()
     }
 
-    /// [06 §2] ring knob (brightness, inferred): the knob value is stored as `Theme.brightness` in
-    /// the `style` group, reopening shows it, and the window color follows it.
-    func testBrightnessKnobIsStoredAndChangesThePalette() throws {
+    /// B159: the wavy slider sets `Theme.intensity` in the `style` group (default 0.8), reopening
+    /// shows it, and the window color follows it.
+    func testIntensitySliderIsStoredAndChangesThePalette() throws {
         let (model, id) = editedModel()
         var draft = model.spaceFlow.themeDraft(of: id)
         draft.colors = [RGBAColor(hex: 0x3D6FE0)]
         model.spaceFlow.applyThemeDraft(draft, to: id)
         let themeID = try XCTUnwrap(model.workspace.spaces[id]?.themeID)
-        XCTAssertEqual(model.workspace.themes[themeID]?.brightness, Theme.defaultBrightness)
-        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0]), "neutral knob keeps the color")
+        XCTAssertEqual(model.workspace.themes[themeID]?.intensity, Theme.defaultIntensity)
+        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0]))
 
-        draft.brightness = 0.9
+        draft.intensity = 1
         model.spaceFlow.applyThemeDraft(draft, to: id)
         let theme = try XCTUnwrap(model.workspace.themes[themeID])
-        XCTAssertEqual(theme.brightness, 0.9, accuracy: 1e-9)
+        XCTAssertEqual(theme.intensity, 1, accuracy: 1e-9)
         XCTAssertEqual(theme.meta.modifiedAt(Theme.FieldGroup.style), later)
-        XCTAssertEqual(model.spaceFlow.themeDraft(of: id).brightness, 0.9, accuracy: 1e-9, "reopening shows the knob value")
-        XCTAssertGreaterThan(
-            ThemeDerivation.luminance(model.sidebar.palette.windowBackground),
-            ThemeDerivation.luminance(draft.colors[0]),
-            "a brighter knob lightens the window"
-        )
+        XCTAssertEqual(model.spaceFlow.themeDraft(of: id).intensity, 1, accuracy: 1e-9, "reopening shows the slider value")
+        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0], intensity: 1))
         model.stop()
     }
 
@@ -396,7 +392,7 @@ final class ThemeEditorTests: XCTestCase {
     func testSeveralPointsGiveGradientStops() {
         let colors = [ThemePad.color(at: CGPoint(x: 0.1, y: 0.2)), ThemePad.color(at: CGPoint(x: 0.6, y: 0.4))]
         let palette = ThemeDerivation.palette(for: Theme(id: UUID(), colors: colors, now: fixture.now))
-        XCTAssertEqual(palette.backgroundGradientColors, colors.map(ThemeDerivation.lightWindow), "[07 §8] each stop mapped like the window")
+        XCTAssertEqual(palette.backgroundGradientColors, colors.map { ThemeDerivation.lightWindow($0) }, "[07 §8] each stop mapped like the window")
         XCTAssertEqual(palette.windowBackground, ThemeDerivation.lightWindow(colors[0]))
     }
 }

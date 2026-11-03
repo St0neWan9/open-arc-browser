@@ -5,7 +5,9 @@ import OpenArcDesign
 /// The theme bubble. [06 §2] observed: three icon segments (automatic / light / dark), a dot-grid
 /// color pad with the hint "Tap to pick a color for this space" and − / + buttons, one row of nine
 /// round swatches with left and right arrows that page through named groups, and at the bottom a
-/// wavy slider (grain, inferred) and a ring knob (brightness, inferred).
+/// wavy slider (the theme color's intensity) and a ring knob (grain); B159 observed from Arc's
+/// stored values (intensity 0.8 puts the thumb at 80 % of the track, grain 0 puts the knob marker
+/// at the top).
 /// [07 §6] observed: visible bubble ≈ 356 × 508, radius 20, padding 8, a 340 × 340 dot pad,
 /// 24 pt preset swatches at a 29.5 pitch, 32 pt segment buttons at a 40 pitch. B158 (2x capture of
 /// Arc 1.170, 2026-11-03, observed): the segments and the − / + sit inside the pad, a flat
@@ -271,16 +273,16 @@ struct ThemeEditorView: View {
     /// The wave slider from x 10 of the content, the knob 16 from its right edge. B158 observed.
     private var bottomControls: some View {
         HStack(spacing: 0) {
-            WavySlider(value: $theme.grain, ink: ink)
+            WavySlider(value: $theme.intensity, ink: ink)
                 .frame(width: M.sliderWidth)
                 .padding(.leading, M.sliderLeading)
+                .accessibilityLabel("Color intensity")
+                .accessibilityIdentifier("openarc.themeEditor.intensity")
+            Spacer(minLength: 0)
+            RingKnob(value: $theme.grain, ink: ink)
+                .padding(.trailing, M.knobTrailing)
                 .accessibilityLabel("Texture")
                 .accessibilityIdentifier("openarc.themeEditor.grain")
-            Spacer(minLength: 0)
-            RingKnob(value: $theme.brightness, ink: ink)
-                .padding(.trailing, M.knobTrailing)
-                .accessibilityLabel("Brightness")
-                .accessibilityIdentifier("openarc.themeEditor.brightness")
         }
         .frame(height: M.knobSize)
     }
@@ -322,10 +324,10 @@ enum ThemeEditorMetrics {
     static let controlsTop: CGFloat = 418
     static let knobSize: CGFloat = 68
     static let knobTrailing: CGFloat = 16
-    /// The slider's track starts 10 pt into the content (bubble x 18); its thumb travel ends
-    /// before the knob (inferred).
+    /// The slider's track runs from 10 pt into the content (bubble x 18) to bubble x 241 (B159:
+    /// a 2x capture of Arc's test Space, thumb center at x 192 for intensity 0.8).
     static let sliderLeading: CGFloat = 10
-    static let sliderWidth: CGFloat = 234
+    static let sliderWidth: CGFloat = 223
     /// Ink opacities over the light fill: icons ≈ 48 % (#7F7D7C), − / + and arrows 43 %
     /// (#8C8988), dimmed arrow 13 % (#DBD7D5), selected segment block 8 % (#E0DDDB on the pad),
     /// pad 3.5 % (#F4F1EE on #FDF9F6). The dimmed − / + is inferred.
@@ -369,10 +371,10 @@ private struct DotGrid: View {
 
 // MARK: - Wavy slider
 
-/// Slider whose track is a sine wave. [06 §2] observed: "a wavy slider"; its meaning (texture/grain
-/// strength) is inferred. B158 observed: a 16 pt gray capsule track up to the thumb with a thick
-/// gray wave on it (4 pt stroke, 15.5 pt amplitude, 37.5 pt wavelength), and a tall white pill
-/// thumb (27 × 58.5); nothing is drawn right of the thumb.
+/// Slider whose track is a sine wave. [06 §2] observed: "a wavy slider"; it sets the theme color's
+/// intensity (B159). B158 / B159 observed: a 16 pt gray capsule track over the whole width, a thick
+/// gray wave on it (4 pt stroke, 15.5 pt amplitude, 37.5 pt wavelength) that is lighter right of the
+/// thumb, and a tall white pill thumb (27 × 58.5).
 private struct WavySlider: View {
     @Binding var value: Double
     let ink: Color
@@ -389,10 +391,13 @@ private struct WavySlider: View {
             ZStack(alignment: .topLeading) {
                 Capsule()
                     .fill(ink.opacity(0.06))
-                    .frame(width: x, height: trackHeight)
+                    .frame(width: width, height: trackHeight)
                     .offset(y: (height - trackHeight) / 2)
-                wave(from: waveInset, to: x, height: height)
+                wave(from: waveInset, to: width - waveInset, height: height)
+                    .stroke(ink.opacity(0.16), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                wave(from: waveInset, to: width - waveInset, height: height)
                     .stroke(ink.opacity(0.38), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    .mask(alignment: .leading) { Rectangle().frame(width: x) }
                 Capsule()
                     .fill(Color.white)
                     .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
@@ -433,10 +438,10 @@ private struct WavySlider: View {
 
 // MARK: - Ring knob
 
-/// Round knob with a ring of dots. [06 §2] observed: "a round knob with a dotted ring"; its meaning
-/// (brightness/contrast) is inferred. B158 observed: a 40 pt circle outline (1 pt, black ≈ 12 %),
+/// Round knob with a ring of dots. [06 §2] observed: "a round knob with a dotted ring"; it sets the
+/// grain (B159). B158 observed: a 40 pt circle outline (1 pt, black ≈ 12 %),
 /// 20 light gray 4.5 pt dots on a 31.75 pt radius all around, and a white 8 × 15.5 pill on the
-/// ring that marks the value (at the top for the middle value; the 270° sweep is inferred).
+/// ring that marks the value (at the top for 0, B159 observed; one clockwise turn to 1, inferred).
 private struct RingKnob: View {
     @Binding var value: Double
     let ink: Color

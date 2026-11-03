@@ -54,20 +54,24 @@ struct SpaceThemeDraft: Equatable {
     /// [07 §8.5] observed: the bubble of a Space with no picked color shows the light segment.
     var appearance: ThemeAppearance = .light
     var colors: [RGBAColor] = []
+    /// Ring knob value, stored as `Theme.grain` (B159).
     var grain: Double = 0
-    /// Ring knob value, stored as `Theme.brightness`. [06 §2] inferred ("brightness/contrast").
+    /// Legacy value carried through unchanged (`Theme.brightness`).
     var brightness: Double = Theme.defaultBrightness
+    /// Wavy slider value, stored as `Theme.intensity` (B159).
+    var intensity: Double = Theme.defaultIntensity
 
     /// The model value of the draft.
     var style: ThemeStyle {
-        ThemeStyle(appearance: appearance, colors: colors, grain: grain, brightness: brightness)
+        ThemeStyle(appearance: appearance, colors: colors, grain: grain, brightness: brightness, intensity: intensity)
     }
 }
 
 extension SpaceThemeDraft {
     /// The draft that shows an existing theme.
     init(_ style: ThemeStyle) {
-        self.init(appearance: style.appearance, colors: style.colors, grain: style.grain, brightness: style.brightness)
+        self.init(appearance: style.appearance, colors: style.colors, grain: style.grain, brightness: style.brightness,
+                  intensity: style.intensity)
     }
 }
 
