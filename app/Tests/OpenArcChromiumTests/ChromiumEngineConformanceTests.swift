@@ -37,11 +37,14 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // --openarc-fake-bluetooth=off (plan B155, tests only): a Bluetooth adapter that is allowed,
         // starts off and turns on when asked, so the phone (hybrid) path shows "turn on Bluetooth"
         // and then its QR code without real Bluetooth.
+        // --host-resolver-rules (plan C36): one made-up host fails name resolution, for the
+        // error-page check; every other name resolves as usual.
         try PasswordFillReauth.prepareLocalState(in: dataDirectory)
         let engine = ChromiumEngine(userDataDirectory: dataDirectory, additionalSwitches: [
             "--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--use-mock-keychain",
             "--openarc-fake-icloud-keychain", "--openarc-fake-device-reauth=fail,pass",
             "--openarc-fake-bluetooth=off",
+            "--host-resolver-rules=MAP \(NetErrorPageTestPage.unresolvableHost) ^NOTFOUND",
         ])
         XCTAssertTrue(engine.engineVersion.hasPrefix("Chromium "))
 
@@ -173,6 +176,10 @@ final class ChromiumEngineConformanceTests: XCTestCase {
 
         // Plan C13 (Chromium 157 regression): submitting a typed login offers to save it.
         try await checkPasswordSavePrompt(engine, server: identityServer, profileID: UUID())
+
+        // Plan C36 (Chromium 157 regression): error pages get their final error and reload by
+        // themselves; the image menu carries the image's address for the shell's image search.
+        try await checkNetErrorPages(engine, server: identityServer, profileID: UUID())
 
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.

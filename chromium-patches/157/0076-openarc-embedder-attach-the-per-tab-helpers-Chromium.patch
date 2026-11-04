@@ -21,23 +21,26 @@ lives as long as the WebContents. That holder also owns
 ManagePasswordsUIController through the embedder constructor of patch 0023
 (registered in the holder's UnownedUserDataHost, found through
 SetEmbedderUserDataHostLookup(), destroyed in WebContentsDestroyed()), so the
-password save/update prompt works again. Other helpers that need a
-TabInterface (TabDialogs, CoreTabHelper, NetErrorTabHelper,
-PopupOpenerTabHelper, ...) are skipped; the list is in the code.
+password save/update prompt works again. NetErrorTabHelper is owned the
+same way, through the embedder constructor of patch "let an embedder own a
+tab's NetErrorTabHelper", so error pages get their final DNS probe status
+(probes stay off, plan C27). Other helpers that need a TabInterface
+(TabDialogs, CoreTabHelper, PopupOpenerTabHelper, ...) are skipped; the list
+is in the code.
 
-Needed by plan tasks C6b, C9, C13, C16 and B123 on Chromium 157. Upstream
+Needed by plan tasks C6b, C9, C13, C16, C36 and B123 on Chromium 157. Upstream
 behaviour without it: a WebContents outside a Browser tab strip gets only
 session, zoom, infobar and autofill helpers.
 ---
- openarc/BUILD.gn                       |  27 ++
- openarc/browser/openarc_tab_helpers.mm | 370 ++++++++++++++++++++++++-
- 2 files changed, 396 insertions(+), 1 deletion(-)
+ openarc/BUILD.gn                       |  28 ++
+ openarc/browser/openarc_tab_helpers.mm | 386 ++++++++++++++++++++++++-
+ 2 files changed, 413 insertions(+), 1 deletion(-)
 
 diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
-index 837812f15330..d3df8923b9c7 100644
+index 837812f15330..12fe314c399f 100644
 --- a/openarc/BUILD.gn
 +++ b/openarc/BUILD.gn
-@@ -140,6 +140,32 @@ source_set("embedder") {
+@@ -140,6 +140,33 @@ source_set("embedder") {
      "//chrome/browser/ui:tab_helpers",
      "//chrome/browser/ui:tab_helpers_impl",
      "//chrome/browser/ui/login",
@@ -52,6 +55,7 @@ index 837812f15330..d3df8923b9c7 100644
 +    "//chrome/browser/login_detection",
 +    "//chrome/browser/lookalikes",
 +    "//chrome/browser/media",
++    "//chrome/browser/net",
 +    "//chrome/browser/password_manager",
 +    "//chrome/browser/preloading/prefetch/no_state_prefetch",
 +    "//chrome/browser/printing",
@@ -70,7 +74,7 @@ index 837812f15330..d3df8923b9c7 100644
      "//chrome/browser/ui:browser_window_header",
      "//chrome/browser/translate",
      "//chrome/browser/ui/translate",
-@@ -162,6 +188,7 @@ source_set("embedder") {
+@@ -162,6 +189,7 @@ source_set("embedder") {
      "//third_party/blink/public/common",
      "//third_party/crashpad/crashpad/client",
      "//ui/base",
@@ -79,10 +83,10 @@ index 837812f15330..d3df8923b9c7 100644
    ]
    frameworks = [
 diff --git a/openarc/browser/openarc_tab_helpers.mm b/openarc/browser/openarc_tab_helpers.mm
-index d7dfcb776bb0..0f8fc96eaf42 100644
+index d7dfcb776bb0..1a30bae27dd4 100644
 --- a/openarc/browser/openarc_tab_helpers.mm
 +++ b/openarc/browser/openarc_tab_helpers.mm
-@@ -5,20 +5,386 @@
+@@ -5,20 +5,402 @@
  #include "openarc/browser/openarc_tab_helpers.h"
  
  #include <memory>
@@ -103,6 +107,7 @@ index d7dfcb776bb0..0f8fc96eaf42 100644
 +#include "chrome/browser/login_detection/login_detection_tab_helper.h"
 +#include "chrome/browser/lookalikes/safety_tip_web_contents_observer.h"
 +#include "chrome/browser/media/media_engagement_service.h"
++#include "chrome/browser/net/net_error_tab_helper.h"
 +#include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
 +#include "chrome/browser/page_content_annotations/multi_source_page_context_fetcher.h"
 +#include "chrome/browser/page_content_annotations/page_content_extraction_service_factory.h"
@@ -218,6 +223,9 @@ index d7dfcb776bb0..0f8fc96eaf42 100644
 +      metrics_services_observer;
 +  std::unique_ptr<OneTimePermissionsTrackerHelper>
 +      one_time_permissions_tracker_helper;
++  // Registered in `unowned_user_data_host`, where the error page's interfaces
++  // find it (NetErrorTabHelper::SetEmbedderUserDataHostLookup()).
++  std::unique_ptr<chrome_browser_net::NetErrorTabHelper> net_error_tab_helper;
 +
 + private:
 +  friend WebContentsUserData;
@@ -237,7 +245,8 @@ index d7dfcb776bb0..0f8fc96eaf42 100644
 +
  namespace {
  
-+// ManagePasswordsUIController::SetEmbedderUserDataHostLookup()'s lookup.
++// The lookup of ManagePasswordsUIController::SetEmbedderUserDataHostLookup()
++// and NetErrorTabHelper::SetEmbedderUserDataHostLookup().
 +ui::UnownedUserDataHost* TabFeatureUserDataHost(
 +    content::WebContents* web_contents) {
 +  TabFeatureHelpers* helpers = TabFeatureHelpers::FromWebContents(web_contents);
@@ -266,14 +275,15 @@ index d7dfcb776bb0..0f8fc96eaf42 100644
 +// ChromeComposeClient, ChromeFacilitatedPaymentsClient, CoreTabHelper,
 +// extensions::AppTabHelper, LoadingPredictorTabHelper,
 +// MixedContentSettingsTabHelper,
-+// MLInstallabilityPromoter, NetErrorTabHelper, offline pages helpers,
++// MLInstallabilityPromoter, offline pages helpers,
 +// PageContentAnnotationsWebContentsObserver, PopupOpenerTabHelper,
 +// RecentlyAudibleHelper, SafeBrowsingTabObserver, SearchEngineTabHelper,
 +// SearchTabHelper, SupervisedUserNavigationObserver, TabDialogs,
 +// TriggerCreator, vr::VrTabHelper. Also skipped: the TabFeatures members that
 +// were never attached by TabHelpers (Open Arc did not have them before 157).
-+// ManagePasswordsUIController has an embedder constructor for this
-+// (registered in TabFeatureHelpers::unowned_user_data_host).
++// ManagePasswordsUIController and NetErrorTabHelper have an embedder
++// constructor for this (registered in TabFeatureHelpers::
++// unowned_user_data_host).
 +void AttachTabFeatureHelpers(content::WebContents* web_contents) {
 +  if (TabFeatureHelpers::FromWebContents(web_contents)) {
 +    return;
@@ -377,6 +387,16 @@ index d7dfcb776bb0..0f8fc96eaf42 100644
 +  owned->file_system_access_tab_helper =
 +      std::make_unique<FileSystemAccessTabHelper>(web_contents);
 +
++  // The error page's DNS probe status, network diagnostics link (none on Mac)
++  // and dino high score. Probes stay off: they need the "alternate error
++  // pages" pref, which defaults to false (plan C27). Auto-reload is
++  // NetErrorAutoReloader, created from Chrome's navigation throttles.
++  chrome_browser_net::NetErrorTabHelper::SetEmbedderUserDataHostLookup(
++      &TabFeatureUserDataHost);
++  owned->net_error_tab_helper =
++      std::make_unique<chrome_browser_net::NetErrorTabHelper>(
++          owned->unowned_user_data_host, web_contents);
++
 +  webapps::PreRedirectionURLObserver::CreateForWebContents(web_contents);
 +
 +  // Needs ChromePasswordManagerClient (gated on Chrome's own autofill above),
@@ -469,7 +489,7 @@ index d7dfcb776bb0..0f8fc96eaf42 100644
  // The prompt view of PermissionRequestManager: the shell's prompt through the
  // bridge (plan C12), or a dismissing one when no bridge is registered.
  std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
-@@ -35,8 +401,10 @@
+@@ -35,8 +417,10 @@
  // static
  void TabHelpersAccess::AttachTabHelpers(content::WebContents* web_contents) {
    TabHelpers::AttachTabHelpers(web_contents);

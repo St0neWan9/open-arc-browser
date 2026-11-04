@@ -1,0 +1,187 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Thu, 5 Nov 2026 02:18:53 +0700
+Subject: [PATCH] openarc: chrome: let an embedder own a tab's
+ NetErrorTabHelper
+
+Plan C36. Chromium 157 creates NetErrorTabHelper in tabs::TabFeatures and
+finds it through the tab's TabInterface; the error page's interfaces
+(DNS probe status, network diagnostics, dino high score) are bound only
+for a WebContents that is a Browser tab. Open Arc's tabs have no
+TabInterface, so a name-resolution error page never got its final DNS
+probe status and stayed on "Diagnosing the problem" (DNS_PROBE_POSSIBLE).
+
+As for ManagePasswordsUIController (patch "let an embedding app draw the
+password bubble and autofill popup"):
+
+- A constructor that registers the helper in a ui::UnownedUserDataHost the
+  embedder owns; the TabInterface constructor now goes through it.
+- NetErrorTabHelper::SetEmbedderUserDataHostLookup() (Mac only): the Bind*()
+  functions ask it for a WebContents that has no TabInterface.
+
+Without a lookup nothing changes. DNS probes still follow the "alternate
+error pages" pref, which Open Arc defaults to off (plan C27).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ chrome/browser/net/net_error_tab_helper.cc | 63 +++++++++++++++-------
+ chrome/browser/net/net_error_tab_helper.h  | 23 ++++++++
+ 2 files changed, 67 insertions(+), 19 deletions(-)
+
+diff --git a/chrome/browser/net/net_error_tab_helper.cc b/chrome/browser/net/net_error_tab_helper.cc
+index a9c12087ccb7..085c73b21a3f 100644
+--- a/chrome/browser/net/net_error_tab_helper.cc
++++ b/chrome/browser/net/net_error_tab_helper.cc
+@@ -57,6 +57,31 @@ namespace {
+ static NetErrorTabHelper::TestingState testing_state_ =
+     NetErrorTabHelper::TESTING_DEFAULT;
+ 
++#if BUILDFLAG(IS_MAC)
++// Open Arc: see NetErrorTabHelper::SetEmbedderUserDataHostLookup().
++NetErrorTabHelper::EmbedderUserDataHostLookup
++    g_embedder_user_data_host_lookup = nullptr;
++#endif
++
++// The helper of the tab `web_contents` is in, or nullptr.
++NetErrorTabHelper* HelperForWebContents(content::WebContents* web_contents) {
++  if (!web_contents) {
++    return nullptr;
++  }
++  tabs::TabInterface* const tab =
++      tabs::TabInterface::MaybeGetFromContents(web_contents);
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an embedder's tab has no TabInterface; its helper is registered
++  // in the embedder's host.
++  if (!tab && g_embedder_user_data_host_lookup) {
++    ui::UnownedUserDataHost* host =
++        g_embedder_user_data_host_lookup(web_contents);
++    return host ? NetErrorTabHelper::Get(*host) : nullptr;
++  }
++#endif
++  return tab ? NetErrorTabHelper::From(tab) : nullptr;
++}
++
+ }  // namespace
+ 
+ DEFINE_USER_DATA(NetErrorTabHelper);
+@@ -73,12 +98,8 @@ void NetErrorTabHelper::BindNetErrorPageSupport(
+     mojo::PendingAssociatedReceiver<chrome::mojom::NetErrorPageSupport>
+         receiver,
+     content::RenderFrameHost* rfh) {
+-  auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+-  if (!web_contents)
+-    return;
+-  tabs::TabInterface* const tab =
+-      tabs::TabInterface::MaybeGetFromContents(web_contents);
+-  auto* tab_helper = tab ? NetErrorTabHelper::From(tab) : nullptr;
++  auto* tab_helper =
++      HelperForWebContents(content::WebContents::FromRenderFrameHost(rfh));
+   if (!tab_helper)
+     return;
+   tab_helper->net_error_page_support_.Bind(rfh, std::move(receiver));
+@@ -88,12 +109,8 @@ void NetErrorTabHelper::BindNetErrorPageSupport(
+ void NetErrorTabHelper::BindNetworkDiagnostics(
+     mojo::PendingAssociatedReceiver<chrome::mojom::NetworkDiagnostics> receiver,
+     content::RenderFrameHost* rfh) {
+-  auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+-  if (!web_contents)
+-    return;
+-  tabs::TabInterface* const tab =
+-      tabs::TabInterface::MaybeGetFromContents(web_contents);
+-  auto* tab_helper = tab ? NetErrorTabHelper::From(tab) : nullptr;
++  auto* tab_helper =
++      HelperForWebContents(content::WebContents::FromRenderFrameHost(rfh));
+   if (!tab_helper)
+     return;
+   tab_helper->network_diagnostics_receivers_.Bind(rfh, std::move(receiver));
+@@ -103,12 +120,8 @@ void NetErrorTabHelper::BindNetworkDiagnostics(
+ void NetErrorTabHelper::BindNetworkEasterEgg(
+     mojo::PendingAssociatedReceiver<chrome::mojom::NetworkEasterEgg> receiver,
+     content::RenderFrameHost* rfh) {
+-  auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+-  if (!web_contents)
+-    return;
+-  tabs::TabInterface* const tab =
+-      tabs::TabInterface::MaybeGetFromContents(web_contents);
+-  auto* tab_helper = tab ? NetErrorTabHelper::From(tab) : nullptr;
++  auto* tab_helper =
++      HelperForWebContents(content::WebContents::FromRenderFrameHost(rfh));
+   if (!tab_helper)
+     return;
+   tab_helper->network_easter_egg_receivers_.Bind(rfh, std::move(receiver));
+@@ -202,6 +215,18 @@ void NetErrorTabHelper::ShowPortalSignin() {
+ 
+ NetErrorTabHelper::NetErrorTabHelper(tabs::TabInterface& tab,
+                                      WebContents* contents)
++    : NetErrorTabHelper(tab.GetUnownedUserDataHost(), contents) {}
++
++#if BUILDFLAG(IS_MAC)
++// static
++void NetErrorTabHelper::SetEmbedderUserDataHostLookup(
++    EmbedderUserDataHostLookup lookup) {
++  g_embedder_user_data_host_lookup = lookup;
++}
++#endif
++
++NetErrorTabHelper::NetErrorTabHelper(ui::UnownedUserDataHost& host,
++                                     WebContents* contents)
+     : WebContentsObserver(contents),
+       network_diagnostics_receivers_(contents, this),
+       network_easter_egg_receivers_(contents, this),
+@@ -212,7 +237,7 @@ NetErrorTabHelper::NetErrorTabHelper(tabs::TabInterface& tab,
+       is_showing_download_button_in_error_page_(false),
+ #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
+       dns_probe_status_(error_page::DNS_PROBE_POSSIBLE),
+-      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
++      scoped_unowned_user_data_(host, *this) {
+   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+ 
+   // If this helper is under test, it won't have a WebContents.
+diff --git a/chrome/browser/net/net_error_tab_helper.h b/chrome/browser/net/net_error_tab_helper.h
+index 7d13029d548d..a26f70f6bba3 100644
+--- a/chrome/browser/net/net_error_tab_helper.h
++++ b/chrome/browser/net/net_error_tab_helper.h
+@@ -10,6 +10,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/memory/weak_ptr.h"
++#include "build/build_config.h"
+ #include "chrome/browser/net/dns_probe_service.h"
+ #include "chrome/common/net/net_error_page_support.mojom.h"
+ #include "chrome/common/network_diagnostics.mojom.h"
+@@ -26,6 +27,10 @@ namespace tabs {
+ class TabInterface;
+ }  // namespace tabs
+ 
++namespace ui {
++class UnownedUserDataHost;
++}  // namespace ui
++
+ namespace user_prefs {
+ class PrefRegistrySyncable;
+ }  // namespace user_prefs
+@@ -54,6 +59,24 @@ class NetErrorTabHelper : public content::WebContentsObserver,
+   // |contents| is the WebContents of the tab this NetErrorTabHelper is
+   // attached to.
+   NetErrorTabHelper(tabs::TabInterface& tab, content::WebContents* contents);
++  // Open Arc: for a tab of an app that embeds Chrome's browser process and
++  // owns the UI (chrome::EmbedderOwnsUI()). Such a tab has no
++  // tabs::TabInterface, so the embedder owns the helper in its own
++  // per-WebContents data and registers it in `host`, where the Bind*()
++  // functions find it (SetEmbedderUserDataHostLookup(), Mac only). The
++  // embedder destroys the helper no later than in
++  // WebContentsObserver::WebContentsDestroyed(). The constructor above
++  // registers in the tab's host through this one.
++  NetErrorTabHelper(ui::UnownedUserDataHost& host,
++                    content::WebContents* contents);
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: returns the host an embedder registered the helper of
++  // `web_contents` in (see the constructor above), or nullptr. Asked for a
++  // WebContents that is not a tab. nullptr clears it. UI thread only.
++  using EmbedderUserDataHostLookup =
++      ui::UnownedUserDataHost* (*)(content::WebContents* web_contents);
++  static void SetEmbedderUserDataHostLookup(EmbedderUserDataHostLookup lookup);
++#endif
+   NetErrorTabHelper(const NetErrorTabHelper&) = delete;
+   NetErrorTabHelper& operator=(const NetErrorTabHelper&) = delete;
+ 
