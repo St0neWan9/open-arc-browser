@@ -1,0 +1,676 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Mon, 2 Nov 2026 12:48:38 +0700
+Subject: [PATCH] openarc: embedder: phones and tablets (hybrid / QR code) in
+ the shell's passkey dialog
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plan B155. Since the app declares NSBluetoothAlwaysUsageDescription (B154),
+device/fido creates the hybrid (caBLE v2) discovery and //chrome offers the
+phone path. The bridge had no view for its steps, so they fell into
+DescribeStep's default case and the shell showed "This method isn't
+available" (seen on Google sign-in with a passkey account).
+
+- OACWebAuthn.h: steps PhoneQRCode, PhoneConnecting, PhoneConnected,
+  TurnOnBluetooth, BluetoothOff, BluetoothPermission; mechanism kind Phone;
+  error kind PhoneConnectionFailed; properties phoneQRCode (Chrome's
+  cable_qr_string, only in the QR step), phoneStepAcceptsSecurityKey and
+  bluetoothIsPowered.
+- oac_webauthn.mm: maps kCableV2QRCode / Connecting / Connected / Error and
+  kBlePowerOnAutomatic / kBlePowerOnManual / kBlePermissionMac; lists
+  Mechanism::Hybrid; accept turns Bluetooth on (busy until the adapter
+  reports power), continues once it is on, or opens System Settings ▸
+  Privacy & Security ▸ Bluetooth, as Chrome's sheets do. "Use another
+  method" is hidden while connecting, connected and after the phone error,
+  as in Chrome. Updates on Bluetooth power changes.
+- oac_webauthn_test_bluetooth.mm (tests only): --openarc-fake-bluetooth[=off]
+  installs an always-allowed adapter that never finds a phone (off until
+  turned on with =off), so the engine test reaches the QR step without real
+  Bluetooth.
+- device/fido: FidoDiscoveryFactory honours ScopedAlwaysAllowBLECalls (new
+  IsActive()) like FidoRequestHandlerBase already does, so that stand-in
+  works under a test runner whose responsible process lacks the Bluetooth
+  usage description. No change for the app (it is its own responsible
+  process and has the description).
+---
+ device/fido/fido_discovery_factory.cc         |   3 +-
+ device/fido/fido_request_handler_base.cc      |   5 +
+ device/fido/fido_request_handler_base.h       |   5 +
+ openarc/BUILD.gn                              |   2 +
+ openarc/bridge/oac_application.mm             |  22 ++-
+ openarc/bridge/oac_webauthn.mm                | 112 ++++++++++--
+ openarc/bridge/oac_webauthn_internal.h        |  15 +-
+ openarc/bridge/oac_webauthn_test_bluetooth.mm | 162 ++++++++++++++++++
+ .../bridge/public/OpenArcCore/OACWebAuthn.h   |  42 ++++-
+ 9 files changed, 339 insertions(+), 29 deletions(-)
+ create mode 100644 openarc/bridge/oac_webauthn_test_bluetooth.mm
+
+diff --git a/device/fido/fido_discovery_factory.cc b/device/fido/fido_discovery_factory.cc
+index 2e8b50bfb802..8fa62d334048 100644
+--- a/device/fido/fido_discovery_factory.cc
++++ b/device/fido/fido_discovery_factory.cc
+@@ -53,7 +53,8 @@ std::vector<std::unique_ptr<FidoDiscoveryBase>> FidoDiscoveryFactory::Create(
+       return {};
+     case FidoTransportProtocol::kHybrid:
+ #if BUILDFLAG(IS_MAC)
+-      if (!base::DoesResponsibleProcessHaveBluetoothMetadata()) {
++      if (!FidoRequestHandlerBase::ScopedAlwaysAllowBLECalls::IsActive() &&
++          !base::DoesResponsibleProcessHaveBluetoothMetadata()) {
+         // On recent macOS a process must have listed Bluetooth metadata in
+         // its Info.plist in order to call Bluetooth APIs. Failure to do so
+         // results in the system killing with process with SIGABRT once
+diff --git a/device/fido/fido_request_handler_base.cc b/device/fido/fido_request_handler_base.cc
+index 92809136af65..f0d100ef2df9 100644
+--- a/device/fido/fido_request_handler_base.cc
++++ b/device/fido/fido_request_handler_base.cc
+@@ -163,6 +163,11 @@ FidoRequestHandlerBase::ScopedAlwaysAllowBLECalls::
+   g_always_allow_ble_calls = false;
+ }
+ 
++// static
++bool FidoRequestHandlerBase::ScopedAlwaysAllowBLECalls::IsActive() {
++  return g_always_allow_ble_calls;
++}
++
+ // FidoRequestHandlerBase -----------------------------------------------------
+ 
+ FidoRequestHandlerBase::FidoRequestHandlerBase()
+diff --git a/device/fido/fido_request_handler_base.h b/device/fido/fido_request_handler_base.h
+index cd0cc4cf2ad4..6133463ca702 100644
+--- a/device/fido/fido_request_handler_base.h
++++ b/device/fido/fido_request_handler_base.h
+@@ -276,6 +276,11 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoRequestHandlerBase
+    public:
+     ScopedAlwaysAllowBLECalls();
+     ~ScopedAlwaysAllowBLECalls();
++
++    // Open Arc: whether an instance is alive. FidoDiscoveryFactory checks the
++    // same responsible-process condition before creating the hybrid
++    // discovery.
++    static bool IsActive();
+   };
+ 
+   FidoRequestHandlerBase();
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index f884f8e85656..837812f15330 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -292,6 +292,7 @@ source_set("bridge") {
+               "bridge/oac_values.mm",
+               "bridge/oac_webauthn.mm",
+               "bridge/oac_webauthn_internal.h",
++              "bridge/oac_webauthn_test_bluetooth.mm",
+               "bridge/oac_webauthn_test_keychain.mm",
+               "browser/openarc_page_top_color.h",
+               "browser/openarc_page_top_color.mm",
+@@ -332,6 +333,7 @@ source_set("bridge") {
+     "//chrome/browser/ui/webauthn",
+     "//chrome/browser/webauthn",
+     "//chrome/browser/webauthn:chrome_web_authentication_delegate",
++    "//device/bluetooth",
+     "//device/fido",
+     "//chrome/browser/ui/login",
+     "//chrome/browser/ui/autofill",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index a1bad35e01c7..670a4ad71aba 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <memory>
+ #include <string>
++#include <string_view>
+ #include <vector>
+ 
+ #include "base/apple/foundation_util.h"
+@@ -334,13 +335,20 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   openarc::InstallClientCertificateSelector();
+   // WebAuthn dialog and the keychain group of passkeys on this Mac (C21),
+   // each request's window (B130). The command line is not parsed yet, so the
+-  // test-only switch is looked up in the arguments.
+-  const bool fake_icloud_keychain = std::ranges::any_of(
+-      g_engine->arguments, [](const std::string& argument) {
+-        return argument == "--openarc-fake-icloud-keychain";
+-      });
+-  openarc::InstallWebAuthnDialog(WebAuthnKeychainAccessGroup(),
+-                                 fake_icloud_keychain);
++  // test-only switches (B130, B155) are looked up in the arguments.
++  const auto has_argument = [](std::string_view name) {
++    return std::ranges::any_of(
++        g_engine->arguments,
++        [name](const std::string& argument) { return argument == name; });
++  };
++  openarc::InstallWebAuthnDialog(
++      WebAuthnKeychainAccessGroup(),
++      has_argument("--openarc-fake-icloud-keychain"),
++      has_argument("--openarc-fake-bluetooth=off")
++          ? openarc::FakeBluetooth::kOff
++          : (has_argument("--openarc-fake-bluetooth")
++                 ? openarc::FakeBluetooth::kOn
++                 : openarc::FakeBluetooth::kNone));
+   // Page translation (plan B47): Chrome's translate bubble steps go to the
+   // tab's translate helper; no Google API key gate.
+   openarc::InstallTranslateHooks();
+diff --git a/openarc/bridge/oac_webauthn.mm b/openarc/bridge/oac_webauthn.mm
+index 4a67fa56bfb6..3e106a5d1991 100644
+--- a/openarc/bridge/oac_webauthn.mm
++++ b/openarc/bridge/oac_webauthn.mm
+@@ -130,6 +130,9 @@ - (void)updateOperation:(OACWebAuthnOperation)operation
+      bioSamplesRemaining:(NSInteger)bioSamplesRemaining
+          bioSamplesTotal:(NSInteger)bioSamplesTotal
+                   isBusy:(BOOL)isBusy;
++- (void)updatePhoneQRCode:(NSString*)phoneQRCode
++       acceptsSecurityKey:(BOOL)acceptsSecurityKey
++       bluetoothIsPowered:(BOOL)bluetoothIsPowered;
+ @end
+ 
+ @implementation OACWebAuthnDialog {
+@@ -149,6 +152,9 @@ @implementation OACWebAuthnDialog {
+   NSInteger _bioSamplesRemaining;
+   NSInteger _bioSamplesTotal;
+   BOOL _isBusy;
++  NSString* _phoneQRCode;
++  BOOL _phoneStepAcceptsSecurityKey;
++  BOOL _bluetoothIsPowered;
+   base::RepeatingCallback<void(WebAuthnAction, NSInteger, NSString*)> _handler;
+ }
+ 
+@@ -167,6 +173,7 @@ - (instancetype)initWithTab:(OACTab*)tab
+     _pinAttemptsRemaining = -1;
+     _bioSamplesRemaining = -1;
+     _bioSamplesTotal = -1;
++    _phoneQRCode = @"";
+   }
+   return self;
+ }
+@@ -209,6 +216,14 @@ - (void)updateOperation:(OACWebAuthnOperation)operation
+   _isBusy = isBusy;
+ }
+ 
++- (void)updatePhoneQRCode:(NSString*)phoneQRCode
++       acceptsSecurityKey:(BOOL)acceptsSecurityKey
++       bluetoothIsPowered:(BOOL)bluetoothIsPowered {
++  _phoneQRCode = [phoneQRCode copy];
++  _phoneStepAcceptsSecurityKey = acceptsSecurityKey;
++  _bluetoothIsPowered = bluetoothIsPowered;
++}
++
+ - (OACWebAuthnOperation)operation {
+   return _operation;
+ }
+@@ -257,6 +272,15 @@ - (NSInteger)bioSamplesTotal {
+ - (BOOL)isBusy {
+   return _isBusy;
+ }
++- (NSString*)phoneQRCode {
++  return _phoneQRCode;
++}
++- (BOOL)phoneStepAcceptsSecurityKey {
++  return _phoneStepAcceptsSecurityKey;
++}
++- (BOOL)bluetoothIsPowered {
++  return _bluetoothIsPowered;
++}
+ 
+ - (void)send:(WebAuthnAction)action index:(NSInteger)index text:(NSString*)text {
+   if (self.isFinished || !_handler) {
+@@ -322,9 +346,9 @@ OACWebAuthnPINError PINErrorFor(device::pin::PINEntryError error) {
+   return OACWebAuthnPINErrorNone;
+ }
+ 
+-// Our step and error for Chrome's step. nullopt: a step this embedder has no
+-// view for (Google Password Manager, phones); it shows as an "unsupported"
+-// error the user can back out of.
++// Our step and error for Chrome's step. Steps this embedder has no view for
++// (Google Password Manager, Windows) show as an "unsupported" error the user
++// can back out of.
+ struct StepDescription {
+   OACWebAuthnStep step;
+   OACWebAuthnErrorKind error = OACWebAuthnErrorKindNone;
+@@ -332,6 +356,13 @@ OACWebAuthnPINError PINErrorFor(device::pin::PINEntryError error) {
+   bool retry = false;
+ };
+ 
++// Steps where Chrome's sheets hide "use another method": the phone is already
++// in charge, or the phone flow failed for good.
++bool HidesOtherMethods(Step step) {
++  return step == Step::kCableV2Connecting || step == Step::kCableV2Connected ||
++         step == Step::kCableV2Error;
++}
++
+ StepDescription DescribeStep(Step step) {
+   switch (step) {
+     case Step::kMechanismSelection:
+@@ -387,17 +418,35 @@ StepDescription DescribeStep(Step step) {
+               true};
+     case Step::kStorageFull:
+       return {OACWebAuthnStepError, OACWebAuthnErrorKindStorageFull, true};
++    // Phones and tablets (plan B155). Chrome shows the QR code only once
++    // Bluetooth is allowed and on; otherwise one of the Bluetooth steps first.
++    case Step::kCableV2QRCode:
++      return {OACWebAuthnStepPhoneQRCode};
++    case Step::kCableV2Connecting:
++      return {OACWebAuthnStepPhoneConnecting};
++    case Step::kCableV2Connected:
++      return {OACWebAuthnStepPhoneConnected};
++    case Step::kCableV2Error:
++      // No "Try again", as in Chrome: the page starts a new request.
++      return {OACWebAuthnStepError, OACWebAuthnErrorKindPhoneConnectionFailed};
++    case Step::kBlePowerOnAutomatic:
++      return {OACWebAuthnStepTurnOnBluetooth};
++    case Step::kBlePowerOnManual:
++      return {OACWebAuthnStepBluetoothOff};
++    case Step::kBlePermissionMac:
++      return {OACWebAuthnStepBluetoothPermission};
+     default:
+       return {OACWebAuthnStepError, OACWebAuthnErrorKindUnsupported, true};
+   }
+ }
+ 
+-// Methods the shell can offer. Phones (hybrid) and Google Password Manager
+-// need Bluetooth or a Google account this embedder does not have, so they are
+-// left out. iCloud Keychain (Apple's Passwords app and other passkey provider
+-// apps) is offered whenever //chrome lists it: device/fido creates it only when
+-// the app has Apple's browser passkey entitlement and the tab has a window
+-// (InstallWebAuthnDialog).
++// Methods the shell can offer. Phones and tablets (hybrid) are offered when
++// //chrome lists them (it does when the request allows hybrid and the app may
++// use Bluetooth, plan B155). Google Password Manager needs a Google account
++// this embedder does not have, so it is left out. iCloud Keychain (Apple's
++// Passwords app and other passkey provider apps) is offered whenever //chrome
++// lists it: device/fido creates it only when the app has Apple's browser
++// passkey entitlement and the tab has a window (InstallWebAuthnDialog).
+ std::optional<OACWebAuthnMechanismKind> MechanismKindFor(
+     const Mechanism& mechanism) {
+   if (const auto* credential =
+@@ -414,6 +463,9 @@ StepDescription DescribeStep(Step step) {
+   if (std::holds_alternative<Mechanism::ICloudKeychain>(mechanism.type)) {
+     return OACWebAuthnMechanismKindICloudKeychain;
+   }
++  if (std::holds_alternative<Mechanism::Hybrid>(mechanism.type)) {
++    return OACWebAuthnMechanismKindPhone;
++  }
+   if (const auto* transport =
+           std::get_if<Mechanism::Transport>(&mechanism.type)) {
+     switch (transport->value()) {
+@@ -484,9 +536,13 @@ StepDescription DescribeStep(Step step) {
+   }
+ 
+   // AuthenticatorRequestDialogModel::Observer:
+-  void OnStepTransition() override { Update(); }
++  void OnStepTransition() override {
++    powering_on_bluetooth_ = false;
++    Update();
++  }
+   void OnSheetModelChanged() override { Update(); }
+   void OnButtonsStateChanged() override { Update(); }
++  void OnBluetoothPoweredStateChanged() override { Update(); }
+   void OnModelDestroyed(AuthenticatorRequestDialogModel* model) override {
+     observation_.Reset();
+     model_ = nullptr;
+@@ -576,7 +632,8 @@ void Describe() {
+               priorityIndex:priority
+                    accounts:accounts
+      canChooseAnotherMethod:mechanisms.count > 1 &&
+-                            description.step != OACWebAuthnStepChooseMethod
++                            description.step != OACWebAuthnStepChooseMethod &&
++                            !HidesOtherMethods(model_->step())
+                   errorKind:description.error
+                    canRetry:description.retry && model_->offer_try_again_in_ui
+                    pinError:PINErrorFor(model_->pin_error)
+@@ -584,7 +641,13 @@ void Describe() {
+            minimumPINLength:model_->min_pin_length
+         bioSamplesRemaining:bio_remaining
+             bioSamplesTotal:bio_total
+-                     isBusy:model_->ui_disabled_];
++                     isBusy:model_->ui_disabled_ || powering_on_bluetooth_];
++    [dialog_ updatePhoneQRCode:model_->step() == Step::kCableV2QRCode
++                                   ? base::SysUTF8ToNSString(
++                                         model_->cable_qr_string.value_or(""))
++                                   : @""
++            acceptsSecurityKey:model_->show_security_key_on_qr_sheet
++            bluetoothIsPowered:model_->ble_adapter_is_powered];
+   }
+ 
+   // The user's choice, as Chrome's sheets turn button presses into events.
+@@ -648,6 +711,23 @@ void Accept(Step step) {
+       case Step::kInlineBioEnrollment:
+         model_->OnBioEnrollmentDone();
+         return;
++      case Step::kBlePowerOnAutomatic:
++        // As Chrome's sheet: busy until the adapter reports power, after
++        // which //chrome continues by itself.
++        if (!powering_on_bluetooth_) {
++          powering_on_bluetooth_ = true;
++          Update();
++          model_->PowerOnBleAdapter();
++        }
++        return;
++      case Step::kBlePowerOnManual:
++        if (model_->ble_adapter_is_powered) {
++          model_->ContinueWithFlowAfterBleAdapterPowered();
++        }
++        return;
++      case Step::kBlePermissionMac:
++        model_->OpenBlePreferences();
++        return;
+       case Step::kSelectAccount:
+       case Step::kPreSelectAccount:
+         // A single account is chosen with the main button.
+@@ -672,6 +752,8 @@ void Accept(Step step) {
+   OACWebAuthnDialog* __strong dialog_ = nil;
+   // dialog_.mechanisms[i] is model_->mechanisms[mechanism_indices_[i]].
+   std::vector<size_t> mechanism_indices_;
++  // "Turn on" was pressed in kBlePowerOnAutomatic (reset on the next step).
++  bool powering_on_bluetooth_ = false;
+   base::ScopedObservation<AuthenticatorRequestDialogModel,
+                           AuthenticatorRequestDialogModel::Observer>
+       observation_{this};
+@@ -698,7 +780,8 @@ void Accept(Step step) {
+ }  // namespace
+ 
+ void InstallWebAuthnDialog(const std::string& keychain_access_group,
+-                           bool fake_icloud_keychain) {
++                           bool fake_icloud_keychain,
++                           FakeBluetooth fake_bluetooth) {
+   AuthenticatorRequestDialogViewController::SetEmbedderFactory(&CreateDialog);
+   ChromeWebAuthenticationDelegate::SetKeychainAccessGroupOverride(
+       keychain_access_group);
+@@ -707,6 +790,9 @@ void InstallWebAuthnDialog(const std::string& keychain_access_group,
+   if (fake_icloud_keychain) {
+     InstallFakeICloudKeychainForTesting();
+   }
++  if (fake_bluetooth != FakeBluetooth::kNone) {
++    InstallFakeBluetoothForTesting(fake_bluetooth == FakeBluetooth::kOn);
++  }
+ }
+ 
+ }  // namespace openarc
+diff --git a/openarc/bridge/oac_webauthn_internal.h b/openarc/bridge/oac_webauthn_internal.h
+index bcff136ebcfe..20eae3b1843d 100644
+--- a/openarc/bridge/oac_webauthn_internal.h
++++ b/openarc/bridge/oac_webauthn_internal.h
+@@ -17,15 +17,24 @@ namespace openarc {
+ // empty keeps Chrome's). Plan B130: also names each request's window (the
+ // tab's NSWindow), without which device/fido never offers iCloud Keychain.
+ // |fake_icloud_keychain| (the --openarc-fake-icloud-keychain switch, tests
+-// only) replaces macOS's iCloud Keychain API with a stand-in. Called once
+-// when the engine starts.
++// only) replaces macOS's iCloud Keychain API with a stand-in.
++// |fake_bluetooth| (--openarc-fake-bluetooth[=off], tests only, plan B155)
++// installs a Bluetooth adapter that is always allowed, so the phone path
++// reaches its QR code without real Bluetooth. Called once when the engine
++// starts.
++enum class FakeBluetooth { kNone, kOn, kOff };
+ void InstallWebAuthnDialog(const std::string& keychain_access_group,
+-                           bool fake_icloud_keychain);
++                           bool fake_icloud_keychain,
++                           FakeBluetooth fake_bluetooth);
+ 
+ // Plan B130, tests only (oac_webauthn_test_keychain.mm): see
+ // InstallWebAuthnDialog.
+ void InstallFakeICloudKeychainForTesting();
+ 
++// Plan B155, tests only (oac_webauthn_test_bluetooth.mm): see
++// InstallWebAuthnDialog.
++void InstallFakeBluetoothForTesting(bool powered);
++
+ }  // namespace openarc
+ 
+ #endif  // OPENARC_BRIDGE_OAC_WEBAUTHN_INTERNAL_H_
+diff --git a/openarc/bridge/oac_webauthn_test_bluetooth.mm b/openarc/bridge/oac_webauthn_test_bluetooth.mm
+new file mode 100644
+index 000000000000..1553dbd50ff3
+--- /dev/null
++++ b/openarc/bridge/oac_webauthn_test_bluetooth.mm
+@@ -0,0 +1,162 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Plan B155: a stand-in Bluetooth adapter, for the engine conformance test
++// only. The phone / tablet (hybrid) path of WebAuthn needs a Bluetooth adapter
++// that is present, allowed and powered before //chrome shows its QR code. A
++// test process may have none of that (no permission prompt can be answered,
++// and macOS kills a process that touches Bluetooth without the usage
++// description in its responsible app). This adapter answers "present, allowed",
++// accepts scans and never finds a device, so the flow stops at the QR code,
++// which is what the test checks. With --openarc-fake-bluetooth=off it starts
++// powered off and turns on when asked (//chrome's "turn on Bluetooth" step).
++//
++// Installed only when the browser process starts with
++// --openarc-fake-bluetooth[=off] (OACApplication passes it on from the host's
++// switches); nothing here runs otherwise.
++
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/functional/callback.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/task/single_thread_task_runner.h"
++#include "device/bluetooth/bluetooth_adapter.h"
++#include "device/bluetooth/bluetooth_adapter_factory.h"
++#include "device/bluetooth/bluetooth_discovery_session_outcome.h"
++#include "device/fido/fido_request_handler_base.h"
++#import "openarc/bridge/oac_webauthn_internal.h"
++
++namespace openarc {
++
++namespace {
++
++class TestBluetoothAdapter final : public device::BluetoothAdapter {
++ public:
++  explicit TestBluetoothAdapter(bool powered) : powered_(powered) {}
++  TestBluetoothAdapter(const TestBluetoothAdapter&) = delete;
++  TestBluetoothAdapter& operator=(const TestBluetoothAdapter&) = delete;
++
++  // device::BluetoothAdapter:
++  void Initialize(base::OnceClosure callback) override {
++    std::move(callback).Run();
++  }
++  std::string GetAddress() const override { return "00:00:00:00:B1:55"; }
++  std::string GetName() const override { return "Open Arc Test Bluetooth"; }
++  void SetName(const std::string& name,
++               base::OnceClosure callback,
++               ErrorCallback error_callback) override {
++    Post(std::move(error_callback));
++  }
++  bool IsInitialized() const override { return true; }
++  bool IsPresent() const override { return true; }
++  bool IsPowered() const override { return powered_; }
++  PermissionStatus GetOsPermissionStatus() const override {
++    return PermissionStatus::kAllowed;
++  }
++  bool IsDiscoverable() const override { return false; }
++  void SetDiscoverable(bool discoverable,
++                       base::OnceClosure callback,
++                       ErrorCallback error_callback) override {
++    Post(std::move(error_callback));
++  }
++  bool IsDiscovering() const override { return scanning_; }
++  UUIDList GetUUIDs() const override { return {}; }
++  void CreateRfcommService(const device::BluetoothUUID& uuid,
++                           const ServiceOptions& options,
++                           CreateServiceCallback callback,
++                           CreateServiceErrorCallback error_callback) override {
++    Post(base::BindOnce(std::move(error_callback), "unsupported"));
++  }
++  void CreateL2capService(const device::BluetoothUUID& uuid,
++                          const ServiceOptions& options,
++                          CreateServiceCallback callback,
++                          CreateServiceErrorCallback error_callback) override {
++    Post(base::BindOnce(std::move(error_callback), "unsupported"));
++  }
++  void RegisterAdvertisement(
++      std::unique_ptr<device::BluetoothAdvertisement::Data> advertisement_data,
++      CreateAdvertisementCallback callback,
++      AdvertisementErrorCallback error_callback) override {
++    Post(base::BindOnce(
++        std::move(error_callback),
++        device::BluetoothAdvertisement::ERROR_UNSUPPORTED_PLATFORM));
++  }
++  device::BluetoothLocalGattService* GetGattService(
++      const std::string& identifier) const override {
++    return nullptr;
++  }
++
++ protected:
++  ~TestBluetoothAdapter() override = default;
++
++  base::WeakPtr<device::BluetoothAdapter> GetWeakPtr() override {
++    return weak_factory_.GetWeakPtr();
++  }
++  // Takes effect at once; observers and the pending SetPowered() callback hear
++  // of it from a fresh task, as from the platform.
++  bool SetPoweredImpl(bool powered) override {
++    powered_ = powered;
++    Post(base::BindOnce(&TestBluetoothAdapter::DidChangePower,
++                        weak_factory_.GetWeakPtr()));
++    return true;
++  }
++  void StartScanWithFilter(
++      std::unique_ptr<device::BluetoothDiscoveryFilter> discovery_filter,
++      DiscoverySessionResultCallback callback) override {
++    scanning_ = true;
++    Post(base::BindOnce(std::move(callback), /*is_error=*/false,
++                        device::UMABluetoothDiscoverySessionOutcome::SUCCESS));
++  }
++  void UpdateFilter(
++      std::unique_ptr<device::BluetoothDiscoveryFilter> discovery_filter,
++      DiscoverySessionResultCallback callback) override {
++    Post(base::BindOnce(std::move(callback), /*is_error=*/false,
++                        device::UMABluetoothDiscoverySessionOutcome::SUCCESS));
++  }
++  void StopScan(DiscoverySessionResultCallback callback) override {
++    scanning_ = false;
++    Post(base::BindOnce(std::move(callback), /*is_error=*/false,
++                        device::UMABluetoothDiscoverySessionOutcome::SUCCESS));
++  }
++  void RemovePairingDelegateInternal(
++      device::BluetoothDevice::PairingDelegate* pairing_delegate) override {}
++
++ private:
++  // Callbacks answer from a fresh task, as a platform adapter does.
++  static void Post(base::OnceClosure closure) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, std::move(closure));
++  }
++
++  void DidChangePower() {
++    NotifyAdapterPoweredChanged(powered_);
++    RunPendingPowerCallbacks();
++  }
++
++  bool powered_;
++  bool scanning_ = false;
++  base::WeakPtrFactory<TestBluetoothAdapter> weak_factory_{this};
++};
++
++}  // namespace
++
++void InstallFakeBluetoothForTesting(bool powered) {
++  // Kept for the life of the process: the factory holds only a weak pointer,
++  // and device/fido must not fall back to the real adapter later.
++  static base::NoDestructor<scoped_refptr<TestBluetoothAdapter>> adapter(
++      base::MakeRefCounted<TestBluetoothAdapter>(powered));
++  device::BluetoothAdapterFactory::SetAdapterForTesting(*adapter);
++  // device/fido skips Bluetooth when the responsible process (the test
++  // runner) lacks the usage description; this adapter is not macOS's.
++  static base::NoDestructor<
++      device::FidoRequestHandlerBase::ScopedAlwaysAllowBLECalls>
++      allow_ble_calls;
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/public/OpenArcCore/OACWebAuthn.h b/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
+index 6c2b3c537556..57673f0f1a21 100644
+--- a/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
++++ b/openarc/bridge/public/OpenArcCore/OACWebAuthn.h
+@@ -28,10 +28,13 @@
+ //   it when the provisioning profile allows it) and the tab is in a window. Without the
+ //   entitlement the engine never offers them. Choosing one hands over to macOS's own passkey
+ //   sheet (first: its "Passkeys Access for Web Browsers" consent), and this dialog closes.
++// - Phones and tablets (hybrid / caBLE, plan B155): the dialog shows a QR code (`phoneQRCode`)
++//   that the phone's camera scans; the phone then talks to this Mac over Bluetooth and the
++//   internet. Needs the app's NSBluetoothAlwaysUsageDescription (B154) and the user's Bluetooth
++//   permission; the steps before the QR code ask to turn Bluetooth on or to allow it.
+ // Not supported:
+-// - Phones and tablets as security keys (hybrid / caBLE, needs Bluetooth and the QR flow); the
+-//   bridge leaves that method out.
+-// - Google Password Manager passkeys (need a signed-in Google account).
++// - Google Password Manager passkeys (need a signed-in Google account). Such steps arrive as
++//   `OACWebAuthnErrorKindUnsupported`.
+ //
+ // The look is not in docs/arc-spec (00 §A records the dialog exists; style unknown).
+ 
+@@ -77,6 +80,22 @@ typedef NS_ENUM(NSInteger, OACWebAuthnStep) {
+     OACWebAuthnStepPrivateWindowWarning = 12,
+     /// The request failed (`errorKind`); accept retries when `canRetry`.
+     OACWebAuthnStepError = 13,
++    /// Plan B155: scan `phoneQRCode` with a phone or tablet (no button; the phone answers). When
++    /// `phoneStepAcceptsSecurityKey`, a security key can be used here too.
++    OACWebAuthnStepPhoneQRCode = 14,
++    /// The phone was found; connecting to it (no button).
++    OACWebAuthnStepPhoneConnecting = 15,
++    /// Connected: the user continues on the phone (no button).
++    OACWebAuthnStepPhoneConnected = 16,
++    /// Bluetooth is off and the app can turn it on: accept turns it on (then `isBusy` until the
++    /// engine moves on by itself).
++    OACWebAuthnStepTurnOnBluetooth = 17,
++    /// Bluetooth is off and only the user can turn it on: accept continues once
++    /// `bluetoothIsPowered` (the dialog updates when the power changes).
++    OACWebAuthnStepBluetoothOff = 18,
++    /// macOS denied this app Bluetooth: accept opens System Settings ▸ Privacy & Security ▸
++    /// Bluetooth. A permission granted there applies after the app is reopened.
++    OACWebAuthnStepBluetoothPermission = 19,
+ };
+ 
+ typedef NS_ENUM(NSInteger, OACWebAuthnErrorKind) {
+@@ -101,10 +120,12 @@ typedef NS_ENUM(NSInteger, OACWebAuthnErrorKind) {
+     OACWebAuthnErrorKindMissingCapability = 9,
+     /// The key has no room for another passkey.
+     OACWebAuthnErrorKindStorageFull = 10,
+-    /// A method this app does not support (phone, Bluetooth, cloud passkeys).
++    /// A step this app has no view for (Google Password Manager, Windows Hello).
+     OACWebAuthnErrorKindUnsupported = 11,
+     /// Any other failure.
+     OACWebAuthnErrorKindOther = 12,
++    /// Plan B155: the phone or tablet could not be reached (Bluetooth or internet on either side).
++    OACWebAuthnErrorKindPhoneConnectionFailed = 13,
+ };
+ 
+ typedef NS_ENUM(NSInteger, OACWebAuthnPINError) {
+@@ -132,6 +153,9 @@ typedef NS_ENUM(NSInteger, OACWebAuthnMechanismKind) {
+     /// A passkey for one account in iCloud Keychain (`title`: the account; `subtitle`: the app
+     /// that holds it, may be empty). macOS shows its own sheet next.
+     OACWebAuthnMechanismKindPasskeyInICloudKeychain = 5,
++    /// Plan B155: use a phone or tablet (shows a QR code next; with `phoneStepAcceptsSecurityKey`
++    /// a security key works there too).
++    OACWebAuthnMechanismKindPhone = 6,
+ };
+ 
+ /// One way to continue (a row of the method list).
+@@ -192,8 +216,16 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ @property (nonatomic, readonly) NSInteger bioSamplesTotal;
+ /// The engine is busy (no input until the next update).
+ @property (nonatomic, readonly) BOOL isBusy;
++/// Plan B155: the text of the QR code for `OACWebAuthnStepPhoneQRCode` ("FIDO:/…"); empty in other
++/// steps.
++@property (nonatomic, readonly, copy) NSString *phoneQRCode;
++/// The phone step (and the phone method) also takes a security key.
++@property (nonatomic, readonly) BOOL phoneStepAcceptsSecurityKey;
++/// Bluetooth is on (`OACWebAuthnStepBluetoothOff` can continue).
++@property (nonatomic, readonly) BOOL bluetoothIsPowered;
+ 
+-/// The step's main button: continue, create, try again, done (see `OACWebAuthnStep`).
++/// The step's main button: continue, create, try again, done, turn on Bluetooth, open System
++/// Settings (see `OACWebAuthnStep`).
+ - (void)accept;
+ /// Chooses `mechanisms[index]`.
+ - (void)selectMechanismAtIndex:(NSInteger)index NS_SWIFT_NAME(selectMechanism(at:));

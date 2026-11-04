@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 19:30:55 -0700
+Subject: [PATCH] openarc: chrome: no status tray when an embedding app owns
+ the UI
+
+Chrome puts its own items in the macOS menu bar's status area (the Glic
+launcher, background mode, WebHID/WebUSB and capture indicators) through
+BrowserProcessImpl's StatusTray. An app that embeds the browser process
+and owns the UI (chrome::EmbedderOwnsUI()) does not want any of them, so
+no StatusTray is created in that mode. Every caller of status_tray()
+already handles a null tray except DeviceStatusIconRenderer, which now
+returns early instead of DCHECKing.
+
+Needed by plan task C6b ("no Chrome UI"): without it an empty status
+item appeared in the menu bar at startup.
+---
+ chrome/browser/browser_process_impl.cc                   | 9 +++++++++
+ .../device_notifications/device_status_icon_renderer.cc  | 7 ++++++-
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
+index 187e99b29bf9..fe5c4f3a9c39 100644
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -286,6 +286,7 @@ void OnLocalStatePrefsLoaded();
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
++#include "chrome/browser/embedder_owned_ui_mac.h"
+ #include "components/os_crypt/async/browser/keychain_key_provider.h"
+ #endif
+ 
+@@ -1787,6 +1788,14 @@ void BrowserProcessImpl::CreateBackgroundModeManager() {
+ 
+ void BrowserProcessImpl::CreateStatusTray() {
+   DCHECK(!status_tray_);
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: an app that owns the UI shows no Chrome status items (Glic,
++  // background mode, device and capture indicators) in the menu bar. Every
++  // caller of status_tray() handles a null tray.
++  if (chrome::EmbedderOwnsUI()) {
++    return;
++  }
++#endif
+   status_tray_ = StatusTray::Create();
+ }
+ 
+diff --git a/chrome/browser/device_notifications/device_status_icon_renderer.cc b/chrome/browser/device_notifications/device_status_icon_renderer.cc
+index 8d079e7b34d4..f819c45784ee 100644
+--- a/chrome/browser/device_notifications/device_status_icon_renderer.cc
++++ b/chrome/browser/device_notifications/device_status_icon_renderer.cc
+@@ -139,7 +139,12 @@ void DeviceStatusIconRenderer::ShowSiteSettings(base::WeakPtr<Profile> profile,
+ void DeviceStatusIconRenderer::RefreshIcon() {
+   command_id_callbacks_.clear();
+   auto* status_tray = g_browser_process->status_tray();
+-  CHECK(status_tray, base::NotFatalUntil::M161);
++  // Open Arc: an app that owns the Mac UI has no Chrome status tray
++  // (BrowserProcessImpl::CreateStatusTray()); no icon is shown. Upstream
++  // CHECKs for a tray here (NotFatalUntil::M161), which would fire for us.
++  if (!status_tray) {
++    return;
++  }
+   if (device_system_tray_icon_->profiles().empty()) {
+     if (status_icon_) {
+       std::unique_ptr<StatusIcon> removed_icon =

@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 03:26:46 -0700
+Subject: [PATCH] openarc: content: let RunContentProcess return to a host run
+ loop
+
+Adds ContentMainParams::host_runs_main_loop (Mac only). When set, the
+browser process is started from inside an app that already runs the
+main run loop: RunContentProcess() returns after the ContentMainDelegate
+has initialized the browser (BrowserMainRunner::Initialize) and attached
+the UI thread to the app's loop (patch 0001), instead of shutting
+content down. The embedder later shuts down itself (BrowserMainRunner::
+Shutdown, ContentMainRunner::Shutdown).
+
+The outermost autorelease pool of RunContentProcess() is not handed to
+the browser main loop in that mode, since it is gone when the function
+returns.
+
+Child processes are unaffected. Needed by plan task C6.
+---
+ content/app/content_main.cc       | 16 +++++++++++++++-
+ content/public/app/content_main.h |  8 ++++++++
+ 2 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 0fd60fa82080..31223a52798a 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -193,6 +193,8 @@ NO_STACK_PROTECTOR int RunContentProcess(
+   int exit_code = -1;
+ #if BUILDFLAG(IS_MAC)
+   base::apple::ScopedNSAutoreleasePool autorelease_pool;
++  // Read before |params| is handed to the runner.
++  const bool host_runs_main_loop = params.host_runs_main_loop;
+ #endif
+ 
+   // A flag to indicate whether Main() has been called before. On Android, we
+@@ -284,7 +286,9 @@ NO_STACK_PROTECTOR int RunContentProcess(
+     // is not safe. Each main loop should create and destroy its own pool; it
+     // should not be flushing the pool at the base of the autorelease pool
+     // stack.
+-    params.autorelease_pool = &autorelease_pool;
++    // With a host-owned run loop this pool is gone once RunContentProcess()
++    // returns, so the browser main loop must not keep a pointer to it.
++    params.autorelease_pool = host_runs_main_loop ? nullptr : &autorelease_pool;
+     InitializeMac();
+ #endif
+ 
+@@ -336,6 +340,16 @@ NO_STACK_PROTECTOR int RunContentProcess(
+     CommonSubprocessInit();
+   exit_code = content_main_runner->Run();
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the browser process keeps running in the embedding app's run
++  // loop after this returns (see ContentMainParams::host_runs_main_loop).
++  if (host_runs_main_loop && base::CommandLine::ForCurrentProcess()
++                                  ->GetSwitchValueASCII(switches::kProcessType)
++                                  .empty()) {
++    return exit_code;
++  }
++#endif
++
+ #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+   content_main_runner->Shutdown();
+ #endif
+diff --git a/content/public/app/content_main.h b/content/public/app/content_main.h
+index abbb4f4ccccc..9464c463e0b7 100644
+--- a/content/public/app/content_main.h
++++ b/content/public/app/content_main.h
+@@ -70,6 +70,13 @@ struct CONTENT_EXPORT ContentMainParams {
+   // The outermost autorelease pool to pass to main entry points.
+   STACK_ALLOCATED_IGNORE("https://crbug.com/1424190")
+   base::apple::ScopedNSAutoreleasePool* autorelease_pool = nullptr;
++
++  // Open Arc: the embedding app's NSApplication already runs the main run
++  // loop. The browser process is started from inside that app, the
++  // ContentMainDelegate attaches the UI thread to the app's loop instead of
++  // running it, and RunContentProcess() returns without shutting content down.
++  // The embedder calls ContentMainRunner::Shutdown() itself later.
++  bool host_runs_main_loop = false;
+ #endif
+ 
+   // Returns a copy of this ContentMainParams without the move-only data
+@@ -89,6 +96,7 @@ struct CONTENT_EXPORT ContentMainParams {
+     copy.minimal_browser_mode = minimal_browser_mode;
+ #if BUILDFLAG(IS_MAC)
+     copy.autorelease_pool = autorelease_pool;
++    copy.host_runs_main_loop = host_runs_main_loop;
+ #endif
+     return copy;
+   }

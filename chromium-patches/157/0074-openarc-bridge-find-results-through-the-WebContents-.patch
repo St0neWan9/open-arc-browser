@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Wed, 4 Nov 2026 19:33:17 +0700
+Subject: [PATCH] openarc: bridge: find results through the WebContents
+ observer (157)
+
+Chromium 157 moved find-in-page results from WebContentsDelegate::FindReply
+to WebContentsObserver::DidReceiveFindReply. The tab bridge is both, so it
+now overrides the observer method; the find bar (B25) keeps its counts.
+---
+ openarc/bridge/oac_tab.mm | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index ab88837b0269..7208565516d8 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -344,12 +344,13 @@ bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
+     }
+     return true;
+   }
+-  void FindReply(content::WebContents* web_contents,
+-                 int request_id,
+-                 int number_of_matches,
+-                 const gfx::Rect& selection_rect,
+-                 int active_match_ordinal,
+-                 bool final_update) override {
++  // content::WebContentsObserver (157 moved find results here from
++  // WebContentsDelegate::FindReply).
++  void DidReceiveFindReply(int request_id,
++                           int number_of_matches,
++                           const gfx::Rect& selection_rect,
++                           int active_match_ordinal,
++                           bool final_update) override {
+     [tab_ webContentsDidReplyToFind:request_id
+                             matches:number_of_matches
+                       activeOrdinal:active_match_ordinal

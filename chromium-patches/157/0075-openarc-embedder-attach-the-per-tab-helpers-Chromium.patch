@@ -1,0 +1,432 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Wed, 4 Nov 2026 20:42:29 +0700
+Subject: [PATCH] openarc: embedder: attach the per-tab helpers Chromium 157
+ moved to TabFeatures
+
+Chromium 157 moved most per-tab helpers out of TabHelpers::AttachTabHelpers()
+into tabs::TabFeatures (Init() and WillDiscardContents()). TabFeatures needs a
+TabInterface in a Browser; Open Arc's tabs have neither, so after the upgrade
+they lost the favicon driver, history, the password manager client, the
+subresource filter (which the ad blocker forces on), translate, page-specific
+content settings, PermissionRequestManager, the popup blocker, installable
+manager, top sites, site engagement, page-load metrics, HTTPS-only mode and
+more. Favicons, most-visited pages and the password dropdown stopped working.
+
+TabHelpersAccess::AttachTabHelpers() now creates the WebContents-scoped helpers
+itself, in TabFeatures::WillDiscardContents() order and with its conditions
+(platform autofill, off-the-record, feature flags, build flags). The helpers
+TabFeatures keeps as plain members are owned by a WebContentsUserData that
+lives as long as the WebContents. Helpers that need a TabInterface
+(ManagePasswordsUIController, TabDialogs, CoreTabHelper, NetErrorTabHelper,
+PopupOpenerTabHelper, ...) are skipped; the list is in the code.
+
+Needed by plan tasks C6b, C9, C13, C16 and B123 on Chromium 157. Upstream
+behaviour without it: a WebContents outside a Browser tab strip gets only
+session, zoom, infobar and autofill helpers.
+---
+ openarc/BUILD.gn                       |  25 ++
+ openarc/browser/openarc_tab_helpers.mm | 332 ++++++++++++++++++++++++-
+ 2 files changed, 356 insertions(+), 1 deletion(-)
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 837812f15330..35057cc3345a 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -140,6 +140,31 @@ source_set("embedder") {
+     "//chrome/browser/ui:tab_helpers",
+     "//chrome/browser/ui:tab_helpers_impl",
+     "//chrome/browser/ui/login",
++    # The per-tab helpers Chromium 157 moved to TabFeatures, attached by
++    # openarc_tab_helpers.mm.
++    "//chrome/browser/captive_portal",
++    "//chrome/browser/commerce",
++    "//chrome/browser/content_settings",
++    "//chrome/browser/favicon",
++    "//chrome/browser/file_system_access",
++    "//chrome/browser/history_clusters",
++    "//chrome/browser/login_detection",
++    "//chrome/browser/lookalikes",
++    "//chrome/browser/media",
++    "//chrome/browser/password_manager",
++    "//chrome/browser/preloading/prefetch/no_state_prefetch",
++    "//chrome/browser/printing",
++    "//chrome/browser/subresource_filter",
++    "//chrome/browser/trusted_vault",
++    "//chrome/browser/ui/autofill",
++    "//chrome/browser/ui/find_bar",
++    "//chrome/browser/ui/javascript_dialogs",
++    "//chrome/browser/ui/prefs",
++    "//components/captive_portal/content",
++    "//components/client_hints/browser",
++    "//components/commerce/content/browser",
++    "//components/history/content/browser",
++    "//components/ukm/content",
+     "//chrome/browser/ui:browser_window_header",
+     "//chrome/browser/translate",
+     "//chrome/browser/ui/translate",
+diff --git a/openarc/browser/openarc_tab_helpers.mm b/openarc/browser/openarc_tab_helpers.mm
+index d7dfcb776bb0..5c47e1bc3579 100644
+--- a/openarc/browser/openarc_tab_helpers.mm
++++ b/openarc/browser/openarc_tab_helpers.mm
+@@ -5,20 +5,348 @@
+ #include "openarc/browser/openarc_tab_helpers.h"
+ 
+ #include <memory>
++#include <optional>
+ 
+ #include "base/functional/bind.h"
++#include "base/time/default_tick_clock.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/commerce/shopping_service_factory.h"
++#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
++#include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
++#include "chrome/browser/favicon/favicon_utils.h"
++#include "chrome/browser/file_system_access/file_system_access_permission_request_manager.h"
++#include "chrome/browser/file_system_access/file_system_access_tab_helper.h"
++#include "chrome/browser/history/history_tab_helper.h"
++#include "chrome/browser/history/top_sites_factory.h"
++#include "chrome/browser/history_clusters/history_clusters_tab_helper.h"
++#include "chrome/browser/login_detection/login_detection_tab_helper.h"
++#include "chrome/browser/lookalikes/safety_tip_web_contents_observer.h"
++#include "chrome/browser/media/media_engagement_service.h"
++#include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
++#include "chrome/browser/page_content_annotations/multi_source_page_context_fetcher.h"
++#include "chrome/browser/page_content_annotations/page_content_extraction_service_factory.h"
++#include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
++#include "chrome/browser/password_manager/chrome_password_manager_client.h"
++#include "chrome/browser/permissions/one_time_permissions_tracker_helper.h"
++#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/resource_coordinator/tab_helper.h"
++#include "chrome/browser/ssl/https_only_mode_tab_helper.h"
++#include "chrome/browser/subresource_filter/chrome_content_subresource_filter_web_contents_helper_factory.h"
++#include "chrome/browser/translate/chrome_translate_client.h"
++#include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
++#include "chrome/browser/ui/autofill/autofill_client_provider.h"
++#include "chrome/browser/ui/autofill/autofill_client_provider_factory.h"
++#include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
++#include "chrome/browser/ui/find_bar/find_bar_state.h"
++#include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.h"
++#include "chrome/browser/ui/prefs/prefs_tab_helper.h"
+ #include "chrome/browser/ui/tab_helpers.h"
++#include "chrome/browser/web_applications/policy/pre_redirection_url_observer.h"
++#include "chrome/common/chrome_isolated_world_ids.h"
++#include "components/autofill/content/browser/content_autofill_client.h"
++#include "components/blocked_content/popup_blocker_tab_helper.h"
++#include "components/captive_portal/core/buildflags.h"
++#include "components/client_hints/browser/client_hints_web_contents_observer.h"
++#include "components/commerce/content/browser/commerce_tab_helper.h"
++#include "components/content_settings/browser/page_specific_content_settings.h"
++#include "components/history/content/browser/web_contents_top_sites_observer.h"
++#include "components/history/core/browser/top_sites.h"
++#include "components/javascript_dialogs/tab_modal_dialog_manager.h"
++#include "components/metrics/content/metrics_services_web_contents_observer.h"
++#include "components/metrics_services_manager/metrics_services_manager.h"
++#include "components/optimization_guide/core/optimization_guide_features.h"
++#include "components/page_content_annotations/content/annotate_page_content_request.h"
++#include "components/performance_manager/embedder/performance_manager_registry.h"
+ #include "components/permissions/permission_prompt.h"
++#include "components/permissions/permission_recovery_success_rate_tracker.h"
+ #include "components/permissions/permission_request_manager.h"
++#include "components/safe_browsing/buildflags.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "components/site_engagement/content/site_engagement_helper.h"
++#include "components/site_engagement/content/site_engagement_service.h"
++#include "components/ukm/content/source_url_recorder.h"
++#include "components/web_modal/web_contents_modal_dialog_manager.h"
++#include "components/webapps/browser/installable/installable_manager.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "extensions/buildflags/buildflags.h"
++#include "printing/buildflags/buildflags.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_dialog_host.h"
+ #include "openarc/browser/openarc_web_store_branding.h"
+ 
++#if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
++#include "chrome/browser/captive_portal/captive_portal_service_factory.h"
++#include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
++#include "components/captive_portal/content/captive_portal_tab_helper.h"
++#endif
++
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++#include "chrome/browser/extensions/api/web_navigation/web_navigation_tab_observer.h"
++#include "chrome/browser/extensions/tab_helper.h"
++#include "extensions/browser/view_type_utils.h"
++#include "extensions/common/mojom/view_type.mojom.h"
++#endif
++
++#if BUILDFLAG(ENABLE_PRINTING)
++#include "chrome/browser/printing/printing_init.h"
++#endif
++
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
++#include "chrome/browser/enterprise/connectors/referrer_cache_utils.h"
++#include "chrome/browser/safe_browsing/chrome_password_reuse_detection_manager_client.h"
++#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
++#include "chrome/browser/safe_browsing/safe_browsing_service.h"
++#include "components/safe_browsing/content/browser/async_check_tracker.h"
++#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer.h"
++#include "components/safe_browsing/content/browser/ui_manager.h"
++#endif
++
+ namespace openarc {
+ 
++// Open Arc embedder change (Chromium 157): owns the per-tab helpers that
++// TabFeatures keeps as plain members since 157 (they were WebContentsUserData
++// attached by TabHelpers before). Lives as long as the WebContents, as a
++// TabFeatures does for a Browser tab. Its presence also marks a WebContents
++// whose 157 helpers are attached, so attaching twice is a no-op.
++class TabFeatureHelpers
++    : public content::WebContentsUserData<TabFeatureHelpers> {
++ public:
++  ~TabFeatureHelpers() override = default;
++
++  std::unique_ptr<commerce::CommerceTabHelper> commerce_tab_helper;
++  std::unique_ptr<history::WebContentsTopSitesObserver> top_sites_observer;
++  std::unique_ptr<client_hints::ClientHintsWebContentsObserver>
++      client_hints_observer;
++  std::unique_ptr<FileSystemAccessTabHelper> file_system_access_tab_helper;
++  std::unique_ptr<metrics::MetricsServicesWebContentsObserver>
++      metrics_services_observer;
++  std::unique_ptr<OneTimePermissionsTrackerHelper>
++      one_time_permissions_tracker_helper;
++
++ private:
++  friend WebContentsUserData;
++  explicit TabFeatureHelpers(content::WebContents* web_contents)
++      : content::WebContentsUserData<TabFeatureHelpers>(*web_contents) {}
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(TabFeatureHelpers);
++
+ namespace {
+ 
++std::optional<int64_t> PageContentAnnotationsTabId(
++    content::WebContents* web_contents) {
++  SessionID id = sessions::SessionTabHelper::IdForTab(web_contents);
++  if (id.is_valid()) {
++    return id.id();
++  }
++  return std::nullopt;
++}
++
++// Open Arc embedder change (Chromium 157): Chromium 157 moved most per-tab
++// helpers out of TabHelpers::AttachTabHelpers() into tabs::TabFeatures, which
++// needs a tabs::TabInterface in a Browser. Open Arc's tabs have neither, so
++// this attaches the WebContents-scoped ones itself, in TabFeatures' order and
++// with its conditions (mirrors TabFeatures::WillDiscardContents(), which
++// re-creates them for a new WebContents).
++//
++// Skipped, because they need a TabInterface (TabFeatures creates them through
++// its user-data factory with the tab): AutoPictureInPictureTabHelper,
++// BreadcrumbManagerTabHelper, ChainedBackNavigationTracker,
++// ChromeComposeClient, ChromeFacilitatedPaymentsClient, CoreTabHelper,
++// extensions::AppTabHelper, LoadingPredictorTabHelper,
++// ManagePasswordsUIController, MixedContentSettingsTabHelper,
++// MLInstallabilityPromoter, NetErrorTabHelper, offline pages helpers,
++// PageContentAnnotationsWebContentsObserver, PopupOpenerTabHelper,
++// RecentlyAudibleHelper, SafeBrowsingTabObserver, SearchEngineTabHelper,
++// SearchTabHelper, SupervisedUserNavigationObserver, TabDialogs,
++// TriggerCreator, vr::VrTabHelper. Also skipped: the TabFeatures members that
++// were never attached by TabHelpers (Open Arc did not have them before 157).
++void AttachTabFeatureHelpers(content::WebContents* web_contents) {
++  if (TabFeatureHelpers::FromWebContents(web_contents)) {
++    return;
++  }
++  TabFeatureHelpers::CreateForWebContents(web_contents);
++  TabFeatureHelpers* owned = TabFeatureHelpers::FromWebContents(web_contents);
++  Profile* profile =
++      Profile::FromBrowserContext(web_contents->GetBrowserContext());
++
++  autofill::AutofillClientProvider& autofill_client_provider =
++      autofill::AutofillClientProviderFactory::GetForProfile(profile);
++  if (!autofill_client_provider.uses_platform_autofill()) {
++    ChromePasswordManagerClient::CreateForWebContents(web_contents);
++  }
++
++  CreateSubresourceFilterWebContentsHelper(web_contents);
++
++  ChromeTranslateClient::CreateForWebContents(web_contents);
++
++  if (!content_settings::PageSpecificContentSettings::GetDelegateForWebContents(
++          web_contents)) {
++    content_settings::PageSpecificContentSettings::CreateForWebContents(
++        web_contents,
++        std::make_unique<PageSpecificContentSettingsDelegate>(web_contents));
++  }
++
++  favicon::CreateContentFaviconDriverForWebContents(web_contents);
++
++  if (!profile->IsOffTheRecord()) {
++    HistoryTabHelper::GetOrCreateForWebContents(web_contents);
++  }
++
++  webapps::InstallableManager::CreateForWebContents(web_contents);
++
++  if (optimization_guide::features::IsOptimizationHintsEnabled()) {
++    OptimizationGuideWebContentsObserver::CreateForWebContents(web_contents);
++  }
++
++  if (auto* page_content_extraction_service = page_content_annotations::
++          PageContentExtractionServiceFactory::GetForProfile(profile)) {
++    page_content_annotations::AnnotatedPageContentRequest::CreateForWebContents(
++        web_contents, *page_content_extraction_service,
++        base::BindRepeating(&page_content_annotations::FetchPageContext),
++        base::BindRepeating(&PageContentAnnotationsTabId));
++  }
++
++  InitializePageLoadMetricsForWebContents(web_contents);
++
++  BookmarkTabHelper::CreateForWebContents(web_contents);
++
++#if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
++  captive_portal::CaptivePortalTabHelper::CreateForWebContents(
++      web_contents, CaptivePortalServiceFactory::GetForProfile(profile),
++      base::BindRepeating(
++          &ChromeSecurityBlockingPageFactory::OpenLoginTabForWebContents,
++          web_contents, false));
++#endif
++
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++  // A WebContents that already has a view type (DevTools) keeps it.
++  if (extensions::GetViewType(web_contents) ==
++      extensions::mojom::ViewType::kInvalid) {
++    extensions::SetViewType(web_contents,
++                            extensions::mojom::ViewType::kTabContents);
++  }
++  extensions::WebNavigationTabObserver::CreateForWebContents(web_contents);
++  extensions::TabHelper::CreateForWebContents(web_contents);
++#endif
++
++  permissions::PermissionRequestManager::CreateForWebContents(web_contents);
++
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
++  safe_browsing::SafeBrowsingNavigationObserver::MaybeCreateForWebContents(
++      web_contents, HostContentSettingsMapFactory::GetForProfile(profile),
++      safe_browsing::SafeBrowsingNavigationObserverManagerFactory::
++          GetForBrowserContext(profile),
++      profile->GetPrefs(), g_browser_process->safe_browsing_service(),
++      enterprise_connectors::IsReferrerChainNeededForEnterprise(profile));
++  if (g_browser_process->safe_browsing_service()) {
++    safe_browsing::AsyncCheckTracker::CreateForWebContents(
++        web_contents, g_browser_process->safe_browsing_service()->ui_manager(),
++        safe_browsing::AsyncCheckTracker::
++            IsPlatformEligibleForSyncCheckerCheckAllowlist());
++  }
++  if (autofill::ContentAutofillClient::FromWebContents(web_contents)) {
++    ChromePasswordReuseDetectionManagerClient::CreateForWebContents(
++        web_contents);
++  }
++#endif
++
++  owned->top_sites_observer =
++      std::make_unique<history::WebContentsTopSitesObserver>(
++          web_contents, TopSitesFactory::GetForProfile(profile).get());
++
++  owned->client_hints_observer =
++      std::make_unique<client_hints::ClientHintsWebContentsObserver>(
++          web_contents);
++
++  FileSystemAccessPermissionRequestManager::CreateForWebContents(web_contents);
++
++  owned->file_system_access_tab_helper =
++      std::make_unique<FileSystemAccessTabHelper>(web_contents);
++
++  webapps::PreRedirectionURLObserver::CreateForWebContents(web_contents);
++
++  owned->commerce_tab_helper = std::make_unique<commerce::CommerceTabHelper>(
++      web_contents, profile->IsOffTheRecord(),
++      commerce::ShoppingServiceFactory::GetForBrowserContext(profile),
++      ISOLATED_WORLD_ID_CHROME_INTERNAL);
++
++  if (auto* metrics_services_manager =
++          g_browser_process->GetMetricsServicesManager()) {
++    owned->metrics_services_observer =
++        std::make_unique<metrics::MetricsServicesWebContentsObserver>(
++            web_contents, metrics_services_manager->GetOnDidStartLoadingCb(),
++            metrics_services_manager->GetOnDidStopLoadingCb(),
++            metrics_services_manager->GetOnRendererUnresponsiveCb());
++  }
++
++  FindBarState::ConfigureWebContents(web_contents);
++
++  if (MediaEngagementService::IsEnabled()) {
++    MediaEngagementService::CreateWebContentsObserver(web_contents);
++  }
++
++#if BUILDFLAG(ENABLE_PRINTING)
++  printing::InitializePrintingForWebContents(web_contents);
++#endif
++
++  permissions::PermissionRecoverySuccessRateTracker::CreateForWebContents(
++      web_contents);
++
++  javascript_dialogs::TabModalDialogManager::CreateForWebContents(
++      web_contents,
++      std::make_unique<JavaScriptTabModalDialogManagerDelegateDesktop>(
++          web_contents));
++
++  web_modal::WebContentsModalDialogManager::CreateForWebContents(web_contents);
++
++  TrustedVaultEncryptionKeysTabHelper::CreateForWebContents(web_contents);
++
++  owned->one_time_permissions_tracker_helper =
++      std::make_unique<OneTimePermissionsTrackerHelper>(web_contents);
++
++  PrefsTabHelper::CreateForWebContents(web_contents);
++
++  if (site_engagement::SiteEngagementService::IsEnabled()) {
++    site_engagement::SiteEngagementService::Helper::CreateForWebContents(
++        web_contents,
++        prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
++            profile));
++  }
++
++  SafetyTipWebContentsObserver::CreateForWebContents(web_contents);
++
++  HttpsOnlyModeTabHelper::CreateForWebContents(web_contents);
++
++  login_detection::LoginDetectionTabHelper::MaybeCreateForWebContents(
++      web_contents);
++
++  if (!profile->IsOffTheRecord()) {
++    HistoryClustersTabHelper::CreateForWebContents(
++        web_contents, HistoryTabHelper::FromWebContents(web_contents));
++  }
++
++  if (!blocked_content::PopupBlockerTabHelper::FromWebContents(web_contents)) {
++    if (auto* pm_registry =
++            performance_manager::PerformanceManagerRegistry::GetInstance()) {
++      pm_registry->SetPageType(web_contents,
++                               performance_manager::PageType::kTab);
++    }
++  }
++
++  // After the subresource filter helper, which it depends on.
++  blocked_content::PopupBlockerTabHelper::CreateForWebContents(web_contents);
++
++  resource_coordinator::ResourceCoordinatorTabHelper::CreateForWebContents(
++      web_contents);
++
++  ukm::InitializeSourceUrlRecorderForWebContents(web_contents);
++}
++
+ // The prompt view of PermissionRequestManager: the shell's prompt through the
+ // bridge (plan C12), or a dismissing one when no bridge is registered.
+ std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
+@@ -35,8 +363,10 @@
+ // static
+ void TabHelpersAccess::AttachTabHelpers(content::WebContents* web_contents) {
+   TabHelpers::AttachTabHelpers(web_contents);
++  // Chromium 157 attaches most per-tab helpers in TabFeatures, not TabHelpers.
++  AttachTabFeatureHelpers(web_contents);
+   // Built-in ad blocking (plan C16): forced activation of Chrome's subresource
+-  // filter, which TabHelpers just attached, and the per-page blocked count.
++  // filter, attached just above, and the per-page blocked count.
+   AdBlockTabHelper::CreateForWebContents(web_contents);
+   // The Chrome Web Store names this browser on its install button and shows
+   // no "Switch to Chrome" prompt or banner (plan B61, 06 §18.3).

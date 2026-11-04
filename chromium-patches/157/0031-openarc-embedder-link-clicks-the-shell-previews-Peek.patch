@@ -1,0 +1,532 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 20:52:22 -0700
+Subject: [PATCH] openarc: embedder: link clicks the shell previews (Peek)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plan B49 (Peek, docs/arc-spec/06-flows.md §22): a plain click on a link
+to another site in a favorite or pinned tab, and a Shift-click on a link
+in any tab, must open the shell's preview panel instead of navigating the
+tab or opening a window. The shell has to learn of the click before the
+navigation happens, so the page stays as it was.
+
+OACTab (OACLinkPreview) gets linkPreviewTriggers. The policy lives on the
+WebContents (openarc::LinkPreviewPolicy):
+- other-site clicks: a NavigationThrottle added by
+  OpenArcContentBrowserClient::CreateThrottlesForNavigation cancels a
+  user link click in the primary main frame whose registrable domain
+  differs from the page's (CANCEL_AND_IGNORE: no request, no history
+  entry, no error page) and reports it;
+- Shift-clicks: OpenURLFromTab drops a renderer-initiated NEW_WINDOW
+  link open with a user gesture and reports it.
+The tab delegate hears of it through -tab:didInterceptLinkToURL:trigger:
+(OACLinkPreviewDelegate) from a posted task. Tabs without triggers keep
+the previous behaviour.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ openarc/BUILD.gn                              |   6 +
+ openarc/bridge/oac_link_preview.mm            |  72 ++++++++++
+ openarc/bridge/oac_tab.mm                     |   5 +
+ .../public/OpenArcCore/OACLinkPreview.h       |  57 ++++++++
+ .../bridge/public/OpenArcCore/OpenArcCore.h   |   1 +
+ .../browser/openarc_content_browser_client.h  |   3 +
+ .../browser/openarc_content_browser_client.mm |   7 +
+ openarc/browser/openarc_link_preview.cc       | 134 ++++++++++++++++++
+ openarc/browser/openarc_link_preview.h        |  89 ++++++++++++
+ 9 files changed, 374 insertions(+)
+ create mode 100644 openarc/bridge/oac_link_preview.mm
+ create mode 100644 openarc/bridge/public/OpenArcCore/OACLinkPreview.h
+ create mode 100644 openarc/browser/openarc_link_preview.cc
+ create mode 100644 openarc/browser/openarc_link_preview.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 95ca91ea8b80..cb4ca4e41dfb 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -43,6 +43,7 @@ openarc_public_headers = [
+   "bridge/public/OpenArcCore/OACDownloads.h",
+   "bridge/public/OpenArcCore/OACExtensions.h",
+   "bridge/public/OpenArcCore/OACImport.h",
++  "bridge/public/OpenArcCore/OACLinkPreview.h",
+   "bridge/public/OpenArcCore/OACProfile.h",
+   "bridge/public/OpenArcCore/OACSiteSettings.h",
+   "bridge/public/OpenArcCore/OACTab.h",
+@@ -85,6 +86,8 @@ source_set("embedder") {
+     "browser/openarc_content_browser_client.mm",
+     "browser/openarc_dialog_host.cc",
+     "browser/openarc_dialog_host.h",
++    "browser/openarc_link_preview.cc",
++    "browser/openarc_link_preview.h",
+     "browser/openarc_tab_helpers.h",
+     "browser/openarc_tab_helpers.mm",
+     "browser/openarc_tab_preferences.h",
+@@ -144,8 +147,10 @@ source_set("embedder") {
+     "//components/subresource_filter/core/browser",
+     "//content/public/browser",
+     "//content/public/common",
++    "//net",
+     "//third_party/blink/public/common",
+     "//third_party/crashpad/crashpad/client",
++    "//ui/base",
+     "//ui/gfx",
+   ]
+   frameworks = [
+@@ -240,6 +245,7 @@ source_set("bridge") {
+               "bridge/oac_downloads_internal.h",
+               "bridge/oac_extensions.mm",
+               "bridge/oac_extensions_internal.h",
++              "bridge/oac_link_preview.mm",
+               "bridge/oac_import.mm",
+               "bridge/oac_profile.mm",
+               "bridge/oac_profile_internal.h",
+diff --git a/openarc/bridge/oac_link_preview.mm b/openarc/bridge/oac_link_preview.mm
+new file mode 100644
+index 000000000000..aa3ae147079a
+--- /dev/null
++++ b/openarc/bridge/oac_link_preview.mm
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Plan B49: the link preview policy of a tab (OACLinkPreview.h). The policy
++// lives on the WebContents (openarc::LinkPreviewPolicy), so the navigation
++// throttle and OpenURLFromTab can read it without the bridge.
++
++#import <OpenArcCore/OACLinkPreview.h>
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/apple/url_conversions.h"
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++#include "openarc/browser/openarc_link_preview.h"
++
++static_assert(static_cast<unsigned>(OACLinkPreviewTriggersOtherSiteLink) ==
++                  static_cast<unsigned>(openarc::kLinkPreviewTriggerOtherSite),
++              "OACLinkPreviewTriggers must match openarc::LinkPreviewTrigger");
++static_assert(static_cast<unsigned>(OACLinkPreviewTriggersShiftClick) ==
++                  static_cast<unsigned>(openarc::kLinkPreviewTriggerShiftClick),
++              "OACLinkPreviewTriggers must match openarc::LinkPreviewTrigger");
++
++@implementation OACTab (OACLinkPreview)
++
++- (OACLinkPreviewTriggers)linkPreviewTriggers {
++  content::WebContents* contents = self.webContents;
++  openarc::LinkPreviewPolicy* policy =
++      contents ? openarc::LinkPreviewPolicy::FromWebContents(contents)
++               : nullptr;
++  return policy ? policy->triggers() : OACLinkPreviewTriggersNone;
++}
++
++- (void)setLinkPreviewTriggers:(OACLinkPreviewTriggers)triggers {
++  CHECK(NSThread.isMainThread);
++  content::WebContents* contents = self.webContents;
++  if (!contents) {
++    return;
++  }
++  openarc::LinkPreviewPolicy* policy =
++      openarc::LinkPreviewPolicy::FromWebContents(contents);
++  if (!policy) {
++    openarc::LinkPreviewPolicy::CreateForWebContents(contents);
++    policy = openarc::LinkPreviewPolicy::FromWebContents(contents);
++    __weak OACTab* weakSelf = self;
++    // Called from inside Chromium's navigation code: the delegate hears of
++    // the click from a posted task (OACDefines.h, no re-entrant callbacks).
++    policy->set_callback(base::BindRepeating(
++        ^(const GURL& url, openarc::LinkPreviewTrigger trigger) {
++          NSURL* link = net::NSURLWithGURL(url);
++          OACLinkPreviewTriggers matched =
++              static_cast<OACLinkPreviewTriggers>(trigger);
++          OACPostToMainThread(^{
++            OACTab* tab = weakSelf;
++            id<OACTabDelegate> delegate = tab.delegate;
++            if (tab && !tab.isClosed && link &&
++                [delegate respondsToSelector:@selector
++                          (tab:didInterceptLinkToURL:trigger:)]) {
++              [(id<OACLinkPreviewDelegate>)delegate tab:tab
++                                  didInterceptLinkToURL:link
++                                                trigger:matched];
++            }
++          });
++        }));
++  }
++  policy->set_triggers(triggers & (OACLinkPreviewTriggersOtherSiteLink |
++                                   OACLinkPreviewTriggersShiftClick));
++}
++
++@end
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 7be891eb42ee..207bfca34700 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -82,6 +82,7 @@
+ #import "openarc/bridge/oac_tab_internal.h"
+ #import "openarc/bridge/oac_translation_internal.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
++#include "openarc/browser/openarc_link_preview.h"
+ #include "openarc/browser/openarc_page_tools.h"
+ #include "openarc/browser/openarc_page_top_color.h"
+ #include "openarc/browser/openarc_tab_helpers.h"
+@@ -366,6 +367,10 @@ bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
+     if (params.disposition == WindowOpenDisposition::IGNORE_ACTION) {
+       return nullptr;
+     }
++    // Plan B49: a Shift-click the shell previews (OACLinkPreview.h).
++    if (LinkPreviewPolicy::MaybeInterceptOpenURL(source, params)) {
++      return nullptr;
++    }
+     OACTab* tab = tab_;
+     if (!tab) {
+       return nullptr;
+diff --git a/openarc/bridge/public/OpenArcCore/OACLinkPreview.h b/openarc/bridge/public/OpenArcCore/OACLinkPreview.h
+new file mode 100644
+index 000000000000..ef58a3cb40a4
+--- /dev/null
++++ b/openarc/bridge/public/OpenArcCore/OACLinkPreview.h
+@@ -0,0 +1,57 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// OACLinkPreview: link clicks the shell previews instead of letting the tab navigate (plan B49,
++// Peek, docs/arc-spec/06-flows.md §22).
++//
++// Maps to: `BrowserTab.setLinkPreviewTriggers(_:)` and `TabEvent.linkPreviewRequested` in
++// app/Sources/OpenArcEngine/BrowserEngine.swift.
++//
++// The shell tells each tab which clicks to intercept: favorites and pinned tabs intercept plain
++// clicks on links to other sites ([06 §22.1] observed), every tab Shift-clicks ([06 §22.1]
++// observed in a Today tab). The bridge decides before the navigation starts, drops the click
++// (the tab stays on its page, with no history entry and no error page) and reports it to the tab
++// delegate, if it implements `OACLinkPreviewDelegate`. A tab with no triggers behaves as before
++// (Shift-click asks for a new window through `tab:didRequestNewTab:`).
++//
++// What counts:
++// - Other site: a user click on an http(s) link in the main frame that would navigate the tab
++//   itself, whose registrable domain differs from the page's. Scripted navigations, form posts,
++//   redirects and links in subframes navigate as usual (inferred).
++// - Shift-click: a user Shift-click on an http(s) link anywhere in the page (Chromium's
++//   new-window disposition). ⌘-click and ⌘⇧-click keep opening tabs.
++
++#import <OpenArcCore/OACTab.h>
++#import <OpenArcCore/OACTabDelegate.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++/// Which link clicks a tab intercepts. Maps to `LinkPreviewTriggers`.
++typedef NS_OPTIONS(NSUInteger, OACLinkPreviewTriggers) {
++    OACLinkPreviewTriggersNone = 0,
++    /// A plain click on a link to another site.
++    OACLinkPreviewTriggersOtherSiteLink = 1 << 0,
++    /// A Shift-click on a link.
++    OACLinkPreviewTriggersShiftClick = 1 << 1,
++};
++
++@interface OACTab (OACLinkPreview)
++
++/// The clicks this tab intercepts; none by default. Takes effect for the next click.
++@property (nonatomic) OACLinkPreviewTriggers linkPreviewTriggers;
++
++@end
++
++/// Implemented by a tab delegate that wants intercepted clicks. On the main thread, from a posted
++/// task, like every `OACTabDelegate` callback.
++NS_SWIFT_UI_ACTOR
++@protocol OACLinkPreviewDelegate <OACTabDelegate>
++
++/// The tab dropped a click on a link to `url`. `trigger` is the single trigger that matched.
++- (void)tab:(OACTab *)tab didInterceptLinkToURL:(NSURL *)url trigger:(OACLinkPreviewTriggers)trigger
++    NS_SWIFT_NAME(tab(_:didInterceptLinkTo:trigger:));
++
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/openarc/bridge/public/OpenArcCore/OpenArcCore.h b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+index 5abc1b8539ff..6d96ab2ed5f8 100644
+--- a/openarc/bridge/public/OpenArcCore/OpenArcCore.h
++++ b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+@@ -21,4 +21,5 @@
+ #import <OpenArcCore/OACDownloads.h>
+ #import <OpenArcCore/OACExtensions.h>
+ #import <OpenArcCore/OACImport.h>
++#import <OpenArcCore/OACLinkPreview.h>
+ #import <OpenArcCore/OACTranslation.h>
+diff --git a/openarc/browser/openarc_content_browser_client.h b/openarc/browser/openarc_content_browser_client.h
+index 7c7cba277872..42e7e9ea4003 100644
+--- a/openarc/browser/openarc_content_browser_client.h
++++ b/openarc/browser/openarc_content_browser_client.h
+@@ -48,6 +48,9 @@ class OpenArcContentBrowserClient : public ChromeContentBrowserClient {
+       net::SSLCertRequestInfo* cert_request_info,
+       net::ClientCertIdentityList client_certs,
+       std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
++  // Plan B49: link clicks a tab previews instead (openarc_link_preview.h).
++  void CreateThrottlesForNavigation(
++      content::NavigationThrottleRegistry& registry) override;
+ 
+  protected:
+   // ChromeContentBrowserClient: Chrome's HTTP auth flow (extensions, password
+diff --git a/openarc/browser/openarc_content_browser_client.mm b/openarc/browser/openarc_content_browser_client.mm
+index 16fe70e39fc8..70a5b7f4b6f6 100644
+--- a/openarc/browser/openarc_content_browser_client.mm
++++ b/openarc/browser/openarc_content_browser_client.mm
+@@ -27,6 +27,7 @@
+ #include "openarc/app/openarc_helpers.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/browser/openarc_dialog_host.h"
++#include "openarc/browser/openarc_link_preview.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ #include "openarc/common/openarc_paths.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+@@ -187,6 +188,12 @@ void CreateLoginTabHelper(content::WebContents* web_contents) override {
+   return base::DoNothing();
+ }
+ 
++void OpenArcContentBrowserClient::CreateThrottlesForNavigation(
++    content::NavigationThrottleRegistry& registry) {
++  ChromeContentBrowserClient::CreateThrottlesForNavigation(registry);
++  LinkPreviewPolicy::MaybeAddThrottle(registry);
++}
++
+ std::unique_ptr<HttpAuthCoordinator>
+ OpenArcContentBrowserClient::CreateHttpAuthCoordinator() {
+   return std::make_unique<ShellHttpAuthCoordinator>();
+diff --git a/openarc/browser/openarc_link_preview.cc b/openarc/browser/openarc_link_preview.cc
+new file mode 100644
+index 000000000000..76828ddea511
+--- /dev/null
++++ b/openarc/browser/openarc_link_preview.cc
+@@ -0,0 +1,134 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_link_preview.h"
++
++#include <utility>
++
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/navigation_throttle_registry.h"
++#include "content/public/browser/page_navigator.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/base/window_open_disposition.h"
++#include "url/origin.h"
++#include "url/url_constants.h"
++
++namespace openarc {
++
++namespace {
++
++// Only web links are previewed (inferred: the spec's links are http(s)
++// pages; mailto:, javascript: and app schemes keep their usual handling).
++bool IsWebURL(const GURL& url) {
++  return url.is_valid() && url.SchemeIsHTTPOrHTTPS();
++}
++
++}  // namespace
++
++LinkPreviewPolicy::LinkPreviewPolicy(content::WebContents* web_contents)
++    : content::WebContentsUserData<LinkPreviewPolicy>(*web_contents) {}
++
++LinkPreviewPolicy::~LinkPreviewPolicy() = default;
++
++void LinkPreviewPolicy::Report(const GURL& url, LinkPreviewTrigger trigger) {
++  if (callback_) {
++    callback_.Run(url, trigger);
++  }
++}
++
++// static
++bool LinkPreviewPolicy::MaybeInterceptOpenURL(
++    content::WebContents* source,
++    const content::OpenURLParams& params) {
++  LinkPreviewPolicy* policy = source ? FromWebContents(source) : nullptr;
++  if (!policy || !(policy->triggers() & kLinkPreviewTriggerShiftClick)) {
++    return false;
++  }
++  // [06 §22.1] observed: Shift-click on a link opens the preview. Blink turns
++  // a Shift-click into NEW_WINDOW; ⌘-click (background tab) and ⌘⇧-click
++  // (foreground tab) keep their meaning ([06 §22.1] observed for ⌘-click).
++  if (params.disposition != WindowOpenDisposition::NEW_WINDOW ||
++      !params.is_renderer_initiated || !params.user_gesture ||
++      params.post_data ||
++      !ui::PageTransitionCoreTypeIs(params.transition,
++                                    ui::PAGE_TRANSITION_LINK) ||
++      !IsWebURL(params.url)) {
++    return false;
++  }
++  policy->Report(params.url, kLinkPreviewTriggerShiftClick);
++  return true;
++}
++
++// static
++void LinkPreviewPolicy::MaybeAddThrottle(
++    content::NavigationThrottleRegistry& registry) {
++  content::NavigationHandle& handle = registry.GetNavigationHandle();
++  if (!handle.IsInPrimaryMainFrame()) {
++    return;
++  }
++  LinkPreviewPolicy* policy = FromWebContents(handle.GetWebContents());
++  if (!policy || !(policy->triggers() & kLinkPreviewTriggerOtherSite)) {
++    return;
++  }
++  registry.AddThrottle(
++      std::make_unique<LinkPreviewNavigationThrottle>(registry));
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(LinkPreviewPolicy);
++
++LinkPreviewNavigationThrottle::LinkPreviewNavigationThrottle(
++    content::NavigationThrottleRegistry& registry)
++    : content::NavigationThrottle(registry) {}
++
++LinkPreviewNavigationThrottle::~LinkPreviewNavigationThrottle() = default;
++
++content::NavigationThrottle::ThrottleCheckResult
++LinkPreviewNavigationThrottle::WillStartRequest() {
++  content::NavigationHandle* handle = navigation_handle();
++  content::WebContents* contents = handle->GetWebContents();
++  LinkPreviewPolicy* policy =
++      contents ? LinkPreviewPolicy::FromWebContents(contents) : nullptr;
++  // The policy may have changed since the throttle was added.
++  if (!policy || !(policy->triggers() & kLinkPreviewTriggerOtherSite)) {
++    return PROCEED;
++  }
++  // A plain click by the user on a link that would replace this page.
++  // Scripted navigations, form posts, redirects, reloads and history
++  // navigations keep navigating the tab (inferred: [06 §22.1] only records
++  // link clicks).
++  if (!handle->IsRendererInitiated() || !handle->WasInitiatedByLinkClick() ||
++      !handle->HasUserGesture() || handle->IsPost() ||
++      !ui::PageTransitionCoreTypeIs(handle->GetPageTransition(),
++                                    ui::PAGE_TRANSITION_LINK) ||
++      !IsWebURL(handle->GetURL())) {
++    return PROCEED;
++  }
++  const url::Origin& current =
++      contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
++  if (current.opaque() || !(current.scheme() == url::kHttpScheme ||
++                            current.scheme() == url::kHttpsScheme)) {
++    return PROCEED;
++  }
++  // [06 §22.1] observed: a same-site link navigates the favorite itself; a
++  // link to another site opens the preview. "Site" is the registrable domain
++  // (inferred: Chromium's site notion; the spec's test used example.org and
++  // iana.org from a page on another domain).
++  if (net::registry_controlled_domains::SameDomainOrHost(
++          handle->GetURL(), current,
++          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)) {
++    return PROCEED;
++  }
++  policy->Report(handle->GetURL(), kLinkPreviewTriggerOtherSite);
++  // No error page and no history entry: the page stays as it was.
++  return CANCEL_AND_IGNORE;
++}
++
++const char* LinkPreviewNavigationThrottle::GetNameForLogging() {
++  return "OpenArcLinkPreviewNavigationThrottle";
++}
++
++}  // namespace openarc
+diff --git a/openarc/browser/openarc_link_preview.h b/openarc/browser/openarc_link_preview.h
+new file mode 100644
+index 000000000000..d115852c0db9
+--- /dev/null
++++ b/openarc/browser/openarc_link_preview.h
+@@ -0,0 +1,89 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_LINK_PREVIEW_H_
++#define OPENARC_BROWSER_OPENARC_LINK_PREVIEW_H_
++
++#include <memory>
++
++#include "base/functional/callback.h"
++#include "content/public/browser/navigation_throttle.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "url/gurl.h"
++
++namespace content {
++struct OpenURLParams;
++class NavigationThrottleRegistry;
++class WebContents;
++}  // namespace content
++
++namespace openarc {
++
++// Which link clicks of a tab the shell previews instead of letting them
++// navigate (plan B49, docs/arc-spec/06-flows.md §22.1). Bit values match
++// OACLinkPreviewTriggers (OACLinkPreview.h).
++enum LinkPreviewTrigger : unsigned {
++  kLinkPreviewTriggerNone = 0,
++  // A plain click on a link to another site (registrable domain) that would
++  // navigate the tab itself.
++  kLinkPreviewTriggerOtherSite = 1u << 0,
++  // A Shift-click on a link (Chromium's NEW_WINDOW disposition).
++  kLinkPreviewTriggerShiftClick = 1u << 1,
++};
++
++// The shell's link preview policy of one tab, and where intercepted clicks go.
++// The tab's link stays where it was: the click is dropped and reported.
++class LinkPreviewPolicy
++    : public content::WebContentsUserData<LinkPreviewPolicy> {
++ public:
++  // Called with the link's URL and the single trigger that matched.
++  using Callback = base::RepeatingCallback<void(const GURL&, LinkPreviewTrigger)>;
++
++  LinkPreviewPolicy(const LinkPreviewPolicy&) = delete;
++  LinkPreviewPolicy& operator=(const LinkPreviewPolicy&) = delete;
++  ~LinkPreviewPolicy() override;
++
++  unsigned triggers() const { return triggers_; }
++  void set_triggers(unsigned triggers) { triggers_ = triggers; }
++  void set_callback(Callback callback) { callback_ = std::move(callback); }
++
++  // OpenURLFromTab hook: a Shift-click on a link with the Shift-click trigger
++  // set is reported and must not open anything. Returns true when it was.
++  static bool MaybeInterceptOpenURL(content::WebContents* source,
++                                    const content::OpenURLParams& params);
++
++  // Adds the throttle that intercepts other-site link clicks to navigations
++  // of tabs with that trigger set (OpenArcContentBrowserClient).
++  static void MaybeAddThrottle(content::NavigationThrottleRegistry& registry);
++
++  void Report(const GURL& url, LinkPreviewTrigger trigger);
++
++ private:
++  friend class content::WebContentsUserData<LinkPreviewPolicy>;
++  explicit LinkPreviewPolicy(content::WebContents* web_contents);
++
++  unsigned triggers_ = kLinkPreviewTriggerNone;
++  Callback callback_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++// Cancels a main-frame link-click navigation to another site of a tab whose
++// policy has kLinkPreviewTriggerOtherSite, before any request is made, and
++// reports it. The page stays as it was ([06 §22.3] observed: closing the
++// preview shows the unchanged source page).
++class LinkPreviewNavigationThrottle : public content::NavigationThrottle {
++ public:
++  explicit LinkPreviewNavigationThrottle(
++      content::NavigationThrottleRegistry& registry);
++  ~LinkPreviewNavigationThrottle() override;
++
++  // content::NavigationThrottle:
++  ThrottleCheckResult WillStartRequest() override;
++  const char* GetNameForLogging() override;
++};
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_LINK_PREVIEW_H_

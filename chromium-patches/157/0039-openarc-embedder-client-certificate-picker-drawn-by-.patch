@@ -1,0 +1,556 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 15:56:53 -0700
+Subject: [PATCH] openarc: embedder: client-certificate picker drawn by the
+ shell
+
+Plan C25 (C12 follow-up). OpenArcContentBrowserClient answered every
+client-certificate request with "no certificate", since Chrome's picker
+needs a Browser window. Chrome's own policy now runs again
+(ChromeContentBrowserClient::SelectClientCertificate: the
+AutoSelectCertificateForUrls setting picks without asking), and when the
+user has to choose, ShowSSLClientCertificateSelector's embedder hook (the
+previous patch) hands the choice to the bridge:
+
+- OACClientCertificateRequest (OACDialogDelegate.h): "host:port" and the
+  matching keychain identities (subject, issuer, expiry, DER) for the tab's
+  dialog delegate (-tab:selectClientCertificate:).
+- Choosing one acquires its private key (macOS may ask to allow access) and
+  continues the handshake with it; Cancel, or dropping the request,
+  continues without a certificate, as Chrome's dialog does; the network
+  stack remembers either for the host for the session.
+- SSLClientAuthObserver links prompts for the same host (answering one
+  answers the others, which are withdrawn); the tab closing aborts the
+  request; content's cancellation callback withdraws it.
+---
+ openarc/BUILD.gn                              |   3 +
+ openarc/bridge/oac_application.mm             |   3 +
+ openarc/bridge/oac_client_certificate.mm      | 289 ++++++++++++++++++
+ .../bridge/oac_client_certificate_internal.h  |  19 ++
+ .../public/OpenArcCore/OACDialogDelegate.h    |  48 ++-
+ .../browser/openarc_content_browser_client.h  |  12 +-
+ .../browser/openarc_content_browser_client.mm |  18 --
+ 7 files changed, 362 insertions(+), 30 deletions(-)
+ create mode 100644 openarc/bridge/oac_client_certificate.mm
+ create mode 100644 openarc/bridge/oac_client_certificate_internal.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 58b96722d563..32b2f42ccc99 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -250,6 +250,8 @@ source_set("bridge") {
+               "bridge/oac_autofill_internal.h",
+               "bridge/oac_browser_application.mm",
+               "bridge/oac_capture.mm",
++              "bridge/oac_client_certificate.mm",
++              "bridge/oac_client_certificate_internal.h",
+               "bridge/oac_javascript.mm",
+               "bridge/oac_dialog_requests.mm",
+               "bridge/oac_dialog_requests_internal.h",
+@@ -294,6 +296,7 @@ source_set("bridge") {
+     "//chrome/browser/download",
+     "//chrome/browser/external_protocol",
+     "//chrome/browser/media/webrtc",
++    "//chrome/browser/ssl",
+     "//chrome/browser/ui/login",
+     "//chrome/browser/ui/autofill",
+     "//chrome/browser/ui/passwords",
+diff --git a/openarc/bridge/oac_application.mm b/openarc/bridge/oac_application.mm
+index e0a97e86462e..aaf434dd43e8 100644
+--- a/openarc/bridge/oac_application.mm
++++ b/openarc/bridge/oac_application.mm
+@@ -49,6 +49,7 @@
+ #import <OpenArcCore/OACTab.h>
+ 
+ #import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_client_certificate_internal.h"
+ #import "openarc/bridge/oac_autofill_internal.h"
+ #import "openarc/bridge/oac_profile_internal.h"
+ #import "openarc/bridge/oac_tab_internal.h"
+@@ -287,6 +288,8 @@ - (BOOL)startWithConfiguration:(OACApplicationConfiguration*)configuration
+   openarc::InstallBridgeDialogHost();
+   // Password bubble and autofill dropdown (plan C13).
+   openarc::InstallBridgeAutofillHost();
++  // Client-certificate picker (plan C25).
++  openarc::InstallClientCertificateSelector();
+   // Page translation (plan B47): Chrome's translate bubble steps go to the
+   // tab's translate helper; no Google API key gate.
+   openarc::InstallTranslateHooks();
+diff --git a/openarc/bridge/oac_client_certificate.mm b/openarc/bridge/oac_client_certificate.mm
+new file mode 100644
+index 000000000000..62e15759259e
+--- /dev/null
++++ b/openarc/bridge/oac_client_certificate.mm
+@@ -0,0 +1,289 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The client-certificate picker drawn by the shell (plan C25). //chrome keeps
++// the policy (ChromeContentBrowserClient::SelectClientCertificate: the
++// AutoSelectCertificateForUrls setting picks a certificate without asking) and
++// calls ShowSSLClientCertificateSelector() when the user has to choose; an
++// Open Arc hook in that function hands the choice to the bridge, which turns
++// it into an OACClientCertificateRequest for the tab's dialog delegate.
++// SSLClientAuthObserver links prompts for the same host, as Chrome's dialog
++// does: answering one answers the others.
++
++#import "openarc/bridge/oac_client_certificate_internal.h"
++
++#include <memory>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/time/time.h"
++#include "chrome/browser/ssl/ssl_client_auth_observer.h"
++#include "chrome/browser/ssl/ssl_client_certificate_selector.h"
++#include "content/public/browser/client_certificate_delegate.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "net/cert/x509_certificate.h"
++#include "net/cert/x509_util.h"
++#include "net/ssl/client_cert_identity.h"
++#include "net/ssl/ssl_cert_request_info.h"
++#include "net/ssl/ssl_private_key.h"
++#include "url/origin.h"
++
++#import "openarc/bridge/oac_requests_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++
++// MARK: - Bridge classes
++
++@implementation OACClientCertificate {
++  NSString* _subjectName;
++  NSString* _issuerName;
++  NSDate* _validUntil;
++  NSData* _DERData;
++}
++
++- (instancetype)initWithCertificate:(const net::X509Certificate&)certificate {
++  if ((self = [super init])) {
++    _subjectName =
++        base::SysUTF8ToNSString(certificate.subject().GetDisplayName());
++    _issuerName = base::SysUTF8ToNSString(certificate.issuer().GetDisplayName());
++    _validUntil = certificate.valid_expiry().ToNSDate();
++    base::span<const uint8_t> der =
++        net::x509_util::CryptoBufferAsSpan(certificate.cert_buffer());
++    _DERData = [NSData dataWithBytes:der.data() length:der.size()];
++  }
++  return self;
++}
++
++- (NSString*)subjectName {
++  return _subjectName;
++}
++- (NSString*)issuerName {
++  return _issuerName;
++}
++- (NSDate*)validUntil {
++  return _validUntil;
++}
++- (NSData*)DERData {
++  return _DERData;
++}
++
++@end
++
++@implementation OACClientCertificateRequest {
++  NSString* _hostPort;
++  NSArray<OACClientCertificate*>* _certificates;
++  // Runs with the chosen index, or -1 to continue without a certificate.
++  base::OnceCallback<void(NSInteger)> _answer;
++}
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     origin:(OACOrigin*)origin
++                   hostPort:(NSString*)hostPort
++               certificates:(NSArray<OACClientCertificate*>*)certificates
++                     answer:(base::OnceCallback<void(NSInteger)>)answer {
++  if ((self = [super initWithTab:tab origin:origin isFromSubframe:NO])) {
++    _hostPort = [hostPort copy];
++    _certificates = [certificates copy];
++    _answer = std::move(answer);
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [self cancel];
++}
++
++- (NSString*)hostPort {
++  return _hostPort;
++}
++- (NSArray<OACClientCertificate*>*)certificates {
++  return _certificates;
++}
++
++- (void)selectCertificateAtIndex:(NSInteger)index {
++  if (![self markFinished]) {
++    return;
++  }
++  if (_answer) {
++    const bool in_range =
++        index >= 0 && static_cast<NSUInteger>(index) < _certificates.count;
++    std::move(_answer).Run(in_range ? index : -1);
++  }
++}
++
++- (void)continueWithoutCertificate {
++  [self selectCertificateAtIndex:-1];
++}
++
++- (void)cancel {
++  [self continueWithoutCertificate];
++}
++
++- (void)withdrawByEngine {
++  _answer.Reset();
++  [super withdrawByEngine];
++}
++
++@end
++
++// MARK: - Chromium side
++
++namespace openarc {
++
++namespace {
++
++// One prompt: owns Chrome's delegate (through SSLClientAuthObserver) and the
++// identities until the user answers, another prompt for the same host is
++// answered, or the tab goes away. Owns itself; deleted when finished.
++class ShellClientCertificatePrompt : public SSLClientAuthObserver,
++                                     public content::WebContentsObserver {
++ public:
++  ShellClientCertificatePrompt(
++      content::WebContents* web_contents,
++      net::SSLCertRequestInfo* cert_request_info,
++      net::ClientCertIdentityList identities,
++      std::unique_ptr<content::ClientCertificateDelegate> delegate)
++      : SSLClientAuthObserver(web_contents->GetBrowserContext(),
++                              cert_request_info,
++                              std::move(delegate)),
++        content::WebContentsObserver(web_contents),
++        identities_(std::move(identities)) {}
++
++  ShellClientCertificatePrompt(const ShellClientCertificatePrompt&) = delete;
++  ShellClientCertificatePrompt& operator=(const ShellClientCertificatePrompt&) =
++      delete;
++
++  ~ShellClientCertificatePrompt() override {
++    StopObserving();
++    [request_ withdrawByEngine];
++  }
++
++  // Hands the request to the tab's dialog delegate. Returns the cancellation
++  // callback for content (the request went away first).
++  base::OnceClosure Present(OACTab* tab) {
++    StartObserving();
++    NSMutableArray<OACClientCertificate*>* certificates =
++        [NSMutableArray arrayWithCapacity:identities_.size()];
++    for (const auto& identity : identities_) {
++      [certificates addObject:[[OACClientCertificate alloc]
++                                  initWithCertificate:*identity->certificate()]];
++    }
++    const net::HostPortPair& host_port = cert_request_info()->host_and_port;
++    base::WeakPtr<ShellClientCertificatePrompt> weak_this =
++        weak_factory_.GetWeakPtr();
++    request_ = [[OACClientCertificateRequest alloc]
++         initWithTab:tab
++              origin:OACOriginFromURLOrigin(url::Origin::Create(
++                         GURL("https://" + host_port.ToString())))
++            hostPort:base::SysUTF8ToNSString(host_port.ToString())
++        certificates:certificates
++              answer:base::BindOnce(
++                         [](base::WeakPtr<ShellClientCertificatePrompt> self,
++                            NSInteger index) {
++                           if (self) {
++                             self->Answer(index);
++                           }
++                         },
++                         weak_this)];
++    OACClientCertificateRequest* request = request_;
++    OACPresentDialogRequest(
++        tab, request, @selector(tab:selectClientCertificate:),
++        ^BOOL(id<OACDialogDelegate> delegate, OACTab* owner) {
++          return [delegate tab:owner selectClientCertificate:request];
++        });
++    return base::BindOnce(
++        [](base::WeakPtr<ShellClientCertificatePrompt> self) {
++          // The network request went away: nothing to answer. Content also
++          // runs this while it handles our own answer (its handler goes
++          // away inside ContinueWithCertificate); the answer path owns the
++          // deletion then.
++          if (self && !self->answered_) {
++            self->CancelCertificateSelection();
++            delete self.get();
++          }
++        },
++        weak_this);
++  }
++
++ private:
++  void Answer(NSInteger index) {
++    request_ = nil;
++    answered_ = true;
++    if (index < 0) {
++      // As Chrome's dialog closed without a choice: continue without one
++      // (remembered for the host for the session by the network stack).
++      CertificateSelected(nullptr, nullptr);
++      delete this;
++      return;
++    }
++    // Stop observing before the private key arrives, as Chrome does: another
++    // prompt's answer must not delete this while the key is pending.
++    StopObserving();
++    std::unique_ptr<net::ClientCertIdentity> identity =
++        std::move(identities_[static_cast<size_t>(index)]);
++    scoped_refptr<net::X509Certificate> certificate = identity->certificate();
++    net::ClientCertIdentity::SelfOwningAcquirePrivateKey(
++        std::move(identity),
++        base::BindOnce(
++            [](base::WeakPtr<ShellClientCertificatePrompt> self,
++               scoped_refptr<net::X509Certificate> certificate,
++               scoped_refptr<net::SSLPrivateKey> private_key) {
++              if (!self) {
++                return;
++              }
++              self->CertificateSelected(certificate.get(), private_key.get());
++              delete self.get();
++            },
++            weak_factory_.GetWeakPtr(), std::move(certificate)));
++  }
++
++  // SSLClientAuthObserver: another prompt for this host was answered.
++  void OnCertSelectedByNotification() override { delete this; }
++
++  // content::WebContentsObserver: the tab closed; the request is aborted.
++  void WebContentsDestroyed() override {
++    CancelCertificateSelection();
++    if (!answered_) {
++      delete this;
++    }
++  }
++
++  net::ClientCertIdentityList identities_;
++  // Set once the user answered: from then on only the answer path deletes
++  // this (a private key may still be pending).
++  bool answered_ = false;
++  OACClientCertificateRequest* __strong request_ = nil;
++  base::WeakPtrFactory<ShellClientCertificatePrompt> weak_factory_{this};
++};
++
++// ShowSSLClientCertificateSelector()'s embedder hook. |client_certs| is not
++// empty (Chrome continues without a certificate before calling it).
++base::OnceClosure SelectClientCertificate(
++    content::WebContents* contents,
++    net::SSLCertRequestInfo* cert_request_info,
++    net::ClientCertIdentityList client_certs,
++    std::unique_ptr<content::ClientCertificateDelegate> delegate) {
++  OACTab* tab = OACTabForWebContents(contents);
++  if (!tab || tab.isClosed) {
++    // No shell tab to ask in (as Chrome without a modal dialog host): the
++    // request is aborted when |delegate| goes away.
++    return base::OnceClosure();
++  }
++  auto* prompt = new ShellClientCertificatePrompt(
++      contents, cert_request_info, std::move(client_certs),
++      std::move(delegate));
++  return prompt->Present(tab);
++}
++
++}  // namespace
++
++void InstallClientCertificateSelector() {
++  SetEmbedderClientCertificateSelector(&SelectClientCertificate);
++}
++
++}  // namespace openarc
+diff --git a/openarc/bridge/oac_client_certificate_internal.h b/openarc/bridge/oac_client_certificate_internal.h
+new file mode 100644
+index 000000000000..09f695c8ce08
+--- /dev/null
++++ b/openarc/bridge/oac_client_certificate_internal.h
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_CLIENT_CERTIFICATE_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_CLIENT_CERTIFICATE_INTERNAL_H_
++
++#import <OpenArcCore/OACDialogDelegate.h>
++
++namespace openarc {
++
++// Plan C25: registers the bridge's client-certificate picker with //chrome
++// (ShowSSLClientCertificateSelector's embedder hook). Called once when the
++// engine starts.
++void InstallClientCertificateSelector();
++
++}  // namespace openarc
++
++#endif  // OPENARC_BRIDGE_OAC_CLIENT_CERTIFICATE_INTERNAL_H_
+diff --git a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+index 0f6854b34b78..120743531bda 100644
+--- a/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACDialogDelegate.h
+@@ -22,8 +22,8 @@
+ //   `isFinished` turns YES; the shell removes its view.
+ // - Dropping the last reference to an unanswered request answers it with its default (alert:
+ //   dismissed, confirm: cancel, prompt: nil, permission: dismissed (not remembered), auth: cancel,
+-//   file chooser: cancel, external protocol: block, unresponsive page: wait), so a page never
+-//   hangs.
++//   file chooser: cancel, external protocol: block, unresponsive page: wait, client certificate:
++//   continue without one), so a page never hangs.
+ // - With no dialog delegate, or when the delegate method returns NO, the default answer is used
+ //   right away.
+ //
+@@ -38,7 +38,9 @@
+ // policy decided to ask.
+ //
+ // Added in F1 step 2: the unresponsive-page prompt (plan C22) from the tab's
+-// `WebContentsDelegate::RendererUnresponsive`.
++// `WebContentsDelegate::RendererUnresponsive`; the client-certificate picker (plan C25) from
++// //chrome's `ShowSSLClientCertificateSelector` (an Open Arc hook), after Chrome's policy
++// (AutoSelectCertificateForUrls) found nothing to pick on its own.
+ 
+ #import <OpenArcCore/OACDefines.h>
+ #import <OpenArcCore/OACTab.h>
+@@ -226,6 +228,43 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ - (void)leavePage;
+ @end
+ 
++// MARK: - Client certificate (plan C25)
++
++/// One client certificate (an identity in the keychain) the site may get.
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACClientCertificate : NSObject
++/// The subject's display name (common name, else organization…).
++@property (nonatomic, readonly, copy) NSString *subjectName;
++/// The issuer's display name.
++@property (nonatomic, readonly, copy) NSString *issuerName;
++/// The end of the validity period.
++@property (nonatomic, readonly, copy) NSDate *validUntil;
++/// The certificate (DER), for a certificate viewer.
++@property (nonatomic, readonly, copy) NSData *DERData;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// A server asked for a client certificate during the TLS handshake and Chromium's policy did not
++/// pick one itself. `certificates` are the keychain identities that fit the server's list of
++/// accepted issuers (never empty: with none, the engine continues without asking). The network
++/// stack remembers the answer for the host until the browsing session ends, as in Chrome.
++///
++/// Default answer (dropped or cancelled): continue without a certificate. The engine withdraws the
++/// request when the tab closes (the connection is then aborted), the network request went away,
++/// or another prompt for the same host was answered.
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACClientCertificateRequest : OACDialogRequest
++/// The server that asks, "host:port".
++@property (nonatomic, readonly, copy) NSString *hostPort;
++@property (nonatomic, readonly, copy) NSArray<OACClientCertificate *> *certificates;
++/// Sends `certificates[index]` (macOS may ask the user to allow access to its private key).
++/// An index out of range continues without a certificate.
++- (void)selectCertificateAtIndex:(NSInteger)index NS_SWIFT_NAME(selectCertificate(at:));
++/// Continues the handshake without a certificate.
++- (void)continueWithoutCertificate;
++@end
++
+ // MARK: - Delegate
+ 
+ @class OACPasswordSavePrompt;
+@@ -253,6 +292,9 @@ NS_SWIFT_UI_ACTOR
+ /// The page stopped responding (plan C22).
+ - (BOOL)tab:(OACTab *)tab pageBecameUnresponsive:(OACUnresponsivePageRequest *)request
+     NS_SWIFT_NAME(tab(_:pageBecameUnresponsive:));
++/// A site asks for a client certificate (plan C25).
++- (BOOL)tab:(OACTab *)tab selectClientCertificate:(OACClientCertificateRequest *)request
++    NS_SWIFT_NAME(tab(_:selectClientCertificate:));
+ 
+ /// The engine cancelled an unanswered request (navigation, tab closed, page withdrew it).
+ - (void)tab:(OACTab *)tab didCancelDialogRequest:(OACDialogRequest *)request;
+diff --git a/openarc/browser/openarc_content_browser_client.h b/openarc/browser/openarc_content_browser_client.h
+index 42e7e9ea4003..4e5b77a8b577 100644
+--- a/openarc/browser/openarc_content_browser_client.h
++++ b/openarc/browser/openarc_content_browser_client.h
+@@ -18,8 +18,9 @@ namespace openarc {
+ // Chrome's own UI redirected: no Chrome context menus, HTTP auth prompts drawn
+ // by the shell (plan C12; external protocol prompts reach the shell through
+ // ExternalProtocolHandler's embedder hook, permission prompts through the
+-// tab's PermissionRequestManager), no client-certificate picker yet, the
+-// shell's per-tab color scheme, and our helper apps.
++// tab's PermissionRequestManager; Chrome's client-certificate policy picks or
++// asks through //chrome's selector hook, plan C25), the shell's per-tab color
++// scheme, and our helper apps.
+ class OpenArcContentBrowserClient : public ChromeContentBrowserClient {
+  public:
+   OpenArcContentBrowserClient();
+@@ -41,13 +42,6 @@ class OpenArcContentBrowserClient : public ChromeContentBrowserClient {
+       content::WebContents* web_contents,
+       content::SiteInstance& main_frame_site,
+       blink::web_pref::WebPreferences* prefs) override;
+-  base::OnceClosure SelectClientCertificate(
+-      content::BrowserContext* browser_context,
+-      int process_id,
+-      content::WebContents* web_contents,
+-      net::SSLCertRequestInfo* cert_request_info,
+-      net::ClientCertIdentityList client_certs,
+-      std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
+   // Plan B49: link clicks a tab previews instead (openarc_link_preview.h).
+   void CreateThrottlesForNavigation(
+       content::NavigationThrottleRegistry& registry) override;
+diff --git a/openarc/browser/openarc_content_browser_client.mm b/openarc/browser/openarc_content_browser_client.mm
+index 70a5b7f4b6f6..bf9809cb18e6 100644
+--- a/openarc/browser/openarc_content_browser_client.mm
++++ b/openarc/browser/openarc_content_browser_client.mm
+@@ -6,7 +6,6 @@
+ 
+ #include <utility>
+ 
+-#include "base/functional/callback_helpers.h"
+ #include "base/notreached.h"
+ #include "chrome/browser/child_process_host_flags.h"
+ #include "chrome/browser/chrome_browser_main.h"
+@@ -15,15 +14,11 @@
+ #include "chrome/browser/ui/login/login_handler.h"
+ #include "chrome/browser/ui/login/login_tab_helper.h"
+ #include "content/public/browser/child_process_host.h"
+-#include "content/public/browser/client_certificate_delegate.h"
+ #include "content/public/browser/login_delegate.h"
+ #include "net/base/auth.h"
+ #include "net/http/http_response_headers.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_view_delegate.h"
+-#include "net/ssl/client_cert_identity.h"
+-#include "net/ssl/ssl_private_key.h"
+-#include "net/cert/x509_certificate.h"
+ #include "openarc/app/openarc_helpers.h"
+ #include "openarc/browser/openarc_browser_main_extra_parts.h"
+ #include "openarc/browser/openarc_dialog_host.h"
+@@ -175,19 +170,6 @@ void CreateLoginTabHelper(content::WebContents* web_contents) override {
+   return changed;
+ }
+ 
+-base::OnceClosure OpenArcContentBrowserClient::SelectClientCertificate(
+-    content::BrowserContext* browser_context,
+-    int process_id,
+-    content::WebContents* web_contents,
+-    net::SSLCertRequestInfo* cert_request_info,
+-    net::ClientCertIdentityList client_certs,
+-    std::unique_ptr<content::ClientCertificateDelegate> delegate) {
+-  // Not in plan C12's list: Chrome's picker needs a Browser window; continue
+-  // without a certificate (follow-up in the plan).
+-  delegate->ContinueWithCertificate(nullptr, nullptr);
+-  return base::DoNothing();
+-}
+-
+ void OpenArcContentBrowserClient::CreateThrottlesForNavigation(
+     content::NavigationThrottleRegistry& registry) {
+   ChromeContentBrowserClient::CreateThrottlesForNavigation(registry);
