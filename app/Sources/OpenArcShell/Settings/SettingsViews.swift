@@ -255,14 +255,14 @@ struct AutomaticUpdatesRow: View {
     var body: some View {
         SettingsToggleRow(
             label: SettingsCatalog.control("general.automaticUpdates").label,
-            isOn: Binding(get: { model.automaticallyChecksForUpdates }, set: { model.automaticallyChecksForUpdates = $0 }),
+            isOn: Binding(get: { model.automaticallyUpdates }, set: { model.automaticallyUpdates = $0 }),
             info: model.unavailableReason ?? Self.info
         )
         .disabled(!model.isAvailable)
     }
 
     /// Our text for the ⓘ (inferred).
-    static let info = "Open Arc checks for updates in the background and installs them when you quit."
+    static let info = "Open Arc checks for updates in the background and downloads them. A button at the bottom of the sidebar installs a downloaded update, or it installs when you quit."
 }
 
 // MARK: - Profiles

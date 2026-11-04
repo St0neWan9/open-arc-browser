@@ -65,6 +65,17 @@ public final class UpdatesModel: ObservableObject {
         }
     }
 
+    /// Arc's one switch, "Automatically update my Arc" ([03 §General] observed): Arc updates itself
+    /// silently. On = check and download in the background (the sidebar pill installs, or the
+    /// update installs on quit); off = neither. B163 (user asked where the download option is).
+    public var automaticallyUpdates: Bool {
+        get { automaticallyChecksForUpdates && automaticallyDownloadsUpdates }
+        set {
+            automaticallyChecksForUpdates = newValue
+            automaticallyDownloadsUpdates = newValue
+        }
+    }
+
     /// Starts a user-initiated check. Ignored while disabled.
     public func checkForUpdates() {
         guard isCheckEnabled else { return }
@@ -130,9 +141,10 @@ extension AppPreferences {
         set { setBool(newValue, Self.automaticUpdateChecksKey) }
     }
 
-    /// "Automatically download and install updates". Per device; off by default (inferred).
+    /// "Automatically download and install updates". Per device; on by default, as Arc updates
+    /// itself silently (B163; [03 §General] observed one automatic-update switch).
     public var automaticallyDownloadsUpdates: Bool {
-        get { boolValue(Self.automaticUpdateDownloadsKey) ?? false }
+        get { boolValue(Self.automaticUpdateDownloadsKey) ?? true }
         set { setBool(newValue, Self.automaticUpdateDownloadsKey) }
     }
 }

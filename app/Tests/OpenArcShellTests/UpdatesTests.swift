@@ -61,14 +61,20 @@ final class UpdatesTests: XCTestCase {
 
     // MARK: Model
 
-    /// Stored choices reach the checker before it starts; defaults are checks on, downloads off.
+    /// Stored choices reach the checker before it starts; defaults are checks and downloads on (B163).
     func testModelAppliesSettingsBeforeStarting() {
         let checker = FakeUpdateChecker()
         let model = UpdatesModel(checker: checker, preferences: .inMemory())
         XCTAssertEqual(checker.startCount, 1)
         XCTAssertEqual(checker.automaticChecksAtStart, true)
         XCTAssertTrue(checker.automaticallyChecksForUpdates)
+        XCTAssertTrue(checker.automaticallyDownloadsUpdates)
+        XCTAssertTrue(model.automaticallyUpdates)
+        model.automaticallyUpdates = false
+        XCTAssertFalse(checker.automaticallyChecksForUpdates)
         XCTAssertFalse(checker.automaticallyDownloadsUpdates)
+        model.automaticallyUpdates = true
+        XCTAssertTrue(checker.automaticallyDownloadsUpdates)
         XCTAssertTrue(model.isAvailable)
         XCTAssertTrue(model.isCheckEnabled)
     }

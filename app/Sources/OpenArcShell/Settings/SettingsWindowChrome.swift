@@ -75,6 +75,26 @@ struct SettingsWindowConfigurator: NSViewRepresentable {
         if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true; changed = true }
         if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none; changed = true }
         if let title, window.title != title { window.title = title; changed = true }
+        if hideTitlebarMaterial(in: window) { changed = true }
+        return changed
+    }
+
+    /// The SwiftUI Settings window's title bar keeps a material view of its own under the title,
+    /// which shows as a gray band above the white toolbar even with a transparent title bar (user,
+    /// 2026-11-04: "the header should be white like the content"). Hides that material so the
+    /// window's white fill shows up to the top edge, as in Arc (B100 capture, observed).
+    @MainActor
+    static func hideTitlebarMaterial(in window: NSWindow) -> Bool {
+        guard let container = window.standardWindowButton(.closeButton)?.superview?.superview else { return false }
+        var changed = false
+        func visit(_ view: NSView) {
+            if let effect = view as? NSVisualEffectView, !effect.isHidden {
+                effect.isHidden = true
+                changed = true
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(container)
         return changed
     }
 }
