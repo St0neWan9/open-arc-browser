@@ -137,20 +137,39 @@ final class LittleArcAdoptionTests: XCTestCase {
         )
         window.isReleasedWhenClosed = false
         addTeardownBlock { @MainActor in window.close() }
+        let becameKey = KeyCount()
+        let keyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: nil
+        ) { _ in MainActor.assumeIsolated { becameKey.value += 1 } }
+        addTeardownBlock { NotificationCenter.default.removeObserver(keyObserver) }
+        // Two paths make the window key, and only one runs: the command bar field does it as it
+        // attaches when the app really is active (the engine tests activate the test process), the
+        // configurator does it otherwise (its active check is stubbed to true above).
+        let appWasActive = NSApp.isActive
         LittleArcWindowConfigurator.diagnostics = .init()
         window.contentView = NSHostingView(rootView: LittleArcWindowView(model: model))
         window.orderFront(nil)
         // One turn for the configurator pass (scheduled from the view update), one for its work.
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        // A test runner is never the active app, so AppKit may refuse to make any window key:
-        // check that the window asked to be key, and that it is whenever AppKit allows.
-        XCTAssertEqual(LittleArcWindowConfigurator.diagnostics.keyRequestCount, 1, "the new window is made key once")
-        if NSApp.keyWindow != nil { XCTAssertTrue(window.isKeyWindow, "the new Little Arc window is key") }
+        if appWasActive {
+            // AppKit allows key changes: the window is key, made so once, and the configurator
+            // does not ask again.
+            XCTAssertTrue(window.isKeyWindow, "the new Little Arc window is key")
+            XCTAssertEqual(becameKey.value, 1, "the new window is made key once")
+            XCTAssertEqual(LittleArcWindowConfigurator.diagnostics.keyRequestCount, 0, "no second key request")
+        } else {
+            // An inactive test runner: AppKit may refuse to make any window key, so check that the
+            // window asked to be key, and that it is whenever AppKit allows.
+            XCTAssertEqual(LittleArcWindowConfigurator.diagnostics.keyRequestCount, 1, "the new window is made key once")
+            if NSApp.keyWindow != nil { XCTAssertTrue(window.isKeyWindow, "the new Little Arc window is key") }
+        }
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "the field has the keyboard")
         XCTAssertTrue(editor.isFieldEditor)
         XCTAssertTrue((editor.delegate as AnyObject?) is CommandBarNSTextField)
     }
+
+    @MainActor private final class KeyCount { var value = 0 }
 
     // MARK: Type-ahead
 

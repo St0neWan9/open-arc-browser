@@ -72,7 +72,10 @@ final class ScriptableWindow: NSObject {
     }
 
     static func specifier(windowID: UUID) -> NSScriptObjectSpecifier? {
-        guard let appDescription = NSApplication.shared.classDescription as? NSScriptClassDescription else { return nil }
+        // The engine's NSApplication subclass has no class description of its own (the sdef names
+        // NSApplication), so fall back to the base class's.
+        guard let appDescription = (NSApplication.shared.classDescription as? NSScriptClassDescription)
+            ?? NSScriptClassDescription(for: NSApplication.self) else { return nil }
         return NSUniqueIDSpecifier(
             containerClassDescription: appDescription, containerSpecifier: nil,
             key: ScriptingKeys.applicationWindows, uniqueID: windowID.uuidString
