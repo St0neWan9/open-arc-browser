@@ -176,7 +176,9 @@ Use content-driven adjustments within these ranges; do not depend on a single id
 
 - Folded-ribbon SVG mark plus a plain `Open Arc` wordmark.
 - Desktop links: Features / Move from Arc / Your data / GitHub.
-- One primary download action.
+- Keep the primary acquisition action at the far right. Place a globe language disclosure immediately before it; list English and 简体中文 with a check beside the current language.
+- Language choices use real links, remember the selection, and preserve the current section. The disclosure closes on Escape, outside click, or focus leaving it.
+- On narrow screens, keep the acquisition button visible, collapse navigation links into a menu, and use the standalone brand mark when space is limited.
 - Pale translucent background; blur is progressive enhancement, with a readable solid fallback.
 - Position within the hero; do not introduce a permanent floating overlay that obscures content while scrolling.
 - Mobile menu exposes the same destinations. Announce expanded state, support Escape, and close after navigation.
@@ -301,3 +303,7 @@ Each section uses a distinct composition while retaining the same typography, sp
 - Complete the page using the keyboard; verify visible focus and modal focus return.
 - Verify text contrast, 44 px touch targets, meaningful labels, and reduced-motion behavior.
 - Check console errors and failed local assets in browser QA.
+
+### Decorative bloom
+
+- Use six broad, rounded lobes with shallow valleys and a small circular counter. Avoid narrow points or sharp gear-like teeth. The same SVG symbol supplies both large decorations and small illustrative icons.

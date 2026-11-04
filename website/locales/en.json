@@ -188,8 +188,5 @@
   "demo.ideas.kicker": "A SMALL SPARK. SOMETHING NEW.",
   "demo.ideas.description.first": "Keep the things that make you pause.",
   "demo.ideas.description.last": "Your next idea might start right here.",
-  "locale.switchLabel": "Switch to Simplified Chinese",
-  "locale.switchText": "简体中文",
-  "locale.alternatePath": "/zh/",
-  "locale.alternate": "zh-CN"
+  "locale.menuLabel": "Choose language"
 }

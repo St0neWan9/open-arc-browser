@@ -188,8 +188,5 @@
   "demo.ideas.kicker": "一点灵感，一种新的可能。",
   "demo.ideas.description.first": "留下那些让你停顿的瞬间。",
   "demo.ideas.description.last": "下一次灵感，也许就从这里开始。",
-  "locale.switchLabel": "Switch to English",
-  "locale.switchText": "English",
-  "locale.alternatePath": "/",
-  "locale.alternate": "en"
+  "locale.menuLabel": "选择语言"
 }

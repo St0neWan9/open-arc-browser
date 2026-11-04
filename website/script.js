@@ -1,13 +1,30 @@
 const { locale, strings } = JSON.parse(document.querySelector('#locale-data').textContent);
 const t = key => strings[key];
-const languageLink = document.querySelector('.language-switch');
+const languagePicker = document.querySelector('.language-picker');
+const languageTrigger = languagePicker.querySelector('summary');
 try {
   const preferred = localStorage.getItem('openarc.locale');
   if (locale === 'en' && preferred === 'zh-CN') location.replace('/zh/' + location.hash);
 } catch { /* Browsing remains available when storage is disabled. */ }
-languageLink.addEventListener('click', () => {
-  try { localStorage.setItem('openarc.locale', locale === 'en' ? 'zh-CN' : 'en'); } catch { /* The locale URL still works without storage. */ }
-  languageLink.hash = location.hash;
+languagePicker.querySelectorAll('a[data-locale]').forEach(link => {
+  if (link.dataset.locale === locale) link.setAttribute('aria-current', 'true');
+  link.addEventListener('click', () => {
+    try { localStorage.setItem('openarc.locale', link.dataset.locale); } catch { /* The locale URL still works without storage. */ }
+    link.hash = location.hash;
+  });
+});
+document.addEventListener('click', event => {
+  if (!languagePicker.contains(event.target)) languagePicker.open = false;
+});
+document.addEventListener('focusin', event => {
+  if (!languagePicker.contains(event.target)) languagePicker.open = false;
+});
+languagePicker.addEventListener('toggle', () => { if (languagePicker.open) closeMenu(); });
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && languagePicker.open) {
+    languagePicker.open = false;
+    languageTrigger.focus();
+  }
 });
 const demo = document.querySelector('#browser-demo');
 const symbols = { work: '▦', life: '☀' };
@@ -51,6 +68,7 @@ const menu = document.querySelector('.menu-button');
 const navigation = document.querySelector('#navigation');
 function closeMenu() { menu.setAttribute('aria-expanded', 'false'); menu.setAttribute('aria-label', t('nav.open')); navigation.classList.remove('is-open'); }
 menu.addEventListener('click', () => {
+  languagePicker.open = false;
   const open = menu.getAttribute('aria-expanded') !== 'true';
   menu.setAttribute('aria-expanded', String(open)); menu.setAttribute('aria-label', t(open ? 'nav.close' : 'nav.open')); navigation.classList.toggle('is-open', open);
 });

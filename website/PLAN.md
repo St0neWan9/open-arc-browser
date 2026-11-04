@@ -23,7 +23,7 @@
 
 - English: https://open-arc.trentaml.com/
 - Simplified Chinese: https://open-arc.trentaml.com/zh/
-- Cloudflare deployment version: `83cc22b6-fe70-4695-8f3b-46a984f690da`.
+- Cloudflare deployment version: `45492daf-3b6d-468f-9d53-ff235726a4ed`.
 - Acquisition buttons link to the public repository until a downloadable release exists.
 
 ## Brand rollout validation — November 4, 2026
@@ -33,3 +33,13 @@
 - Built and signed an isolated development app at `build/branding-preview/Open Arc Dev branding.app`. Visually checked all six rows, selected Neon, verified its CURRENT ICON state, and restored Original.
 - Website build and static checks passed. English and Chinese HTML, SVG mark and PNG icon all return HTTP 200 and match local artifacts byte for byte. Reviewed the live Chinese landing page in Chrome.
 - Visual evidence: `branding/icon-collection.png`, `branding/previews/settings.png`, and `branding/previews/landing.png`.
+
+- LP8 — Done: Move acquisition to the trailing edge of the header, add a globe language disclosure with current-language indication, and soften the six-lobed decorative motif. Validate desktop/mobile layout, keyboard dismissal, language persistence and deployed output.
+
+
+## Header refinement validation — November 4, 2026
+
+- Website build and static checks passed. Native repository checks also passed with no compiler warnings: 2,089 tests, 6 skipped, 0 failures.
+- Checked the desktop header and responsive layouts at 390 px and 320 px. The acquisition action remains visible at the trailing edge.
+- Verified current-language highlighting, English navigation, Enter opening and Escape dismissal. Opening mobile navigation dismisses the language dropdown.
+- Deployed HTML for both locales, CSS, JavaScript and SVG symbols match the local build. Visual evidence is in `website/design/header-refinement/`.
