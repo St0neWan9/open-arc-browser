@@ -81,9 +81,13 @@ final class ProfileIsolationServer: @unchecked Sendable {
     /// The port the server listens on (valid after `start`).
     private(set) var port: UInt16 = 0
 
-    init() throws {
+    /// `port` 0 picks a free port; another one reuses a port an earlier server had (C36 checks
+    /// a page that comes back once its server does).
+    init(port: UInt16 = 0) throws {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+        let local = port == 0 ? NWEndpoint.Port.any : NWEndpoint.Port(rawValue: port) ?? .any
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: local)
+        parameters.allowLocalEndpointReuse = true
         listener = try NWListener(using: parameters)
     }
 
@@ -147,6 +151,8 @@ final class ProfileIsolationServer: @unchecked Sendable {
             case "/login": (status, type, body) = ("200 OK", "text/html; charset=utf-8", PasswordSaveTestPage.loginHTML)
             case "/login/done": (status, type, body) = ("200 OK", "text/html; charset=utf-8", PasswordSaveTestPage.doneHTML)
             case "/link": (status, type, body) = ("200 OK", "text/html; charset=utf-8", SiteIconTestImage.linkHTML)
+            // C36 (157): an image to right-click.
+            case "/image": (status, type, body) = ("200 OK", "text/html; charset=utf-8", NetErrorPageTestPage.imageHTML)
             // B132: the site icon the command bar fetches for a never visited site.
             case "/favicon.ico":
                 (status, type, body) = ("200 OK", "image/png", "")
