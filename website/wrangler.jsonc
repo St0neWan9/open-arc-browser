@@ -3,6 +3,12 @@
   "account_id": "56c0f17ebb6824c44382d97f0d1f45d3",
   "compatibility_date": "2026-11-04",
   "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "open-arc.trentaml.com",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "html_handling": "auto-trailing-slash",

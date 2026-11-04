@@ -4,6 +4,7 @@
 - Scope: standalone static website; no changes to the native browser or shared documentation.
 - Product windows use illustrative content, not screenshots or measurements of the shipping app.
 - LP2 — Done: Define the design system in English. DESIGN.md specifies visual tokens, typography, layout, components, responsive behavior, and localization.
+- LP4 — Done: Bind `open-arc.trentaml.com` as a Cloudflare custom domain. HTTPS requests to both language routes return HTTP 200 and match the deployed build.
 - LP3 — Done: Deploy an isolated Cloudflare preview and verify the live English and Chinese routes, assets, headers, and 404 behavior.
 
 ## Validation — November 4, 2026
@@ -17,7 +18,7 @@
 
 ## Preview
 
-- English: https://open-arc-landing-preview.cmux-remote-relay.workers.dev/
-- Simplified Chinese: https://open-arc-landing-preview.cmux-remote-relay.workers.dev/zh/
-- Cloudflare deployment version: `e62912c5-1220-46d8-9124-b74583567dec`.
+- English: https://open-arc.trentaml.com/
+- Simplified Chinese: https://open-arc.trentaml.com/zh/
+- Cloudflare deployment version: `a4a5b1c8-2ad6-4f48-9639-20e9ddb8dca0`.
 - Acquisition buttons link to the public repository until a downloadable release exists.

@@ -2,7 +2,7 @@
 
 A standalone, bilingual static site. English is served at `/` and Simplified Chinese at `/zh/`. Design decisions and reusable visual tokens are defined in [DESIGN.md](DESIGN.md).
 
-Preview: [English](https://open-arc-landing-preview.cmux-remote-relay.workers.dev/) · [Simplified Chinese](https://open-arc-landing-preview.cmux-remote-relay.workers.dev/zh/).
+Preview: [English](https://open-arc.trentaml.com/) · [Simplified Chinese](https://open-arc.trentaml.com/zh/).
 
 ## Local development
 
@@ -50,4 +50,4 @@ wrangler deploy --dry-run
 wrangler deploy
 ```
 
-Only `dist/` is deployed. The worker serves static assets and has no storage bindings or application backend. The preview uses a separate `open-arc-landing-preview` worker and does not change existing sites or custom domains.
+Only `dist/` is deployed. The worker serves static assets and has no storage bindings or application backend. The preview uses a separate `open-arc-landing-preview` worker, bound to `open-arc.trentaml.com`. The original workers.dev preview URL remains available.
