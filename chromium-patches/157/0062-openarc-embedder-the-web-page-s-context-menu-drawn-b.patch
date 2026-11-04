@@ -1,0 +1,1499 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Fri, 30 Oct 2026 17:09:50 +0800
+Subject: [PATCH] openarc: embedder: the web page's context menu, drawn by the
+ shell
+
+Plan B124. Right-clicking a page showed nothing: Open Arc gives content
+no WebContentsViewDelegate (patch 0012), which is where Chrome builds
+and shows its menu, and the tab bridge had no HandleContextMenu.
+
+The tab's WebContentsDelegate now handles the menu. It builds Chromium's
+model for the click with a RenderViewContextMenuMac subclass that is
+never shown (PageMenuModel, oac_context_menu.mm): Chromium's page, link,
+image, selection and editable-field items, spelling, the macOS text
+services and the profile's chrome.contextMenus items. A snapshot of the
+items (each with a role the shell can place) and of what was clicked
+goes to -[OACTabDelegate tab:showContextMenu:] as an OACContextMenu.
+The shell draws its own NSMenu (Arc's items and order) and shows it with
+-popUpMenu:, which keeps Chromium's tasks running while it tracks (Copy
+Link to Highlight waits for the page); -performItemWithIdentifier: runs
+a Chromium item through the model, so observers and extensions
+(contextMenus.onClicked) see it as from Chrome's menu. Items Chromium
+updates while open reach itemUpdateHandler. The model is dropped if its
+WebContents goes away first.
+
+Commands Chrome runs through a Browser window run here without one:
+Reload, Print (the system panel, as File > Print) and Inspect (the
+DevTools window on Elements with the element selected, new
+openarc::InspectElementAt).
+
+Also:
+- -[OACTab requestContextMenuAtPoint:]: the keyboard context menu (the
+  page's focused element), for tests and a menu command.
+- -[OACProfile actionMenuItemsForExtension:tab:] and
+  -performActionMenuItemWithIdentifier:extension:tab:: an extension's
+  contexts:["action"] items, for the shell's action menu (B116).
+- OACTabDelegate.h: the old willShowContextMenu: method, whose comment
+  said the bridge drew Chromium's menu, is replaced.
+---
+ openarc/BUILD.gn                              |   8 +
+ openarc/bridge/oac_context_menu.mm            | 935 ++++++++++++++++++
+ openarc/bridge/oac_context_menu_internal.h    |  30 +
+ openarc/bridge/oac_tab.mm                     |  37 +
+ .../public/OpenArcCore/OACContextMenu.h       | 237 +++++
+ .../public/OpenArcCore/OACTabDelegate.h       |  18 +-
+ .../bridge/public/OpenArcCore/OpenArcCore.h   |   1 +
+ openarc/browser/openarc_page_tools.h          |   9 +
+ openarc/browser/openarc_page_tools.mm         |  19 +
+ 9 files changed, 1288 insertions(+), 6 deletions(-)
+ create mode 100644 openarc/bridge/oac_context_menu.mm
+ create mode 100644 openarc/bridge/oac_context_menu_internal.h
+ create mode 100644 openarc/bridge/public/OpenArcCore/OACContextMenu.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 0464bbfd000b..b2d1da5ce0ab 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -38,6 +38,7 @@ openarc_public_headers = [
+   "bridge/public/OpenArcCore/OACAutocomplete.h",
+   "bridge/public/OpenArcCore/OACAutofill.h",
+   "bridge/public/OpenArcCore/OACCapture.h",
++  "bridge/public/OpenArcCore/OACContextMenu.h",
+   "bridge/public/OpenArcCore/OACJavaScript.h",
+   "bridge/public/OpenArcCore/OACBrowserApplication.h",
+   "bridge/public/OpenArcCore/OACDefines.h",
+@@ -257,6 +258,8 @@ source_set("bridge") {
+               "bridge/oac_capture.mm",
+               "bridge/oac_client_certificate.mm",
+               "bridge/oac_client_certificate_internal.h",
++              "bridge/oac_context_menu.mm",
++              "bridge/oac_context_menu_internal.h",
+               "bridge/oac_javascript.mm",
+               "bridge/oac_dialog_requests.mm",
+               "bridge/oac_dialog_requests_internal.h",
+@@ -300,6 +303,11 @@ source_set("bridge") {
+     "//chrome/browser/devtools",
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/extensions",
++    "//chrome/browser/printing",
++    "//chrome/browser/renderer_context_menu",
++    "//chrome/browser/ui/cocoa",
++    "//chrome/browser/ui/tab_contents",
++    "//ui/menus",
+     "//chrome/browser/picture_in_picture",
+     "//chrome/browser/notifications",
+     "//ui/content_accelerators",
+diff --git a/openarc/bridge/oac_context_menu.mm b/openarc/bridge/oac_context_menu.mm
+new file mode 100644
+index 000000000000..4768ccaa37f5
+--- /dev/null
++++ b/openarc/bridge/oac_context_menu.mm
+@@ -0,0 +1,935 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The web page's right-click menu (plan B124). See OACContextMenu.h.
++//
++// Chrome builds the menu with RenderViewContextMenuMac and shows it with
++// RenderViewContextMenuMacCocoa from its WebContentsViewDelegate, which needs a
++// Views widget (a Chrome browser window). Open Arc keeps the model and drops
++// the drawing: PageMenuModel is a RenderViewContextMenuMac that is never shown
++// by Chromium (Show() does nothing). Its Init() builds Chromium's items for the
++// click, the profile's chrome.contextMenus items included, and the bridge
++// copies them into OACContextMenuItem snapshots for the shell, which draws its
++// own NSMenu. The shell's choice comes back through ExecuteCommand, so
++// observers (Copy Link to Highlight, autofill) and extensions
++// (contextMenus.onClicked) see it as from Chrome's own menu.
++//
++// Commands whose Chrome implementation looks for a Chrome browser window
++// (Reload, Print) are run here directly; the shell runs the ones that need
++// its own UI (Save As…, Open Link in Incognito, Search, Import Passwords).
++
++#import <OpenArcCore/OACContextMenu.h>
++
++#import <AppKit/AppKit.h>
++
++#include <map>
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/check.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/no_destructor.h"
++#include "base/task/sequenced_task_runner.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/extensions/context_menu_matcher.h"
++#include "chrome/browser/extensions/menu_manager.h"
++#include "chrome/browser/printing/print_view_manager_common.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac.h"
++#include "chrome/browser/ui/tab_contents/chrome_web_contents_menu_helper.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/context_menu_params.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/reload_type.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "ui/base/mojom/menu_source_type.mojom.h"
++#include "ui/gfx/geometry/point.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "extensions/browser/extension_action.h"
++#include "extensions/browser/extension_action_manager.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/common/api/extension_action/action_info.h"
++#include "net/base/apple/url_conversions.h"
++#include "third_party/blink/public/common/context_menu_data/context_menu_data.h"
++#include "third_party/blink/public/common/context_menu_data/edit_flags.h"
++#include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
++#include "third_party/blink/public/mojom/forms/form_control_type.mojom-shared.h"
++#include "ui/base/cocoa/menu_utils.h"
++#include "ui/base/models/menu_model.h"
++#include "ui/menus/cocoa/text_services_context_menu.h"
++#include "ui/menus/simple_menu_model.h"
++#include "url/gurl.h"
++
++#import "openarc/bridge/oac_context_menu_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++#include "openarc/browser/openarc_page_tools.h"
++
++@interface OACContextMenu ()
++- (void)modelDidUpdateCommand:(int)commandID;
++@end
++
++namespace {
++
++using MediaType = blink::mojom::ContextMenuDataMediaType;
++
++OACContextMenuItemRole RoleForCommand(int command) {
++  using TS = ui::TextServicesContextMenu;
++  if (extensions::ContextMenuMatcher::IsExtensionsCustomCommandId(command)) {
++    return OACContextMenuItemRoleExtension;
++  }
++  if ((command >= IDC_SPELLCHECK_SUGGESTION_0 &&
++       command < IDC_SPELLCHECK_LANGUAGES_FIRST) ||
++      command == IDC_SPELLCHECK_ADD_TO_DICTIONARY ||
++      command == IDC_SPELLCHECK_REMOVE_FROM_DICTIONARY ||
++      command == IDC_CONTENT_CONTEXT_NO_SPELLING_SUGGESTIONS) {
++    return OACContextMenuItemRoleSpelling;
++  }
++  switch (command) {
++    case IDC_BACK:
++      return OACContextMenuItemRoleBack;
++    case IDC_FORWARD:
++      return OACContextMenuItemRoleForward;
++    case IDC_RELOAD:
++      return OACContextMenuItemRoleReload;
++    case IDC_SAVE_PAGE:
++      return OACContextMenuItemRoleSavePage;
++    case IDC_PRINT:
++      return OACContextMenuItemRolePrint;
++    case IDC_ROUTE_MEDIA:
++      return OACContextMenuItemRoleCast;
++    case IDC_CONTENT_CONTEXT_TRANSLATE:
++    case IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE:
++      return OACContextMenuItemRoleTranslate;
++    case IDC_VIEW_SOURCE:
++      return OACContextMenuItemRoleViewSource;
++    case IDC_CONTENT_CONTEXT_INSPECTELEMENT:
++      return OACContextMenuItemRoleInspect;
++    case IDC_CONTENT_CONTEXT_OPENLINKNEWTAB:
++      return OACContextMenuItemRoleOpenLinkInNewTab;
++    case IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW:
++      return OACContextMenuItemRoleOpenLinkInNewWindow;
++    case IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD:
++      return OACContextMenuItemRoleOpenLinkInIncognito;
++    case IDC_CONTENT_CONTEXT_SAVELINKAS:
++      return OACContextMenuItemRoleSaveLinkAs;
++    case IDC_CONTENT_CONTEXT_COPYLINKLOCATION:
++      return OACContextMenuItemRoleCopyLinkAddress;
++    case IDC_CONTENT_CONTEXT_COPY:
++      return OACContextMenuItemRoleCopy;
++    case IDC_CONTENT_CONTEXT_COPYLINKTOTEXT:
++      return OACContextMenuItemRoleCopyLinkToHighlight;
++    case IDC_CONTENT_CONTEXT_SEARCHWEBFOR:
++      return OACContextMenuItemRoleSearchWeb;
++    case IDC_CONTENT_CONTEXT_LOOK_UP:
++      return OACContextMenuItemRoleLookUp;
++    case IDC_CONTENT_CONTEXT_OPENIMAGENEWTAB:
++      return OACContextMenuItemRoleOpenImageInNewTab;
++    case IDC_CONTENT_CONTEXT_SAVEIMAGEAS:
++      return OACContextMenuItemRoleSaveImageAs;
++    case IDC_CONTENT_CONTEXT_COPYIMAGE:
++      return OACContextMenuItemRoleCopyImage;
++    case IDC_CONTENT_CONTEXT_COPYIMAGELOCATION:
++      return OACContextMenuItemRoleCopyImageAddress;
++    case IDC_CONTENT_CONTEXT_EMOJI:
++      return OACContextMenuItemRoleEmoji;
++    case IDC_CONTENT_CONTEXT_UNDO:
++      return OACContextMenuItemRoleUndo;
++    case IDC_CONTENT_CONTEXT_REDO:
++      return OACContextMenuItemRoleRedo;
++    case IDC_CONTENT_CONTEXT_CUT:
++      return OACContextMenuItemRoleCut;
++    case IDC_CONTENT_CONTEXT_PASTE:
++      return OACContextMenuItemRolePaste;
++    case IDC_CONTENT_CONTEXT_PASTE_AND_MATCH_STYLE:
++      return OACContextMenuItemRolePasteAndMatchStyle;
++    case IDC_CONTENT_CONTEXT_SELECTALL:
++      return OACContextMenuItemRoleSelectAll;
++    case IDC_CONTENT_CONTEXT_LANGUAGE_SETTINGS:
++      return OACContextMenuItemRoleLanguageSettings;
++    case IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_IMPORT_PASSWORDS:
++      return OACContextMenuItemRoleImportPasswords;
++    case TS::kWritingDirectionMenu:
++      return OACContextMenuItemRoleWritingDirection;
++    case TS::kSpeechMenu:
++      return OACContextMenuItemRoleSpeech;
++    default:
++      return OACContextMenuItemRoleOther;
++  }
++}
++
++OACContextMenuMediaKind MediaKind(MediaType type) {
++  switch (type) {
++    case MediaType::kImage:
++      return OACContextMenuMediaKindImage;
++    case MediaType::kVideo:
++      return OACContextMenuMediaKindVideo;
++    case MediaType::kAudio:
++      return OACContextMenuMediaKindAudio;
++    case MediaType::kCanvas:
++      return OACContextMenuMediaKindCanvas;
++    case MediaType::kPlugin:
++      return OACContextMenuMediaKindPlugin;
++    case MediaType::kFile:
++      return OACContextMenuMediaKindFile;
++    default:
++      return OACContextMenuMediaKindNone;
++  }
++}
++
++OACContextMenuEditFlags EditFlags(int flags) {
++  OACContextMenuEditFlags result = 0;
++  if (flags & blink::kCanUndo) {
++    result |= OACContextMenuEditFlagCanUndo;
++  }
++  if (flags & blink::kCanRedo) {
++    result |= OACContextMenuEditFlagCanRedo;
++  }
++  if (flags & blink::kCanCut) {
++    result |= OACContextMenuEditFlagCanCut;
++  }
++  if (flags & blink::kCanCopy) {
++    result |= OACContextMenuEditFlagCanCopy;
++  }
++  if (flags & blink::kCanPaste) {
++    result |= OACContextMenuEditFlagCanPaste;
++  }
++  if (flags & blink::kCanSelectAll) {
++    result |= OACContextMenuEditFlagCanSelectAll;
++  }
++  return result;
++}
++
++NSURL* OptionalURL(const GURL& url) {
++  return url.is_valid() && !url.is_empty() ? net::NSURLWithGURL(url) : nil;
++}
++
++}  // namespace
++
++@interface OACContextMenuItem ()
++- (instancetype)initWithIdentifier:(NSInteger)identifier
++                              kind:(OACContextMenuItemKind)kind
++                              role:(OACContextMenuItemRole)role
++                             title:(NSString*)title
++                           enabled:(BOOL)enabled
++                           checked:(BOOL)checked
++                           visible:(BOOL)visible
++               extensionIdentifier:(NSString*)extensionIdentifier
++                      submenuItems:(NSArray<OACContextMenuItem*>*)submenuItems;
++@end
++
++@implementation OACContextMenuItem {
++  NSInteger _identifier;
++  OACContextMenuItemKind _kind;
++  OACContextMenuItemRole _role;
++  NSString* _title;
++  BOOL _enabled;
++  BOOL _checked;
++  BOOL _visible;
++  NSString* _extensionIdentifier;
++  NSArray<OACContextMenuItem*>* _submenuItems;
++}
++
++- (instancetype)initWithIdentifier:(NSInteger)identifier
++                              kind:(OACContextMenuItemKind)kind
++                              role:(OACContextMenuItemRole)role
++                             title:(NSString*)title
++                           enabled:(BOOL)enabled
++                           checked:(BOOL)checked
++                           visible:(BOOL)visible
++               extensionIdentifier:(NSString*)extensionIdentifier
++                      submenuItems:(NSArray<OACContextMenuItem*>*)submenuItems {
++  if ((self = [super init])) {
++    _identifier = identifier;
++    _kind = kind;
++    _role = role;
++    _title = [title copy] ?: @"";
++    _enabled = enabled;
++    _checked = checked;
++    _visible = visible;
++    _extensionIdentifier = [extensionIdentifier copy];
++    _submenuItems = [submenuItems copy] ?: @[];
++  }
++  return self;
++}
++
++- (NSInteger)identifier {
++  return _identifier;
++}
++- (OACContextMenuItemKind)kind {
++  return _kind;
++}
++- (OACContextMenuItemRole)role {
++  return _role;
++}
++- (NSString*)title {
++  return _title;
++}
++- (BOOL)isEnabled {
++  return _enabled;
++}
++- (BOOL)isChecked {
++  return _checked;
++}
++- (BOOL)isVisible {
++  return _visible;
++}
++- (NSString*)extensionIdentifier {
++  return _extensionIdentifier;
++}
++- (NSArray<OACContextMenuItem*>*)submenuItems {
++  return _submenuItems;
++}
++
++- (NSString*)description {
++  return [NSString stringWithFormat:@"<OACContextMenuItem %ld role=%ld %@%@>",
++                                    static_cast<long>(_identifier),
++                                    static_cast<long>(_role), _title,
++                                    _enabled ? @"" : @" (disabled)"];
++}
++
++@end
++
++namespace openarc {
++
++namespace {
++
++// Extension id of an extension item, from the matcher's map.
++NSString* ExtensionIdForCommand(extensions::ContextMenuMatcher& matcher,
++                                int command) {
++  auto map = matcher.extension_item_map();
++  auto found = map.find(command);
++  if (found == map.end()) {
++    return nil;
++  }
++  return base::SysUTF8ToNSString(found->second.extension_key.extension_id);
++}
++
++NSString* StripMnemonics(NSString* label) {
++  NSMutableString* result = [NSMutableString stringWithCapacity:label.length];
++  for (NSUInteger i = 0; i < label.length; ++i) {
++    unichar c = [label characterAtIndex:i];
++    if (c == '&') {
++      if (i + 1 < label.length && [label characterAtIndex:i + 1] == '&') {
++        [result appendString:@"&"];
++        ++i;
++      }
++      continue;
++    }
++    [result appendFormat:@"%C", c];
++  }
++  return result;
++}
++
++// Snapshots `model` (and its submenus). `extension_ids` names the extension of
++// an extension command, or nil.
++NSArray<OACContextMenuItem*>* SnapshotModel(
++    ui::MenuModel* model,
++    NSString* (^extension_id)(int command)) {
++  NSMutableArray<OACContextMenuItem*>* items = [NSMutableArray array];
++  for (size_t i = 0; i < model->GetItemCount(); ++i) {
++    const ui::MenuModel::ItemType type = model->GetTypeAt(i);
++    const int command = model->GetCommandIdAt(i);
++    OACContextMenuItemKind kind = OACContextMenuItemKindCommand;
++    NSArray<OACContextMenuItem*>* submenu = nil;
++    switch (type) {
++      case ui::MenuModel::TYPE_SEPARATOR:
++        kind = OACContextMenuItemKindSeparator;
++        break;
++      case ui::MenuModel::TYPE_CHECK:
++      case ui::MenuModel::TYPE_RADIO:
++        kind = OACContextMenuItemKindCheckbox;
++        break;
++      case ui::MenuModel::TYPE_SUBMENU:
++      case ui::MenuModel::TYPE_ACTIONABLE_SUBMENU:
++        kind = OACContextMenuItemKindSubmenu;
++        if (ui::MenuModel* child = model->GetSubmenuModelAt(i)) {
++          submenu = SnapshotModel(child, extension_id);
++        }
++        break;
++      case ui::MenuModel::TYPE_TITLE:
++        // Not a command; shown as a disabled row.
++        break;
++      default:
++        break;
++    }
++    const bool separator = kind == OACContextMenuItemKindSeparator;
++    OACContextMenuItemRole role =
++        separator ? OACContextMenuItemRoleOther : RoleForCommand(command);
++    NSString* extension =
++        role == OACContextMenuItemRoleExtension ? extension_id(command) : nil;
++    // Chrome's labels mark mnemonics with "&" and write a literal "&" as
++    // "&&"; AppKit menus have no mnemonics.
++    std::u16string label = separator ? std::u16string() : model->GetLabelAt(i);
++    NSString* title = StripMnemonics(base::SysUTF16ToNSString(label));
++    [items addObject:[[OACContextMenuItem alloc]
++                         initWithIdentifier:separator ? 0 : command
++                                       kind:kind
++                                       role:role
++                                      title:title
++                                    enabled:!separator && model->IsEnabledAt(i) &&
++                                            type != ui::MenuModel::TYPE_TITLE
++                                    checked:model->IsItemCheckedAt(i)
++                                    visible:model->IsVisibleAt(i)
++                        extensionIdentifier:extension
++                               submenuItems:submenu]];
++  }
++  return items;
++}
++
++// Finds `command` in `model` or its submenus.
++bool FindCommand(ui::MenuModel* model,
++                 int command,
++                 ui::MenuModel** found_model,
++                 size_t* found_index) {
++  for (size_t i = 0; i < model->GetItemCount(); ++i) {
++    if (model->GetTypeAt(i) != ui::MenuModel::TYPE_SEPARATOR &&
++        model->GetCommandIdAt(i) == command) {
++      *found_model = model;
++      *found_index = i;
++      return true;
++    }
++    if (ui::MenuModel* child = model->GetSubmenuModelAt(i);
++        child && FindCommand(child, command, found_model, found_index)) {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
++// Chromium's menu model for one right-click, never shown by Chromium.
++class PageMenuModel : public RenderViewContextMenuMac {
++ public:
++  PageMenuModel(content::RenderFrameHost& render_frame_host,
++                const content::ContextMenuParams& params,
++                bool is_paste_enabled,
++                bool is_paste_and_match_style_enabled)
++      : RenderViewContextMenuMac(render_frame_host,
++                                 params,
++                                 is_paste_enabled,
++                                 is_paste_and_match_style_enabled) {}
++  PageMenuModel(const PageMenuModel&) = delete;
++  PageMenuModel& operator=(const PageMenuModel&) = delete;
++  ~PageMenuModel() override = default;
++
++  void set_owner(OACContextMenu* owner) { owner_ = owner; }
++
++  // RenderViewContextMenuBase: the shell shows the menu.
++  void Show() override {}
++
++  ui::SimpleMenuModel* model() { return &menu_model_; }
++  extensions::ContextMenuMatcher& extension_items() { return extension_items_; }
++  const content::ContextMenuParams& menu_params() const { return params_; }
++
++  // Commands that Chrome runs through its browser window run here instead.
++  bool RunWithoutBrowserWindow(int command) {
++    content::WebContents* contents = GetWebContents();
++    if (!contents) {
++      return true;
++    }
++    switch (command) {
++      case IDC_RELOAD:
++        contents->GetController().Reload(content::ReloadType::NORMAL,
++                                         /*check_for_repost=*/true);
++        return true;
++      case IDC_PRINT:
++        // The system print panel, as File ▸ Print (OpenArc has no print
++        // preview, see openarc_page_tools.h); an image prints alone.
++        if (params_.media_type != MediaType::kNone) {
++          if (content::RenderFrameHost* rfh = GetRenderFrameHost()) {
++            printing::StartPrintNodeUnderContextMenu(
++                rfh, /*print_preview_disabled=*/true);
++          }
++        } else {
++          printing::StartPrint(contents, /*print_preview_disabled=*/true,
++                               !params_.selection_text.empty());
++        }
++        return true;
++      case IDC_CONTENT_CONTEXT_INSPECTELEMENT:
++        // Chrome docks DevTools in its window; Open Arc opens its DevTools
++        // window on the Elements panel, then points it at the element.
++        if (content::RenderFrameHost* rfh = GetRenderFrameHost()) {
++          InspectElementAt(contents, rfh, params_.x, params_.y);
++        }
++        return true;
++      default:
++        return false;
++    }
++  }
++
++  // SimpleMenuModel::Delegate:
++  bool IsCommandIdEnabled(int command_id) const override {
++    switch (command_id) {
++      case IDC_RELOAD:
++        return true;
++      case IDC_PRINT:
++        return GetProfile()->GetPrefs()->GetBoolean(prefs::kPrintingEnabled) &&
++               (params_.media_type == MediaType::kNone ||
++                (params_.media_flags & blink::ContextMenuData::kMediaCanPrint));
++      case IDC_SAVE_PAGE:
++        return GetWebContents() &&
++               GetWebContents()->GetController().GetLastCommittedEntry();
++      default:
++        return RenderViewContextMenuMac::IsCommandIdEnabled(command_id);
++    }
++  }
++
++  void ExecuteCommand(int command_id, int event_flags) override {
++    if (RunWithoutBrowserWindow(command_id)) {
++      RecordUsedItem(command_id);
++      return;
++    }
++    RenderViewContextMenuMac::ExecuteCommand(command_id, event_flags);
++  }
++
++ protected:
++  // RenderViewContextMenuMac: Chromium changed an item (Copy Link to
++  // Highlight once its link is ready).
++  void UpdateToolkitMenuItem(int command_id,
++                             bool enabled,
++                             bool hidden,
++                             const std::u16string& title) override {
++    [owner_ modelDidUpdateCommand:command_id];
++  }
++
++ private:
++  __weak OACContextMenu* owner_ = nil;
++};
++
++// Owns the model and drops it when its WebContents goes away first (a tab
++// closed while its menu was open), since the model points into it.
++class PageMenuHolder : public content::WebContentsObserver {
++ public:
++  PageMenuHolder(content::WebContents* contents,
++                 std::unique_ptr<PageMenuModel> model)
++      : content::WebContentsObserver(contents), model_(std::move(model)) {}
++  PageMenuHolder(const PageMenuHolder&) = delete;
++  PageMenuHolder& operator=(const PageMenuHolder&) = delete;
++  ~PageMenuHolder() override = default;
++
++  PageMenuModel* model() { return model_.get(); }
++
++  // content::WebContentsObserver:
++  void WebContentsDestroyed() override { model_.reset(); }
++
++ private:
++  std::unique_ptr<PageMenuModel> model_;
++};
++
++}  // namespace openarc
++
++@implementation OACContextMenu {
++  std::unique_ptr<openarc::PageMenuHolder> _holder;
++  __weak OACTab* _tab;
++  NSArray<OACContextMenuItem*>* _items;
++  NSURL* _linkURL;
++  NSString* _linkText;
++  NSURL* _sourceURL;
++  OACContextMenuMediaKind _mediaKind;
++  BOOL _hasImageContents;
++  NSString* _selectionText;
++  BOOL _editable;
++  BOOL _isPasswordField;
++  OACContextMenuEditFlags _editFlags;
++  NSURL* _pageURL;
++  NSURL* _frameURL;
++  CGPoint _location;
++  BOOL _shown;
++  BOOL _closed;
++  BOOL _popUpUsed;
++}
++
++@synthesize itemUpdateHandler = _itemUpdateHandler;
++
++- (instancetype)initWithTab:(OACTab*)tab
++                     holder:(std::unique_ptr<openarc::PageMenuHolder>)holder {
++  if ((self = [super init])) {
++    _tab = tab;
++    _holder = std::move(holder);
++    _holder->model()->set_owner(self);
++    const content::ContextMenuParams& params = _holder->model()->menu_params();
++    _linkURL = OptionalURL(params.link_url);
++    _linkText = base::SysUTF16ToNSString(params.link_text);
++    _sourceURL = OptionalURL(params.src_url);
++    _mediaKind = MediaKind(params.media_type);
++    _hasImageContents = params.has_image_contents;
++    _selectionText = base::SysUTF16ToNSString(params.selection_text);
++    _editable = params.is_editable;
++    _isPasswordField = params.form_control_type ==
++                       blink::mojom::FormControlType::kInputPassword;
++    _editFlags = EditFlags(params.edit_flags);
++    _pageURL = OptionalURL(params.page_url);
++    _frameURL = OptionalURL(params.frame_url);
++    _location = CGPointMake(params.x, params.y);
++    _items = [self snapshot];
++  }
++  return self;
++}
++
++- (void)dealloc {
++  // The menu ends with its last reference; the page learns it closed.
++  openarc::PageMenuModel* model = _holder ? _holder->model() : nullptr;
++  if (model && _shown) {
++    model->MenuClosed(model->model());
++  }
++}
++
++// The model, or nullptr once closed or once its page went away.
++- (openarc::PageMenuModel*)liveModel {
++  return _holder ? _holder->model() : nullptr;
++}
++
++- (NSArray<OACContextMenuItem*>*)snapshot {
++  openarc::PageMenuModel* model = [self liveModel];
++  if (!model) {
++    return @[];
++  }
++  return openarc::SnapshotModel(model->model(), ^NSString*(int command) {
++    return openarc::ExtensionIdForCommand(model->extension_items(), command);
++  });
++}
++
++- (OACTab*)tab {
++  return _tab;
++}
++- (NSArray<OACContextMenuItem*>*)items {
++  return _items;
++}
++- (NSURL*)linkURL {
++  return _linkURL;
++}
++- (NSString*)linkText {
++  return _linkText;
++}
++- (NSURL*)sourceURL {
++  return _sourceURL;
++}
++- (OACContextMenuMediaKind)mediaKind {
++  return _mediaKind;
++}
++- (BOOL)hasImageContents {
++  return _hasImageContents;
++}
++- (NSString*)selectionText {
++  return _selectionText;
++}
++- (BOOL)isEditable {
++  return _editable;
++}
++- (BOOL)isPasswordField {
++  return _isPasswordField;
++}
++- (OACContextMenuEditFlags)editFlags {
++  return _editFlags;
++}
++- (NSURL*)pageURL {
++  return _pageURL;
++}
++- (NSURL*)frameURL {
++  return _frameURL;
++}
++- (CGPoint)location {
++  return _location;
++}
++- (BOOL)isClosed {
++  return _closed;
++}
++
++// The shell's delegate method returned YES: the menu counts as showing (the
++// page holds further right-clicks until it closes).
++- (void)markShown {
++  openarc::PageMenuModel* model = [self liveModel];
++  if (_closed || _shown || !model || !model->GetWebContents() ||
++      model->GetWebContents()->IsShowingContextMenu()) {
++    return;
++  }
++  _shown = YES;
++  model->OnMenuWillShow(model->model());
++}
++
++- (void)modelDidUpdateCommand:(int)commandID {
++  openarc::PageMenuModel* model = [self liveModel];
++  if (_closed || !model) {
++    return;
++  }
++  ui::MenuModel* found_model = nullptr;
++  size_t index = 0;
++  if (!openarc::FindCommand(model->model(), commandID, &found_model,
++                            &index)) {
++    return;
++  }
++  // The model already holds the new state (RenderViewContextMenuBase updates
++  // it before telling the toolkit); refresh the snapshot and report the item.
++  _items = [self snapshot];
++  OACContextMenuItem* updated = [self itemWithIdentifier:commandID in:_items];
++  void (^handler)(OACContextMenuItem*) = self.itemUpdateHandler;
++  if (updated && handler) {
++    handler(updated);
++  }
++}
++
++- (OACContextMenuItem*)itemWithIdentifier:(NSInteger)identifier
++                                       in:(NSArray<OACContextMenuItem*>*)items {
++  for (OACContextMenuItem* item in items) {
++    if (item.kind != OACContextMenuItemKindSeparator &&
++        item.identifier == identifier) {
++      return item;
++    }
++    if (OACContextMenuItem* found = [self itemWithIdentifier:identifier
++                                                          in:item.submenuItems]) {
++      return found;
++    }
++  }
++  return nil;
++}
++
++- (BOOL)popUpMenu:(id)menu {
++  CHECK(NSThread.isMainThread);
++  OACTab* tab = _tab;
++  NSView* view = tab.nativeView;
++  if (_closed || _popUpUsed || ![menu isKindOfClass:[NSMenu class]] || !view ||
++      !view.window || tab.isClosed) {
++    return NO;
++  }
++  _popUpUsed = YES;
++  [self markShown];
++  // The click, from the page's top-left coordinates to the view's.
++  NSPoint point = NSMakePoint(_location.x, view.isFlipped
++                                               ? _location.y
++                                               : NSHeight(view.bounds) -
++                                                     _location.y);
++  NSPoint inWindow = [view convertPoint:point toView:nil];
++  NSEvent* event =
++      ui::EventForPositioningContextMenuRelativeToWindow(inWindow, view.window);
++  // Tasks keep running while the menu shows (Copy Link to Highlight waits
++  // for the page), as in Chrome.
++  OACContextMenu* keepAlive = self;
++  ui::ShowContextMenu(static_cast<NSMenu*>(menu), event, view,
++                      /*allow_nested_tasks=*/true);
++  // AppKit sends the chosen item's action right after the menu's tracking
++  // ends; close on the next turn so that action still reaches the model.
++  dispatch_async(dispatch_get_main_queue(), ^{
++    [keepAlive close];
++  });
++  return YES;
++}
++
++- (void)performItemWithIdentifier:(NSInteger)identifier {
++  CHECK(NSThread.isMainThread);
++  openarc::PageMenuModel* model = [self liveModel];
++  if (_closed || !model) {
++    return;
++  }
++  const int command = static_cast<int>(identifier);
++  ui::MenuModel* found_model = nullptr;
++  size_t index = 0;
++  if (!openarc::FindCommand(model->model(), command, &found_model, &index) ||
++      found_model->GetTypeAt(index) == ui::MenuModel::TYPE_SUBMENU ||
++      !found_model->IsEnabledAt(index)) {
++    return;
++  }
++  [self markShown];
++  // Through the model, so submenu models (extension groups, text services)
++  // reach their own delegates.
++  found_model->ActivatedAt(index, /*event_flags=*/0);
++}
++
++- (void)close {
++  CHECK(NSThread.isMainThread);
++  if (_closed) {
++    return;
++  }
++  _closed = YES;
++  self.itemUpdateHandler = nil;
++  if (openarc::PageMenuModel* model = [self liveModel]; model && _shown) {
++    model->MenuClosed(model->model());
++  }
++  // Deleted on a later turn: -close may run from inside one of the model's
++  // own calls (an itemUpdateHandler that closes the menu).
++  if (std::unique_ptr<openarc::PageMenuHolder> holder = std::move(_holder)) {
++    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
++        FROM_HERE, std::move(holder));
++  }
++}
++
++@end
++
++namespace openarc {
++
++OACContextMenu* MakeContextMenu(OACTab* tab,
++                                content::RenderFrameHost& render_frame_host,
++                                const content::ContextMenuParams& params,
++                                bool is_paste_enabled,
++                                bool is_paste_and_match_style_enabled) {
++  content::WebContents* contents =
++      content::WebContents::FromRenderFrameHost(&render_frame_host);
++  if (!contents) {
++    return nil;
++  }
++  auto model = std::make_unique<PageMenuModel>(
++      render_frame_host,
++      AddContextMenuParamsPropertiesFromPreferences(contents, params),
++      is_paste_enabled, is_paste_and_match_style_enabled);
++  model->Init();
++  return [[OACContextMenu alloc]
++      initWithTab:tab
++           holder:std::make_unique<PageMenuHolder>(contents, std::move(model))];
++}
++
++void MarkContextMenuShown(OACContextMenu* menu) {
++  [menu markShown];
++}
++
++}  // namespace openarc
++
++@implementation OACTab (OACContextMenu)
++
++- (void)requestContextMenuAtPoint:(CGPoint)point {
++  CHECK(NSThread.isMainThread);
++  content::WebContents* contents = self.isClosed ? nullptr : self.webContents;
++  content::RenderWidgetHostView* view =
++      contents ? contents->GetRenderWidgetHostView() : nullptr;
++  if (!view) {
++    return;
++  }
++  // Blink opens the menu in its focused frame, as for a right-click (which
++  // focuses the page first): give the page focus.
++  contents->GetPrimaryMainFrame()->GetRenderWidgetHost()->Focus();
++  view->GetRenderWidgetHost()->ShowContextMenuAtPoint(
++      gfx::Point(static_cast<int>(point.x), static_cast<int>(point.y)),
++      ui::mojom::MenuSourceType::kMouse);
++}
++
++@end
++
++// MARK: - Extension action menu
++
++namespace {
++
++// The action menu items of one extension, for one profile.
++struct ActionMenu {
++  std::unique_ptr<ui::SimpleMenuModel> model;
++  std::unique_ptr<extensions::ContextMenuMatcher> matcher;
++};
++
++// The ContextMenuMatcher needs a SimpleMenuModel::Delegate; the items are
++// snapshot only, commands run through the matcher.
++class ActionMenuDelegate : public ui::SimpleMenuModel::Delegate {
++ public:
++  void ExecuteCommand(int command_id, int event_flags) override {}
++};
++
++ActionMenuDelegate& SharedActionMenuDelegate() {
++  static base::NoDestructor<ActionMenuDelegate> delegate;
++  return *delegate;
++}
++
++bool ItemMatchesAction(std::optional<extensions::ActionInfo::Type> type,
++                       const extensions::MenuItem* item) {
++  const extensions::MenuItem::ContextList& contexts = item->contexts();
++  if (contexts.Contains(extensions::MenuItem::ALL)) {
++    return true;
++  }
++  if (!type) {
++    return false;
++  }
++  switch (*type) {
++    case extensions::ActionInfo::Type::kAction:
++      return contexts.Contains(extensions::MenuItem::ACTION);
++    case extensions::ActionInfo::Type::kBrowser:
++      return contexts.Contains(extensions::MenuItem::BROWSER_ACTION);
++    case extensions::ActionInfo::Type::kPage:
++      return contexts.Contains(extensions::MenuItem::PAGE_ACTION);
++  }
++  return false;
++}
++
++std::optional<ActionMenu> BuildActionMenu(Profile* profile,
++                                          const std::string& extension_id) {
++  const extensions::Extension* extension =
++      extensions::ExtensionRegistry::Get(profile)
++          ->enabled_extensions()
++          .GetByID(extension_id);
++  extensions::MenuManager* manager = extensions::MenuManager::Get(profile);
++  if (!extension || !manager ||
++      !manager->MenuItems(extensions::MenuItem::ExtensionKey(extension_id))) {
++    return std::nullopt;
++  }
++  extensions::ExtensionAction* action =
++      extensions::ExtensionActionManager::Get(profile)->GetExtensionAction(
++          *extension);
++  std::optional<extensions::ActionInfo::Type> type =
++      action ? std::optional<extensions::ActionInfo::Type>(
++                   action->action_type())
++             : std::nullopt;
++  ActionMenu menu;
++  menu.model =
++      std::make_unique<ui::SimpleMenuModel>(&SharedActionMenuDelegate());
++  menu.matcher = std::make_unique<extensions::ContextMenuMatcher>(
++      profile, &SharedActionMenuDelegate(), menu.model.get(),
++      base::BindRepeating(&ItemMatchesAction, type));
++  int index = 0;
++  menu.matcher->AppendExtensionItems(
++      extensions::MenuItem::ExtensionKey(extension_id), std::u16string(),
++      &index, /*is_action_menu=*/true);
++  return menu;
++}
++
++}  // namespace
++
++@implementation OACProfile (OACExtensionActionMenu)
++
++- (NSArray<OACContextMenuItem*>*)
++    actionMenuItemsForExtension:(NSString*)extensionIdentifier
++                            tab:(OACTab*)tab {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.valid ? self.chromeProfile : nullptr;
++  if (!profile || extensionIdentifier.length == 0) {
++    return @[];
++  }
++  std::optional<ActionMenu> menu =
++      BuildActionMenu(profile, base::SysNSStringToUTF8(extensionIdentifier));
++  if (!menu) {
++    return @[];
++  }
++  NSString* identifier = [extensionIdentifier copy];
++  return openarc::SnapshotModel(menu->model.get(), ^NSString*(int) {
++    return identifier;
++  });
++}
++
++- (void)performActionMenuItemWithIdentifier:(NSInteger)identifier
++                                  extension:(NSString*)extensionIdentifier
++                                        tab:(OACTab*)tab {
++  CHECK(NSThread.isMainThread);
++  Profile* profile = self.valid ? self.chromeProfile : nullptr;
++  if (!profile || extensionIdentifier.length == 0) {
++    return;
++  }
++  std::optional<ActionMenu> menu =
++      BuildActionMenu(profile, base::SysNSStringToUTF8(extensionIdentifier));
++  const int command = static_cast<int>(identifier);
++  if (!menu || !extensions::ContextMenuMatcher::IsExtensionsCustomCommandId(
++                   command) ||
++      !menu->matcher->IsCommandIdEnabled(command)) {
++    return;
++  }
++  // As Chrome's action menu does: the tab, no frame, empty params.
++  content::WebContents* contents = tab && !tab.isClosed ? tab.webContents
++                                                        : nullptr;
++  menu->matcher->ExecuteCommand(command, contents, nullptr,
++                                content::ContextMenuParams());
++}
++
++@end
+diff --git a/openarc/bridge/oac_context_menu_internal.h b/openarc/bridge/oac_context_menu_internal.h
+new file mode 100644
+index 000000000000..f5d7eee86a55
+--- /dev/null
++++ b/openarc/bridge/oac_context_menu_internal.h
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BRIDGE_OAC_CONTEXT_MENU_INTERNAL_H_
++#define OPENARC_BRIDGE_OAC_CONTEXT_MENU_INTERNAL_H_
++
++#import <OpenArcCore/OACContextMenu.h>
++
++namespace content {
++class RenderFrameHost;
++struct ContextMenuParams;
++}  // namespace content
++
++namespace openarc {
++
++// Builds Chromium's menu for a right-click in `tab` (plan B124); nil when the
++// frame has no WebContents.
++OACContextMenu* MakeContextMenu(OACTab* tab,
++                                content::RenderFrameHost& render_frame_host,
++                                const content::ContextMenuParams& params,
++                                bool is_paste_enabled,
++                                bool is_paste_and_match_style_enabled);
++
++// The shell took the menu: the page counts it as showing until it closes.
++void MarkContextMenuShown(OACContextMenu* menu);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BRIDGE_OAC_CONTEXT_MENU_INTERNAL_H_
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index f50221223130..b6dc1d5424cd 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -22,6 +22,7 @@
+ #include "components/input/native_web_keyboard_event.h"
+ #include "components/viz/common/frame_sinks/copy_output_result.h"
+ #include "content/public/browser/browser_context.h"
++#include "content/public/browser/context_menu_params.h"
+ #include "content/public/browser/host_zoom_map.h"
+ #include "content/public/browser/keyboard_event_processing_result.h"
+ #include "content/public/browser/render_process_host.h"
+@@ -80,6 +81,7 @@
+ #import <OpenArcCore/OACTabDelegate.h>
+ 
+ #import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_context_menu_internal.h"
+ #import "openarc/bridge/oac_dialog_requests_internal.h"
+ #import "openarc/bridge/oac_extension_commands_internal.h"
+ #import "openarc/bridge/oac_infobars_internal.h"
+@@ -163,6 +165,7 @@ - (void)webContentsDidReplyToFind:(int)requestId
+                     activeOrdinal:(int)activeOrdinal
+                           isFinal:(bool)isFinal;
+ - (void)webContentsDidRequestNewTab:(OACNewTabRequest*)request;
++- (void)webContentsDidRequestContextMenu:(OACContextMenu*)menu;
+ - (content::JavaScriptDialogManager*)javaScriptDialogManager;
+ @end
+ 
+@@ -305,6 +308,25 @@ bool HandleKeyboardEvent(
+                ? content::KeyboardEventProcessingResult::HANDLED
+                : content::KeyboardEventProcessingResult::NOT_HANDLED;
+   }
++  // Plan B124: the page's right-click menu. Chromium builds it, the shell
++  // draws it (OACContextMenu.h). Always handled: content's own view would
++  // show nothing anyway (no view delegate, patch 0012).
++  bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
++                         const content::ContextMenuParams& params) override {
++    OACTab* tab = tab_;
++    if (!tab || tab.isClosed || web_contents()->IsShowingContextMenu()) {
++      return true;
++    }
++    NSPasteboard* pasteboard = NSPasteboard.generalPasteboard;
++    const bool can_paste = pasteboard.types.count > 0;
++    const bool can_paste_plain =
++        [pasteboard availableTypeFromArray:@[ NSPasteboardTypeString ]] != nil;
++    if (OACContextMenu* menu = openarc::MakeContextMenu(
++            tab, render_frame_host, params, can_paste, can_paste_plain)) {
++      [tab webContentsDidRequestContextMenu:menu];
++    }
++    return true;
++  }
+   void FindReply(content::WebContents* web_contents,
+                  int request_id,
+                  int number_of_matches,
+@@ -1158,6 +1180,21 @@ - (void)webContentsDidRequestNewTab:(OACNewTabRequest*)request {
+   });
+ }
+ 
++- (void)webContentsDidRequestContextMenu:(OACContextMenu*)menu {
++  __weak OACTab* weakSelf = self;
++  OACPostToMainThread(^{
++    OACTab* tab = weakSelf;
++    id<OACTabDelegate> delegate = tab.delegate;
++    if (tab && !tab.isClosed &&
++        [delegate respondsToSelector:@selector(tab:showContextMenu:)] &&
++        [delegate tab:tab showContextMenu:menu]) {
++      openarc::MarkContextMenuShown(menu);
++    } else {
++      [menu close];
++    }
++  });
++}
++
+ - (void)webContentsDidFinishNavigation:(content::NavigationHandle*)handle {
+   if (handle->IsInPrimaryMainFrame() && handle->HasCommitted() &&
+       !handle->IsSameDocument()) {
+diff --git a/openarc/bridge/public/OpenArcCore/OACContextMenu.h b/openarc/bridge/public/OpenArcCore/OACContextMenu.h
+new file mode 100644
+index 000000000000..23c4d4213b94
+--- /dev/null
++++ b/openarc/bridge/public/OpenArcCore/OACContextMenu.h
+@@ -0,0 +1,237 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// OACContextMenu: the web page's right-click menu, built by Chromium and drawn by the shell
++// (plan B124).
++//
++// Spec: docs/arc-spec/05-surfaces.md §右键菜单, "网页内容右键菜单 (E29)" (observed): Arc's page, link,
++// image, selection and editable-field menus, item by item, as a native NSMenu.
++//
++// Maps to: `PageContextMenu` and `TabEvent.contextMenuRequested` (app/Sources/OpenArcEngine/
++// PageContextMenu.swift), wrapped by app/Sources/OpenArcChromium/ChromiumContextMenu.swift.
++//
++// How it works:
++// - A right-click reaches the tab's `content::WebContentsDelegate::HandleContextMenu`. The bridge
++//   builds Chromium's menu model for the click (`RenderViewContextMenu`, never shown by Chromium):
++//   Chromium's own items for the target (page, link, image, selection, editable field), the
++//   `chrome.contextMenus` items of the profile's extensions, spelling suggestions and the macOS
++//   text services (Look Up, Speech, Writing Direction).
++// - The bridge hands an `OACContextMenu` to `-tab:showContextMenu:`. It carries a snapshot of the
++//   items (`items`, each with a `role` the shell can place) and what was clicked (`linkURL`,
++//   `sourceURL`, `selectionText`, the editable flags).
++// - The shell builds its own `NSMenu` in Arc's order from those items plus its own, and calls
++//   `-popUpMenu:` once. Its items for Chromium's entries call `-performItemWithIdentifier:`, which
++//   runs the command as Chromium's menu would (`chrome.contextMenus.onClicked` for an extension
++//   item). Commands that need a Chrome browser window are run by the bridge another way (Reload,
++//   Print, Inspect) or are left to the shell (see `OACContextMenuItemRole`).
++// - Chromium may update an item while the menu is open (Copy Link to Highlight turns enabled once
++//   its link is ready): `itemUpdateHandler` runs with the new item, on the main thread.
++// - `-close` (or releasing the object) ends the menu; the page learns that its menu closed.
++//
++// A menu nobody shows costs nothing: with no delegate, or when the delegate returns NO, the bridge
++// drops it and the page shows no menu.
++
++#import <OpenArcCore/OACDefines.h>
++#import <OpenArcCore/OACProfile.h>
++#import <OpenArcCore/OACTab.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++typedef NS_ENUM(NSInteger, OACContextMenuItemKind) {
++    OACContextMenuItemKindCommand = 0,
++    OACContextMenuItemKindCheckbox = 1,
++    OACContextMenuItemKindSeparator = 2,
++    OACContextMenuItemKindSubmenu = 3,
++};
++
++/// What a Chromium item does, so the shell can place it in its own order without knowing
++/// Chromium's command numbers. `Other` is anything else Chromium offers (the shell may drop it).
++typedef NS_ENUM(NSInteger, OACContextMenuItemRole) {
++    OACContextMenuItemRoleOther = 0,
++    // Page.
++    OACContextMenuItemRoleBack = 1,
++    OACContextMenuItemRoleForward = 2,
++    OACContextMenuItemRoleReload = 3,
++    /// Save As… Chromium's command saves through its own save dialog; the shell runs its Save Page
++    /// As (format choice) instead.
++    OACContextMenuItemRoleSavePage = 4,
++    OACContextMenuItemRolePrint = 5,
++    /// Cast… Chromium's cast dialog needs a Chrome browser window: not available.
++    OACContextMenuItemRoleCast = 6,
++    /// "Translate to <language>". Runs Chromium's translation (OACTranslation.h).
++    OACContextMenuItemRoleTranslate = 7,
++    OACContextMenuItemRoleViewSource = 8,
++    OACContextMenuItemRoleInspect = 9,
++    // Link.
++    OACContextMenuItemRoleOpenLinkInNewTab = 10,
++    OACContextMenuItemRoleOpenLinkInNewWindow = 11,
++    /// Chromium would open the link in the tab's own profile; the shell opens an incognito window.
++    OACContextMenuItemRoleOpenLinkInIncognito = 12,
++    OACContextMenuItemRoleSaveLinkAs = 13,
++    OACContextMenuItemRoleCopyLinkAddress = 14,
++    // Selection.
++    OACContextMenuItemRoleCopy = 15,
++    /// Copy Link to Highlight (a URL with a text fragment). Disabled until Chromium made the link;
++    /// an `itemUpdateHandler` call enables it.
++    OACContextMenuItemRoleCopyLinkToHighlight = 16,
++    /// "Search <engine> for “…”" with Chromium's default search engine. The shell uses its own
++    /// engine instead.
++    OACContextMenuItemRoleSearchWeb = 17,
++    OACContextMenuItemRoleLookUp = 18,
++    // Image.
++    OACContextMenuItemRoleOpenImageInNewTab = 19,
++    OACContextMenuItemRoleSaveImageAs = 20,
++    OACContextMenuItemRoleCopyImage = 21,
++    OACContextMenuItemRoleCopyImageAddress = 22,
++    // Editable field.
++    OACContextMenuItemRoleEmoji = 23,
++    OACContextMenuItemRoleUndo = 24,
++    OACContextMenuItemRoleRedo = 25,
++    OACContextMenuItemRoleCut = 26,
++    OACContextMenuItemRolePaste = 27,
++    OACContextMenuItemRolePasteAndMatchStyle = 28,
++    OACContextMenuItemRoleSelectAll = 29,
++    OACContextMenuItemRoleLanguageSettings = 30,
++    /// The Writing Direction submenu (Default, Left to Right, Right to Left).
++    OACContextMenuItemRoleWritingDirection = 31,
++    /// Spelling suggestions, Add to / Remove from Dictionary.
++    OACContextMenuItemRoleSpelling = 32,
++    /// Chromium's password import item (it opens Chrome's password manager page, which needs a
++    /// Chrome browser window); the shell runs its own import.
++    OACContextMenuItemRoleImportPasswords = 33,
++    // Text services and extensions.
++    /// The Speech submenu (Start Speaking, Stop Speaking).
++    OACContextMenuItemRoleSpeech = 34,
++    /// An item of an extension (`chrome.contextMenus`), or an extension's submenu of items.
++    OACContextMenuItemRoleExtension = 35,
++};
++
++/// One item of a menu snapshot. Immutable.
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACContextMenuItem : NSObject
++/// Pass to `-performItemWithIdentifier:`. Unique within one menu; 0 for separators.
++@property (nonatomic, readonly) NSInteger identifier;
++@property (nonatomic, readonly) OACContextMenuItemKind kind;
++@property (nonatomic, readonly) OACContextMenuItemRole role;
++/// Chromium's localized title (empty for separators).
++@property (nonatomic, readonly, copy) NSString *title;
++@property (nonatomic, readonly, getter=isEnabled) BOOL enabled;
++@property (nonatomic, readonly, getter=isChecked) BOOL checked;
++@property (nonatomic, readonly, getter=isVisible) BOOL visible;
++/// For extension items: the extension's id.
++@property (nonatomic, readonly, copy, nullable) NSString *extensionIdentifier;
++/// The items of a submenu; empty otherwise.
++@property (nonatomic, readonly, copy) NSArray<OACContextMenuItem *> *submenuItems;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// What the right-click hit.
++typedef NS_ENUM(NSInteger, OACContextMenuMediaKind) {
++    OACContextMenuMediaKindNone = 0,
++    OACContextMenuMediaKindImage = 1,
++    OACContextMenuMediaKindVideo = 2,
++    OACContextMenuMediaKindAudio = 3,
++    OACContextMenuMediaKindCanvas = 4,
++    OACContextMenuMediaKindPlugin = 5,
++    OACContextMenuMediaKindFile = 6,
++};
++
++/// The edit commands the focused field allows (Blink's edit flags).
++typedef NS_OPTIONS(NSUInteger, OACContextMenuEditFlags) {
++    OACContextMenuEditFlagCanUndo = 1 << 0,
++    OACContextMenuEditFlagCanRedo = 1 << 1,
++    OACContextMenuEditFlagCanCut = 1 << 2,
++    OACContextMenuEditFlagCanCopy = 1 << 3,
++    OACContextMenuEditFlagCanPaste = 1 << 4,
++    OACContextMenuEditFlagCanSelectAll = 1 << 5,
++};
++
++/// One right-click menu of a tab. Main thread only.
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACContextMenu : NSObject
++
++@property (nonatomic, readonly, weak, nullable) OACTab *tab;
++/// Chromium's items, in Chromium's order, as built for the click.
++@property (nonatomic, readonly, copy) NSArray<OACContextMenuItem *> *items;
++
++/// The link under the pointer, if any.
++@property (nonatomic, readonly, copy, nullable) NSURL *linkURL;
++/// The link's text.
++@property (nonatomic, readonly, copy) NSString *linkText;
++/// The image, video or audio source under the pointer, if any.
++@property (nonatomic, readonly, copy, nullable) NSURL *sourceURL;
++@property (nonatomic, readonly) OACContextMenuMediaKind mediaKind;
++/// The image under the pointer has loaded (Copy Image works).
++@property (nonatomic, readonly) BOOL hasImageContents;
++/// The selected text (for an editable field, the word under the pointer that macOS selected).
++@property (nonatomic, readonly, copy) NSString *selectionText;
++@property (nonatomic, readonly, getter=isEditable) BOOL editable;
++/// The field is a password field.
++@property (nonatomic, readonly) BOOL isPasswordField;
++@property (nonatomic, readonly) OACContextMenuEditFlags editFlags;
++/// The page and the frame the click was in.
++@property (nonatomic, readonly, copy, nullable) NSURL *pageURL;
++@property (nonatomic, readonly, copy, nullable) NSURL *frameURL;
++/// The click, in points, in the page's view with the origin at its top left (y down).
++@property (nonatomic, readonly) CGPoint location;
++
++/// Runs with an item Chromium changed while the menu is open (same identifier, new title or
++/// enabled state). Main thread; may run while `-popUpMenu:` is still showing the menu.
++@property (nonatomic, copy, nullable) void (^itemUpdateHandler)(OACContextMenuItem *item);
++
++/// YES once closed.
++@property (nonatomic, readonly, getter=isClosed) BOOL closed;
++
++/// Shows `menu` (an `NSMenu`, typed `id` so this header stays free of AppKit) at the click, over
++/// the page's view, and returns when it closed. Chromium's work (the page, the link for Copy Link
++/// to Highlight) keeps running while it shows. macOS may add its own items (Services, AutoFill)
++/// for the page's view. The menu closes (`-close`) on the next run loop turn, so an item's action
++/// that AppKit sends as the menu ends can still call `-performItemWithIdentifier:`. At most once;
++/// NO when closed already or when the tab has no view.
++- (BOOL)popUpMenu:(id)menu;
++
++/// Runs an item's command, as a click on it in Chromium's own menu would. Ignored for unknown,
++/// disabled or submenu items and after `-close`.
++- (void)performItemWithIdentifier:(NSInteger)identifier NS_SWIFT_NAME(performItem(identifier:));
++
++/// Ends the menu without a choice (or after one). Idempotent.
++- (void)close;
++
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++@interface OACTab (OACContextMenu)
++
++/// Asks the page for its keyboard context menu (as the context-menu key does): it is for the
++/// page's focused element or selection (the page itself when neither), placed at `point` (points,
++/// the page's view, origin top left). The page's `contextmenu` handlers run first, then
++/// `-tab:showContextMenu:` follows if the page did not cancel it. The page gets keyboard focus
++/// first. For a keyboard menu command and tests.
++- (void)requestContextMenuAtPoint:(CGPoint)point NS_SWIFT_NAME(requestContextMenu(at:));
++
++@end
++
++/// The `chrome.contextMenus` items an extension added for its toolbar action
++/// (`contexts: ["action"]`, also "all"), for the shell's action menu (plan B116, B124).
++@interface OACProfile (OACExtensionActionMenu)
++
++/// The action items of `extensionIdentifier`, in the extension's order (submenus included), for a
++/// right-click on its action while `tab` shows. Empty for an unknown or disabled extension, or one
++/// without such items.
++- (NSArray<OACContextMenuItem *> *)actionMenuItemsForExtension:(NSString *)extensionIdentifier
++                                                           tab:(nullable OACTab *)tab
++    NS_SWIFT_NAME(actionMenuItems(extensionIdentifier:tab:));
++
++/// Runs one of those items (the extension's `contextMenus.onClicked` fires, with `tab`). Ignored
++/// when the item is gone.
++- (void)performActionMenuItemWithIdentifier:(NSInteger)identifier
++                                  extension:(NSString *)extensionIdentifier
++                                        tab:(nullable OACTab *)tab
++    NS_SWIFT_NAME(performActionMenuItem(identifier:extensionIdentifier:tab:));
++
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+index 3dc4edcfe99d..962295ad2a1f 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+@@ -7,8 +7,8 @@
+ // Maps to: `TabEvent` (one callback per case) and the tab-originated `EngineEvent`s
+ // (`newTabRequested`, `tabClosed`) in app/Sources/OpenArcEngine/BrowserEngine.swift. Plan task C9.
+ // The Chromium side is a `content::WebContentsObserver` (URL, title, load, navigation, audio,
+-// crash) plus a `content::WebContentsDelegate` (new tabs, close requests, fullscreen) plus the
+-// favicon driver observer, all owned by the `OACTab`.
++// crash) plus a `content::WebContentsDelegate` (new tabs, close requests, fullscreen, the page's
++// context menu) plus the favicon driver observer, all owned by the `OACTab`.
+ //
+ // Delivery rules (README §Threading):
+ // - On the main thread, from a posted task, in the order Chromium produced the changes.
+@@ -26,11 +26,14 @@
+ //   tab:renderProcessDidTerminate:        -> TabEvent.renderProcessGone
+ //   tabDidClose:                          -> TabEvent.closed + EngineEvent.tabClosed
+ //   tab:didRequestNewTab:                 -> EngineEvent.newTabRequested
++//   tab:showContextMenu:                  -> TabEvent.contextMenuRequested (plan B124)
+ //   everything else                       -> proposed events, SWIFT_PROTOCOL_CHANGES.md
+ 
+ #import <OpenArcCore/OACDefines.h>
+ #import <OpenArcCore/OACTab.h>
+ 
++@class OACContextMenu;
++
+ NS_ASSUME_NONNULL_BEGIN
+ 
+ /// How the page asked for a new tab. Maps to `NewTabDisposition`; Chromium's
+@@ -176,10 +179,13 @@ NS_SWIFT_UI_ACTOR
+ /// `NSEvent`, typed `id` so this header stays free of AppKit.
+ - (BOOL)tab:(OACTab *)tab handleUnhandledKeyEvent:(id)event;
+ 
+-/// A context menu is about to show. The bridge draws Chromium's own menu items in an `NSMenu`;
+-/// the shell may add items (Open Link in Split View, Open in Little Arc). inferred: the web page
+-/// context menu is not in the spec. `menu` is the `NSMenu`, typed `id` for the same reason.
+-- (void)tab:(OACTab *)tab willShowContextMenu:(id)menu forLinkURL:(nullable NSURL *)linkURL;
++/// The user right-clicked the page (plan B124). The bridge draws no menu itself: `menu` holds
++/// Chromium's items for the click (extension `chrome.contextMenus` items included) and what was
++/// clicked; the shell builds its own `NSMenu` (Arc's items and order, docs/arc-spec/05-surfaces.md
++/// §右键菜单 E29), shows it with `-[OACContextMenu popUpMenu:]` and runs Chromium's items with
++/// `-performItemWithIdentifier:`. Return YES to take the menu (the page then holds further
++/// right-clicks until it closes); NO, or no implementation, shows no menu. See OACContextMenu.h.
++- (BOOL)tab:(OACTab *)tab showContextMenu:(OACContextMenu *)menu NS_SWIFT_NAME(tab(_:showContextMenu:));
+ 
+ // MARK: Find in page (C12)
+ 
+diff --git a/openarc/bridge/public/OpenArcCore/OpenArcCore.h b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+index f8065733594d..e4db564d8f4a 100644
+--- a/openarc/bridge/public/OpenArcCore/OpenArcCore.h
++++ b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+@@ -14,6 +14,7 @@
+ #import <OpenArcCore/OACProfile.h>
+ #import <OpenArcCore/OACTab.h>
+ #import <OpenArcCore/OACTabDelegate.h>
++#import <OpenArcCore/OACContextMenu.h>
+ #import <OpenArcCore/OACCapture.h>
+ #import <OpenArcCore/OACJavaScript.h>
+ #import <OpenArcCore/OACDialogDelegate.h>
+diff --git a/openarc/browser/openarc_page_tools.h b/openarc/browser/openarc_page_tools.h
+index 2903648b7ead..aa8f55781304 100644
+--- a/openarc/browser/openarc_page_tools.h
++++ b/openarc/browser/openarc_page_tools.h
+@@ -14,6 +14,7 @@ class FilePath;
+ }
+ 
+ namespace content {
++class RenderFrameHost;
+ class WebContents;
+ }
+ 
+@@ -46,6 +47,14 @@ void ShowDevTools(content::WebContents* inspected,
+                   DevToolsCommand command,
+                   const std::string& panel);
+ 
++// The page context menu's Inspect (plan B124): DevTools on the Elements panel
++// with the element at (`x`, `y`) of `frame` (the click, in the page's
++// coordinates) selected.
++void InspectElementAt(content::WebContents* inspected,
++                      content::RenderFrameHost* frame,
++                      int x,
++                      int y);
++
+ // Closes the DevTools window of `inspected`, if any.
+ void CloseDevTools(content::WebContents* inspected);
+ 
+diff --git a/openarc/browser/openarc_page_tools.mm b/openarc/browser/openarc_page_tools.mm
+index f01de151199b..ae9ff0483b6e 100644
+--- a/openarc/browser/openarc_page_tools.mm
++++ b/openarc/browser/openarc_page_tools.mm
+@@ -617,6 +617,25 @@ void ShowDevTools(content::WebContents* inspected,
+   owner->host()->Run(command, panel);
+ }
+ 
++void InspectElementAt(content::WebContents* inspected,
++                      content::RenderFrameHost* frame,
++                      int x,
++                      int y) {
++  if (!inspected || !frame) {
++    return;
++  }
++  Profile* profile =
++      Profile::FromBrowserContext(inspected->GetBrowserContext());
++  if (!DevToolsWindow::AllowDevToolsFor(profile, inspected)) {
++    return;
++  }
++  // As DevToolsWindow::InspectElement: the agent remembers the element, and
++  // the front end selects it once it attaches (or at once, when attached).
++  content::DevToolsAgentHost::GetOrCreateForTab(inspected)->InspectElement(
++      frame, x, y);
++  ShowDevTools(inspected, DevToolsCommand::kShowPanel, "elements");
++}
++
+ void CloseDevTools(content::WebContents* inspected) {
+   if (!inspected) {
+     return;

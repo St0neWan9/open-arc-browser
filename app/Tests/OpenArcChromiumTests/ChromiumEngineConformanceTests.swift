@@ -240,11 +240,12 @@ func withTimeout<T: Sendable>(
 }
 
 /// What Arc 1.170.0 sends ([06 §18.1] observed), for the Chromium version of this build: Chromium's
-/// reduced user agent (frozen macOS 10_15_7, major version only) and the brands Not:A-Brand and
-/// Chromium, nothing else.
+/// reduced user agent (frozen macOS 10_15_7, major version only) and Chromium's brands, nothing else.
+/// Both follow the engine's milestone: the GREASE brand's punctuation is derived from the major
+/// version (Chromium 156 sent "Not:A-Brand", 157 sends "Not-A.Brand"), so update them on each upgrade.
 enum BrowserIdentity {
-    static let majorVersion = "156"
+    static let majorVersion = "157"
     static let expectedUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Chrome/\(majorVersion).0.0.0 Safari/537.36"
-    static let expectedBrands: Set<String> = ["Not:A-Brand", "Chromium"]
+    static let expectedBrands: Set<String> = ["Not-A.Brand", "Chromium"]
 }

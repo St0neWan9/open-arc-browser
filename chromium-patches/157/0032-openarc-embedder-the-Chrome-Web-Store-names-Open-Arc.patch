@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 22:03:12 -0700
+Subject: [PATCH] openarc: embedder: the Chrome Web Store names Open Arc
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plan B61 (docs/arc-spec/06-flows.md §18.2, §18.3): the Chrome Web Store
+shows every browser that is not Google Chrome a "Switch to Chrome?" prompt,
+a "Switch to Chrome to install extensions and themes" banner and an
+"Add to Chrome" button. The server decides this from data of its own, not
+from the user agent or the client hint brands, so sending other brands
+would not help (and would break sites). The spec records the reference
+browser rewriting the page after load instead.
+
+openarc/browser/openarc_web_store_branding.{h,cc}: WebStoreBranding, a
+per-tab WebContentsObserver attached with the other tab helpers. When the
+primary main frame's document element of an https page on the store's
+domain (extension_urls::IsWebstoreDomain) becomes available, it runs a
+script in Chrome's internal isolated world (the page cannot see or undo
+it) that:
+- renames "Add to Chrome" / "Remove from Chrome" to "Add to Open Arc" /
+  "Remove from Open Arc", text and aria-labels;
+- hides the banner's component and the prompt's dialog;
+- keeps doing so for nodes the store's single-page app adds later
+  (MutationObserver on the document).
+Texts are matched whole; if the store changes its strings the page shows
+Chrome's wording again. Installing is unchanged: the button drives
+chrome.webstorePrivate, which our profiles have (C14).
+---
+ openarc/BUILD.gn                              |   3 +
+ openarc/browser/openarc_tab_helpers.mm        |   4 +
+ openarc/browser/openarc_web_store_branding.cc | 111 ++++++++++++++++++
+ openarc/browser/openarc_web_store_branding.h  |  54 +++++++++
+ 4 files changed, 172 insertions(+)
+ create mode 100644 openarc/browser/openarc_web_store_branding.cc
+ create mode 100644 openarc/browser/openarc_web_store_branding.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index cb4ca4e41dfb..0358c3eccc83 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -94,6 +94,8 @@ source_set("embedder") {
+     "browser/openarc_tab_preferences.mm",
+     "browser/openarc_translate.cc",
+     "browser/openarc_translate.h",
++    "browser/openarc_web_store_branding.cc",
++    "browser/openarc_web_store_branding.h",
+     "common/openarc_paths.h",
+     "common/openarc_paths.mm",
+   ]
+@@ -147,6 +149,7 @@ source_set("embedder") {
+     "//components/subresource_filter/core/browser",
+     "//content/public/browser",
+     "//content/public/common",
++    "//extensions/common",
+     "//net",
+     "//third_party/blink/public/common",
+     "//third_party/crashpad/crashpad/client",
+diff --git a/openarc/browser/openarc_tab_helpers.mm b/openarc/browser/openarc_tab_helpers.mm
+index edb0154564d3..d7dfcb776bb0 100644
+--- a/openarc/browser/openarc_tab_helpers.mm
++++ b/openarc/browser/openarc_tab_helpers.mm
+@@ -13,6 +13,7 @@
+ #include "content/public/browser/web_contents.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_dialog_host.h"
++#include "openarc/browser/openarc_web_store_branding.h"
+ 
+ namespace openarc {
+ 
+@@ -37,6 +38,9 @@
+   // Built-in ad blocking (plan C16): forced activation of Chrome's subresource
+   // filter, which TabHelpers just attached, and the per-page blocked count.
+   AdBlockTabHelper::CreateForWebContents(web_contents);
++  // The Chrome Web Store names this browser on its install button and shows
++  // no "Switch to Chrome" prompt or banner (plan B61, 06 §18.3).
++  WebStoreBranding::CreateForWebContents(web_contents);
+   if (auto* manager = permissions::PermissionRequestManager::FromWebContents(
+           web_contents)) {
+     // The setter is named for tests; it is the only way to choose the prompt
+diff --git a/openarc/browser/openarc_web_store_branding.cc b/openarc/browser/openarc_web_store_branding.cc
+new file mode 100644
+index 000000000000..61879835e17e
+--- /dev/null
++++ b/openarc/browser/openarc_web_store_branding.cc
+@@ -0,0 +1,111 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_web_store_branding.h"
++
++#include "chrome/common/chrome_isolated_world_ids.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "extensions/common/extension_urls.h"
++
++namespace openarc {
++
++namespace {
++
++// Runs once per document in an isolated world. Texts are matched whole, so a
++// store string that merely mentions Chrome stays as it is.
++constexpr char16_t kBrandingScript[] = uR"JS((() => {
++  if (window.__openArcWebStoreBranding) return;
++  window.__openArcWebStoreBranding = true;
++  const LABELS = new Map([
++    ['Add to Chrome', 'Add to Open Arc'],
++    ['Remove from Chrome', 'Remove from Open Arc'],
++  ]);
++  const BANNER = 'Switch to Chrome to install extensions and themes';
++  const PROMPT = 'Switch to Chrome?';
++  const hide = (el) => {
++    if (el && el !== document.body && el !== document.documentElement) {
++      el.style.setProperty('display', 'none', 'important');
++    }
++  };
++  const fixText = (node) => {
++    const text = node.data.trim();
++    const label = LABELS.get(text);
++    if (label) {
++      node.data = node.data.replace(text, label);
++      return;
++    }
++    const owner = node.parentElement;
++    if (!owner) return;
++    if (text === BANNER) {
++      // The banner's own component: the nearest controlled element that
++      // holds little more than the banner (its text and button).
++      const box = owner.closest('[jscontroller]');
++      if (box && box.textContent.length < 400) hide(box);
++    } else if (text === PROMPT) {
++      hide(owner.closest('[role=dialog]'));
++    }
++  };
++  const fixLabels = (root) => {
++    for (const el of root.querySelectorAll('[aria-label]')) {
++      let value = el.getAttribute('aria-label');
++      for (const [from, to] of LABELS) value = value.split(from).join(to);
++      if (value !== el.getAttribute('aria-label')) {
++        el.setAttribute('aria-label', value);
++      }
++    }
++  };
++  const scan = (root) => {
++    if (root.nodeType === Node.TEXT_NODE) {
++      fixText(root);
++      return;
++    }
++    if (root.nodeType !== Node.ELEMENT_NODE) return;
++    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
++    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
++      fixText(node);
++    }
++    fixLabels(root);
++  };
++  scan(document.documentElement);
++  new MutationObserver((records) => {
++    for (const record of records) {
++      if (record.type === 'characterData') {
++        fixText(record.target);
++      } else {
++        for (const node of record.addedNodes) scan(node);
++      }
++    }
++  }).observe(document.documentElement,
++             {childList: true, subtree: true, characterData: true});
++})())JS";
++
++}  // namespace
++
++WebStoreBranding::WebStoreBranding(content::WebContents* web_contents)
++    : content::WebContentsObserver(web_contents),
++      content::WebContentsUserData<WebStoreBranding>(*web_contents) {}
++
++WebStoreBranding::~WebStoreBranding() = default;
++
++// static
++bool WebStoreBranding::IsWebStorePage(const GURL& url) {
++  return url.SchemeIs(url::kHttpsScheme) &&
++         extension_urls::IsWebstoreDomain(url);
++}
++
++void WebStoreBranding::PrimaryMainDocumentElementAvailable() {
++  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
++  if (!frame || !frame->IsRenderFrameLive() ||
++      !IsWebStorePage(frame->GetLastCommittedURL())) {
++    return;
++  }
++  frame->ExecuteJavaScriptInIsolatedWorld(
++      kBrandingScript, base::NullCallback(),
++      ISOLATED_WORLD_ID_CHROME_INTERNAL);
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(WebStoreBranding);
++
++}  // namespace openarc
+diff --git a/openarc/browser/openarc_web_store_branding.h b/openarc/browser/openarc_web_store_branding.h
+new file mode 100644
+index 000000000000..e200a5d75160
+--- /dev/null
++++ b/openarc/browser/openarc_web_store_branding.h
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_WEB_STORE_BRANDING_H_
++#define OPENARC_BROWSER_OPENARC_WEB_STORE_BRANDING_H_
++
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "url/gurl.h"
++
++namespace openarc {
++
++// Makes the Chrome Web Store name this browser (plan B61,
++// docs/arc-spec/06-flows.md §18.2 / §18.3). The store serves every browser
++// that is not Google Chrome a "Switch to Chrome?" prompt, a "Switch to Chrome
++// to install extensions and themes" banner and an "Add to Chrome" button; the
++// server decides from data of its own, not from the UA or the brands (§18.3:
++// with the same UA and brands as plain Chromium, Arc's store page shows the
++// install button named after the browser and neither the prompt nor the
++// banner, rewritten in the page after load). Installing works either way:
++// the button drives chrome.webstorePrivate, which our profiles have (C14).
++//
++// What we do: on every document of the store's origin in the primary main
++// frame, a script in an isolated world (the page's own scripts cannot see or
++// undo it) renames "Add to Chrome" / "Remove from Chrome" to
++// "… Open Arc", hides the banner and the prompt, and keeps doing so for nodes
++// the store's single-page app adds later (MutationObserver). The store's
++// markup is not an API: if Google changes the strings, the page simply shows
++// Chrome's wording again.
++class WebStoreBranding
++    : public content::WebContentsObserver,
++      public content::WebContentsUserData<WebStoreBranding> {
++ public:
++  WebStoreBranding(const WebStoreBranding&) = delete;
++  WebStoreBranding& operator=(const WebStoreBranding&) = delete;
++  ~WebStoreBranding() override;
++
++  // Whether `url` is a Chrome Web Store page the script runs on.
++  static bool IsWebStorePage(const GURL& url);
++
++  // content::WebContentsObserver:
++  void PrimaryMainDocumentElementAvailable() override;
++
++ private:
++  friend class content::WebContentsUserData<WebStoreBranding>;
++  explicit WebStoreBranding(content::WebContents* web_contents);
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_WEB_STORE_BRANDING_H_

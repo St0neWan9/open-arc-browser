@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 15:33:06 -0700
+Subject: [PATCH] openarc: chrome: let an embedding app draw the client
+ certificate picker
+
+Plan C25. ShowSSLClientCertificateSelector() shows Chrome's tab-modal Views
+dialog, which needs a Browser window; Open Arc's tabs have none, so its
+browser client continued every client-certificate request without one.
+
+SetEmbedderClientCertificateSelector() (Mac only) lets an app that owns the
+UI (chrome::EmbedderOwnsUI()) take the dialog's place: it is called after
+the same checks as the dialog (an empty identity list still continues
+without a certificate) with the identities and the delegate, and returns
+the dialog's cancellation callback. ChromeContentBrowserClient's policy
+(AutoSelectCertificateForUrls) is unchanged and still runs first. Without a
+selector nothing changes.
+---
+ .../ssl/ssl_client_certificate_selector.h     | 17 ++++++++++++++
+ .../views/ssl_client_certificate_selector.cc  | 22 +++++++++++++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/chrome/browser/ssl/ssl_client_certificate_selector.h b/chrome/browser/ssl/ssl_client_certificate_selector.h
+index 584a981b7414..02d911cb2481 100644
+--- a/chrome/browser/ssl/ssl_client_certificate_selector.h
++++ b/chrome/browser/ssl/ssl_client_certificate_selector.h
+@@ -46,4 +46,21 @@ using ShowSSLClientCertificateSelectorTestingHook =
+ void SetShowSSLClientCertificateSelectorHookForTest(
+     ShowSSLClientCertificateSelectorTestingHook hook);
+ 
++#if BUILDFLAG(IS_MAC)
++// Open Arc: an app that embeds Chrome's browser process and owns the UI
++// (chrome::EmbedderOwnsUI()) draws the client certificate picker itself.
++// When set, the selector is called where ShowSSLClientCertificateSelector()
++// would show Chrome's tab-modal dialog, after the same checks (an empty
++// certificate list still continues without a certificate). It answers
++// |delegate| the way Chrome's dialog does and returns the dialog's
++// cancellation callback (may be null). Without a selector nothing changes.
++using EmbedderClientCertificateSelector = base::OnceClosure (*)(
++    content::WebContents* contents,
++    net::SSLCertRequestInfo* cert_request_info,
++    net::ClientCertIdentityList client_certs,
++    std::unique_ptr<content::ClientCertificateDelegate> delegate);
++void SetEmbedderClientCertificateSelector(
++    EmbedderClientCertificateSelector selector);
++#endif  // BUILDFLAG(IS_MAC)
++
+ #endif  // CHROME_BROWSER_SSL_SSL_CLIENT_CERTIFICATE_SELECTOR_H_
+diff --git a/chrome/browser/ui/views/ssl_client_certificate_selector.cc b/chrome/browser/ui/views/ssl_client_certificate_selector.cc
+index e9b4dea94229..e32a63ede492 100644
+--- a/chrome/browser/ui/views/ssl_client_certificate_selector.cc
++++ b/chrome/browser/ui/views/ssl_client_certificate_selector.cc
+@@ -37,6 +37,11 @@ GetShowSSLClientCertificateSelectorTestingHook() {
+   return *instance;
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++// Open Arc: see SetEmbedderClientCertificateSelector().
++EmbedderClientCertificateSelector g_embedder_selector = nullptr;
++#endif
++
+ }  // namespace
+ 
+ class SSLClientCertificateSelector::SSLClientAuthObserverImpl
+@@ -183,6 +188,15 @@ base::OnceClosure ShowSSLClientCertificateSelector(
+     return base::OnceClosure();
+   }
+ 
++#if BUILDFLAG(IS_MAC)
++  // Open Arc: the embedding app draws the picker; Chrome's needs a Browser
++  // window.
++  if (g_embedder_selector) {
++    return g_embedder_selector(contents, cert_request_info,
++                               std::move(client_certs), std::move(delegate));
++  }
++#endif
++
+   // Not all WebContentses can show modal dialogs.
+   //
+   // TODO(davidben): Move this hook to the WebContentsDelegate and only try to
+@@ -204,3 +218,11 @@ void SetShowSSLClientCertificateSelectorHookForTest(
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   GetShowSSLClientCertificateSelectorTestingHook() = std::move(hook);
+ }
++
++#if BUILDFLAG(IS_MAC)
++void SetEmbedderClientCertificateSelector(
++    EmbedderClientCertificateSelector selector) {
++  // Set once while the embedder starts, before content's threads exist.
++  g_embedder_selector = selector;
++}
++#endif

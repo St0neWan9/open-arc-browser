@@ -1,0 +1,457 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: voidforge <voidforge@valuz.io>
+Date: Tue, 27 Oct 2026 07:59:22 -0700
+Subject: [PATCH] openarc: embedder: history search and search suggestions for
+ the command bar
+
+Plan B66. OACProfile answers the command bar's history query
+(HistoryService::QueryHistory, one row per URL, http/https only, empty for
+off-the-record profiles) and fetches a search suggestion URL the shell built
+(SimpleURLLoader on the profile's storage partition, no cookies, no cache,
+1.5 s timeout, 64 KiB limit). Each call returns an OACAutocompleteRequest
+whose -cancel runs the handler once with an empty result.
+---
+ openarc/BUILD.gn                              |   7 +
+ openarc/bridge/oac_autocomplete.mm            | 300 ++++++++++++++++++
+ .../public/OpenArcCore/OACAutocomplete.h      |  83 +++++
+ .../bridge/public/OpenArcCore/OpenArcCore.h   |   1 +
+ 4 files changed, 391 insertions(+)
+ create mode 100644 openarc/bridge/oac_autocomplete.mm
+ create mode 100644 openarc/bridge/public/OpenArcCore/OACAutocomplete.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index fe5aa1515954..58b96722d563 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -35,6 +35,7 @@ assert(is_mac, "Open Arc is a macOS browser")
+ # sync by chromium-patches/export.sh's check (see chromium-patches/README.md).
+ openarc_public_headers = [
+   "bridge/public/OpenArcCore/OACApplication.h",
++  "bridge/public/OpenArcCore/OACAutocomplete.h",
+   "bridge/public/OpenArcCore/OACAutofill.h",
+   "bridge/public/OpenArcCore/OACCapture.h",
+   "bridge/public/OpenArcCore/OACJavaScript.h",
+@@ -174,6 +175,11 @@ source_set("page_tools") {
+   deps = [
+     "//base",
+     "//chrome/browser/devtools",
++    "//chrome/browser/history",
++    "//components/history/core/browser",
++    "//components/keyed_service/core",
++    "//services/network/public/cpp",
++    "//services/network/public/mojom",
+     "//chrome/browser/printing",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/search_engines",
+@@ -239,6 +245,7 @@ source_set("bridge") {
+   sources = openarc_public_headers + [
+               "bridge/oac_application.mm",
+               "bridge/oac_application_internal.h",
++              "bridge/oac_autocomplete.mm",
+               "bridge/oac_autofill.mm",
+               "bridge/oac_autofill_internal.h",
+               "bridge/oac_browser_application.mm",
+diff --git a/openarc/bridge/oac_autocomplete.mm b/openarc/bridge/oac_autocomplete.mm
+new file mode 100644
+index 000000000000..130f5a14a5bd
+--- /dev/null
++++ b/openarc/bridge/oac_autocomplete.mm
+@@ -0,0 +1,300 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// History search and search suggestions for the command bar (plan B66). See
++// OACAutocomplete.h.
++//
++// Why not AutocompleteController: the omnibox stack wants a TemplateURLService
++// default search provider, an AutocompleteProviderClient and Chrome's
++// classification / scoring; the shell already owns the search engine choice
++// (ProfileSettings.searchEngine) and the ranking (CommandBarRanker). So the
++// bridge hands over raw data only:
++// - history: HistoryService::QueryHistory with a text query (word match on
++//   title and URL, REMOVE_ALL_DUPLICATES), then the URL rows' visit and typed
++//   counts;
++// - suggestions: one SimpleURLLoader GET on the profile's storage partition
++//   (the OTR partition for an incognito profile), credentials omitted.
++
++#import <OpenArcCore/OACAutocomplete.h>
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/strings/sys_string_conversions.h"
++#include "base/task/cancelable_task_tracker.h"
++#include "base/time/time.h"
++#include "chrome/browser/history/history_service_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/history/core/browser/history_service.h"
++#include "components/history/core/browser/history_types.h"
++#include "components/keyed_service/core/service_access_type.h"
++#include "content/public/browser/storage_partition.h"
++#include "net/base/apple/url_conversions.h"
++#include "net/base/load_flags.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/cpp/shared_url_loader_factory.h"
++#include "services/network/public/cpp/simple_url_loader.h"
++#include "services/network/public/mojom/url_response_head.mojom.h"
++#include "url/gurl.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_profile_internal.h"
++
++namespace {
++
++using HistoryHandler = void (^)(NSArray<OACHistoryEntry*>*);
++using SuggestHandler = void (^)(NSData*);
++
++// Own values (the spec records none): a suggestion that arrives later than
++// this no longer helps the row list; the shell asks again on the next key.
++constexpr base::TimeDelta kSuggestTimeout = base::Milliseconds(1500);
++constexpr size_t kMaxSuggestBodySize = 64 * 1024;
++constexpr int kMaxHistoryCount = 100;
++
++net::NetworkTrafficAnnotationTag SuggestAnnotation() {
++  return net::DefineNetworkTrafficAnnotation("openarc_search_suggestions", R"(
++    semantics {
++      sender: "Open Arc command bar"
++      description:
++        "Asks the user's search engine for query suggestions while the "
++        "user types in the command bar."
++      trigger:
++        "Typing in the command bar, when 'Include search engine "
++        "suggestions' is on for the profile."
++      data: "The text typed so far."
++      destination: OTHER
++      destination_other: "The search engine chosen in the profile's settings."
++    }
++    policy {
++      cookies_allowed: NO
++      setting:
++        "Settings > Profiles > Include search engine suggestions."
++      policy_exception_justification: "Not implemented."
++    })");
++}
++
++}  // namespace
++
++@implementation OACHistoryEntry {
++  NSURL* _URL;
++  NSString* _title;
++  NSDate* _lastVisitDate;
++  NSInteger _visitCount;
++  NSInteger _typedCount;
++}
++
++- (instancetype)initWithURL:(NSURL*)url
++                      title:(NSString*)title
++                  lastVisit:(NSDate*)lastVisit
++                     visits:(NSInteger)visits
++                      typed:(NSInteger)typed {
++  if ((self = [super init])) {
++    _URL = [url copy];
++    _title = [title copy];
++    _lastVisitDate = [lastVisit copy];
++    _visitCount = MAX(1, visits);
++    _typedCount = MAX(0, typed);
++  }
++  return self;
++}
++
++- (id)copyWithZone:(NSZone*)zone {
++  return self;  // Immutable.
++}
++
++- (NSURL*)URL {
++  return _URL;
++}
++- (NSString*)title {
++  return _title;
++}
++- (NSDate*)lastVisitDate {
++  return _lastVisitDate;
++}
++- (NSInteger)visitCount {
++  return _visitCount;
++}
++- (NSInteger)typedCount {
++  return _typedCount;
++}
++
++@end
++
++// One request. Owns the history task tracker or the URL loader; dropping them
++// cancels the work. The handler runs once, from a posted task.
++@implementation OACAutocompleteRequest {
++  HistoryHandler _historyHandler;
++  SuggestHandler _suggestHandler;
++  std::unique_ptr<base::CancelableTaskTracker> _tracker;
++  std::unique_ptr<network::SimpleURLLoader> _loader;
++  BOOL _finished;
++}
++
++- (instancetype)initWithHistoryHandler:(HistoryHandler)historyHandler
++                        suggestHandler:(SuggestHandler)suggestHandler {
++  if ((self = [super init])) {
++    _historyHandler = [historyHandler copy];
++    _suggestHandler = [suggestHandler copy];
++  }
++  return self;
++}
++
++- (void)finishWithEntries:(NSArray<OACHistoryEntry*>*)entries body:(NSData*)body {
++  if (_finished) {
++    return;
++  }
++  _finished = YES;
++  _tracker.reset();  // Cancels a pending history task.
++  _loader.reset();   // Cancels a pending load.
++  HistoryHandler history = _historyHandler;
++  SuggestHandler suggest = _suggestHandler;
++  _historyHandler = nil;
++  _suggestHandler = nil;
++  OACPostToMainThread(^{
++    if (history) {
++      history(entries ?: @[]);
++    }
++    if (suggest) {
++      suggest(body);
++    }
++  });
++}
++
++- (void)cancel {
++  CHECK(NSThread.isMainThread);
++  [self finishWithEntries:@[] body:nil];
++}
++
++- (void)startHistoryQuery:(history::HistoryService*)service
++                     text:(NSString*)text
++                    count:(int)count {
++  _tracker = std::make_unique<base::CancelableTaskTracker>();
++  history::QueryOptions options;
++  options.max_count = count;
++  options.duplicate_policy = history::QueryOptions::REMOVE_ALL_DUPLICATES;
++  options.policy_for_404_visits = history::VisitQuery404sPolicy::kExclude404s;
++  // The callback keeps the request alive until it finishes, so the handler
++  // runs even when the caller drops the request; -finish... resets the
++  // tracker, which breaks the cycle.
++  OACAutocompleteRequest* request = self;
++  service->QueryHistory(
++      base::SysNSStringToUTF16(text), options,
++      base::BindOnce(^(history::QueryResults results) {
++        NSMutableArray<OACHistoryEntry*>* entries = [NSMutableArray array];
++        for (const history::URLResult& row : results) {
++          const GURL& url = row.url();
++          if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
++            continue;
++          }
++          NSURL* nsURL = net::NSURLWithGURL(url);
++          if (!nsURL) {
++            continue;
++          }
++          base::Time last = row.last_visit().is_null() ? row.visit_time()
++                                                       : row.last_visit();
++          [entries addObject:[[OACHistoryEntry alloc]
++                                 initWithURL:nsURL
++                                       title:base::SysUTF16ToNSString(row.title())
++                                   lastVisit:last.ToNSDate()
++                                      visits:row.visit_count()
++                                       typed:row.typed_count()]];
++        }
++        [request finishWithEntries:entries body:nil];
++      }),
++      _tracker.get());
++}
++
++- (void)startFetch:(const GURL&)url profile:(Profile*)profile {
++  auto resource = std::make_unique<network::ResourceRequest>();
++  resource->url = url;
++  resource->method = "GET";
++  resource->credentials_mode = network::mojom::CredentialsMode::kOmit;
++  // Nothing of the typed text stays behind: no cookies, no HTTP cache entry
++  // (this also makes the on-disk context safe for an incognito window that
++  // has no off-the-record context yet, see ChromiumAutocomplete.swift).
++  resource->load_flags =
++      net::LOAD_DO_NOT_SAVE_COOKIES | net::LOAD_DISABLE_CACHE;
++  _loader = network::SimpleURLLoader::Create(std::move(resource),
++                                             SuggestAnnotation());
++  _loader->SetTimeoutDuration(kSuggestTimeout);
++  scoped_refptr<network::SharedURLLoaderFactory> factory =
++      profile->GetDefaultStoragePartition()
++          ->GetURLLoaderFactoryForBrowserProcess();
++  // As for history: the callback keeps the request alive until it finishes
++  // (the loader always completes, at the latest after the timeout), and
++  // -finish... drops the loader, which breaks the cycle. SimpleURLLoader
++  // allows deleting it from its completion callback.
++  OACAutocompleteRequest* request = self;
++  network::SimpleURLLoader* loader = _loader.get();
++  loader->DownloadToString(
++      factory.get(),
++      base::BindOnce(^(std::optional<std::string> body) {
++        NSData* data = nil;
++        const network::mojom::URLResponseHead* head =
++            loader->ResponseInfo();
++        const int status =
++            head && head->headers ? head->headers->response_code() : 0;
++        if (body && status >= 200 && status < 300) {
++          data = [NSData dataWithBytes:body->data() length:body->size()];
++        }
++        [request finishWithEntries:nil body:data];
++      }),
++      kMaxSuggestBodySize);
++}
++
++@end
++
++@implementation OACProfile (OACAutocomplete)
++
++- (OACAutocompleteRequest*)
++    queryHistoryMatchingText:(NSString*)text
++                maximumCount:(NSInteger)maximumCount
++           completionHandler:(void (^)(NSArray<OACHistoryEntry*>*))completionHandler {
++  CHECK(NSThread.isMainThread);
++  CHECK(completionHandler);
++  OACAutocompleteRequest* request =
++      [[OACAutocompleteRequest alloc] initWithHistoryHandler:completionHandler
++                                              suggestHandler:nil];
++  NSString* trimmed = [text
++      stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
++  Profile* profile = self.valid && !self.offTheRecord ? self.chromeProfile : nullptr;
++  history::HistoryService* service =
++      profile ? HistoryServiceFactory::GetForProfile(
++                    profile, ServiceAccessType::EXPLICIT_ACCESS)
++              : nullptr;
++  if (trimmed.length == 0 || !service) {
++    [request finishWithEntries:@[] body:nil];
++    return request;
++  }
++  const int count = static_cast<int>(
++      MIN(MAX(maximumCount, NSInteger{1}), NSInteger{kMaxHistoryCount}));
++  [request startHistoryQuery:service text:trimmed count:count];
++  return request;
++}
++
++- (OACAutocompleteRequest*)
++    fetchSearchSuggestionsFromURL:(NSURL*)suggestionURL
++                completionHandler:(void (^)(NSData*))completionHandler {
++  CHECK(NSThread.isMainThread);
++  CHECK(completionHandler);
++  OACAutocompleteRequest* request =
++      [[OACAutocompleteRequest alloc] initWithHistoryHandler:nil
++                                              suggestHandler:completionHandler];
++  Profile* profile = self.valid ? self.chromeProfile : nullptr;
++  GURL url = net::GURLWithNSURL(suggestionURL);
++  if (!profile || !url.is_valid() || !url.SchemeIs(url::kHttpsScheme)) {
++    [request finishWithEntries:nil body:nil];
++    return request;
++  }
++  [request startFetch:url profile:profile];
++  return request;
++}
++
++@end
+diff --git a/openarc/bridge/public/OpenArcCore/OACAutocomplete.h b/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
+new file mode 100644
+index 000000000000..8ab3c41d1373
+--- /dev/null
++++ b/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
+@@ -0,0 +1,83 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// OACAutocomplete: browsing history search and search suggestions for the command bar (plan B66).
++//
++// Spec: docs/arc-spec/05-surfaces.md §command bar (observed: one entry for new tabs, search and
++// commands), 07-design-system.md §9 (observed row glyphs: globe, magnifier, clock), 06-flows.md
++// §16.2 / §19.1 / §23 (observed: a typed word without a matching command lists search
++// suggestions), 03-settings.md §Profiles (observed: "Search engine", "Include search engine
++// suggestions" per profile).
++//
++// Maps to: `EngineAutocomplete` (app/Sources/OpenArcEngine/Autocomplete.swift), wrapped by
++// app/Sources/OpenArcChromium/ChromiumAutocomplete.swift. The bridge hands over raw data; the
++// shell ranks and draws the rows (Chromium's omnibox UI and `AutocompleteController` are not used:
++// the search engine choice lives in the shell's model, not in Chromium's TemplateURLService).
++//
++// - History: the profile's `history::HistoryService::QueryHistory` (title and URL word match,
++//   one row per URL, newest visit first), with each row's visit and typed counts. An
++//   off-the-record profile records no history, so it always answers an empty list.
++// - Suggestions: one GET of a suggestion URL the shell built from the profile's search engine,
++//   through the profile's own network context (the off-the-record one for an incognito profile),
++//   without cookies (none sent, none stored), without the HTTP cache, a 1.5 s timeout and a
++//   64 KiB body limit. The body goes back unparsed; the shell reads the OpenSearch suggestion JSON
++//   (`SearchSuggestionParser`).
++//
++// Both calls return a request object. `-cancel` stops the work (the history task is cancelled, the
++// network load is dropped); if the handler has not run yet it then runs once with an empty result.
++// The handler always runs exactly once, on the main thread, from a posted task.
++
++#import <OpenArcCore/OACDefines.h>
++#import <OpenArcCore/OACProfile.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++/// One page of the profile's history. Immutable.
++OAC_EXPORT NS_SWIFT_SENDABLE
++@interface OACHistoryEntry : NSObject <NSCopying>
++@property (nonatomic, readonly, copy) NSURL *URL;
++/// The stored page title; empty when the page had none.
++@property (nonatomic, readonly, copy) NSString *title;
++/// The most recent visit.
++@property (nonatomic, readonly, copy) NSDate *lastVisitDate;
++/// Visits recorded for the URL (at least 1).
++@property (nonatomic, readonly) NSInteger visitCount;
++/// Visits that came from typing the address (Chromium's typed count).
++@property (nonatomic, readonly) NSInteger typedCount;
++
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++/// A running history query or suggestion fetch.
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACAutocompleteRequest : NSObject
++/// Stops the work. The handler, if it has not run yet, runs once with an empty result. Idempotent.
++- (void)cancel;
++
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
++@interface OACProfile (OACAutocomplete)
++
++/// Pages whose title or URL contains every word of `text` (Chromium's history word match), one per
++/// URL, newest visit first, at most `maximumCount` (1...100; other values are clamped). Only http
++/// and https pages. An empty `text`, an off-the-record or invalid profile answer an empty array.
++- (OACAutocompleteRequest *)queryHistoryMatchingText:(NSString *)text
++                                        maximumCount:(NSInteger)maximumCount
++                                   completionHandler:(void (^)(NSArray<OACHistoryEntry *> *entries))completionHandler
++    NS_SWIFT_NAME(queryHistory(matching:maximumCount:completionHandler:));
++
++/// GETs `suggestionURL` (https only) through this profile's network context and answers the body,
++/// or nil on any failure: not https, network error, non-2xx status, timeout (1.5 s), a body over
++/// 64 KiB, an invalid profile, or cancellation. No cookies are sent or stored, and the HTTP cache
++/// is not used.
++- (OACAutocompleteRequest *)fetchSearchSuggestionsFromURL:(NSURL *)suggestionURL
++                                        completionHandler:(void (^)(NSData *_Nullable body))completionHandler
++    NS_SWIFT_NAME(fetchSearchSuggestions(from:completionHandler:));
++
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/openarc/bridge/public/OpenArcCore/OpenArcCore.h b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+index d7a2d3dc8dd3..549fbf12b0b7 100644
+--- a/openarc/bridge/public/OpenArcCore/OpenArcCore.h
++++ b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+@@ -24,3 +24,4 @@
+ #import <OpenArcCore/OACImport.h>
+ #import <OpenArcCore/OACLinkPreview.h>
+ #import <OpenArcCore/OACTranslation.h>
++#import <OpenArcCore/OACAutocomplete.h>

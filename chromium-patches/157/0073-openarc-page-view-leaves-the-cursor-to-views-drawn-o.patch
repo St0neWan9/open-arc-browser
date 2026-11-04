@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 3 Nov 2026 14:17:43 +0700
+Subject: [PATCH] openarc: page view leaves the cursor to views drawn over it
+
+The page view re-applies its cursor on every mouse move inside its bounds,
+also where an embedder view (the sidebar resize seam) covers it. Only set
+the cursor when the page view is the hit view under the pointer, or a
+press that started on the page is held.
+---
+ .../render_widget_host_view_cocoa.mm           | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
+index b72b0edd65c8..bffa405a24fd 100644
+--- a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
++++ b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
+@@ -3051,6 +3051,24 @@ - (BOOL)shouldChangeCurrentCursor {
+   if (_cursorHidden || _showingContextMenu)
+     return NO;
+ 
++  // OpenArc: an embedder view drawn over the page (such as the sidebar resize
++  // seam) owns the cursor where it covers this view. Mouse-moved events still
++  // reach this view through its tracking area, so without this check the page
++  // cursor would replace the overlapping view's cursor on every move. While a
++  // press that started on the page is held, the page keeps the cursor.
++  if (!_hasOpenMouseDown) {
++    NSView* contentView = self.window.contentView;
++    NSPoint pointInWindow =
++        [self.window convertPointFromScreen:NSEvent.mouseLocation];
++    NSView* view = [contentView
++        hitTest:[contentView.superview convertPoint:pointInWindow
++                                           fromView:nil]];
++    while (view && view != self)
++      view = view.superview;
++    if (!view)
++      return NO;
++  }
++
+   return YES;
+ }
+ 

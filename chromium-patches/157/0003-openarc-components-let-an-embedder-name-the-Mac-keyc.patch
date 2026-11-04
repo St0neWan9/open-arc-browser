@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 25 Oct 2026 18:14:30 -0700
+Subject: [PATCH] openarc: components: let an embedder name the Mac keychain
+ item
+
+KeychainPassword keeps the os_crypt encryption password (cookies,
+passwords, autofill) in the keychain item "Chromium Safe Storage" /
+"Chromium". Its service and account names are only assignable when
+ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE is defined, which nothing in the
+build sets. Defines it on Mac for keychain_password_mac and its direct
+dependents (a public config), so Open Arc's embedder can use its own
+item and never shares, or prompts for, the item of a Chromium installed
+on the same Mac.
+
+Needed by plan task C6b (persistent cookies through //chrome). Behaviour
+is unchanged until a caller assigns the names.
+---
+ components/os_crypt/common/BUILD.gn | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/components/os_crypt/common/BUILD.gn b/components/os_crypt/common/BUILD.gn
+index 10db0687101b..e0f897189d64 100644
+--- a/components/os_crypt/common/BUILD.gn
++++ b/components/os_crypt/common/BUILD.gn
+@@ -17,11 +17,22 @@ group("crypto_lib") {
+ }
+ 
+ if (is_apple) {
++  # Open Arc: lets an embedding app name the keychain item that holds the
++  # encryption password (KeychainPassword::GetServiceName() and
++  # GetAccountName() become assignable), so it never reads or writes the
++  # item of a Chrome or Chromium installed on the same Mac.
++  config("runtime_configurable_key_storage") {
++    if (is_mac) {
++      defines = [ "ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE" ]
++    }
++  }
++
+   source_set("keychain_password_mac") {
+     sources = [
+       "keychain_password_mac.h",
+       "keychain_password_mac.mm",
+     ]
++    public_configs = [ ":runtime_configurable_key_storage" ]
+     deps = [
+       "//base",
+       "//build:branding_buildflags",

@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Fri, 30 Oct 2026 17:09:47 +0800
+Subject: [PATCH] openarc: embedder: most visited pages for the command bar
+
+Plan B123. The command bar lists the profile's most visited pages for an
+empty or short query (shell side: B121). -[OACProfile
+queryMostVisitedWithMaximumCount:completionHandler:] answers them from
+HistoryService::QueryMostVisitedURLs, the segment-based query behind
+Chrome's new-tab tiles (typed or bookmarked pages and the visits that
+followed them, scored by frequency and recency).
+
+Chromium's list also holds pages that are not http(s) (data:, file:,
+chrome:), so the bridge asks for the longest list (100) and keeps the
+first `maximumCount` web pages. visitCount is the segment's visit count;
+the query reports no typed count. An off-the-record profile has no
+history and answers an empty list. Same request object and cancellation
+as the history search (OACAutocompleteRequest).
+---
+ openarc/bridge/oac_autocomplete.mm            | 61 +++++++++++++++++++
+ .../public/OpenArcCore/OACAutocomplete.h      | 12 ++++
+ 2 files changed, 73 insertions(+)
+
+diff --git a/openarc/bridge/oac_autocomplete.mm b/openarc/bridge/oac_autocomplete.mm
+index 130f5a14a5bd..69961284a6c2 100644
+--- a/openarc/bridge/oac_autocomplete.mm
++++ b/openarc/bridge/oac_autocomplete.mm
+@@ -13,6 +13,8 @@
+ // - history: HistoryService::QueryHistory with a text query (word match on
+ //   title and URL, REMOVE_ALL_DUPLICATES), then the URL rows' visit and typed
+ //   counts;
++// - most visited (plan B123): HistoryService::QueryMostVisitedURLs, the
++//   segment-based query behind Chrome's top sites;
+ // - suggestions: one SimpleURLLoader GET on the profile's storage partition
+ //   (the OTR partition for an incognito profile), credentials omitted.
+ 
+@@ -211,6 +213,41 @@ - (void)startHistoryQuery:(history::HistoryService*)service
+       _tracker.get());
+ }
+ 
++- (void)startMostVisitedQuery:(history::HistoryService*)service
++                        count:(int)count {
++  _tracker = std::make_unique<base::CancelableTaskTracker>();
++  // As for the history query: the callback keeps the request alive until it
++  // finishes.
++  OACAutocompleteRequest* request = self;
++  // Chromium's list also holds pages that are not http(s) (data:, file:,
++  // chrome:); ask for the longest list and keep the first `count` web pages.
++  service->QueryMostVisitedURLs(
++      kMaxHistoryCount,
++      base::BindOnce(^(history::MostVisitedURLList pages) {
++        NSMutableArray<OACHistoryEntry*>* entries = [NSMutableArray array];
++        for (const history::MostVisitedURL& page : pages) {
++          if (entries.count >= static_cast<NSUInteger>(count)) {
++            break;
++          }
++          if (!page.url.is_valid() || !page.url.SchemeIsHTTPOrHTTPS()) {
++            continue;
++          }
++          NSURL* nsURL = net::NSURLWithGURL(page.url);
++          if (!nsURL) {
++            continue;
++          }
++          [entries addObject:[[OACHistoryEntry alloc]
++                                 initWithURL:nsURL
++                                       title:base::SysUTF16ToNSString(page.title)
++                                   lastVisit:page.last_visit_time.ToNSDate()
++                                      visits:page.visit_count
++                                       typed:0]];
++        }
++        [request finishWithEntries:entries body:nil];
++      }),
++      _tracker.get());
++}
++
+ - (void)startFetch:(const GURL&)url profile:(Profile*)profile {
+   auto resource = std::make_unique<network::ResourceRequest>();
+   resource->url = url;
+@@ -279,6 +316,30 @@ @implementation OACProfile (OACAutocomplete)
+   return request;
+ }
+ 
++- (OACAutocompleteRequest*)
++    queryMostVisitedWithMaximumCount:(NSInteger)maximumCount
++                   completionHandler:
++                       (void (^)(NSArray<OACHistoryEntry*>*))completionHandler {
++  CHECK(NSThread.isMainThread);
++  CHECK(completionHandler);
++  OACAutocompleteRequest* request =
++      [[OACAutocompleteRequest alloc] initWithHistoryHandler:completionHandler
++                                              suggestHandler:nil];
++  Profile* profile = self.valid && !self.offTheRecord ? self.chromeProfile : nullptr;
++  history::HistoryService* service =
++      profile ? HistoryServiceFactory::GetForProfile(
++                    profile, ServiceAccessType::EXPLICIT_ACCESS)
++              : nullptr;
++  if (!service) {
++    [request finishWithEntries:@[] body:nil];
++    return request;
++  }
++  const int count = static_cast<int>(
++      MIN(MAX(maximumCount, NSInteger{1}), NSInteger{kMaxHistoryCount}));
++  [request startMostVisitedQuery:service count:count];
++  return request;
++}
++
+ - (OACAutocompleteRequest*)
+     fetchSearchSuggestionsFromURL:(NSURL*)suggestionURL
+                 completionHandler:(void (^)(NSData*))completionHandler {
+diff --git a/openarc/bridge/public/OpenArcCore/OACAutocomplete.h b/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
+index 8ab3c41d1373..167cda80ecc4 100644
+--- a/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
++++ b/openarc/bridge/public/OpenArcCore/OACAutocomplete.h
+@@ -18,6 +18,8 @@
+ // - History: the profile's `history::HistoryService::QueryHistory` (title and URL word match,
+ //   one row per URL, newest visit first), with each row's visit and typed counts. An
+ //   off-the-record profile records no history, so it always answers an empty list.
++// - Most visited (plan B123): `history::HistoryService::QueryMostVisitedURLs`, for an empty or
++//   short command bar.
+ // - Suggestions: one GET of a suggestion URL the shell built from the profile's search engine,
+ //   through the profile's own network context (the off-the-record one for an incognito profile),
+ //   without cookies (none sent, none stored), without the HTTP cache, a 1.5 s timeout and a
+@@ -70,6 +72,16 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+                                    completionHandler:(void (^)(NSArray<OACHistoryEntry *> *entries))completionHandler
+     NS_SWIFT_NAME(queryHistory(matching:maximumCount:completionHandler:));
+ 
++/// The profile's most visited pages (plan B123): Chromium's history "most visited" query (the
++/// data behind Chrome's new-tab tiles: pages reached by typing or from bookmarks, and the visits
++/// that followed them, ranked by visit frequency and recency), at most `maximumCount` (1...100;
++/// other values are clamped), best first, one per URL, http and https only. `visitCount` is the
++/// page's visit count; `typedCount` is 0 (the query does not report it). An off-the-record or
++/// invalid profile answers an empty array.
++- (OACAutocompleteRequest *)queryMostVisitedWithMaximumCount:(NSInteger)maximumCount
++                                           completionHandler:(void (^)(NSArray<OACHistoryEntry *> *entries))completionHandler
++    NS_SWIFT_NAME(queryMostVisited(maximumCount:completionHandler:));
++
+ /// GETs `suggestionURL` (https only) through this profile's network context and answers the body,
+ /// or nil on any failure: not https, network error, non-2xx status, timeout (1.5 s), a body over
+ /// 64 KiB, an invalid profile, or cancellation. No cookies are sent or stored, and the HTTP cache

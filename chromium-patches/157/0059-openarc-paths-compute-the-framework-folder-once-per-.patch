@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Thu, 29 Oct 2026 10:12:02 -0700
+Subject: [PATCH] openarc: paths: compute the framework folder once per process
+
+dladdr scanned the whole symbol table on every tab (about 2 ms each, B105).
+---
+ openarc/common/openarc_paths.mm | 29 +++++++++++++++++++----------
+ 1 file changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/openarc/common/openarc_paths.mm b/openarc/common/openarc_paths.mm
+index 1922426a324e..33fb4a2402e7 100644
+--- a/openarc/common/openarc_paths.mm
++++ b/openarc/common/openarc_paths.mm
+@@ -14,6 +14,7 @@
+ #include "base/apple/bundle_locations.h"
+ #include "base/apple/foundation_util.h"
+ #include "base/check.h"
++#include "base/no_destructor.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/sys_string_conversions.h"
+@@ -82,16 +83,24 @@ bool IsOwnBundleID(NSString* bundle_id) {
+ }  // namespace
+ 
+ base::FilePath GetFrameworkVersionDirectory() {
+-  Dl_info info;
+-  CHECK(dladdr(reinterpret_cast<const void*>(&GetFrameworkVersionDirectory),
+-               &info));
+-  // dli_fname is the path the library was loaded from; resolve symlinks
+-  // (Versions/Current, a symlinked app location) so the sandbox sees the same
+-  // path it is given.
+-  char resolved[PATH_MAX];
+-  const char* path = realpath(info.dli_fname, resolved) ? resolved
+-                                                        : info.dli_fname;
+-  return base::FilePath(path).DirName();
++  // Computed once per process: the library does not move while it is loaded,
++  // and dladdr() searches the library's whole symbol table (about 2 ms in this
++  // binary), which every new tab paid on the main thread through the helper
++  // path of its spare renderer (plan B105). A function-local static is
++  // initialized thread-safely.
++  static const base::NoDestructor<base::FilePath> directory([] {
++    Dl_info info;
++    CHECK(dladdr(reinterpret_cast<const void*>(&GetFrameworkVersionDirectory),
++                 &info));
++    // dli_fname is the path the library was loaded from; resolve symlinks
++    // (Versions/Current, a symlinked app location) so the sandbox sees the
++    // same path it is given.
++    char resolved[PATH_MAX];
++    const char* path = realpath(info.dli_fname, resolved) ? resolved
++                                                          : info.dli_fname;
++    return base::FilePath(path).DirName();
++  }());
++  return *directory;
+ }
+ 
+ base::FilePath GetHelperExecutablePath(std::string_view suffix) {

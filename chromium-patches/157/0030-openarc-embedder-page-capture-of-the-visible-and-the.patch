@@ -1,0 +1,445 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 20:31:52 -0700
+Subject: [PATCH] openarc: embedder: page capture of the visible and the full
+ page
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plan B51 (docs/arc-spec/06-flows.md §24): the shell's region capture,
+Capture Full Page and portrait mode need images of the page that the
+existing snapshot (a scaled copy of the whole visible frame) cannot give.
+
+OACCapture.h / oac_capture.mm add to OACTab:
+- -captureVisibleRect:completionHandler: copies a rectangle of the visible
+  page at the screen's pixel density (CopyFromSurface with a source rect).
+- -captureFullPageWithMaximumAspectRatio:completionHandler: renders the
+  whole document beyond the viewport. It attaches its own DevTools
+  protocol client to the tab, reads Page.getLayoutMetrics and asks
+  Page.captureScreenshot with captureBeyondViewport and a clip of the
+  content size (optionally limited to a height / width ratio, scaled down
+  past 16384 pixels), then detaches. This is what Chrome's DevTools
+  "Capture full size screenshot" does; without it the embedder has no way
+  to render below the fold.
+---
+ openarc/BUILD.gn                              |   2 +
+ openarc/bridge/oac_capture.mm                 | 324 ++++++++++++++++++
+ .../bridge/public/OpenArcCore/OACCapture.h    |  44 +++
+ .../bridge/public/OpenArcCore/OpenArcCore.h   |   1 +
+ 4 files changed, 371 insertions(+)
+ create mode 100644 openarc/bridge/oac_capture.mm
+ create mode 100644 openarc/bridge/public/OpenArcCore/OACCapture.h
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 021e0fb76f81..95ca91ea8b80 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -36,6 +36,7 @@ assert(is_mac, "Open Arc is a macOS browser")
+ openarc_public_headers = [
+   "bridge/public/OpenArcCore/OACApplication.h",
+   "bridge/public/OpenArcCore/OACAutofill.h",
++  "bridge/public/OpenArcCore/OACCapture.h",
+   "bridge/public/OpenArcCore/OACBrowserApplication.h",
+   "bridge/public/OpenArcCore/OACDefines.h",
+   "bridge/public/OpenArcCore/OACDialogDelegate.h",
+@@ -232,6 +233,7 @@ source_set("bridge") {
+               "bridge/oac_autofill.mm",
+               "bridge/oac_autofill_internal.h",
+               "bridge/oac_browser_application.mm",
++              "bridge/oac_capture.mm",
+               "bridge/oac_dialog_requests.mm",
+               "bridge/oac_dialog_requests_internal.h",
+               "bridge/oac_downloads.mm",
+diff --git a/openarc/bridge/oac_capture.mm b/openarc/bridge/oac_capture.mm
+new file mode 100644
+index 000000000000..5bd5efc7afab
+--- /dev/null
++++ b/openarc/bridge/oac_capture.mm
+@@ -0,0 +1,324 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Page capture for the shell's capture tools (plan B51, 06 §24). See
++// OACCapture.h.
++
++#import <OpenArcCore/OACCapture.h>
++
++#include <algorithm>
++#include <cmath>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/base64.h"
++#include "base/containers/span.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
++#include "base/values.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/browser/devtools_agent_host.h"
++#include "content/public/browser/devtools_agent_host_client.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++
++#import "openarc/bridge/oac_application_internal.h"
++#import "openarc/bridge/oac_tab_internal.h"
++
++namespace {
++
++using CaptureHandler = void (^)(NSData*, CGSize, NSError*);
++
++// Longest side of a full-page image, in pixels (Skia and the GPU process
++// handle 16384; Chrome's own limit for the protocol is 128K CSS pixels).
++constexpr double kMaxPixelSide = 16384;
++constexpr base::TimeDelta kVisibleTimeout = base::Seconds(5);
++constexpr base::TimeDelta kFullPageTimeout = base::Seconds(20);
++
++NSError* NoFrameError() {
++  return OACMakeError(OACErrorSnapshotUnavailable,
++                      @"The page has no frame to copy.");
++}
++
++void Fail(CaptureHandler handler, NSError* error) {
++  OACPostToMainThread(^{
++    handler(nil, CGSizeZero, error);
++  });
++}
++
++// Width and height from a PNG's IHDR chunk; zero when |png| is not a PNG.
++CGSize PNGPixelSize(const std::vector<uint8_t>& png) {
++  if (png.size() < 24 || png[12] != 'I' || png[13] != 'H' || png[14] != 'D' ||
++      png[15] != 'R') {
++    return CGSizeZero;
++  }
++  auto be32 = [&png](size_t at) {
++    return (static_cast<uint32_t>(png[at]) << 24) |
++           (static_cast<uint32_t>(png[at + 1]) << 16) |
++           (static_cast<uint32_t>(png[at + 2]) << 8) |
++           static_cast<uint32_t>(png[at + 3]);
++  };
++  return CGSizeMake(be32(16), be32(20));
++}
++
++// One full-page capture: attaches as a DevTools protocol client to the tab's
++// page target, asks for the layout metrics, then for a screenshot of the
++// whole document (`captureBeyondViewport`), detaches and deletes itself. The
++// handler runs exactly once.
++class FullPageCapture : public content::DevToolsAgentHostClient {
++ public:
++  ~FullPageCapture() override = default;
++
++  static void Start(content::WebContents* web_contents,
++                    double maximum_aspect_ratio,
++                    float device_scale_factor,
++                    CaptureHandler handler) {
++    // Owned by itself until Finish().
++    auto* capture = new FullPageCapture(maximum_aspect_ratio,
++                                        device_scale_factor, handler);
++    capture->Attach(web_contents);
++  }
++
++  // content::DevToolsAgentHostClient:
++  void DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
++                               base::span<const uint8_t> message) override {
++    std::string_view json(reinterpret_cast<const char*>(message.data()),
++                          message.size());
++    std::optional<base::DictValue> dict =
++        base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++    if (!dict) {
++      return;
++    }
++    std::optional<int> id = dict->FindInt("id");
++    if (!id) {
++      return;  // An event; this client enables no domain, so none expected.
++    }
++    const base::DictValue* result = dict->FindDict("result");
++    if (!result) {
++      Finish(nil);
++      return;
++    }
++    if (*id == kMetricsRequest) {
++      DidGetLayoutMetrics(*result);
++    } else if (*id == kScreenshotRequest) {
++      DidCaptureScreenshot(*result);
++    }
++  }
++
++  void AgentHostClosed(content::DevToolsAgentHost* agent_host) override {
++    host_ = nullptr;
++    Finish(nil);
++  }
++
++ private:
++  static constexpr int kMetricsRequest = 1;
++  static constexpr int kScreenshotRequest = 2;
++
++  FullPageCapture(double maximum_aspect_ratio,
++                  float device_scale_factor,
++                  CaptureHandler handler)
++      : maximum_aspect_ratio_(maximum_aspect_ratio),
++        device_scale_factor_(device_scale_factor > 0 ? device_scale_factor
++                                                     : 1),
++        handler_([handler copy]) {}
++
++  void Attach(content::WebContents* web_contents) {
++    host_ = content::DevToolsAgentHost::GetOrCreateFor(web_contents);
++    if (!host_ || !host_->AttachClient(this)) {
++      host_ = nullptr;
++      Finish(nil);
++      return;
++    }
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&FullPageCapture::TimedOut,
++                       weak_factory_.GetWeakPtr()),
++        kFullPageTimeout);
++    Send(kMetricsRequest, "Page.getLayoutMetrics", base::DictValue());
++  }
++
++  void Send(int id, const char* method, base::DictValue params) {
++    base::DictValue message;
++    message.Set("id", id);
++    message.Set("method", method);
++    message.Set("params", std::move(params));
++    std::optional<std::string> json = base::WriteJson(message);
++    if (!json || !host_) {
++      Finish(nil);
++      return;
++    }
++    host_->DispatchProtocolMessage(
++        this, base::as_bytes(base::span(*json)));
++  }
++
++  void DidGetLayoutMetrics(const base::DictValue& result) {
++    const base::DictValue* content = result.FindDict("cssContentSize");
++    const base::DictValue* viewport = result.FindDict("cssLayoutViewport");
++    double width = content ? content->FindDouble("width").value_or(0) : 0;
++    double height = content ? content->FindDouble("height").value_or(0) : 0;
++    // A page narrower than the window is still captured window-wide.
++    if (viewport) {
++      width = std::max(
++          width, viewport->FindDouble("clientWidth").value_or(0));
++      height = std::max(
++          height, viewport->FindDouble("clientHeight").value_or(0));
++    }
++    width = std::floor(width);
++    height = std::floor(height);
++    if (width < 1 || height < 1) {
++      Finish(nil);
++      return;
++    }
++    if (maximum_aspect_ratio_ > 0) {
++      height = std::min(height, std::floor(width * maximum_aspect_ratio_));
++    }
++    const double longer = std::max(width, height) * device_scale_factor_;
++    const double scale = longer > kMaxPixelSide ? kMaxPixelSide / longer : 1;
++
++    base::DictValue clip;
++    clip.Set("x", 0);
++    clip.Set("y", 0);
++    clip.Set("width", width);
++    clip.Set("height", height);
++    clip.Set("scale", scale);
++    base::DictValue params;
++    params.Set("format", "png");
++    params.Set("fromSurface", true);
++    params.Set("captureBeyondViewport", true);
++    params.Set("clip", std::move(clip));
++    Send(kScreenshotRequest, "Page.captureScreenshot", std::move(params));
++  }
++
++  void DidCaptureScreenshot(const base::DictValue& result) {
++    const std::string* data = result.FindString("data");
++    std::optional<std::vector<uint8_t>> png =
++        data ? base::Base64Decode(*data) : std::nullopt;
++    if (!png || png->empty()) {
++      Finish(nil);
++      return;
++    }
++    const CGSize size = PNGPixelSize(*png);
++    if (size.width <= 0 || size.height <= 0) {
++      Finish(nil);
++      return;
++    }
++    pixel_size_ = size;
++    Finish([NSData dataWithBytes:png->data() length:png->size()]);
++  }
++
++  void TimedOut() { Finish(nil); }
++
++  // Detaches, reports and deletes this object.
++  void Finish(NSData* png) {
++    if (finished_) {
++      return;
++    }
++    finished_ = true;
++    weak_factory_.InvalidateWeakPtrs();
++    if (host_) {
++      host_->DetachClient(this);
++      host_ = nullptr;
++    }
++    CaptureHandler handler = handler_;
++    const CGSize size = pixel_size_;
++    NSError* error = png ? nil : NoFrameError();
++    OACPostToMainThread(^{
++      handler(png, png ? size : CGSizeZero, error);
++    });
++    // DispatchProtocolMessage and AgentHostClosed may still be on the stack:
++    // delete from a later task.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
++                                                                  this);
++  }
++
++  const double maximum_aspect_ratio_;
++  const double device_scale_factor_;
++  CaptureHandler handler_;
++  scoped_refptr<content::DevToolsAgentHost> host_;
++  CGSize pixel_size_ = CGSizeZero;
++  bool finished_ = false;
++  base::WeakPtrFactory<FullPageCapture> weak_factory_{this};
++};
++
++}  // namespace
++
++@implementation OACTab (OACCapture)
++
++- (void)captureVisibleRect:(CGRect)rect
++         completionHandler:(void (^)(NSData*, CGSize, NSError*))
++                               completionHandler {
++  CaptureHandler handler = [completionHandler copy];
++  content::WebContents* contents = self.isClosed ? nullptr : self.webContents;
++  content::RenderWidgetHostView* view =
++      contents ? contents->GetRenderWidgetHostView() : nullptr;
++  if (!view || contents->IsCrashed()) {
++    Fail(handler, NoFrameError());
++    return;
++  }
++  const gfx::Rect bounds(view->GetViewBounds().size());
++  gfx::Rect source = bounds;
++  if (!CGRectIsNull(rect)) {
++    const CGRect integral = CGRectIntegral(rect);
++    source = gfx::Rect(static_cast<int>(integral.origin.x),
++                       static_cast<int>(integral.origin.y),
++                       static_cast<int>(integral.size.width),
++                       static_cast<int>(integral.size.height));
++    source.Intersect(bounds);
++  }
++  if (source.IsEmpty()) {
++    Fail(handler, OACMakeError(OACErrorInvalidArgument,
++                               @"The capture area is outside the page."));
++    return;
++  }
++  // An empty output size keeps the surface's pixel density.
++  view->CopyFromSurface(
++      source, gfx::Size(), kVisibleTimeout,
++      base::BindOnce(^(const content::CopyFromSurfaceResult& result) {
++        NSData* png = nil;
++        CGSize size = CGSizeZero;
++        if (result.has_value() && !result->bitmap.drawsNothing()) {
++          std::optional<std::vector<uint8_t>> encoded =
++              gfx::PNGCodec::EncodeBGRASkBitmap(result->bitmap,
++                                                /*discard_transparency=*/true);
++          if (encoded) {
++            png = [NSData dataWithBytes:encoded->data()
++                                 length:encoded->size()];
++            size = CGSizeMake(result->bitmap.width(), result->bitmap.height());
++          }
++        }
++        NSError* error = png ? nil : NoFrameError();
++        // The copy may complete off the main thread.
++        OACPostToMainThread(^{
++          handler(png, size, error);
++        });
++      }));
++}
++
++- (void)captureFullPageWithMaximumAspectRatio:(double)maximumAspectRatio
++                            completionHandler:
++                                (void (^)(NSData*, CGSize, NSError*))
++                                    completionHandler {
++  CaptureHandler handler = [completionHandler copy];
++  content::WebContents* contents = self.isClosed ? nullptr : self.webContents;
++  content::RenderWidgetHostView* view =
++      contents ? contents->GetRenderWidgetHostView() : nullptr;
++  if (!view || contents->IsCrashed() || maximumAspectRatio < 0) {
++    Fail(handler, NoFrameError());
++    return;
++  }
++  FullPageCapture::Start(contents, maximumAspectRatio,
++                         view->GetDeviceScaleFactor(), handler);
++}
++
++@end
+diff --git a/openarc/bridge/public/OpenArcCore/OACCapture.h b/openarc/bridge/public/OpenArcCore/OACCapture.h
+new file mode 100644
+index 000000000000..b088c3e3ab1d
+--- /dev/null
++++ b/openarc/bridge/public/OpenArcCore/OACCapture.h
+@@ -0,0 +1,44 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// OACCapture: page capture for the shell's capture tools (plan B51, docs/arc-spec/06-flows.md §24).
++//
++// Maps to: `BrowserTab.capture(_:)` with `PageCaptureArea` (app/Sources/OpenArcEngine/
++// BrowserEngine.swift). Images cross the bridge as PNG bytes at the screen's pixel density, like
++// `-[OACTab snapshotWithMaxPixelSize:completionHandler:]`.
++//
++// - Visible capture copies the last painted frame of the tab's view (the region capture of §24.1).
++// - Full-page capture renders the document beyond the viewport through the DevTools protocol's
++//   `Page.captureScreenshot` with `captureBeyondViewport` (§24.2, and the portrait mode of §24.3 with
++//   a height limit). The bridge attaches its own protocol client to the tab for the duration of the
++//   capture and detaches afterwards; the page is laid out at its full height for a moment, as in
++//   Chrome's DevTools "Capture full size screenshot".
++
++#import <OpenArcCore/OACTab.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++/// Completion handlers get PNG data and its size in pixels, or an error, on the main thread.
++@interface OACTab (OACCapture)
++
++/// Copies `rect` of the visible page (points in `nativeView` coordinates, origin top left) at the
++/// screen's pixel density; `CGRectNull` copies the whole visible page. The rectangle is clipped to
++/// the view. Fails with `OACErrorSnapshotUnavailable` (no frame: hidden without a cached frame,
++/// crashed, closed) or `OACErrorInvalidArgument` (nothing of `rect` lies inside the view).
++- (void)captureVisibleRect:(CGRect)rect
++         completionHandler:(void (^)(NSData *_Nullable pngData, CGSize pixelSize, NSError *_Nullable error))completionHandler
++    NS_SWIFT_NAME(captureVisible(rect:completionHandler:));
++
++/// Renders the whole document from its top, beyond the viewport, at the screen's pixel density
++/// (scaled down when a side would exceed 16384 pixels). `maximumAspectRatio` (height / width) > 0
++/// keeps only the top part of the page up to that ratio; 0 keeps the whole page. Fails with
++/// `OACErrorSnapshotUnavailable` when the page cannot be rendered (closed, crashed, still without a
++/// document, or the renderer gave up within 20 s).
++- (void)captureFullPageWithMaximumAspectRatio:(double)maximumAspectRatio
++                            completionHandler:(void (^)(NSData *_Nullable pngData, CGSize pixelSize, NSError *_Nullable error))completionHandler
++    NS_SWIFT_NAME(captureFullPage(maximumAspectRatio:completionHandler:));
++
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/openarc/bridge/public/OpenArcCore/OpenArcCore.h b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+index 733f6c5db3ee..5abc1b8539ff 100644
+--- a/openarc/bridge/public/OpenArcCore/OpenArcCore.h
++++ b/openarc/bridge/public/OpenArcCore/OpenArcCore.h
+@@ -14,6 +14,7 @@
+ #import <OpenArcCore/OACProfile.h>
+ #import <OpenArcCore/OACTab.h>
+ #import <OpenArcCore/OACTabDelegate.h>
++#import <OpenArcCore/OACCapture.h>
+ #import <OpenArcCore/OACDialogDelegate.h>
+ #import <OpenArcCore/OACAutofill.h>
+ #import <OpenArcCore/OACSiteSettings.h>

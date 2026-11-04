@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 27 Oct 2026 17:52:56 -0700
+Subject: [PATCH] openarc: embedder: Web Store extension updates with
+ background networking off
+
+Plan C28. Open Arc starts Chrome with --disable-background-networking,
+which also stopped extension updates, so extensions installed from the
+Chrome Web Store kept their first-installed version. The embedder now
+calls ExtensionUpdater::AllowWebStoreUpdatesWithoutBackgroundNetworking()
+(patch "let an embedder keep Web Store extension updates without
+background networking") before any profile loads its extensions: the
+updater checks soon after start and then about every 5 hours, against
+the Web Store's update servers only; extensions with another update URL
+are skipped, and everything else the switch stops stays off.
+---
+ openarc/BUILD.gn                                    | 1 +
+ openarc/browser/openarc_browser_main_extra_parts.mm | 9 +++++++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index e502cfab2b01..c6b8d0d1aca4 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -134,6 +134,7 @@ source_set("embedder") {
+     "//chrome/browser:child_process_host_flags",
+     "//chrome/browser/component_updater",
+     "//chrome/browser/content_settings:content_settings_factory",
++    "//chrome/browser/extensions",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:tab_helpers",
+     "//chrome/browser/ui:tab_helpers_impl",
+diff --git a/openarc/browser/openarc_browser_main_extra_parts.mm b/openarc/browser/openarc_browser_main_extra_parts.mm
+index dfdff5f3dfe8..1cb865ea50af 100644
+--- a/openarc/browser/openarc_browser_main_extra_parts.mm
++++ b/openarc/browser/openarc_browser_main_extra_parts.mm
+@@ -10,6 +10,7 @@
+ #include "base/values.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/component_updater/chrome_component_updater_configurator.h"
++#include "chrome/browser/extensions/updater/extension_updater.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/embedder_support/pref_names.h"
+@@ -61,6 +62,14 @@
+   KeychainPassword::GetServiceName() = product_name + " Safe Storage";
+   KeychainPassword::GetAccountName() = product_name;
+ 
++  // Plan C28: --disable-background-networking (oac_application.mm) also
++  // stops extension updates. Keep the extension updater on its normal
++  // schedule (a check soon after start, then about every 5 hours), for
++  // extensions from the Chrome Web Store only; everything else that switch
++  // stops stays off. Before any profile loads its extensions.
++  extensions::ExtensionUpdater::
++      AllowWebStoreUpdatesWithoutBackgroundNetworking();
++
+   // Plan C27: --disable-component-update (decision Q21) only skips the
+   // components Chrome registers at startup. Installers that register on
+   // demand still reach update.googleapis.com and dl.google.com; the

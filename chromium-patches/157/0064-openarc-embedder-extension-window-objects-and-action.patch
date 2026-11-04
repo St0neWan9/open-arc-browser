@@ -1,0 +1,604 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: St0neWan9 <pawamaba@gmail.com>
+Date: Fri, 30 Oct 2026 17:46:50 +0800
+Subject: [PATCH] openarc: embedder: extension window objects and
+ action.openPopup()
+
+Plans B125 and B126.
+
+- OACExtensions.windows (class property) and OACExtensionWindow: the
+  shell reports its windows, most recently focused first (identifier,
+  profile, focused, popup, frame in AppKit screen coordinates, tabs and
+  active tabs). The bridge gives each window a stable Chromium window id,
+  sets it as the window id of the window's tabs, and lists the windows
+  for chrome.windows.get* (ExtensionTabUtil's embedder window list).
+  chrome.tabs.query's embedder tab list follows the windows once there
+  are any: a tab is active when its window shows it and in the current
+  window when its window is the most recently focused one.
+- chrome.action.openPopup() opens the popup on the tab like an
+  `_execute_action` shortcut and hands it to the delegate, which is
+  renamed -extensions:didOpenPopup:onTab: (it no longer comes only from
+  the keyboard). The function resolves when the popup's page loaded and
+  fails when it closes first or another popup is open.
+---
+ openarc/bridge/oac_extensions.mm              | 325 +++++++++++++++++-
+ openarc/bridge/oac_extensions_internal.h      |   6 +-
+ .../bridge/public/OpenArcCore/OACExtensions.h |  62 +++-
+ 3 files changed, 376 insertions(+), 17 deletions(-)
+
+diff --git a/openarc/bridge/oac_extensions.mm b/openarc/bridge/oac_extensions.mm
+index 2e9a32988e7a..cad43c876ed0 100644
+--- a/openarc/bridge/oac_extensions.mm
++++ b/openarc/bridge/oac_extensions.mm
+@@ -50,6 +50,7 @@
+ #include "components/input/native_web_keyboard_event.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/sessions/content/session_tab_helper.h"
++#include "components/sessions/core/session_id.h"
+ #include "content/public/browser/keyboard_event_processing_result.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/render_frame_host.h"
+@@ -80,6 +81,7 @@
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/gfx/codec/png_codec.h"
+ #include "ui/gfx/geometry/size.h"
++#include "ui/gfx/mac/coordinate_conversion.h"
+ #include "ui/gfx/image/image.h"
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/gfx/image/image_skia_rep.h"
+@@ -102,6 +104,20 @@ - (void)actionDidUpdate:(const std::string&)extensionID
+             webContents:(content::WebContents*)webContents;
+ - (void)popupDidClose:(OACExtensionPopup*)popup;
+ - (void)errorsDidChangeForExtension:(const std::string&)extensionID;
++// Makes the popup of |extension| on |tab| (no activeTab grant, no click
++// event), closing the open one; nil when the action has no popup there.
++- (OACExtensionPopup*)makePopupOfExtension:(const Extension*)extension
++                                     onTab:(OACTab*)tab;
++// Hands a popup the shell did not ask for (a shortcut, action.openPopup()) to
++// the delegate in a posted task; closes it when nobody shows it.
++- (void)deliverUnrequestedPopup:(OACExtensionPopup*)popup onTab:(OACTab*)tab;
++// Plan B125: chrome.action.openPopup() on |tab|. NO when no popup can open
++// (another is open, no popup on the tab); otherwise |callback| runs once.
++- (BOOL)openPopupForAPIOfExtension:(const Extension&)extension
++                             onTab:(OACTab*)tab
++                          callback:
++                              (base::OnceCallback<void(
++                                   extensions::ExtensionHost*)>)callback;
+ @end
+ 
+ @interface OACExtensionPopup ()
+@@ -111,6 +127,10 @@ - (instancetype)initWithHost:(std::unique_ptr<extensions::ExtensionViewHost>)hos
+ - (void)hostDidLoad;
+ - (void)hostDidResizeTo:(const gfx::Size&)size;
+ - (void)hostDidAskToClose;
++// Plan B125: runs once with the popup's host when its page loaded, or with
++// null when the popup closes first (chrome.action.openPopup()'s answer).
++- (void)setLoadCallback:
++    (base::OnceCallback<void(extensions::ExtensionHost*)>)callback;
+ @end
+ 
+ @interface OACExtensionInstallRequest ()
+@@ -624,6 +644,7 @@ @implementation OACExtensionPopup {
+   CGSize _preferredSize;
+   BOOL _hasLoaded;
+   BOOL _closed;
++  base::OnceCallback<void(extensions::ExtensionHost*)> _loadCallback;
+ }
+ 
+ @synthesize delegate = _delegate;
+@@ -701,8 +722,16 @@ - (void)close {
+   });
+ }
+ 
++- (void)setLoadCallback:
++    (base::OnceCallback<void(extensions::ExtensionHost*)>)callback {
++  _loadCallback = std::move(callback);
++}
++
+ - (void)tearDown {
+   _closed = YES;
++  if (_loadCallback) {
++    std::move(_loadCallback).Run(nullptr);
++  }
+   if (!_host) {
+     return;
+   }
+@@ -724,6 +753,9 @@ - (void)hostDidLoad {
+   // The committed page's main frame (see PopupExtensionView).
+   openarc::PopupExtensionView::EnableAutoResize(
+       _host->host_contents()->GetPrimaryMainFrame());
++  if (_loadCallback) {
++    std::move(_loadCallback).Run(_host.get());
++  }
+   __weak OACExtensionPopup* weakSelf = self;
+   OACPostToMainThread(^{
+     OACExtensionPopup* popup = weakSelf;
+@@ -765,6 +797,150 @@ - (void)hostDidAskToClose {
+ 
+ @end
+ 
++// MARK: - OACExtensionWindow
++
++namespace {
++
++// The live tabs of a weak tab list (OACExtensionWindow).
++NSArray<OACTab*>* LiveTabsIn(NSPointerArray* tabs) {
++  NSMutableArray<OACTab*>* result = [NSMutableArray array];
++  for (OACTab* tab in tabs) {
++    if (tab && !tab.closed && tab.webContents) {
++      [result addObject:tab];
++    }
++  }
++  return result;
++}
++
++NSPointerArray* WeakTabs(NSArray<OACTab*>* tabs) {
++  NSPointerArray* result = [NSPointerArray weakObjectsPointerArray];
++  for (OACTab* tab in tabs) {
++    [result addPointer:(__bridge void*)tab];
++  }
++  return result;
++}
++
++}  // namespace
++
++@implementation OACExtensionWindow {
++  NSUUID* _identifier;
++  __weak OACProfile* _profile;
++  NSPointerArray* _tabs;
++  NSPointerArray* _activeTabs;
++}
++
++@synthesize focused = _focused;
++@synthesize popup = _popup;
++@synthesize frame = _frame;
++
++- (instancetype)initWithIdentifier:(NSUUID*)identifier
++                           profile:(OACProfile*)profile {
++  if ((self = [super init])) {
++    _identifier = [identifier copy];
++    _profile = profile;
++    _tabs = [NSPointerArray weakObjectsPointerArray];
++    _activeTabs = [NSPointerArray weakObjectsPointerArray];
++    _frame = CGRectZero;
++  }
++  return self;
++}
++
++- (NSUUID*)identifier {
++  return _identifier;
++}
++
++- (OACProfile*)profile {
++  return _profile;
++}
++
++- (NSArray<OACTab*>*)tabs {
++  return LiveTabsIn(_tabs);
++}
++
++- (void)setTabs:(NSArray<OACTab*>*)tabs {
++  _tabs = WeakTabs(tabs);
++}
++
++- (NSArray<OACTab*>*)activeTabs {
++  return LiveTabsIn(_activeTabs);
++}
++
++- (void)setActiveTabs:(NSArray<OACTab*>*)activeTabs {
++  _activeTabs = WeakTabs(activeTabs);
++}
++
++@end
++
++namespace {
++
++// Plan B126: the shell's windows, most recently focused first.
++NSArray<OACExtensionWindow*>* g_extension_windows = @[];
++
++// The Chromium window id (a SessionID) of each window identifier, made once.
++NSMutableDictionary<NSUUID*, NSNumber*>* ExtensionWindowIDs() {
++  static NSMutableDictionary<NSUUID*, NSNumber*>* ids =
++      [NSMutableDictionary dictionary];
++  return ids;
++}
++
++int ExtensionWindowIDFor(NSUUID* identifier) {
++  NSNumber* known = ExtensionWindowIDs()[identifier];
++  if (!known) {
++    known = @(SessionID::NewUnique().id());
++    ExtensionWindowIDs()[identifier] = known;
++  }
++  return known.intValue;
++}
++
++// The Chromium profile of a window: the on-disk profile, or for an incognito
++// window its off-the-record profile when it exists (listing windows never
++// creates one).
++content::BrowserContext* BrowserContextOfWindow(OACExtensionWindow* window) {
++  OACProfile* profile = window.profile;
++  if (!profile.valid) {
++    return nullptr;
++  }
++  if (!profile.offTheRecord) {
++    return profile.chromeProfile;
++  }
++  OACProfile* original = profile.originalProfile;
++  Profile* chrome = original.valid ? original.chromeProfile : nullptr;
++  if (!chrome || !chrome->HasPrimaryOTRProfile()) {
++    return nullptr;
++  }
++  return chrome->GetPrimaryOTRProfile(/*create_if_needed=*/false);
++}
++
++// Gives every listed tab its window's id (tab.windowId, tabs.query); a tab in
++// no window gets none. The first window that lists a tab wins.
++void AssignTabWindowIDs() {
++  std::map<content::WebContents*, int> window_of_tab;
++  for (OACExtensionWindow* window in g_extension_windows) {
++    const int window_id = ExtensionWindowIDFor(window.identifier);
++    for (OACTab* tab in window.tabs) {
++      window_of_tab.emplace(tab.webContents, window_id);
++    }
++  }
++  for (OACTab* tab in OACApplication.sharedApplication.liveTabsForBridge) {
++    content::WebContents* contents = tab.webContents;
++    auto* helper = contents
++                       ? sessions::SessionTabHelper::FromWebContents(contents)
++                       : nullptr;
++    if (!helper) {
++      continue;
++    }
++    auto it = window_of_tab.find(contents);
++    const SessionID wanted = it == window_of_tab.end()
++                                 ? SessionID::InvalidValue()
++                                 : SessionID::FromSerializedValue(it->second);
++    if (helper->window_id() != wanted) {
++      helper->SetWindowID(wanted);
++    }
++  }
++}
++
++}  // namespace
++
+ // MARK: - OACExtensions
+ 
+ @implementation OACExtensions {
+@@ -809,6 +985,10 @@ - (void)runActionFromKeyboardOfExtension:(NSString*)extensionIdentifier
+   if (!popup) {
+     return;  // action.onClicked was sent (or nothing to run).
+   }
++  [self deliverUnrequestedPopup:popup onTab:tab];
++}
++
++- (void)deliverUnrequestedPopup:(OACExtensionPopup*)popup onTab:(OACTab*)tab {
+   __weak OACExtensions* weakSelf = self;
+   __weak OACTab* weakTab = tab;
+   OACPostToMainThread(^{
+@@ -817,16 +997,36 @@ - (void)runActionFromKeyboardOfExtension:(NSString*)extensionIdentifier
+     id<OACExtensionsDelegate> delegate = strongSelf.delegate;
+     if (strongSelf && strongTab && !popup.closed &&
+         [delegate respondsToSelector:@selector(extensions:
+-                                          didOpenPopup:fromKeyboardOnTab:)]) {
+-      [delegate extensions:strongSelf
+-                didOpenPopup:popup
+-           fromKeyboardOnTab:strongTab];
++                                             didOpenPopup:onTab:)]) {
++      [delegate extensions:strongSelf didOpenPopup:popup onTab:strongTab];
+     } else {
+       [popup close];
+     }
+   });
+ }
+ 
++- (BOOL)openPopupForAPIOfExtension:(const Extension&)extension
++                             onTab:(OACTab*)tab
++                          callback:
++                              (base::OnceCallback<void(
++                                   extensions::ExtensionHost*)>)callback {
++  Profile* profile = self.chromeProfile;
++  if (!profile || OriginalProfileOfTab(tab) != profile) {
++    return NO;
++  }
++  // As Chrome's toolbar: no popup over one that is open.
++  if (_popup && !_popup.closed) {
++    return NO;
++  }
++  OACExtensionPopup* popup = [self makePopupOfExtension:&extension onTab:tab];
++  if (!popup) {
++    return NO;
++  }
++  [popup setLoadCallback:std::move(callback)];
++  [self deliverUnrequestedPopup:popup onTab:tab];
++  return YES;
++}
++
+ - (void)errorsDidChangeForExtension:(const std::string&)extensionID {
+   NSString* identifier = ToNS(extensionID);
+   __weak OACExtensions* weakSelf = self;
+@@ -972,6 +1172,26 @@ - (OACExtensionPopup*)popup {
+   return _popup;
+ }
+ 
+++ (NSArray<OACExtensionWindow*>*)windows {
++  return g_extension_windows;
++}
++
+++ (void)setWindows:(NSArray<OACExtensionWindow*>*)windows {
++  CHECK(NSThread.isMainThread);
++  g_extension_windows = [windows copy] ?: @[];
++  // Forget the ids of windows that are gone.
++  NSMutableSet<NSUUID*>* live = [NSMutableSet set];
++  for (OACExtensionWindow* window in g_extension_windows) {
++    [live addObject:window.identifier];
++  }
++  for (NSUUID* identifier in ExtensionWindowIDs().allKeys) {
++    if (![live containsObject:identifier]) {
++      [ExtensionWindowIDs() removeObjectForKey:identifier];
++    }
++  }
++  AssignTabWindowIDs();
++}
++
+ - (OACExtensionPopup*)runActionOfExtension:(NSString*)extensionIdentifier
+                                      onTab:(OACTab*)tab {
+   CHECK(NSThread.isMainThread);
+@@ -999,6 +1219,18 @@ - (OACExtensionPopup*)runActionOfExtension:(NSString*)extensionIdentifier
+   if (show != ExtensionAction::ShowAction::kShowPopup) {
+     return nil;
+   }
++  return [self makePopupOfExtension:extension onTab:tab];
++}
++
++- (OACExtensionPopup*)makePopupOfExtension:(const Extension*)extension
++                                     onTab:(OACTab*)tab {
++  Profile* profile = self.chromeProfile;
++  content::WebContents* contents = tab.webContents;
++  if (!profile || !contents || !extension) {
++    return nil;
++  }
++  [_popup close];
++  _popup = nil;
+   ExtensionAction* action =
+       extensions::ExtensionActionManager::Get(profile)->GetExtensionAction(
+           *extension);
+@@ -1244,15 +1476,58 @@ void ShowInstallConfirmation(
+   });
+ }
+ 
++// The embedder windows of ExtensionTabUtil (plan B126): every window the
++// shell reported, most recently focused first; ExtensionTabUtil keeps those
++// of the extension's profile.
++std::vector<extensions::ExtensionTabUtil::EmbedderWindow> ListWindows() {
++  std::vector<extensions::ExtensionTabUtil::EmbedderWindow> result;
++  for (OACExtensionWindow* window in g_extension_windows) {
++    content::BrowserContext* context = BrowserContextOfWindow(window);
++    if (!context) {
++      continue;
++    }
++    extensions::ExtensionTabUtil::EmbedderWindow entry;
++    entry.id = ExtensionWindowIDFor(window.identifier);
++    entry.browser_context = context;
++    entry.focused = window.focused;
++    entry.popup = window.popup;
++    entry.bounds = gfx::ScreenRectFromNSRect(NSRectFromCGRect(window.frame));
++    NSArray<OACTab*>* active = window.activeTabs;
++    for (OACTab* tab in window.tabs) {
++      content::WebContents* contents = tab.webContents;
++      // A window's tabs are of its profile (an incognito window's tabs are
++      // off the record).
++      if (!contents || contents->GetBrowserContext() != context ||
++          extensions::ExtensionTabUtil::GetWindowIdOfTab(contents) !=
++              entry.id) {
++        continue;
++      }
++      extensions::ExtensionTabUtil::EmbedderTab tab_entry;
++      tab_entry.contents = contents;
++      tab_entry.active = [active containsObject:tab];
++      tab_entry.in_current_window = false;
++      entry.tabs.push_back(tab_entry);
++    }
++    result.push_back(std::move(entry));
++  }
++  return result;
++}
++
+ // chrome.tabs.query's embedder tab list (an Open Arc patch): every live tab of
+-// the profile. The shell does not tell the bridge which tabs are on screen,
+-// so "active" means the tab's page is visible, and every tab counts as in the
+-// current window (inferred: Arc shows one window's tabs in its sidebar).
++// the profile. Once the shell reported windows of the profile (plan B126), a
++// tab is active when its window shows it, and in the current window when its
++// window is the profile's most recently focused one. Otherwise "active" means
++// the tab's page is visible and every tab counts as in the current window
++// (inferred: Arc shows one window's tabs in its sidebar).
+ std::vector<extensions::ExtensionTabUtil::EmbedderTab> ListTabs(
+     content::BrowserContext* browser_context,
+     bool include_incognito) {
+   std::vector<extensions::ExtensionTabUtil::EmbedderTab> result;
+   Profile* profile = Profile::FromBrowserContext(browser_context);
++  std::vector<extensions::ExtensionTabUtil::EmbedderWindow> windows =
++      extensions::ExtensionTabUtil::GetEmbedderWindows(browser_context,
++                                                       include_incognito);
++  const bool has_windows = !windows.empty();
+   for (OACTab* tab in OACApplication.sharedApplication.liveTabsForBridge) {
+     content::WebContents* contents = tab.webContents;
+     if (!contents) {
+@@ -1269,11 +1544,43 @@ void ShowInstallConfirmation(
+     entry.active =
+         contents->GetVisibility() == content::Visibility::VISIBLE;
+     entry.in_current_window = true;
++    if (has_windows) {
++      entry.active = false;
++      entry.in_current_window = false;
++      for (size_t i = 0; i < windows.size(); ++i) {
++        for (const auto& window_tab : windows[i].tabs) {
++          if (window_tab.contents == contents) {
++            entry.active = window_tab.active;
++            entry.in_current_window = i == 0;
++          }
++        }
++      }
++    }
+     result.push_back(entry);
+   }
+   return result;
+ }
+ 
++// chrome.action.openPopup()'s embedder popup opener (plan B125): the popup
++// opens on the tab like an `_execute_action` shortcut's and reaches the shell
++// through -extensions:didOpenPopup:onTab:.
++bool OpenPopupForExtensionAPI(
++    const Extension& extension,
++    content::WebContents* contents,
++    base::OnceCallback<void(extensions::ExtensionHost*)> callback) {
++  OACTab* tab = OACTabForWebContents(contents);
++  OACProfile* profile = tab.profile;
++  if (!tab || !profile.valid) {
++    return false;
++  }
++  OACProfile* original = profile.originalProfile ?: profile;
++  OACExtensions* extensions = original.extensions;
++  return extensions && [extensions openPopupForAPIOfExtension:extension
++                                                        onTab:tab
++                                                     callback:std::move(
++                                                                  callback)];
++}
++
+ // The bridge profile (or its off-the-record variant) of a Chrome profile.
+ OACProfile* BridgeProfileForExtensions(Profile* profile) {
+   if (!profile) {
+@@ -1365,4 +1672,8 @@ void OACInstallExtensionHooks() {
+       base::BindRepeating(&ListTabs));
+   extensions::ExtensionTabUtil::SetEmbedderTabOpener(
+       base::BindRepeating(&OpenTabForExtension));
++  extensions::ExtensionTabUtil::SetEmbedderWindowList(
++      base::BindRepeating(&ListWindows));
++  extensions::ExtensionTabUtil::SetEmbedderActionPopupOpener(
++      base::BindRepeating(&OpenPopupForExtensionAPI));
+ }
+diff --git a/openarc/bridge/oac_extensions_internal.h b/openarc/bridge/oac_extensions_internal.h
+index f3df5554f406..546d23462a89 100644
+--- a/openarc/bridge/oac_extensions_internal.h
++++ b/openarc/bridge/oac_extensions_internal.h
+@@ -22,7 +22,7 @@ class ExtensionCommandRegistry;
+ // Plan C26: the profile's extension keyboard commands (nullptr once invalid).
+ - (openarc::ExtensionCommandRegistry*)commandRegistry;
+ // An `_execute_action` shortcut: runs the action on |tab| and hands its popup,
+-// if any, to the delegate (-extensions:didOpenPopup:fromKeyboardOnTab:).
++// if any, to the delegate (-extensions:didOpenPopup:onTab:).
+ - (void)runActionFromKeyboardOfExtension:(NSString*)extensionIdentifier
+                                    onTab:(OACTab*)tab;
+ @end
+@@ -31,7 +31,9 @@ class ExtensionCommandRegistry;
+ // install confirmation (ExtensionInstallPrompt's embedder dialog), the
+ // embedder tab list of chrome.tabs.query, and (plan C31) the embedder tab
+ // opener of chrome.tabs.create, chrome.windows.create and
+-// chrome.runtime.openOptionsPage. Called once when the engine starts.
++// chrome.runtime.openOptionsPage, (plan B126) the embedder window list of
++// chrome.windows.get* and (plan B125) the popup opener of
++// chrome.action.openPopup(). Called once when the engine starts.
+ void OACInstallExtensionHooks();
+ 
+ #endif  // OPENARC_BRIDGE_OAC_EXTENSIONS_INTERNAL_H_
+diff --git a/openarc/bridge/public/OpenArcCore/OACExtensions.h b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+index 36cf46095519..3bcb1e5fff39 100644
+--- a/openarc/bridge/public/OpenArcCore/OACExtensions.h
++++ b/openarc/bridge/public/OpenArcCore/OACExtensions.h
+@@ -22,8 +22,8 @@
+ // Keyboard commands (plan C26): the manifest's `commands` work while a tab of the profile has the
+ // keyboard, as in Chrome: a named command sends `commands.onCommand` with that tab (and grants
+ // activeTab when the extension asks for it); `_execute_action` runs the action on the tab and its
+-// popup comes to the delegate (`-extensions:didOpenPopup:fromKeyboardOnTab:`). Shortcuts are set
+-// in chrome://extensions/shortcuts. Global (system-wide) commands are not registered.
++// popup comes to the delegate (`-extensions:didOpenPopup:onTab:`). Shortcuts are set in
++// chrome://extensions/shortcuts. Global (system-wide) commands are not registered.
+ //
+ // Runtime errors (plan C26): with developer mode on, Chromium's error console collects them for
+ // every extension (all of an unpacked one's, and errors of others once their "Collect errors"
+@@ -37,9 +37,21 @@
+ // Moving tabs between windows, incognito windows and window ids other than the current one are
+ // errors for the extension.
+ //
+-// Not covered: the extension context menu, side panels, `chrome.action.openPopup()` and the rest
+-// of `chrome.windows.*` (no window objects): they fail as in a Chrome without windows. "Manage
+-// Extensions…" opens chrome://extensions in a tab until a native page exists.
++// Windows (plan B126): the shell reports its windows (`OACExtensions.windows`, most recently
++// focused first). `chrome.windows.get`, `getCurrent`, `getLastFocused` and `getAll` answer with
++// them (id, focused, bounds, type normal or popup, their tabs); the tabs carry the window's id
++// (`tab.windowId`, `tabs.query({windowId})`), and `tabs.query({currentWindow: true})` means the
++// most recently focused window. A window belongs to one profile: an incognito window to the
++// off-the-record profile only. Window events (`windows.onFocusChanged` …), `windows.update` and
++// `windows.remove` are not covered.
++//
++// `chrome.action.openPopup()` (plan B125) opens the popup over the active tab of the most recently
++// focused window, when that window is focused, and hands it to the delegate like a keyboard
++// shortcut's popup (`-extensions:didOpenPopup:onTab:`); the call resolves once the popup's page
++// loaded. It fails while another popup is open, as in Chrome.
++//
++// Not covered: side panels and the rest of `chrome.windows.*`: they fail as in a Chrome without
++// windows. "Manage Extensions…" opens chrome://extensions in a tab until a native page exists.
+ 
+ #import <OpenArcCore/OACDefines.h>
+ 
+@@ -145,6 +157,32 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ + (instancetype)new NS_UNAVAILABLE;
+ @end
+ 
++/// One of the shell's windows as extensions see it (`chrome.windows`, plan B126). The shell makes
++/// one per window it reports in `OACExtensions.windows`.
++OAC_EXPORT NS_SWIFT_UI_ACTOR
++@interface OACExtensionWindow : NSObject
++/// Stable for the window's life: the bridge gives each identifier one Chromium window id.
++@property (nonatomic, readonly, copy) NSUUID *identifier;
++/// The profile the window's tabs belong to; an incognito window passes the off-the-record profile.
++/// nil once the profile is gone (the window is then left out).
++@property (nonatomic, readonly, weak, nullable) OACProfile *profile;
++/// The window is the key window.
++@property (nonatomic, getter=isFocused) BOOL focused;
++/// A popup window (`type: "popup"`), else a normal one.
++@property (nonatomic, getter=isPopup) BOOL popup;
++/// The window's frame in AppKit screen coordinates (points, origin at the bottom left of the main
++/// screen), as `NSWindow.frame`. Extensions get it flipped, as Chrome reports bounds.
++@property (nonatomic) CGRect frame;
++/// The window's tabs in its order. Each tab belongs to one window: a tab listed by several takes
++/// the id of the first one in `OACExtensions.windows`. Held weakly: closed tabs drop out.
++@property (nonatomic, copy) NSArray<OACTab *> *tabs;
++/// The tabs it shows (the selected tab, or the panes of a split view); a subset of `tabs`.
++@property (nonatomic, copy) NSArray<OACTab *> *activeTabs;
++- (instancetype)initWithIdentifier:(NSUUID *)identifier profile:(OACProfile *)profile NS_DESIGNATED_INITIALIZER;
++- (instancetype)init NS_UNAVAILABLE;
+++ (instancetype)new NS_UNAVAILABLE;
++@end
++
+ NS_SWIFT_UI_ACTOR
+ @protocol OACExtensionsDelegate <NSObject>
+ @optional
+@@ -154,9 +192,11 @@ NS_SWIFT_UI_ACTOR
+ - (void)extensions:(OACExtensions *)extensions didUpdateActionOfExtension:(NSString *)extensionIdentifier tab:(nullable OACTab *)tab;
+ /// Chromium wants to confirm an install. Return YES to show UI and answer later, NO to cancel.
+ - (BOOL)extensions:(OACExtensions *)extensions confirmInstall:(OACExtensionInstallRequest *)request;
+-/// An extension's `_execute_action` shortcut opened its popup on `tab` (plan C26). The shell shows
+-/// it as after `-runActionOfExtension:onTab:`. Without this method the popup is closed.
+-- (void)extensions:(OACExtensions *)extensions didOpenPopup:(OACExtensionPopup *)popup fromKeyboardOnTab:(OACTab *)tab;
++/// An extension opened its popup on `tab` without a call to `-runActionOfExtension:onTab:`: its
++/// `_execute_action` shortcut (plan C26) or `chrome.action.openPopup()` (plan B125). The shell
++/// shows it as after `-runActionOfExtension:onTab:`. Without this method the popup is closed (and
++/// `openPopup()` fails).
++- (void)extensions:(OACExtensions *)extensions didOpenPopup:(OACExtensionPopup *)popup onTab:(OACTab *)tab;
+ /// An extension's error count changed (plan C26, `OACExtensionInfo.errorCount`).
+ - (void)extensions:(OACExtensions *)extensions didChangeErrorsOfExtension:(NSString *)extensionIdentifier;
+ @end
+@@ -184,6 +224,12 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ /// The open popup, if any.
+ @property (nonatomic, readonly, nullable) OACExtensionPopup *popup;
+ 
++/// The shell's windows for every profile, most recently focused first (plan B126). The shell sets
++/// the whole list again whenever a window opens, closes, gains or loses focus, moves, or changes
++/// its tabs or the tab it shows. Empty until then: `chrome.windows.get*` finds no window and every
++/// tab counts as in the current window.
++@property (class, nonatomic, copy) NSArray<OACExtensionWindow *> *windows;
++
+ /// Installs from the Web Store by id. Chromium asks through `-extensions:confirmInstall:` (with no
+ /// tab). The store page's own "Add to …" button takes the store's install flow instead.
+ - (void)installFromWebStoreWithIdentifier:(NSString *)extensionIdentifier

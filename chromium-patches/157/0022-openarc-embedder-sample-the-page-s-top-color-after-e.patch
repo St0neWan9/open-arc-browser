@@ -1,0 +1,575 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 26 Oct 2026 09:33:59 -0700
+Subject: [PATCH] openarc: embedder: sample the page's top color after each
+ load
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plan B45 (docs/arc-spec/06-flows.md §17.4, E18): the web toolbar takes the
+rendered color at the top-right of the visible page, sampled once per
+finished main-frame load (navigation, reload; at the scroll position of that
+moment), not on scroll or later style changes; a classic scrollbar at the
+right edge makes the shell use its neutral fallback instead.
+
+openarc/browser/openarc_page_top_color.{h,mm}: PageTopColorSampler, a
+WebContentsObserver. After a committed cross-document main-frame navigation
+finishes loading, it measures the classic scrollbar's width in an isolated
+world (innerWidth - scrollingElement.clientWidth), waits for a visual state
+round trip, then copies a 3 x 12 DIP area at the view's top-right corner with
+RenderWidgetHostView::CopyFromSurface, converts it to sRGB (the copy is in the
+display's color space) and averages it. Hidden tabs are sampled when shown;
+failed copies are retried a few times.
+
+OACTabState gains pageTopColorKind / pageTopColor and the delegate
+-tabDidSamplePageTopColor:. Without this patch the shell has no page color
+and the toolbar can only show its neutral color.
+---
+ openarc/BUILD.gn                              |   2 +
+ openarc/bridge/oac_tab.mm                     |  42 +++
+ openarc/bridge/oac_tab_internal.h             |   3 +
+ openarc/bridge/oac_values.mm                  |   8 +
+ openarc/bridge/public/OpenArcCore/OACTab.h    |  16 ++
+ .../public/OpenArcCore/OACTabDelegate.h       |   2 +
+ openarc/browser/openarc_page_top_color.h      |  89 +++++++
+ openarc/browser/openarc_page_top_color.mm     | 239 ++++++++++++++++++
+ 8 files changed, 401 insertions(+)
+ create mode 100644 openarc/browser/openarc_page_top_color.h
+ create mode 100644 openarc/browser/openarc_page_top_color.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index fad1625df7f9..4c3e37de38f9 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -196,6 +196,8 @@ source_set("bridge") {
+               "bridge/oac_tab.mm",
+               "bridge/oac_tab_internal.h",
+               "bridge/oac_values.mm",
++              "browser/openarc_page_top_color.h",
++              "browser/openarc_page_top_color.mm",
+             ]
+   public_configs = [ ":openarc_public_config" ]
+   deps = [
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 11002026f689..336fd0b3f999 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -82,6 +82,7 @@
+ #import "openarc/bridge/oac_tab_internal.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_page_tools.h"
++#include "openarc/browser/openarc_page_top_color.h"
+ #include "openarc/browser/openarc_tab_helpers.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
+ 
+@@ -142,6 +143,7 @@ - (void)webContentsDidRequestClose;
+ - (void)faviconDriverDidUpdateIcon:(const GURL&)iconURL
+                              image:(const gfx::Image&)image;
+ - (void)webContentsDidChangeThemeColor;
++- (void)pageTopColorSampled:(openarc::PageTopColorKind)kind color:(SkColor)color;
+ - (void)webContentsDidToggleFullscreen:(BOOL)isFullscreen;
+ - (void)webContentsDidHoverURL:(const GURL&)url;
+ - (void)webContentsDidRequestActivation;
+@@ -499,6 +501,10 @@ @implementation OACTab {
+   __weak id<OACDialogDelegate> _dialogDelegate;
+   std::unique_ptr<content::WebContents> _webContents;
+   std::unique_ptr<openarc::TabWebContentsBridge> _bridge;
++  // Samples the page's top-right color after each load (plan B45).
++  std::unique_ptr<openarc::PageTopColorSampler> _pageTopColorSampler;
++  OACPageTopColorKind _pageTopColorKind;
++  OACColor _pageTopColor;
+   std::unique_ptr<openarc::TabJavaScriptDialogManager> _dialogManager;
+   OACTabStateFields _fields;
+   OACTabState* _state;
+@@ -619,6 +625,12 @@ - (void)setUpWithWebContents:(std::unique_ptr<content::WebContents>)contents
+   _dialogManager = std::make_unique<openarc::TabJavaScriptDialogManager>(self);
+   _bridge =
+       std::make_unique<openarc::TabWebContentsBridge>(self, _webContents.get());
++  __weak OACTab* weakSelf = self;
++  _pageTopColorSampler = std::make_unique<openarc::PageTopColorSampler>(
++      _webContents.get(),
++      base::BindRepeating(^(openarc::PageTopColorKind kind, SkColor color) {
++        [weakSelf pageTopColorSampled:kind color:color];
++      }));
+   _preferredColorScheme = colorScheme;
+   openarc::OpenArcTabPreferences::CreateForWebContents(_webContents.get());
+   openarc::OpenArcTabPreferences::FromWebContents(_webContents.get())
+@@ -642,6 +654,7 @@ - (void)dealloc {
+   for (OACNewTabRequest* request in _pendingRequests) {
+     [request decline];
+   }
++  _pageTopColorSampler.reset();
+   _bridge.reset();
+   _webContents.reset();
+   _dialogManager.reset();
+@@ -764,6 +777,8 @@ - (OACTabStateFields)refreshState {
+   _fields.fullscreen = contents->IsFullscreen();
+   _fields.faviconURL = _faviconURL;
+   _fields.faviconPNGData = _faviconPNGData;
++  _fields.pageTopColorKind = _pageTopColorKind;
++  _fields.pageTopColor = _pageTopColor;
+   const std::optional<SkColor> theme = contents->GetThemeColor();
+   _fields.hasThemeColor = theme.has_value();
+   _fields.themeColor =
+@@ -885,6 +900,32 @@ - (void)webContentsDidChangeThemeColor {
+   [self webContentsDidChangeState];
+ }
+ 
++// Plan B45: a finished load was sampled. Posted like every state change; the
++// delegate reads the new value from `state`.
++- (void)pageTopColorSampled:(openarc::PageTopColorKind)kind color:(SkColor)color {
++  if (_closed) {
++    return;
++  }
++  _pageTopColorKind = kind == openarc::PageTopColorKind::kScrollbar
++                          ? OACPageTopColorKindScrollbar
++                          : OACPageTopColorKindColor;
++  _pageTopColor =
++      kind == openarc::PageTopColorKind::kScrollbar
++          ? OACColor{0, 0, 0, 0}
++          : OACColor{SkColorGetR(color) / 255.0, SkColorGetG(color) / 255.0,
++                     SkColorGetB(color) / 255.0, 1.0};
++  [self webContentsDidChangeState];
++  __weak OACTab* weakSelf = self;
++  OACPostToMainThread(^{
++    OACTab* tab = weakSelf;
++    id<OACTabDelegate> delegate = tab.delegate;
++    if (tab && !tab.isClosed &&
++        [delegate respondsToSelector:@selector(tabDidSamplePageTopColor:)]) {
++      [delegate tabDidSamplePageTopColor:tab];
++    }
++  });
++}
++
+ - (void)webContentsDidToggleFullscreen:(BOOL)isFullscreen {
+   [self webContentsDidChangeState];
+ }
+@@ -1524,6 +1565,7 @@ - (void)close {
+   }
+   [_pendingRequests removeAllObjects];
+   _dialogManager->CancelDialogs(_webContents.get(), /*reset_state=*/true);
++  _pageTopColorSampler.reset();
+   _bridge.reset();
+   _webContents.reset();
+   [LiveTabs() removeObjectForKey:_identifier];
+diff --git a/openarc/bridge/oac_tab_internal.h b/openarc/bridge/oac_tab_internal.h
+index 071371d6d5fd..70209344b9c1 100644
+--- a/openarc/bridge/oac_tab_internal.h
++++ b/openarc/bridge/oac_tab_internal.h
+@@ -33,6 +33,9 @@ struct OACTabStateFields {
+   NSData* faviconPNGData = nil;
+   bool hasThemeColor = false;
+   OACColor themeColor = {0, 0, 0, 0};
++  // Plan B45 (openarc/browser/openarc_page_top_color.h).
++  OACPageTopColorKind pageTopColorKind = OACPageTopColorKindNone;
++  OACColor pageTopColor = {0, 0, 0, 0};
+ };
+ 
+ @interface OACTabState ()
+diff --git a/openarc/bridge/oac_values.mm b/openarc/bridge/oac_values.mm
+index 57b28a9e04ba..fa473dc8feb0 100644
+--- a/openarc/bridge/oac_values.mm
++++ b/openarc/bridge/oac_values.mm
+@@ -186,6 +186,14 @@ - (OACColor)themeColor {
+   return _fields.themeColor;
+ }
+ 
++- (OACPageTopColorKind)pageTopColorKind {
++  return _fields.pageTopColorKind;
++}
++
++- (OACColor)pageTopColor {
++  return _fields.pageTopColor;
++}
++
+ - (id)copyWithZone:(NSZone*)zone {
+   return self;
+ }
+diff --git a/openarc/bridge/public/OpenArcCore/OACTab.h b/openarc/bridge/public/OpenArcCore/OACTab.h
+index 883de735f75e..a943778da238 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTab.h
++++ b/openarc/bridge/public/OpenArcCore/OACTab.h
+@@ -99,6 +99,16 @@ typedef NS_OPTIONS(NSUInteger, OACCaptureState) {
+     OACCaptureStateScreen = 1 << 2,
+ };
+ 
++/// What `OACTabState.pageTopColor` holds (plan B45). Maps to `PageTopColor?`.
++typedef NS_ENUM(NSInteger, OACPageTopColorKind) {
++    /// No finished load was sampled yet (or the copy failed).
++    OACPageTopColorKindNone = 0,
++    /// `pageTopColor` is the rendered color at the top-right of the visible page.
++    OACPageTopColorKindColor = 1,
++    /// The sample would land on a classic (always shown) scrollbar; the shell uses its fallback.
++    OACPageTopColorKindScrollbar = 2,
++};
++
+ /// Immutable snapshot of a tab's observable state. Maps to `BrowserTabState`; the fields that
+ /// `BrowserTabState` lacks are listed in SWIFT_PROTOCOL_CHANGES.md §6.
+ OAC_EXPORT NS_SWIFT_SENDABLE
+@@ -146,6 +156,12 @@ OAC_EXPORT NS_SWIFT_SENDABLE
+ /// The page's `<meta name="theme-color">`, if any (plan C17).
+ @property (nonatomic, readonly) BOOL hasThemeColor;
+ @property (nonatomic, readonly) OACColor themeColor;
++/// The color at the top-right of the visible page (the top row of the viewport, at its right
++/// end, inside any classic scrollbar), averaged over a 2 × 2 device-pixel area, sampled once each
++/// time a main-frame load finishes (navigation, reload) and not on scroll or later style changes
++/// (plan B45; [06 §17.4] observed). Opaque sRGB; valid only for `OACPageTopColorKindColor`.
++@property (nonatomic, readonly) OACPageTopColorKind pageTopColorKind;
++@property (nonatomic, readonly) OACColor pageTopColor;
+ 
+ - (instancetype)init NS_UNAVAILABLE;
+ + (instancetype)new NS_UNAVAILABLE;
+diff --git a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+index e8bb8e7f45f5..c3474cc8977c 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
++++ b/openarc/bridge/public/OpenArcCore/OACTabDelegate.h
+@@ -140,6 +140,8 @@ NS_SWIFT_UI_ACTOR
+ - (void)tab:(OACTab *)tab didChangeCaptureState:(OACCaptureState)captureState;
+ /// `<meta name="theme-color">` appeared, changed or went away (plan C17).
+ - (void)tab:(OACTab *)tab didChangeThemeColor:(OACColor)color hasThemeColor:(BOOL)hasThemeColor;
++/// A finished load was sampled: `tab.state.pageTopColorKind` / `pageTopColor` changed (plan B45).
++- (void)tabDidSamplePageTopColor:(OACTab *)tab;
+ /// The page entered or left HTML fullscreen. The shell hides the sidebar and makes the window full
+ /// screen (inferred; the spec records no page-fullscreen behavior).
+ - (void)tab:(OACTab *)tab didChangeFullscreen:(BOOL)isFullscreen;
+diff --git a/openarc/browser/openarc_page_top_color.h b/openarc/browser/openarc_page_top_color.h
+new file mode 100644
+index 000000000000..de3250c9ac2c
+--- /dev/null
++++ b/openarc/browser/openarc_page_top_color.h
+@@ -0,0 +1,89 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_PAGE_TOP_COLOR_H_
++#define OPENARC_BROWSER_OPENARC_PAGE_TOP_COLOR_H_
++
++#include "base/functional/callback.h"
++#include "base/memory/weak_ptr.h"
++#include "base/values.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "third_party/skia/include/core/SkColor.h"
++
++namespace openarc {
++
++// What a sample found at the top-right of the visible page (plan B45).
++enum class PageTopColorKind {
++  // A rendered page color (`color`).
++  kColor,
++  // A classic (always shown) scrollbar sits at the right edge of the viewport,
++  // so the sample would land on its track: the shell uses its fallback color.
++  kScrollbar,
++};
++
++// Samples the color the web toolbar takes from the page ([06 §17.4] observed
++// in Arc 1.170.0): the rendered color at the top row of the visible page, at
++// its right end, once every time a main-frame load finishes (navigation,
++// reload; at the scroll position of that moment). Scrolling and later style
++// changes do not trigger a new sample. When a classic scrollbar occupies the
++// right edge, the result is kScrollbar instead.
++//
++// How: when loading stops, a script in an isolated world reads the classic
++// scrollbar's width (window.innerWidth − documentElement.clientWidth; 0 with
++// overlay scrollbars or `::-webkit-scrollbar { display: none }`), a visual
++// state round trip makes sure the finished page's frame reached the
++// compositor, then CopyFromSurface copies a small area at the top-right corner
++// of the view and averages it. A tab that finishes loading while hidden is
++// sampled when it is next shown.
++class PageTopColorSampler : public content::WebContentsObserver {
++ public:
++  using Callback =
++      base::RepeatingCallback<void(PageTopColorKind kind, SkColor color)>;
++
++  // The sample area, in DIP, anchored at the top-right corner of the view.
++  // inferred: [06 §17.4] gives "a ~1–2 px area" with the exact size unknown;
++  // 3 × 12 reproduces both edge probes of the capture: a 2 px black strip at
++  // the right edge of a red band gave #540000 (one third red), a 1 px black
++  // line at the top of a red band gave #E92721 (about 11/12 red).
++  static constexpr int kSampleWidth = 3;
++  static constexpr int kSampleHeight = 12;
++
++  PageTopColorSampler(content::WebContents* web_contents, Callback callback);
++  PageTopColorSampler(const PageTopColorSampler&) = delete;
++  PageTopColorSampler& operator=(const PageTopColorSampler&) = delete;
++  ~PageTopColorSampler() override;
++
++  // content::WebContentsObserver:
++  void DidFinishNavigation(content::NavigationHandle* handle) override;
++  void DidStopLoading() override;
++  void OnVisibilityChanged(content::Visibility visibility) override;
++  void PrimaryMainFrameRenderProcessGone(
++      base::TerminationStatus status) override;
++
++ private:
++  // Starts a sample for the current page (a new generation; older results in
++  // flight are dropped).
++  void Sample();
++  void DidMeasureScrollbar(int generation, base::Value result);
++  void DidSubmitVisualState(int generation, bool success);
++  void Copy(int generation);
++  void DidCopy(int generation, SkColor color, bool ok);
++  void RetryOrWait(int generation);
++
++  Callback callback_;
++  // Bumped by every Sample(); results of an older generation are ignored.
++  int generation_ = 0;
++  int attempts_ = 0;
++  // A cross-document main-frame navigation (or reload) committed and its
++  // load has not been sampled yet. Later loads of the same document (a
++  // subframe, a fetch that shows the spinner) do not sample again.
++  bool load_needs_sample_ = false;
++  // A load finished while the tab was hidden: sample when it is shown.
++  bool pending_until_visible_ = false;
++  base::WeakPtrFactory<PageTopColorSampler> weak_factory_{this};
++};
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_PAGE_TOP_COLOR_H_
+diff --git a/openarc/browser/openarc_page_top_color.mm b/openarc/browser/openarc_page_top_color.mm
+new file mode 100644
+index 000000000000..56a1b1abd5b9
+--- /dev/null
++++ b/openarc/browser/openarc_page_top_color.mm
+@@ -0,0 +1,239 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "openarc/browser/openarc_page_top_color.h"
++
++#include <algorithm>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/task/bind_post_task.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
++#include "chrome/common/chrome_isolated_world_ids.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/visibility.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "third_party/skia/include/core/SkColorSpace.h"
++#include "third_party/skia/include/core/SkImageInfo.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++
++namespace openarc {
++
++namespace {
++
++// Width of a classic scrollbar at the right edge of the viewport, in CSS
++// pixels: the layout viewport minus the scrolling element's client width
++// (quirks mode scrolls the body). 0 with overlay scrollbars and with
++// `::-webkit-scrollbar { display: none }`.
++constexpr char16_t kScrollbarWidthScript[] =
++    u"(() => { try {"
++    u" const e = document.scrollingElement || document.documentElement;"
++    u" if (!e) return 0;"
++    u" return Math.max(0, window.innerWidth - e.clientWidth);"
++    u" } catch (_) { return 0; } })()";
++
++// A difference this small is rounding at fractional zoom levels, not a
++// scrollbar (a classic scrollbar is 15 DIP, at least 3 CSS px at 500 %).
++constexpr int kScrollbarMinimumWidth = 2;
++
++// Copies that fail (the frame is not ready, the view is being resized) are
++// retried this many times, this far apart.
++constexpr int kMaxAttempts = 4;
++constexpr base::TimeDelta kRetryDelay = base::Milliseconds(150);
++constexpr base::TimeDelta kCopyTimeout = base::Seconds(2);
++
++// Averages the copied pixels in sRGB, composited over white (a page without
++// its own background is drawn on white). The copy comes in the display's
++// color space (Display P3 on most Macs); the shell paints the bar in sRGB, so
++// the pixels are converted first. Returns false for an empty bitmap.
++bool AverageColor(const SkBitmap& source, SkColor* out) {
++  if (source.drawsNothing() || source.width() <= 0 || source.height() <= 0) {
++    return false;
++  }
++  SkBitmap bitmap;
++  if (!bitmap.tryAllocPixels(SkImageInfo::Make(
++          source.width(), source.height(), kN32_SkColorType,
++          kUnpremul_SkAlphaType, SkColorSpace::MakeSRGB())) ||
++      !source.readPixels(bitmap.pixmap(), 0, 0)) {
++    return false;
++  }
++  double red = 0, green = 0, blue = 0;
++  const int count = bitmap.width() * bitmap.height();
++  for (int y = 0; y < bitmap.height(); ++y) {
++    for (int x = 0; x < bitmap.width(); ++x) {
++      const SkColor c = bitmap.getColor(x, y);
++      const double a = SkColorGetA(c) / 255.0;
++      red += SkColorGetR(c) * a + 255.0 * (1 - a);
++      green += SkColorGetG(c) * a + 255.0 * (1 - a);
++      blue += SkColorGetB(c) * a + 255.0 * (1 - a);
++    }
++  }
++  auto channel = [count](double sum) {
++    return static_cast<U8CPU>(std::clamp(sum / count + 0.5, 0.0, 255.0));
++  };
++  *out = SkColorSetRGB(channel(red), channel(green), channel(blue));
++  return true;
++}
++
++}  // namespace
++
++PageTopColorSampler::PageTopColorSampler(content::WebContents* web_contents,
++                                         Callback callback)
++    : content::WebContentsObserver(web_contents),
++      callback_(std::move(callback)) {}
++
++PageTopColorSampler::~PageTopColorSampler() = default;
++
++void PageTopColorSampler::DidFinishNavigation(
++    content::NavigationHandle* handle) {
++  if (handle->IsInPrimaryMainFrame() && handle->HasCommitted() &&
++      !handle->IsSameDocument()) {
++    load_needs_sample_ = true;
++  }
++}
++
++void PageTopColorSampler::DidStopLoading() {
++  if (!load_needs_sample_) {
++    return;
++  }
++  load_needs_sample_ = false;
++  if (web_contents()->GetVisibility() == content::Visibility::HIDDEN) {
++    // Hidden views produce no frames; sample once the tab is shown.
++    ++generation_;
++    pending_until_visible_ = true;
++    return;
++  }
++  Sample();
++}
++
++void PageTopColorSampler::OnVisibilityChanged(
++    content::Visibility visibility) {
++  if (visibility != content::Visibility::HIDDEN && pending_until_visible_ &&
++      !web_contents()->IsLoading()) {
++    Sample();
++  }
++}
++
++void PageTopColorSampler::PrimaryMainFrameRenderProcessGone(
++    base::TerminationStatus status) {
++  ++generation_;
++  pending_until_visible_ = false;
++}
++
++void PageTopColorSampler::Sample() {
++  pending_until_visible_ = false;
++  const int generation = ++generation_;
++  attempts_ = 0;
++  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
++  if (!frame || !frame->IsRenderFrameLive()) {
++    return;
++  }
++  frame->ExecuteJavaScriptInIsolatedWorld(
++      kScrollbarWidthScript,
++      base::BindOnce(&PageTopColorSampler::DidMeasureScrollbar,
++                     weak_factory_.GetWeakPtr(), generation),
++      ISOLATED_WORLD_ID_CHROME_INTERNAL);
++}
++
++void PageTopColorSampler::DidMeasureScrollbar(int generation,
++                                              base::Value result) {
++  if (generation != generation_) {
++    return;
++  }
++  int width = 0;
++  if (result.is_int()) {
++    width = result.GetInt();
++  } else if (result.is_double()) {
++    width = static_cast<int>(result.GetDouble());
++  }
++  if (width > kScrollbarMinimumWidth) {
++    // [06 §17.4] observed: with a classic scrollbar the toolbar falls back to
++    // the Space's neutral color.
++    callback_.Run(PageTopColorKind::kScrollbar, SK_ColorTRANSPARENT);
++    return;
++  }
++  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
++  if (!frame || !frame->IsRenderFrameLive()) {
++    return;
++  }
++  // Make sure the finished page's frame reached the compositor before copying.
++  frame->InsertVisualStateCallback(
++      base::BindOnce(&PageTopColorSampler::DidSubmitVisualState,
++                     weak_factory_.GetWeakPtr(), generation));
++}
++
++void PageTopColorSampler::DidSubmitVisualState(int generation, bool success) {
++  if (generation != generation_) {
++    return;
++  }
++  Copy(generation);
++}
++
++void PageTopColorSampler::Copy(int generation) {
++  content::RenderWidgetHostView* view =
++      web_contents()->GetRenderWidgetHostView();
++  if (!view || !view->IsSurfaceAvailableForCopy()) {
++    RetryOrWait(generation);
++    return;
++  }
++  const gfx::Size size = view->GetViewBounds().size();
++  if (size.width() < kSampleWidth || size.height() < kSampleHeight) {
++    RetryOrWait(generation);
++    return;
++  }
++  const gfx::Rect area(size.width() - kSampleWidth, 0, kSampleWidth,
++                       kSampleHeight);
++  // The copy may complete off the UI thread.
++  auto done = base::BindPostTask(
++      base::SingleThreadTaskRunner::GetCurrentDefault(),
++      base::BindOnce(&PageTopColorSampler::DidCopy,
++                     weak_factory_.GetWeakPtr(), generation));
++  view->CopyFromSurface(
++      area, gfx::Size(), kCopyTimeout,
++      base::BindOnce(
++          [](base::OnceCallback<void(SkColor, bool)> done,
++             const content::CopyFromSurfaceResult& result) {
++            SkColor color = SK_ColorTRANSPARENT;
++            const bool ok =
++                result.has_value() && AverageColor(result->bitmap, &color);
++            std::move(done).Run(color, ok);
++          },
++          std::move(done)));
++}
++
++void PageTopColorSampler::DidCopy(int generation, SkColor color, bool ok) {
++  if (generation != generation_) {
++    return;
++  }
++  if (!ok) {
++    RetryOrWait(generation);
++    return;
++  }
++  callback_.Run(PageTopColorKind::kColor, color);
++}
++
++void PageTopColorSampler::RetryOrWait(int generation) {
++  if (web_contents()->GetVisibility() == content::Visibility::HIDDEN) {
++    pending_until_visible_ = true;
++    return;
++  }
++  if (++attempts_ >= kMaxAttempts) {
++    return;
++  }
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&PageTopColorSampler::Copy, weak_factory_.GetWeakPtr(),
++                     generation),
++      kRetryDelay);
++}
++
++}  // namespace openarc
