@@ -10,7 +10,8 @@ languageLink.addEventListener('click', () => {
   languageLink.hash = location.hash;
 });
 const demo = document.querySelector('#browser-demo');
-const symbols = { work: '▦', life: '☀', ideas: '✳' };
+const symbols = { work: '▦', life: '☀' };
+const ideasSymbol = document.querySelector('button[data-space="ideas"] svg');
 function setLines(element, first, last) {
   element.replaceChildren(document.createTextNode(first), document.createElement('br'), document.createTextNode(last));
 }
@@ -19,7 +20,7 @@ document.querySelectorAll('button[data-space]').forEach(button => {
     const key = button.dataset.space;
     demo.dataset.space = key;
     document.querySelectorAll('button[data-space]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-    document.getElementById('space-symbol').textContent = symbols[key];
+    document.getElementById('space-symbol').replaceChildren(key === 'ideas' ? ideasSymbol.cloneNode(true) : document.createTextNode(symbols[key]));
     for (const [id, suffix] of Object.entries({ 'space-name':'name', 'folder-name':'folder', 'pinned-name':'pinned', 'selected-name':'selected', 'editor-kicker':'kicker' })) {
       document.getElementById(id).textContent = t(`demo.${key}.${suffix}`);
     }

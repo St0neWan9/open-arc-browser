@@ -6,6 +6,8 @@
 - LP2 — Done: Define the design system in English. DESIGN.md specifies visual tokens, typography, layout, components, responsive behavior, and localization.
 - LP4 — Done: Bind `open-arc.trentaml.com` as a Cloudflare custom domain. HTTPS requests to both language routes return HTTP 200 and match the deployed build.
 - LP3 — Done: Deploy an isolated Cloudflare preview and verify the live English and Chinese routes, assets, headers, and 404 behavior.
+- LP5 — Done: Replace decorative star glyphs with a rounded six-petal SVG bloom and outbound link arrows with consistent rounded-stroke SVGs. Preserve idea-space switching and accessible control names. Static checks and browser review passed.
+- LP6 — Concepts delivered: Create four Open Arc logo directions for user selection. Original previews and generation prompts are saved in `design/logo-exploration/`. Production logo selection is pending.
 
 ## Validation — November 4, 2026
 
@@ -20,5 +22,5 @@
 
 - English: https://open-arc.trentaml.com/
 - Simplified Chinese: https://open-arc.trentaml.com/zh/
-- Cloudflare deployment version: `a4a5b1c8-2ad6-4f48-9639-20e9ddb8dca0`.
+- Cloudflare deployment version: `4ba8b7f6-5687-47fe-8a51-b7ce3ef7a748`.
 - Acquisition buttons link to the public repository until a downloadable release exists.

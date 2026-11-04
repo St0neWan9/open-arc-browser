@@ -11,7 +11,7 @@ for(const [route,locale] of [['','en'],['zh','zh-CN']]){
  assert(html.includes(`lang="${locale}"`));assert(!html.includes('{{'));
  const ids=[...html.matchAll(/\bid="([^"]+)"/g)].map(x=>x[1]);assert.equal(ids.length,new Set(ids).size,'Unique element IDs');
  for(const match of html.matchAll(/href="#([^"]+)"/g))assert(ids.includes(match[1]),`Missing anchor ${match[1]}`);
- for(const match of html.matchAll(/(?:src|href)="(\/(?:assets\/[^"?]+|style\.css|script\.js))"/g))await access(path.join(root,'dist',match[1]));
+ for(const match of html.matchAll(/(?:src|href)="(\/(?:assets\/[^"?]+|style\.css|script\.js))"/g))await access(path.join(root,'dist',match[1].split('#')[0]));
  const data=JSON.parse(html.match(/<script id="locale-data" type="application\/json">(.*?)<\/script>/s)[1]);
  for(const space of ['work','life','ideas'])for(const suffix of ['name','folder','pinned','selected','kicker','title.first','title.last','description.first','description.last'])assert(data.strings[`demo.${space}.${suffix}`],`Missing demo string: ${locale}/${space}/${suffix}`);
  assert(!html.includes('releases/latest'),'No unavailable release links');

@@ -17,3 +17,19 @@ html[lang="zh-CN"] .hero h1{font-style:normal;line-height:1.2;letter-spacing:-.0
 /* Keep interactive demo controls comfortable on touch screens. */
 .space-controls{gap:2px}.space-controls button{width:44px;height:44px;min-width:44px;min-height:44px}
 @media(max-width:640px){.browser-sidebar{width:140px}.space-controls{gap:0}.theme-swatch{width:44px;height:44px}.theme-swatch::before{inset:13px}}
+
+/* Shared vector icons keep shapes consistent across platforms and locales. */
+.ui-icon{display:inline-block;width:1em;height:1em;flex:none;vertical-align:-.13em;overflow:visible}
+.direction-icon{width:1.1em;height:1.1em;vertical-align:-.18em}
+.button>.ui-icon,.button>span:has(.ui-icon),.text-link>span:has(.ui-icon){display:inline-flex;align-items:center;justify-content:center}
+.button .direction-icon{width:18px;height:18px}
+.nav-links .direction-icon,footer .direction-icon{margin-left:5px}
+.motif-icon{vertical-align:-.15em}
+.tiny-flower,.paper-star,.peek-flower,.closing-flower{line-height:0}
+.tiny-flower .motif-icon,.paper-star .motif-icon,.peek-flower .motif-icon,.closing-flower .motif-icon{vertical-align:0}
+.space-controls .motif-icon{width:18px;height:18px}
+.open-bracket span{display:flex;align-items:center}
+.easel-image>span{display:flex;align-items:center}
+.closing-flower{font-size:148px;right:9%;color:#9cacc36b;transform:rotate(-12deg)}
+@media(max-width:900px){.closing-flower{font-size:110px;right:3%}}
+@media(max-width:640px){.closing-flower{font-size:86px;right:-28px;opacity:.65}}

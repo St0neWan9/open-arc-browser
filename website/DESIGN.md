@@ -38,6 +38,9 @@ Warm, personal, spacious, and quietly playful. The visual system combines soft c
 - Avoid neon glows, ornamental 3D objects, and repeated generic card grids.
 - Limit strong gradients to broad atmospheric fields.
 - Keep decorative motifs small and purposeful.
+- Use the six-petal rounded bloom in `assets/icons.svg` for decorative floral accents and idea-space markers. Preserve the central cutout and the same silhouette at every size.
+- Directional link icons use a 24 px SVG view box with a 1.6 px stroke, rounded caps, and rounded joins. Render them at 18 px in primary buttons and about 1.1 em next to text.
+- Use vector icons for floral motifs and outbound arrows rather than font glyphs. Decorative SVGs are hidden from assistive technology; the surrounding control supplies the accessible name.
 - Use one source of visual depth per layer: a soft shadow, an overlap, or a color contrast.
 
 ## 3. Color system
