@@ -174,6 +174,11 @@ public final class SidebarViewModel: ObservableObject {
     var autoScrollTickInterval: Double = SidebarLocalTokens.autoScrollTickInterval
     /// Scroll hook of the list on screen (set by the list view, a fake in tests). Weak: the view owns it.
     weak var listScroller: (any SidebarListScrolling)?
+    /// The last scroll offset of each Space's list. The pinned sidebar and the floating one are
+    /// separate views that are rebuilt when shown; a new list starts here instead of at the top
+    /// (B162, user 2026-11-04: Arc keeps the list where it was). Not published: it is only read
+    /// when a list appears.
+    var listScrollOffsets: [UUID: CGFloat] = [:]
     /// Scroll state of the sidebar on screen (set by `SidebarView`; tests read its row bands).
     weak var listScrollState: SidebarListScrollState?
     /// Signed auto-scroll velocity of the last step (points per second, 0 = not scrolling).
@@ -739,7 +744,8 @@ public final class SidebarViewModel: ObservableObject {
             favicon: tab.icon == nil ? faviconImage(for: tab.id) : nil,
             splitPreview: splitPreviewSide(for: tab.id),
             isRenaming: renamingItemID == tab.id, showsRenameHint: showsPinRenameHint(tab.id),
-            isDropInto: dropTarget == .row(tab.id, .into), isIncognito: isIncognito)
+            isDropInto: dropTarget == .row(tab.id, .into), isIncognito: isIncognito,
+            isLoaded: live != nil)
     }
 
     /// What folder row `folder` draws now.

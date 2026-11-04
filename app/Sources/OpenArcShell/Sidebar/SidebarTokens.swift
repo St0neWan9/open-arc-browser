@@ -57,6 +57,9 @@ enum SidebarLocalTokens {
     static let rowAccessoryGlyphSize: CGFloat = 11
     static let rowAccessoryGlyphWeight: Font.Weight = .semibold
     static let rowAccessoryInkOpacity: Double = 0.7
+    /// The accessory's own hover fill and its corner radius. inferred (B162).
+    static let rowAccessoryHoverBlackOpacity: Double = 0.08
+    static let rowAccessoryHoverCornerRadius: CGFloat = 6
 
     /// The tab audio glyph between the favicon and the title. [05 §tab audio indicator] observed
     /// its place and that it draws in the row's ink; its cell width and the gap to the title are

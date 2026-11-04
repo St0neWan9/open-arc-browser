@@ -101,6 +101,9 @@ struct SidebarTabRowState: Equatable {
     /// The row is the "drop into" target of a drag (`SidebarRowInteraction`).
     var isDropInto = false
     var isIncognito = false
+    /// The tab has a page in the engine. A pinned row shows — while loaded and ✕ once unloaded
+    /// (B162).
+    var isLoaded = false
 }
 
 /// A tab row in the pinned area or in Today. States: normal, hover (darker fill + ✕ / —),
@@ -250,24 +253,58 @@ struct SidebarTabRowView: View, Equatable {
         (isHovering || isSelected) && !isRenaming
     }
 
+    /// What the trailing button does. [06 §16.1] observed: — on a loaded pinned row closes the page
+    /// and keeps the pin; ✕ archives the tab. B162 (user, 2026-11-04): an unloaded pinned row shows
+    /// ✕ and archives the tab, as Arc's two hover actions ("close and keep pinned" / "archive this
+    /// tab", inferred).
+    enum AccessoryAction: Equatable { case unloadKeepingPin, archive }
+
+    static func accessoryAction(area: SidebarArea, isLoaded: Bool) -> AccessoryAction {
+        area == .pinned && isLoaded ? .unloadKeepingPin : .archive
+    }
+
     @ViewBuilder
     private func accessory(textColor: Color) -> some View {
         if Self.showsAccessory(isHovering: isHovering, isSelected: row.isSelected, isRenaming: row.isRenaming) {
-            // ✕ archives a Today tab; — on a pinned row unloads the page and keeps the pin
-            // (`SidebarViewModel.unloadPinnedTab`). [06 §12], [06 §16.1] observed.
-            Button {
-                if area == .pinned { viewModel.unloadPinnedTab(tab.id) } else { viewModel.closeTab(tab.id) }
-            } label: {
-                Image(systemName: area == .pinned ? "minus" : "xmark")
-                    .font(.system(size: SidebarLocalTokens.rowAccessoryGlyphSize, weight: SidebarLocalTokens.rowAccessoryGlyphWeight))
-                    .foregroundStyle(textColor.opacity(SidebarLocalTokens.rowAccessoryInkOpacity))
-                    .frame(width: SidebarLocalTokens.rowAccessoryButtonSize, height: SidebarLocalTokens.rowAccessoryButtonSize)
-                    .contentShape(Rectangle())
+            let action = Self.accessoryAction(area: area, isLoaded: row.isLoaded)
+            SidebarRowAccessoryButton(symbol: action == .unloadKeepingPin ? "minus" : "xmark", textColor: textColor,
+                                      label: action == .unloadKeepingPin ? "Close and keep pinned" : "Archive tab") {
+                switch action {
+                case .unloadKeepingPin: viewModel.unloadPinnedTab(tab.id)
+                case .archive: viewModel.closeTab(tab.id)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(area == .pinned ? "Unload pinned tab" : "Archive tab")
             .accessibilityIdentifier("openarc.sidebar.row.accessory")
         }
+    }
+}
+
+/// The ✕ / — at a row's trailing end: a 26 pt target with a rounded fill under the pointer, so it
+/// reads as a button and is easy to hit (B162; the fill is inferred). The press is the button's:
+/// the sidebar's press-to-select leaves the trailing `rowAccessoryButtonSize` of a row alone.
+struct SidebarRowAccessoryButton: View {
+    let symbol: String
+    let textColor: Color
+    let label: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: SidebarLocalTokens.rowAccessoryGlyphSize, weight: SidebarLocalTokens.rowAccessoryGlyphWeight))
+                .foregroundStyle(textColor.opacity(SidebarLocalTokens.rowAccessoryInkOpacity))
+                .frame(width: SidebarLocalTokens.rowAccessoryButtonSize, height: SidebarLocalTokens.rowAccessoryButtonSize)
+                .background(
+                    RoundedRectangle(cornerRadius: SidebarLocalTokens.rowAccessoryHoverCornerRadius, style: .continuous)
+                        .fill(Color.black.opacity(isHovered ? SidebarLocalTokens.rowAccessoryHoverBlackOpacity : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 

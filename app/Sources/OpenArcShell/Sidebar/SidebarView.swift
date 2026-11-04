@@ -737,6 +737,13 @@ private struct SidebarListScrollProbe: NSViewRepresentable {
         let view = ProbeView()
         let hook = context.coordinator
         hook.onScroll = onScroll
+        if let spaceID, let offset = viewModel.listScrollOffsets[spaceID], offset > 0 {
+            hook.pendingRestoreOffset = offset
+        }
+        hook.onOffset = { [weak viewModel] offset in
+            guard let spaceID else { return }
+            viewModel?.listScrollOffsets[spaceID] = offset
+        }
         view.onMoveToWindow = { [weak hook] probe in
             guard let hook, let scrollView = probe.enclosingScrollView else { return }
             hook.scrollView = scrollView
@@ -782,6 +789,12 @@ final class SidebarNSScrollHook: SidebarListScrolling {
     }
     /// Reports scrolling and resizing of the clip view (bounds changes).
     var onScroll: @MainActor (SidebarScrollMetrics) -> Void = { _ in }
+    /// Records the offset after each scroll (`SidebarViewModel.listScrollOffsets`).
+    var onOffset: @MainActor (CGFloat) -> Void = { _ in }
+    /// An offset to return to once the content is tall enough (a rebuilt list, B162). Until then
+    /// the list's own offsets are not recorded, so its first report at the top does not overwrite it.
+    var pendingRestoreOffset: CGFloat?
+    private var restoreAttempts = 0
     private var observation: NSObjectProtocol?
 
     private func observe() {
@@ -796,7 +809,22 @@ final class SidebarNSScrollHook: SidebarListScrolling {
     }
 
     private func report() {
-        if let metrics { onScroll(metrics) }
+        guard let metrics else { return }
+        if let target = pendingRestoreOffset {
+            let reachable = metrics.contentHeight - metrics.viewportHeight
+            restoreAttempts += 1
+            if metrics.viewportHeight > 0, reachable >= target - 0.5 || restoreAttempts > 20 {
+                pendingRestoreOffset = nil
+                let offset = max(0, min(target, reachable))
+                if abs(metrics.offset - offset) > 0.5 {
+                    // The scroll reports again with the restored offset.
+                    scroll(toOffset: offset)
+                    return
+                }
+            }
+        }
+        if pendingRestoreOffset == nil { onOffset(metrics.offset) }
+        onScroll(metrics)
     }
 
     var metrics: SidebarScrollMetrics? {
