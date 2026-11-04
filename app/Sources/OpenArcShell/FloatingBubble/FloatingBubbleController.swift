@@ -41,6 +41,9 @@ struct FloatingBubbleRequest {
     var onDismiss: (FloatingBubbleDismissReason) -> Void
     /// Called after a `becomesKey` bubble became key.
     var onBecameKey: (() -> Void)? = nil
+    /// The bubble waits for an answer (a permission request): a click elsewhere or a switch to
+    /// another app leaves it up, and only Esc in its own window closes it. inferred.
+    var waitsForAnswer = false
 }
 
 extension View {
@@ -273,7 +276,7 @@ final class FloatingBubbleController: NSObject {
         guard monitors.isEmpty else { return }
         if let down = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
-                guard let self, let panel = self.panel, panel.isVisible else { return }
+                guard let self, let panel = self.panel, panel.isVisible, self.request?.waitsForAnswer != true else { return }
                 // By screen position: a press on the bubble may arrive with no window when the
                 // panel is not key. Menus opened from the bubble are their own windows: not outside.
                 let location = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) } ?? event.locationInWindow
@@ -285,7 +288,8 @@ final class FloatingBubbleController: NSObject {
         }) { monitors.append(down) }
         if let key = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             let handled = MainActor.assumeIsolated { () -> Bool in
-                guard let self, self.panel?.isVisible == true, event.keyCode == 53 else { return false }
+                guard let self, let panel = self.panel, panel.isVisible, event.keyCode == 53 else { return false }
+                if self.request?.waitsForAnswer == true, event.window !== panel.parent { return false }
                 self.dismiss(.escape)
                 return true
             }
@@ -293,7 +297,10 @@ final class FloatingBubbleController: NSObject {
         }) { monitors.append(key) }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dismiss(.appDeactivated) }
+            MainActor.assumeIsolated {
+                guard let self, self.request?.waitsForAnswer != true else { return }
+                self.dismiss(.appDeactivated)
+            }
         })
     }
 

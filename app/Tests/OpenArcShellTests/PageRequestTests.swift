@@ -10,8 +10,8 @@ import OpenArcSyncAPI
 /// Spec: [06 §13] observed new tabs at the top of Today; [06 §4] observed a Shift-click opening a
 /// new window with the tab in Today; [01 §View] observed Force Refresh the Page and the three Zoom
 /// items, [02] their keys. Placement next to the opener, popups as Today tabs, archiving on
-/// `window.close()`, per-tab dialog queues and the permission bubble placement are inferred
-/// (chromium-bridge/SWIFT_PROTOCOL_CHANGES.md §1–§4, WorkspaceController+PageRequests.swift).
+/// `window.close()` and per-tab dialog queues are inferred (chromium-bridge/SWIFT_PROTOCOL_CHANGES.md
+/// §1–§4, WorkspaceController+PageRequests.swift). The look of the prompts: WebPromptsB161Tests.
 @MainActor
 final class PageRequestTests: XCTestCase {
     private var engine: FakeEngine!
@@ -224,7 +224,7 @@ final class PageRequestTests: XCTestCase {
 
         request = try XCTUnwrap(center.current(for: live.id))
         XCTAssertEqual(DialogPresentation(request).style, .permissionBubble)
-        XCTAssertEqual(DialogPresentation(request).message, "Use your camera\nUse your microphone")
+        XCTAssertEqual(DialogPresentation(request).message, "Allow https://dialogs.example to use your camera and microphone?")
         center.answer(permission, with: DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false))
 
         request = try XCTUnwrap(center.current(for: live.id))
@@ -241,7 +241,7 @@ final class PageRequestTests: XCTestCase {
         XCTAssertEqual(live.dialogAnswers[confirm], .javaScript(JavaScriptDialogReply(accepted: false)))
         XCTAssertEqual(live.dialogAnswers[prompt], .javaScript(JavaScriptDialogReply(accepted: true, promptText: "Grace")))
         XCTAssertEqual(live.dialogAnswers[auth], .authentication(.proceed(username: "u", password: "p")))
-        XCTAssertEqual(live.dialogAnswers[permission], .permission(.allow(remember: false)))
+        XCTAssertEqual(live.dialogAnswers[permission], .permission(.allow(remember: true)))
         XCTAssertEqual(live.dialogAnswers[chooser], .fileChooser(.select([file])))
         XCTAssertEqual(live.dialogAnswers[external], .externalProtocol(.open(rememberForOrigin: true)))
     }
@@ -301,19 +301,6 @@ final class PageRequestTests: XCTestCase {
         XCTAssertEqual(DialogPresentation(request).buttons, ["Cancel", "Leave"])
         center.answer(request.id, with: DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false))
         try await waitUntil { self.model.workspace.tabs[id]?.meta.isTombstone == true }
-    }
-
-    /// The selected tab's permission prompt goes under the URL box while the sidebar shows;
-    /// otherwise it stays in the panel. inferred.
-    func testPermissionBubblePlacement() {
-        let tab = UUID(), other = UUID()
-        XCTAssertTrue(PermissionPromptPlacement.isUnderURLBox(tabID: tab, selectedTabID: tab, isSidebarVisible: true))
-        XCTAssertFalse(PermissionPromptPlacement.isUnderURLBox(tabID: tab, selectedTabID: tab, isSidebarVisible: false))
-        XCTAssertFalse(PermissionPromptPlacement.isUnderURLBox(tabID: other, selectedTabID: tab, isSidebarVisible: true))
-        let layout = MainWindowLayout(windowSize: CGSize(width: 1280, height: 800))
-        let origin = PermissionPromptPlacement.originUnderURLBox(in: layout)
-        XCTAssertEqual(origin.x, layout.addressFieldFrame.minX)
-        XCTAssertEqual(origin.y, layout.addressFieldFrame.maxY + PermissionPromptPlacement.gap)
     }
 
     // MARK: - Page commands (§4, View menu)

@@ -102,6 +102,7 @@ struct LittleArcBrowsingView: View {
             WebPanel(tab: model.liveTab, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient,
                      crashed: model.page.isCrashed ? CrashedPageState(reload: { model.reloadOrStop() }) : nil)
                 .environment(\.dialogCenter, model.dialogs)
+                .environment(\.dialogPalette, palette)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
                 .webPanelEdgeShadow(palette.appearance)
                 .padding([.horizontal, .bottom], LittleArcTokens.pageInset)
@@ -135,6 +136,8 @@ struct LittleArcBrowsingView: View {
         }
         .environment(\.windowSurface, surface)
         .background(WindowBackgroundView(palette: palette, surface: surface))
+        // A page's save offers show here like in a browser window. inferred.
+        .windowModalHost()
         .background(TranslucentWindowConfigurator { isFullScreen = $0 })
         // Traffic lights centered on the 47 pt bar: the main window's measured spot (center y 24,
         // [07 §2] observed) suits it; using it here is inferred.

@@ -47,50 +47,50 @@ final class PasswordAutofillShellTests: XCTestCase {
 
     // MARK: Save prompt
 
-    /// [00 §A] observed (shell-drawn); wording and buttons inferred from Chromium's save bubble.
-    func testSavePromptHangsUnderTheURLBoxAndSavesTheEditedUsername() async throws {
+    /// [06 §30] observed: a window card with no username or password line.
+    func testSavePromptIsAWindowCardAndSavesTheSubmittedUsername() async throws {
         let live = try await openPage("https://login.example")
         let center = model.controller.dialogs
         let id = live.simulatePasswordSavePrompt(username: "ada", passwordLength: 4)
         try await waitUntil { center.current(for: live.id) != nil }
         let request = try XCTUnwrap(center.current(for: live.id))
         let presentation = DialogPresentation(request)
-        XCTAssertEqual(presentation.style, .permissionBubble, "bubble under the URL box, like Chrome's anchored bubble")
-        XCTAssertEqual(presentation.title, "Save password?")
-        XCTAssertEqual(presentation.message, "Password: ••••")
-        XCTAssertEqual(presentation.fields, [.text(placeholder: "Username", initial: "ada")])
-        XCTAssertEqual(presentation.buttons, ["Never", "Not Now", "Save"])
-        center.answer(id, with: DialogPresentation.answer(for: request, button: 2, fieldValues: [" grace "], checkbox: false))
-        XCTAssertEqual(live.dialogAnswers[id], .passwordSave(.save(username: "grace")))
+        XCTAssertEqual(presentation.style, .saveCard)
+        XCTAssertEqual(presentation.title, "Save password for login.example?")
+        XCTAssertEqual(presentation.message, "That way, it’ll be auto-filled next time")
+        XCTAssertEqual(presentation.fields, [])
+        XCTAssertEqual(presentation.buttons, ["Never on this site", "No", "Save"])
+        center.answer(id, with: DialogPresentation.answer(for: request, button: 2, fieldValues: [], checkbox: false))
+        XCTAssertEqual(live.dialogAnswers[id], .passwordSave(.save(username: nil)))
         XCTAssertNil(center.current(for: live.id))
     }
 
+    /// [06 §30] observed for the save prompt; the update prompt's wording inferred.
     func testSavePromptButtons() async throws {
         let live = try await openPage("https://login.example")
         let center = model.controller.dialogs
         let save = live.simulatePasswordSavePrompt(username: "ada")
         try await waitUntil { center.current(for: live.id)?.id == save }
         var request = try XCTUnwrap(center.current(for: live.id))
-        // Unchanged username: nil (keep the submitted one).
-        XCTAssertEqual(DialogPresentation.answer(for: request, button: 2, fieldValues: ["ada"], checkbox: false), .passwordSave(.save(username: nil)))
-        XCTAssertEqual(DialogPresentation.answer(for: request, button: 1, fieldValues: ["ada"], checkbox: false), .passwordSave(.decline))
-        center.answer(save, with: DialogPresentation.answer(for: request, button: 0, fieldValues: ["ada"], checkbox: false))
+        XCTAssertEqual(DialogPresentation.answer(for: request, button: 2, fieldValues: [], checkbox: false), .passwordSave(.save(username: nil)))
+        XCTAssertEqual(DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false), .passwordSave(.decline))
+        center.answer(save, with: DialogPresentation.answer(for: request, button: 0, fieldValues: [], checkbox: false))
         XCTAssertEqual(live.dialogAnswers[save], .passwordSave(.neverForThisSite))
 
         let update = live.simulatePasswordSavePrompt(username: "ada", kind: .update)
         try await waitUntil { center.current(for: live.id)?.id == update }
         request = try XCTUnwrap(center.current(for: live.id))
-        XCTAssertEqual(DialogPresentation(request).title, "Update password?")
-        XCTAssertEqual(DialogPresentation(request).buttons, ["Not Now", "Update"])
+        XCTAssertEqual(DialogPresentation(request).title, "Update password for login.example?")
+        XCTAssertEqual(DialogPresentation(request).buttons, ["No", "Update"])
+        XCTAssertEqual(DialogPresentation.answer(for: request, button: 0, fieldValues: [], checkbox: false), .passwordSave(.decline))
         center.dismiss(update)
         XCTAssertEqual(live.dialogAnswers[update], .passwordSave(.dismiss))
     }
 
     // MARK: Address and card save prompts (C30)
 
-    /// Plan C30, [00 §A] observed (shell-drawn, style not captured): the address prompt hangs under
-    /// the URL box like the password prompt; Save stores the address and the next address field
-    /// offers it. Wording is ours (unknown).
+    /// Plan C30: the address prompt uses the password prompt's card ([06 §30] observed there, inferred
+    /// here); Save stores the address and the next address field offers it. Wording is ours (inferred).
     func testAddressPromptSavesAndIsOfferedNextTime() async throws {
         let live = try await openPage("https://shop.example")
         let center = model.controller.dialogs
@@ -100,11 +100,11 @@ final class PasswordAutofillShellTests: XCTestCase {
         try await waitUntil { center.current(for: live.id)?.id == id }
         let request = try XCTUnwrap(center.current(for: live.id))
         let presentation = DialogPresentation(request)
-        XCTAssertEqual(presentation.style, .permissionBubble)
+        XCTAssertEqual(presentation.style, .saveCard)
         XCTAssertEqual(presentation.title, "Save address?")
         XCTAssertTrue(presentation.message.contains("12 Example Street"))
         XCTAssertTrue(presentation.message.contains("ada@example.test"))
-        XCTAssertEqual(presentation.buttons, ["No Thanks", "Save"])
+        XCTAssertEqual(presentation.buttons, ["No", "Save"])
         XCTAssertEqual(DialogPresentation.answer(for: request, button: 0, fieldValues: [], checkbox: false), .addressSave(.decline))
         center.answer(id, with: DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false))
         XCTAssertEqual(live.dialogAnswers[id], .addressSave(.save))
@@ -127,11 +127,11 @@ final class PasswordAutofillShellTests: XCTestCase {
         let presentation = DialogPresentation(try XCTUnwrap(center.current(for: live.id)))
         XCTAssertEqual(presentation.title, "Update address?")
         XCTAssertEqual(presentation.message, "Phone: +1 555 0100")
-        XCTAssertEqual(presentation.buttons, ["No Thanks", "Update"])
+        XCTAssertEqual(presentation.buttons, ["No", "Update"])
     }
 
     /// Plan C30: the card prompt shows network, last four digits and expiry, never the number;
-    /// No Thanks saves nothing; Escape (dismiss) answers `.ignore`.
+    /// No saves nothing; closing it unanswered (dismiss) answers `.ignore`.
     func testCardPrompt() async throws {
         let live = try await openPage("https://shop.example")
         let center = model.controller.dialogs
@@ -140,7 +140,7 @@ final class PasswordAutofillShellTests: XCTestCase {
         try await waitUntil { center.current(for: live.id)?.id == id }
         let request = try XCTUnwrap(center.current(for: live.id))
         let presentation = DialogPresentation(request)
-        XCTAssertEqual(presentation.style, .permissionBubble)
+        XCTAssertEqual(presentation.style, .saveCard)
         XCTAssertEqual(presentation.title, "Save card?")
         XCTAssertEqual(presentation.message, "Visa ••••1111\nExpires 04/31\nAda Lovelace")
         XCTAssertFalse(presentation.message.contains("4111111111111111"))

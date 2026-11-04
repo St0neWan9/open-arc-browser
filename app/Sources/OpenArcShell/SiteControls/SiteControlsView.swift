@@ -57,23 +57,28 @@ struct SiteControlsURLBoxAccessories: View {
         let openSiteControls: () -> Void
 
         var body: some View {
-            if isHovering || model.isPresented || model.isLinkCopied || model.extensionPopup != nil {
-                URLBoxIconRow {
-                    URLBoxIconButton(symbol: model.isLinkCopied ? "checkmark" : "link",
-                                     label: model.isLinkCopied ? "Copied" : "Copy link",
-                                     id: URLBoxIconButton.copyLinkID, tint: tint) {
-                        model.copyLink()
+            PermissionPromptReader { prompt in
+                // A waiting permission request keeps the button its bubble hangs from. inferred.
+                if isHovering || model.isPresented || model.isLinkCopied || model.extensionPopup != nil || prompt != nil {
+                    URLBoxIconRow {
+                        URLBoxIconButton(symbol: model.isLinkCopied ? "checkmark" : "link",
+                                         label: model.isLinkCopied ? "Copied" : "Copy link",
+                                         id: URLBoxIconButton.copyLinkID, tint: tint) {
+                            model.copyLink()
+                        }
+                        .help(model.isLinkCopied ? "Copied" : "Copy Link")
+                    } siteControls: {
+                        URLBoxIconButton(symbol: "slider.horizontal.3", label: "Site controls",
+                                         id: URLBoxIconButton.siteControlsID, tint: tint, action: openSiteControls)
+                            .onHover { inside in inside ? model.pointerEntered() : model.pointerExited() }
+                            // Below the icon with an arrow pointing up at it, 12 pt below the icon,
+                            // centered on it. [07 §12] observed. Our own panel, not a popover (B42).
+                            .siteControlsBubble(model, isPresented: model.isPresented, palette: chrome)
+                            // Extension popups open from the same button (C14). inferred.
+                            .extensionPopupBubble(model, tabID: model.extensionPopup?.tabID, palette: chrome)
+                            // Permission requests too. [06 §30] observed.
+                            .permissionPromptBubble(prompt, palette: chrome, isHidden: model.isPresented)
                     }
-                    .help(model.isLinkCopied ? "Copied" : "Copy Link")
-                } siteControls: {
-                    URLBoxIconButton(symbol: "slider.horizontal.3", label: "Site controls",
-                                     id: URLBoxIconButton.siteControlsID, tint: tint, action: openSiteControls)
-                        .onHover { inside in inside ? model.pointerEntered() : model.pointerExited() }
-                        // Below the icon with an arrow pointing up at it, 12 pt below the icon,
-                        // centered on it. [07 §12] observed. Our own panel, not a popover (B42).
-                        .siteControlsBubble(model, isPresented: model.isPresented, palette: chrome)
-                        // Extension popups open from the same button (C14). inferred.
-                        .extensionPopupBubble(model, tabID: model.extensionPopup?.tabID, palette: chrome)
                 }
             }
         }

@@ -1,12 +1,14 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import OpenArcModel
 import OpenArcEngine
 import OpenArcDesign
 
-// SwiftUI drawing of engine dialog requests (C7b). Behavior and placement: DialogCenter.swift.
-// Sizes and colors are our own (the spec records none of these dialogs): unknown. Fonts follow the
-// sheet scale of [07 §3] (title Bold 17 is for full sheets; these small cards use the 13 / 14 pt
+// SwiftUI drawing of engine dialog requests (C7b). Behavior and placement: DialogCenter.swift. The
+// prompts [06 §30] records have files of their own (PageSaveCard.swift, SystemAlertPresenter.swift,
+// PermissionPromptBubble.swift). For the rest, sizes and colors are our own: unknown. Fonts follow
+// the sheet scale of [07 §3] (title Bold 17 is for full sheets; these small cards use the 13 / 14 pt
 // chrome sizes).
 
 /// Local tokens of the dialog views. All unknown.
@@ -26,28 +28,42 @@ private struct WindowDrawnPermissionTabKey: EnvironmentKey {
     static let defaultValue: EngineTabID? = nil
 }
 
+private struct DialogPaletteKey: EnvironmentKey {
+    static let defaultValue = ThemeDerivation.palette(for: nil as Theme?)
+}
+
 extension EnvironmentValues {
+    /// The palette of the window's prompts: the save card and the permission bubble follow the
+    /// Space's theme. [06 §30] observed.
+    var dialogPalette: ThemePalette {
+        get { self[DialogPaletteKey.self] }
+        set { self[DialogPaletteKey.self] = newValue }
+    }
+
     /// The dialog queues of the window's controller; nil draws no dialogs (previews).
     var dialogCenter: DialogCenter? {
         get { self[DialogCenterKey.self] }
         set { self[DialogCenterKey.self] = newValue }
     }
 
-    /// The tab whose permission bubble the window draws under the URL box; its web panel then
-    /// leaves the permission request alone.
+    /// The tab whose permission bubble hangs from the window's site controls button; its web panel
+    /// then leaves the permission request alone.
     var windowDrawnPermissionTab: EngineTabID? {
         get { self[WindowDrawnPermissionTabKey.self] }
         set { self[WindowDrawnPermissionTabKey.self] = newValue }
     }
 }
 
-/// Tab-modal dialogs over one web panel or split pane.
+/// The dialogs of one web panel or split pane: tab-modal ones over the panel, the others declared to
+/// the window from here, so they show exactly while the tab is on screen.
 struct TabDialogOverlay: View {
     @ObservedObject var center: DialogCenter
     let tabID: EngineTabID
     let windowDrawnPermissionTab: EngineTabID?
+    @Environment(\.dialogPalette) private var palette
 
     var body: some View {
+        let offer = saveOffer
         ZStack(alignment: .topLeading) {
             queuedDialog
             // The autofill dropdown (C13) floats under its field, beside any queued dialog.
@@ -56,6 +72,18 @@ struct TabDialogOverlay: View {
                     .id(popup.id)
             }
         }
+        // Centered in the window over the dimmed window. [06 §30] observed.
+        .windowModal(id: "pageSaveOffer.\(offer?.id.uuidString ?? "")", isPresented: offer != nil,
+                     size: offer.map { PageSaveCardPlan(DialogPresentation($0)).size } ?? Metrics.Dialog.deleteSpaceSize) {
+            if let offer {
+                PageSaveCard(center: center, request: offer, presentation: DialogPresentation(offer), palette: palette)
+            }
+        }
+    }
+
+    /// The head of the queue when it is a save offer.
+    private var saveOffer: EngineDialogRequest? {
+        center.current(for: tabID).flatMap { DialogPresentation($0).style == .saveCard ? $0 : nil }
     }
 
     @ViewBuilder
@@ -75,12 +103,16 @@ struct TabDialogOverlay: View {
                 .id(request.id)
             case .permissionBubble:
                 if windowDrawnPermissionTab != tabID {
-                    DialogCardView(center: center, request: request, presentation: presentation)
-                        .frame(width: PermissionPromptPlacement.bubbleWidth)
-                        .padding(PermissionPromptPlacement.panelInset)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    PermissionPromptInPanel(prompt: PendingPermissionPrompt(center: center, request: request), palette: palette)
                         .id(request.id)
                 }
+            case .saveCard:
+                // Declared to the window in `body`.
+                EmptyView()
+            case .systemAlert:
+                SystemAlertPresenter(center: center, request: request)
+                    .frame(width: 0, height: 0)
+                    .id(request.id)
             case .filePanel:
                 FileChooserPresenter(center: center, request: request)
                     .id(request.id)
@@ -100,23 +132,6 @@ struct TabDialogOverlay: View {
                 // Never queued (`DialogCenter.autofillPopups`, `DialogCenter.infoBarLists`).
                 EmptyView()
             }
-        }
-    }
-}
-
-/// The permission bubble (or the password save prompt, C13) under the sidebar's URL box, for the
-/// selected tab.
-struct PermissionBubbleUnderURLBox: View {
-    @ObservedObject var center: DialogCenter
-    let tabID: EngineTabID
-    let origin: CGPoint
-
-    var body: some View {
-        if let request = center.current(for: tabID), DialogPresentation(request).style == .permissionBubble {
-            DialogCardView(center: center, request: request, presentation: DialogPresentation(request))
-                .frame(width: PermissionPromptPlacement.bubbleWidth)
-                .offset(x: origin.x, y: origin.y)
-                .id(request.id)
         }
     }
 }

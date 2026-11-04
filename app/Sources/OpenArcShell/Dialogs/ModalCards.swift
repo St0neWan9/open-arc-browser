@@ -59,12 +59,16 @@ struct ModalCardButton: View {
     }
 }
 
-/// The card body shared by the sheets: background, padding, the button row at the lower right.
+/// The card body shared by the sheets: background, padding, the button row at the lower right and
+/// an optional button at the lower left, as far from the card's edge as the row on the right.
 struct ModalCard<Content: View>: View {
     let size: Size2D
     let palette: ThemePalette
+    /// Space between the buttons of the right-hand row.
+    var buttonSpacing: CGFloat = 10
     @ViewBuilder let content: () -> Content
     let buttons: () -> AnyView
+    var leadingButtons: (() -> AnyView)? = nil
 
     var body: some View {
         let d = Metrics.Dialog.self
@@ -73,9 +77,15 @@ struct ModalCard<Content: View>: View {
                 .padding(.leading, CGFloat(d.contentLeading))
                 .padding(.trailing, CGFloat(d.contentTrailing))
                 .frame(width: CGFloat(size.width), height: CGFloat(size.height), alignment: .topLeading)
-            HStack(spacing: 10) { buttons() }
+            HStack(spacing: buttonSpacing) { buttons() }
                 .padding(.trailing, CGFloat(d.contentTrailing))
                 .padding(.bottom, CGFloat(d.contentBottom))
+            if let leadingButtons {
+                leadingButtons()
+                    .padding(.leading, CGFloat(d.contentTrailing))
+                    .padding(.bottom, CGFloat(d.contentBottom))
+                    .frame(width: CGFloat(size.width), alignment: .leading)
+            }
         }
         .frame(width: CGFloat(size.width), height: CGFloat(size.height))
         .background(palette.dialogBackground.swiftUI)

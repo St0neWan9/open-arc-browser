@@ -124,14 +124,6 @@ struct MainWindowContent: View {
                 .animation(ShellMotion.commandBarPresence(isPresented: model.isCommandBarPresented),
                            value: model.isCommandBarPresented)
 
-                // The selected tab's permission prompt hangs under the URL box (inferred, C7b).
-                if let tabID = permissionTabUnderURLBox {
-                    PermissionBubbleUnderURLBox(
-                        center: model.controller.dialogs, tabID: tabID,
-                        origin: PermissionPromptPlacement.originUnderURLBox(in: layout)
-                    )
-                }
-
                 // Capture tools over the page and the web panel. [06 §24] observed. B51.
                 if !model.library.isActive {
                     PageCaptureLayer(capture: model.pageCapture, pageFrame: model.capturePageFrame(in: layout),
@@ -156,6 +148,7 @@ struct MainWindowContent: View {
             }
             .environment(\.windowSurface, surface)
             .environment(\.dialogCenter, model.controller.dialogs)
+            .environment(\.dialogPalette, palette)
             .environment(\.translationModel, model.translation)
             .environment(\.isWebToolbarShown, layout.isWebToolbarShown)
             .environment(\.webToolbarCopyToast, copyToast)
@@ -164,7 +157,7 @@ struct MainWindowContent: View {
             // The window command bar and onboarding cover the sidebar: presses go to them.
             .environment(\.sidebarAcceptsPointer, !(model.isCommandBarPresented && model.commandBarPaneTabID == nil)
                          && !model.controller.onboarding.isShown(in: model) && !isModalPresented)
-            .environment(\.windowDrawnPermissionTab, permissionTabUnderURLBox)
+            .environment(\.windowDrawnPermissionTab, permissionTabAtSiteControls)
             // ⌘S: web panel resize and sidebar slide on one fast ease-out. [07 §11] B40.
             .animation(ShellMotion.sidebarToggle, value: model.isSidebarVisible)
             // Peek slide: curve unknown, within the observed 0.3 s bound. [07 §11] B40.
@@ -212,14 +205,17 @@ struct MainWindowContent: View {
         MainWindowLayout.isBlankPage(hasSelectedTab: model.selectedLiveTab != nil, url: sidebar.selectedURL)
     }
 
-    /// The engine tab whose permission bubble goes under the URL box: the selected tab's, while
-    /// the sidebar shows and the Library is not up. inferred.
-    private var permissionTabUnderURLBox: EngineTabID? {
-        // With the web toolbar on the sidebar has no URL box: the tab's own panel draws the prompt. inferred (B43).
-        let visible = model.isSidebarVisible && !model.spaceFlow.isCreating && !model.library.isActive && !model.isWebToolbarShown
-        guard PermissionPromptPlacement.isUnderURLBox(tabID: sidebar.selectedTabID, selectedTabID: sidebar.selectedTabID, isSidebarVisible: visible) else {
-            return nil
-        }
+    /// The engine tab whose permission bubble hangs from a site controls button: the selected tab's,
+    /// while the URL box shows its controls (it has them for a page with a host) or the toolbar
+    /// shows, and the browser view is up. [06 §30] observed.
+    private var permissionTabAtSiteControls: EngineTabID? {
+        let isBrowserViewUp = !model.spaceFlow.isCreating && !model.library.isActive
+        let hasURLBoxControls = model.isSidebarVisible && !model.isWebToolbarShown
+            && SidebarURLBoxContent.make(url: sidebar.selectedURL) != .placeholder
+        guard isBrowserViewUp, PermissionPromptPlacement.isAtSiteControls(
+            tabID: sidebar.selectedTabID, selectedTabID: sidebar.selectedTabID,
+            hasURLBoxControls: hasURLBoxControls, isToolbarShown: model.isWebToolbarShown
+        ) else { return nil }
         return model.selectedLiveTab?.id
     }
 

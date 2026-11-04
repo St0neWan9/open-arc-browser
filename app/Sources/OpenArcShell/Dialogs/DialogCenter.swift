@@ -10,12 +10,22 @@ import OpenArcDesign
 // prompts (C22), client-certificate pickers (C25) and the WebAuthn dialog (C21) per tab (`BrowserTab.dialogRequests()`); this queue holds them per
 // tab and the views draw the head of each queue (TabDialogViews.swift).
 //
-// Decisions without evidence (the spec records none of these dialogs; all inferred):
+// Where each prompt shows ([06 §30] observed unless noted):
+// - The password save / update prompt is a card centered in the window over the dimmed window, like
+//   New Folder and Delete Space (`PageSaveCard`). The address / card save offers (C30) use the same
+//   card: inferred.
+// - JavaScript alert / confirm / prompt are system alert sheets on the window
+//   (`SystemAlertPresenter`). The beforeunload prompt comes the same way: inferred.
+// - Permission requests are a bubble from the site controls button of the URL box, or of the web
+//   toolbar while it shows (toolbar: inferred). Without such a button (hidden sidebar, inactive
+//   split pane, Peek, Little Arc) the same bubble sits at the top left of the tab's panel: inferred.
+//
+// Decisions without evidence (inferred):
 // - One FIFO queue per tab: a tab shows one dialog at a time, the next one after it is answered.
-// - Dialogs are tab-modal: they cover only that tab's web panel or split pane, never the window.
-// - Permission prompts, the password save prompt (C13) and the address / card save prompts (C30)
-//   are a bubble under the sidebar's URL box when the tab is the selected tab and the sidebar
-//   shows; otherwise at the top left of the tab's panel.
+// - A request shows only while its tab is on screen. Its card, sheet or bubble goes away with the
+//   tab and comes back, still unanswered, when the tab returns.
+// - The other dialogs (HTTP auth, external protocol, ...) are tab-modal: they cover only that tab's
+//   web panel or split pane, never the window.
 // - The autofill dropdown (C13) is not queued: one per tab, under its form field, beside whatever
 //   dialog shows.
 // - Engine info bars (C23, [00 §A] inferred) are not queued either: every open bar of a
@@ -185,14 +195,18 @@ public final class DialogCenter: ObservableObject {
 
 // MARK: - Presentation
 
-/// What a dialog shows, derived from its request. No UI types, so it is unit-testable. All texts
-/// are our own wording (the spec records none of these dialogs): unknown.
+/// What a dialog shows, derived from its request. No UI types, so it is unit-testable. Texts are
+/// [06 §30] observed where a comment says so; the rest are our own wording: unknown.
 public struct DialogPresentation: Equatable, Sendable {
     public enum Style: Equatable, Sendable {
         /// A card attached to the top of the tab's panel, over a dimmed page.
         case sheet
-        /// A bubble under the URL box (or at the panel's top left).
+        /// A bubble from the site controls button (or at the panel's top left). [06 §30] observed.
         case permissionBubble
+        /// A card centered in the window (`PageSaveCard`). [06 §30] observed.
+        case saveCard
+        /// A system alert sheet on the window (`SystemAlertPresenter`). [06 §30] observed.
+        case systemAlert
         /// The system open / save panel.
         case filePanel
         /// The autofill dropdown under a form field (C13; drawn by `AutofillDropdownView`).
@@ -218,6 +232,8 @@ public struct DialogPresentation: Equatable, Sendable {
     public var style: Style
     public var title: String
     public var message: String
+    /// SF Symbol of the prompts that show one (save cards, permission bubbles).
+    public var symbol: String?
     public var fields: [Field]
     /// Title of the "remember" / "suppress" checkbox, if the dialog has one.
     public var checkbox: String?
@@ -232,7 +248,8 @@ public struct DialogPresentation: Equatable, Sendable {
         case .javaScript(let dialog):
             fields = []
             checkbox = dialog.showsSuppressOption ? "Prevent this page from creating additional dialogs" : nil
-            style = .sheet
+            // "<origin> says", the message, Cancel / OK. [06 §30] observed.
+            style = .systemAlert
             switch dialog.kind {
             case .alert:
                 title = "\(site) says"
@@ -265,14 +282,14 @@ public struct DialogPresentation: Equatable, Sendable {
             checkbox = nil
             buttons = ["Cancel", "Sign In"]
         case .permission(let prompt):
+            // Two buttons, whatever the engine supports. [06 §30] observed.
             style = .permissionBubble
-            title = "\(site) wants to"
-            message = prompt.kinds.map(\.promptText).joined(separator: "\n")
+            title = ""
+            message = PermissionPromptText.sentence(origin: prompt.origin, kinds: prompt.kinds)
+            symbol = prompt.kinds.first?.promptSymbol
             fields = []
             checkbox = nil
-            // A one-time grant only where the engine supports it (Chromium: camera, microphone,
-            // location); otherwise "Allow" is the only grant. Chromium's semantics, inferred.
-            buttons = prompt.supportsAllowingOnce ? ["Don’t Allow", "Allow This Time", "Allow"] : ["Don’t Allow", "Allow"]
+            buttons = ["Not Now", "Allow"]
         case .fileChooser(let chooser):
             style = .filePanel
             title = chooser.mode == .save ? "Save" : "Open"
@@ -281,20 +298,21 @@ public struct DialogPresentation: Equatable, Sendable {
             checkbox = nil
             buttons = ["Cancel", chooser.mode == .save ? "Save" : "Open"]
         case .passwordSave(let prompt):
-            // Chrome anchors its save bubble to the address bar; Arc's address bar is the sidebar's
-            // URL box, so it hangs there like a permission prompt. Wording is Chrome's meaning in
-            // our words: unknown ([00 §A] records no style).
-            style = .permissionBubble
-            title = prompt.kind == .update ? "Update password?" : "Save password?"
-            message = "Password: " + String(repeating: "•", count: max(prompt.passwordLength, 1))
-            fields = [.text(placeholder: "Username", initial: prompt.username)]
+            // [06 §30] observed for the save prompt: the host without its port, no username or
+            // password line. The update prompt keeps that layout, with no "Never" (the engine treats
+            // it as a decline there) and our title and button: inferred.
+            style = .saveCard
+            let host = prompt.origin?.host ?? "this site"
+            title = prompt.kind == .update ? "Update password for \(host)?" : "Save password for \(host)?"
+            message = "That way, it’ll be auto-filled next time"
+            symbol = "key.fill"
+            fields = []
             checkbox = nil
-            buttons = prompt.kind == .update ? ["Not Now", "Update"] : ["Never", "Not Now", "Save"]
+            buttons = prompt.kind == .update ? ["No", "Update"] : ["Never on this site", "No", "Save"]
         case .addressSave(let prompt):
-            // C30: hangs under the URL box like the password prompt (Chrome anchors it to its
-            // address bar). [00 §A] observed: drawn by the shell, style not captured; wording is
-            // Chrome's meaning in our words: unknown.
-            style = .permissionBubble
+            // C30: the password card's layout ([06 §30] observed there). Titles, the details under
+            // them and the icon are ours, inferred; the engine has no "never" for these offers.
+            style = .saveCard
             if prompt.kind == .update {
                 title = "Update address?"
                 message = prompt.changes.map { change in
@@ -307,21 +325,24 @@ public struct DialogPresentation: Equatable, Sendable {
                 title = "Save address?"
                 message = ([prompt.addressSummary, prompt.email, prompt.phone].filter { !$0.isEmpty }).joined(separator: "\n")
             }
+            symbol = "mappin.and.ellipse"
             fields = []
             checkbox = nil
-            buttons = ["No Thanks", prompt.kind == .update ? "Update" : "Save"]
+            buttons = ["No", prompt.kind == .update ? "Update" : "Save"]
         case .cardSave(let prompt):
-            // C30: like the address prompt. Saved on this Mac only (Open Arc has no Google Payments).
-            style = .permissionBubble
+            // C30: like the address offer, inferred. Saved on this Mac only (Open Arc has no Google
+            // Payments).
+            style = .saveCard
             title = prompt.kind == .securityCodeOnly ? "Save security code?" : "Save card?"
             let card = [prompt.network, "••••" + prompt.lastFourDigits].filter { !$0.isEmpty }.joined(separator: " ")
             var lines = [card]
             if !prompt.expiration.isEmpty { lines.append("Expires " + prompt.expiration) }
             if !prompt.cardholderName.isEmpty { lines.append(prompt.cardholderName) }
             message = lines.joined(separator: "\n")
+            symbol = "creditcard.fill"
             fields = []
             checkbox = nil
-            buttons = ["No Thanks", "Save"]
+            buttons = ["No", "Save"]
         case .extensionInstall(let prompt):
             // Chrome's install dialog, tab-modal over the store page. The spec does not record the
             // Web Store flow (C14): title and buttons are Chrome's meaning in our words, unknown.
@@ -410,21 +431,17 @@ public struct DialogPresentation: Equatable, Sendable {
         case .authentication:
             guard isDefaultButton else { return .authentication(.cancel) }
             return .authentication(.proceed(username: fieldValues.first ?? "", password: fieldValues.dropFirst().first ?? ""))
-        case .permission(let prompt):
-            switch (index, prompt.supportsAllowingOnce) {
-            case (0, _): return .permission(.deny(remember: true))
-            case (1, true): return .permission(.allow(remember: false))
-            default: return .permission(.allow(remember: true))
-            }
+        case .permission:
+            // "Not Now" stores no decision, so the site may ask again: inferred from its wording
+            // ([06 §30] observed the button, not what Arc stores).
+            return .permission(isDefaultButton ? .allow(remember: true) : .dismiss)
         case .fileChooser:
             return .fileChooser(.cancel)
         case .externalProtocol:
             return .externalProtocol(isDefaultButton ? .open(rememberForOrigin: checkbox) : .block)
         case .passwordSave(let prompt):
-            if isDefaultButton {
-                let edited = fieldValues.first.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                return .passwordSave(.save(username: edited == prompt.username ? nil : edited))
-            }
+            // The card has no username field ([06 §30] observed): the submitted one is saved.
+            if isDefaultButton { return .passwordSave(.save(username: nil)) }
             return .passwordSave(prompt.kind == .save && index == 0 ? .neverForThisSite : .decline)
         case .addressSave:
             return .addressSave(isDefaultButton ? .save : .decline)
@@ -462,45 +479,88 @@ extension AddressSavePrompt.Change.Field {
     }
 }
 
+extension SiteOrigin {
+    /// Scheme, host and port, as the permission bubble spells a site. [06 §30] observed.
+    var fullText: String { "\(scheme)://\(displayHost)" }
+}
+
 extension SitePermissionKind {
-    /// One line of the permission bubble ("Use your camera"). Our wording: unknown.
-    var promptText: String {
+    /// The verb phrase of the permission bubble. [06 §30] observed for location and notifications;
+    /// the others are our wording in the same form: inferred.
+    var promptPhrase: String {
         switch self {
-        case .camera: "Use your camera"
-        case .microphone: "Use your microphone"
-        case .location: "Know your location"
-        case .notifications: "Show notifications"
-        case .clipboardRead: "See text and images copied to the clipboard"
-        case .midi: "Use your MIDI devices"
-        case .storageAccess: "Use cookies and site data in this context"
-        case .screenWakeLock: "Keep your screen on"
-        case .multipleDownloads: "Download multiple files"
-        case .localFonts: "Use the fonts on your computer"
-        case .windowManagement: "Manage windows on all your displays"
-        case .idleDetection: "Know when you’re actively using this device"
-        case .protectedMedia: "Play protected content"
+        case .location: "access your location"
+        case .notifications: "send you notifications"
+        case .camera: "use your camera"
+        case .microphone: "use your microphone"
+        case .clipboardRead: "see text and images copied to the clipboard"
+        case .midi: "use your MIDI devices"
+        case .storageAccess: "use cookies and site data in this context"
+        case .screenWakeLock: "keep your screen on"
+        case .multipleDownloads: "download multiple files"
+        case .localFonts: "use the fonts on your computer"
+        case .windowManagement: "manage windows on all your displays"
+        case .idleDetection: "know when you’re actively using this device"
+        case .protectedMedia: "play protected content"
+        }
+    }
+
+    /// SF Symbol of the permission bubble. [06 §30] observed for location and notifications; the
+    /// others inferred.
+    var promptSymbol: String {
+        switch self {
+        case .location: "location.fill"
+        case .notifications: "bell.fill"
+        case .camera: "camera.fill"
+        case .microphone: "mic.fill"
+        case .clipboardRead: "doc.on.clipboard.fill"
+        case .midi: "pianokeys"
+        case .storageAccess: "externaldrive.fill"
+        case .screenWakeLock: "sun.max.fill"
+        case .multipleDownloads: "arrow.down.circle.fill"
+        case .localFonts: "textformat"
+        case .windowManagement: "macwindow.on.rectangle"
+        case .idleDetection: "person.fill"
+        case .protectedMedia: "play.rectangle.fill"
         }
     }
 }
 
-/// Where a permission bubble goes. inferred (see the file header).
-enum PermissionPromptPlacement {
-    /// Width of the bubble. unknown.
-    static let bubbleWidth: CGFloat = 260
-    /// Gap between the URL box and the bubble. unknown.
-    static let gap: CGFloat = 6
-    /// Inset from the panel's top left when not under the URL box. unknown.
-    static let panelInset: CGFloat = 10
-
-    /// Whether `tabID`'s permission bubble is drawn under the URL box (by the window) rather than
-    /// inside the tab's panel.
-    static func isUnderURLBox(tabID: UUID?, selectedTabID: UUID?, isSidebarVisible: Bool) -> Bool {
-        isSidebarVisible && tabID != nil && tabID == selectedTabID
+/// The body text of the permission bubble.
+enum PermissionPromptText {
+    /// "Allow <origin> to <verb phrase>?". [06 §30] observed: the full origin, with scheme and port.
+    /// The wording without an origin is ours: inferred.
+    static func sentence(origin: SiteOrigin?, kinds: [SitePermissionKind]) -> String {
+        "Allow \(origin?.fullText ?? "this page") to \(phrase(for: kinds))?"
     }
 
-    /// Top-left corner of the bubble under the URL box, in window coordinates.
-    static func originUnderURLBox(in layout: MainWindowLayout) -> CGPoint {
-        let box = layout.addressFieldFrame
-        return CGPoint(x: box.minX, y: box.maxY + gap)
+    /// One phrase for a request of several kinds: camera and microphone share theirs, the others are
+    /// listed. inferred (the spec records single kinds).
+    static func phrase(for kinds: [SitePermissionKind]) -> String {
+        let sharesCamera = kinds.contains(.camera) && kinds.contains(.microphone)
+        let phrases = kinds.compactMap { kind -> String? in
+            guard sharesCamera else { return kind.promptPhrase }
+            switch kind {
+            case .camera: return "use your camera and microphone"
+            case .microphone: return nil
+            default: return kind.promptPhrase
+            }
+        }
+        guard let last = phrases.last, phrases.count > 1 else { return phrases.first ?? "" }
+        return phrases.dropLast().joined(separator: ", ") + " and " + last
+    }
+}
+
+/// Where a permission bubble goes.
+enum PermissionPromptPlacement {
+    /// Inset from the panel's top left when no site controls button is there to point at. unknown.
+    static let panelInset: CGFloat = 10
+
+    /// Whether `tabID`'s bubble hangs from a site controls button rather than sitting in the tab's
+    /// panel. Only the selected tab has that button: the URL box belongs to it, and with the toolbar
+    /// on it is the active pane, the only one whose bar carries the button. [06 §30] observed the URL
+    /// box; the toolbar's button inferred.
+    static func isAtSiteControls(tabID: UUID?, selectedTabID: UUID?, hasURLBoxControls: Bool, isToolbarShown: Bool) -> Bool {
+        (hasURLBoxControls || isToolbarShown) && tabID != nil && tabID == selectedTabID
     }
 }

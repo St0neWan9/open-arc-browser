@@ -44,31 +44,32 @@ final class ShellDialogsC12Tests: XCTestCase {
         XCTFail("condition not met", file: file, line: line)
     }
 
-    // MARK: Permission prompts (Chromium semantics, inferred)
+    // MARK: Permission prompts ([06 §30] observed buttons; what they store inferred)
 
-    /// A prompt for kinds without a one-time grant (notifications) offers no "Allow This Time";
-    /// its second button stores the grant.
-    func testPermissionPromptWithoutOneTimeGrantHasTwoButtons() async throws {
+    /// [06 §30] observed: "Not Now" and "Allow" whatever the kind; Allow stores the grant.
+    func testPermissionPromptWithoutOneTimeGrantHasTwoButtons_06_30() async throws {
         let live = try await openPage("https://notify.example")
         let center = model.controller.dialogs
         let id = live.simulatePermissionPrompt([.notifications], supportsAllowingOnce: false)
         try await waitUntil { center.current(for: live.id) != nil }
         let request = try XCTUnwrap(center.current(for: live.id))
-        XCTAssertEqual(DialogPresentation(request).buttons, ["Don’t Allow", "Allow"])
-        XCTAssertEqual(DialogPresentation(request).message, "Show notifications")
+        XCTAssertEqual(DialogPresentation(request).buttons, ["Not Now", "Allow"])
+        XCTAssertEqual(DialogPresentation(request).message, "Allow https://notify.example to send you notifications?")
         center.answer(id, with: DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false))
         XCTAssertEqual(live.dialogAnswers[id], .permission(.allow(remember: true)))
     }
 
-    func testPermissionPromptWithOneTimeGrantOffersAllowThisTime() async throws {
+    /// [06 §30] observed: no "Allow This Time" even where the engine could grant once. Not Now
+    /// stores no decision (inferred from its wording).
+    func testPermissionPromptWithOneTimeGrantStillHasTwoButtons_06_30() async throws {
         let live = try await openPage("https://camera.example")
         let center = model.controller.dialogs
         let id = live.simulatePermissionPrompt([.camera])
         try await waitUntil { center.current(for: live.id) != nil }
         let request = try XCTUnwrap(center.current(for: live.id))
-        XCTAssertEqual(DialogPresentation(request).buttons, ["Don’t Allow", "Allow This Time", "Allow"])
+        XCTAssertEqual(DialogPresentation(request).buttons, ["Not Now", "Allow"])
         center.answer(id, with: DialogPresentation.answer(for: request, button: 0, fieldValues: [], checkbox: false))
-        XCTAssertEqual(live.dialogAnswers[id], .permission(.deny(remember: true)))
+        XCTAssertEqual(live.dialogAnswers[id], .permission(.dismiss))
     }
 
     // MARK: External protocol (Chromium semantics, inferred)

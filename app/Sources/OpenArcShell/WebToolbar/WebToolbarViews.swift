@@ -160,13 +160,17 @@ struct WebToolbarView: View {
                 model.webToolbarReload(state.tabID)
             }
         case .siteControls:
-            WebToolbarButton(symbol: "slider.horizontal.3", glyphSize: t.siteControlsGlyphSize, label: "Site Controls",
-                             identifier: "openarc.webToolbar.siteControls", colors: colors, isEnabled: state.url != nil) {
-                model.webToolbarShowSiteControls(state.tabID)
+            PermissionPromptReader { prompt in
+                WebToolbarButton(symbol: "slider.horizontal.3", glyphSize: t.siteControlsGlyphSize, label: "Site Controls",
+                                 identifier: "openarc.webToolbar.siteControls", colors: colors, isEnabled: state.url != nil) {
+                    model.webToolbarShowSiteControls(state.tabID)
+                }
+                .siteControlsBubble(siteControls, isPresented: siteControls.isPresented && siteControls.tabID == state.tabID,
+                                    palette: model.windowPalette)
+                .extensionPopupBubble(siteControls, tabID: state.tabID, palette: model.windowPalette)
+                // The toolbar's button stands in for the URL box's. inferred ([06 §30] observed the box).
+                .permissionPromptBubble(prompt, palette: model.windowPalette, isHidden: siteControls.isPresented)
             }
-            .siteControlsBubble(siteControls, isPresented: siteControls.isPresented && siteControls.tabID == state.tabID,
-                                palette: model.windowPalette)
-            .extensionPopupBubble(siteControls, tabID: state.tabID, palette: model.windowPalette)
         case .translate:
             // [06 §19.1] observed: "Translation Options", the bubble below it. B47.
             TranslationToolbarButton(model: model.translation, tabID: state.tabID, colors: colors, palette: model.windowPalette)
