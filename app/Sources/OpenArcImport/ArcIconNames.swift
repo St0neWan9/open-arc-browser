@@ -1,0 +1,58 @@
+import Foundation
+
+/// Arc stores a Space's (and a tab's) named icon under its own short names (`{"icon": "bulb"}`,
+/// observed in its sidebar file, read-only). This maps each name Arc offers onto the SF Symbol
+/// that looks closest, so an imported Space keeps its icon (B164, user 2026-11-04: imported Spaces
+/// had no icons). The name list is the set Arc recognizes (inferred); the symbol
+/// for each is our own choice.
+public enum ArcIconNames {
+    public static let symbols: [String: String] = [
+        "star": "star.fill",
+        "heart": "heart.fill",
+        "flag": "flag.fill",
+        "flash": "bolt.fill",
+        "triangle": "triangle.fill",
+        "medical": "cross.case.fill",
+        "notifications": "bell.fill",
+        "bulb": "lightbulb.fill",
+        "shapes": "square.on.circle.fill",
+        "grid": "square.grid.2x2.fill",
+        "apps": "circle.grid.3x3.fill",
+        "layers": "square.3.layers.3d",
+        "albums": "rectangle.stack.fill",
+        "copy": "doc.on.doc.fill",
+        "fileTrayFull": "tray.full.fill",
+        "calendar": "calendar",
+        "mail": "envelope.fill",
+        "checkbox": "checkmark.square.fill",
+        "book": "book.fill",
+        "people": "person.2.fill",
+        "terminal": "apple.terminal.fill",
+        "construction": "hammer.fill",
+        "square": "square.fill",
+        "ellipse": "circle.fill",
+        "moon": "moon.fill",
+        "sunny": "sun.max.fill",
+        "planet": "globe.americas.fill",
+        "leaf": "leaf.fill",
+        "cloud": "cloud.fill",
+        "gift": "gift.fill",
+        "restaurant": "fork.knife",
+        "barbell": "dumbbell.fill",
+        "airplane": "airplane",
+        "musicalNote": "music.note",
+        "colorPallete": "paintpalette.fill",
+        "bandage": "bandage.fill",
+        "code": "chevron.left.forwardslash.chevron.right",
+        "baseball": "baseball.fill",
+        "cloudOutline": "cloud",
+        "bonfire": "flame.fill",
+        "pizza": "takeoutbag.and.cup.and.straw.fill",
+        "skull": "theatermasks.fill",
+        "receipt": "receipt.fill",
+        "thumbsUp": "hand.thumbsup.fill",
+        "train": "tram.fill",
+        "search": "magnifyingglass",
+        "chatBubbleEllipses": "ellipsis.bubble.fill",
+    ]
+}

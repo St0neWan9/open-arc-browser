@@ -173,6 +173,12 @@ final class ArcSidebarImportTests: XCTestCase {
 
         let work = sidebar.spaces[0]
         XCTAssertEqual(work.icon, .symbol("briefcase"))
+        // B164: Arc's own icon names are translated to SF Symbols; unknown names are dropped.
+        XCTAssertEqual(ForeignSidebarMapper.icon(.symbol("bulb"), knownSymbols: symbols), "lightbulb.fill")
+        XCTAssertEqual(ForeignSidebarMapper.icon(.symbol("fileTrayFull"), knownSymbols: symbols), "tray.full.fill")
+        XCTAssertEqual(ForeignSidebarMapper.icon(.symbol("planet"), knownSymbols: symbols), "globe.americas.fill")
+        XCTAssertEqual(ForeignSidebarMapper.icon(.symbol("briefcase"), knownSymbols: symbols), "briefcase")
+        XCTAssertNil(ForeignSidebarMapper.icon(.symbol("notAnArcIcon"), knownSymbols: symbols))
         XCTAssertFalse(work.isFromOtherProfile)
         let theme = try XCTUnwrap(work.theme)
         XCTAssertEqual(theme.appearance, .dark)
@@ -339,3 +345,17 @@ final class ArcSidebarImportTests: XCTestCase {
         XCTAssertFalse(ChromiumBrowser.known.contains(.arc))
     }
 }
+
+#if canImport(AppKit)
+import AppKit
+
+/// B164: every SF Symbol the Arc icon table names exists on this system.
+final class ArcIconNamesB164Tests: XCTestCase {
+    func testEveryMappedSymbolExists() {
+        for (arc, symbol) in ArcIconNames.symbols {
+            XCTAssertNotNil(NSImage(systemSymbolName: symbol, accessibilityDescription: nil), "\(arc) → \(symbol)")
+        }
+        XCTAssertEqual(ArcIconNames.symbols.count, 47)
+    }
+}
+#endif

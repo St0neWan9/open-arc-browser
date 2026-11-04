@@ -31,7 +31,8 @@ public struct ForeignSidebarImportSummary: Hashable, Sendable {
 ///   source order, with the source name; existing Spaces are never touched and a second import
 ///   adds the Spaces again (no merge);
 /// - the Space's color becomes a new theme (`defaultTheme` when the source has none); an emoji icon
-///   is kept, a named icon only when it is one of `knownSymbols` (else no icon);
+///   is kept; a named icon is kept when it is one of `knownSymbols`, or translated through
+///   `ArcIconNames` when it is one of Arc's icon names (B164), else dropped;
 /// - pinned rows become pinned tabs, folders (nested; top level expanded, deeper ones collapsed
 ///   like D3) and split views; Today rows become Today tabs in the same order;
 /// - favorites are appended to the profile's favorites, except URLs that are already favorites
@@ -67,7 +68,8 @@ public enum ForeignSidebarMapper {
             let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         case .symbol(let name)?:
-            return knownSymbols.contains(name) ? name : nil
+            if knownSymbols.contains(name) { return name }
+            return ArcIconNames.symbols[name]
         case nil:
             return nil
         }
