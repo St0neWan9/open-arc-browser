@@ -7,10 +7,12 @@ import OpenArcDesign
 // spec does not pin down are labeled unknown / inferred.
 
 enum SidebarPeekTokens {
-    /// Width of the invisible hot zone along the window's left edge: only the first column of
-    /// points (x = 0). [06 §26.2] observed with a real pointer: x = 0 opens, x = 1–5 never does
-    /// (6 runs); supersedes the earlier "x ≈ 0–2" reading of [06 §14]. B54.
-    static let edgeHotZoneWidth: CGFloat = 1
+    /// Width of the invisible hot zone inside the window along its left edge: the themed border
+    /// left of the web panel. B160 (user, 2026-11-04, comparing with Arc): Arc opens the panel as
+    /// soon as the pointer reaches the window's left edge, while a 1 pt zone (x = 0 only, the
+    /// [06 §26.2] reading) made our pointer cross the edge first. Covering the border is inferred;
+    /// the pointer over the page itself never opens it.
+    static let edgeHotZoneWidth: CGFloat = CGFloat(hiddenWebPanelInset)
 
     /// A strip outside the window, left of its left edge, that also opens the panel, so the
     /// pointer only has to cross the window's left edge when the window does not touch the screen

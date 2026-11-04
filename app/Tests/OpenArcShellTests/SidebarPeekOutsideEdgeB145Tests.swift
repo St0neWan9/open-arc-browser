@@ -19,9 +19,10 @@ final class SidebarPeekOutsideEdgeB145Tests: XCTestCase {
         XCTAssertEqual(layout.region(of: CGPoint(x: -51, y: 400), presentation: .hidden), .outside)
         XCTAssertEqual(layout.region(of: CGPoint(x: -120, y: 400), presentation: .hidden, wasAtEdge: true), .edge)
         XCTAssertEqual(layout.region(of: CGPoint(x: -251, y: 400), presentation: .hidden, wasAtEdge: true), .outside)
-        // Inside the window only the first column still counts. [06 §26.2] observed.
+        // Inside the window the border left of the page counts too (B160).
         XCTAssertEqual(layout.region(of: CGPoint(x: 0, y: 400), presentation: .hidden), .edge)
-        XCTAssertEqual(layout.region(of: CGPoint(x: 1, y: 400), presentation: .hidden), .outside)
+        XCTAssertEqual(layout.region(of: CGPoint(x: 9, y: 400), presentation: .hidden), .edge)
+        XCTAssertEqual(layout.region(of: CGPoint(x: 10, y: 400), presentation: .hidden), .outside)
         // As tall as the window: not above or below it.
         XCTAssertEqual(layout.region(of: CGPoint(x: -10, y: -1), presentation: .hidden), .outside)
         XCTAssertEqual(layout.region(of: CGPoint(x: -10, y: 801), presentation: .hidden), .outside)

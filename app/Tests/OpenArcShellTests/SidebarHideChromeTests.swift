@@ -50,14 +50,16 @@ final class SidebarHideChromeTests: XCTestCase {
         XCTAssertEqual(WindowButtonPlacement.peek.offset, CGSize(width: 5, height: 5))
     }
 
-    /// 06 §26.2: x = 0 opens the peek; x = 1–5 never does.
-    func testHotZoneIsTheFirstColumnOnly() {
-        XCTAssertEqual(SidebarPeekTokens.edgeHotZoneWidth, 1)
+    /// B160: reaching the window's left edge opens the peek, as in Arc: the whole border left of
+    /// the page counts, not only x = 0; the page itself does not.
+    func testHotZoneIsTheBorderLeftOfThePage() {
+        XCTAssertEqual(SidebarPeekTokens.edgeHotZoneWidth, CGFloat(SidebarPeekTokens.hiddenWebPanelInset))
         let layout = SidebarPeekLayout(windowSize: reference)
-        XCTAssertEqual(layout.region(of: CGPoint(x: 0, y: 400), presentation: .hidden), .edge)
-        for x in 1...5 {
-            XCTAssertEqual(layout.region(of: CGPoint(x: CGFloat(x), y: 400), presentation: .hidden), .outside, "x \(x)")
+        for x in 0...9 {
+            XCTAssertEqual(layout.region(of: CGPoint(x: CGFloat(x), y: 400), presentation: .hidden), .edge, "x \(x)")
         }
+        XCTAssertEqual(layout.region(of: CGPoint(x: 10, y: 400), presentation: .hidden), .outside)
+        XCTAssertEqual(layout.region(of: CGPoint(x: 40, y: 400), presentation: .hidden), .outside)
     }
 
     // MARK: Model (06 §26, §17.2)
@@ -187,5 +189,44 @@ final class SidebarHideChromeTests: XCTestCase {
         try await spin(0.4)
         assertCenters(window, dx: 0, dy: 0, hidden: false)
         XCTAssertFalse(MainWindowChromeConfigurator.Coordinator.apply(to: window, placement: .pinned), "settled")
+    }
+}
+
+/// B160: Arc's traffic lights are muted discs (black ≈ 8 %, 12 pt, no rim) while the window is
+/// active; the real buttons show on hover. [07 §2] observed.
+@MainActor
+final class WindowButtonMuteB160Tests: XCTestCase {
+    func testMutedDiscsCoverTheButtonsUntilHovered_07_2() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        MainWindowChromeConfigurator.Coordinator.syncMute(in: window)
+        let close = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let mute = try XCTUnwrap(close.superview?.subviews.first { $0 is WindowButtonMuteView } as? WindowButtonMuteView)
+        XCTAssertEqual(mute.discCenters.count, 3)
+        XCTAssertNil(mute.hitTest(NSPoint(x: 5, y: 5)), "clicks reach the real buttons")
+        XCTAssertEqual(close.alphaValue, 0, "muted")
+        mute.setHovered(true)
+        XCTAssertEqual(close.alphaValue, 1, "hover shows the real buttons")
+        mute.setHovered(false)
+        XCTAssertEqual(close.alphaValue, 0)
+        let c = WindowButtonMuteView.discColor(isDark: false)
+        XCTAssertEqual(c.alphaComponent, 0.082, accuracy: 0.001)
+        // #DBDBEE × (1 − 0.082) ≈ #C9C9DB, the observed disc.
+        XCTAssertEqual(0xDB * (1 - c.alphaComponent), 0xC9, accuracy: 1.5)
+    }
+
+    func testButtonsHiddenWithTheSidebarHideTheDiscs_06_26() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        MainWindowChromeConfigurator.Coordinator.applyVisibility(to: window, showsButtons: false)
+        MainWindowChromeConfigurator.Coordinator.syncMute(in: window)
+        let close = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let mute = try XCTUnwrap(close.superview?.subviews.first { $0 is WindowButtonMuteView })
+        XCTAssertTrue(mute.isHidden)
     }
 }

@@ -198,12 +198,11 @@ final class SidebarPeekTests: XCTestCase {
         XCTAssertEqual(reference.height - layout.panelFrame.maxY, SidebarPeekTokens.panelInset)
         // The sidebar moves with the panel (06 §26.2): it fills the panel.
         XCTAssertEqual(layout.sidebarSize, CGSize(width: 276, height: 975))
-        // Hot zone: x = 0 only. 06 §26.2 observed (x = 1–5 never opens).
-        XCTAssertEqual(layout.region(of: CGPoint(x: 0, y: 500), presentation: .hidden), .edge)
-        XCTAssertEqual(layout.region(of: CGPoint(x: 0.5, y: 500), presentation: .hidden), .edge)
-        for x in [1.0, 2, 3, 5] {
-            XCTAssertEqual(layout.region(of: CGPoint(x: x, y: 500), presentation: .hidden), .outside, "x \(x)")
+        // Hot zone inside the window: the 10 pt border left of the page (B160).
+        for x in [0.0, 0.5, 1, 5, 9.5] {
+            XCTAssertEqual(layout.region(of: CGPoint(x: x, y: 500), presentation: .hidden), .edge, "x \(x)")
         }
+        XCTAssertEqual(layout.region(of: CGPoint(x: 10, y: 500), presentation: .hidden), .outside)
         XCTAssertEqual(layout.region(of: CGPoint(x: 200, y: 500), presentation: .hidden), .outside)
         XCTAssertEqual(layout.region(of: CGPoint(x: 200, y: 500), presentation: .peeking), .overlay)
         XCTAssertEqual(layout.region(of: CGPoint(x: 280, y: 500), presentation: .peeking), .overlay)

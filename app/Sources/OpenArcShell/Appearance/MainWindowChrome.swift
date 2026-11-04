@@ -204,6 +204,7 @@ struct MainWindowChromeConfigurator: NSViewRepresentable {
                 if !placement.isOnScreen, Self.applyVisibility(to: window, showsButtons: false) { changed = true }
             }
             if changed { writeCount += 1 }
+            if !isAnimating { Self.syncMute(in: window) }
         }
 
         private func attach(to window: NSWindow) {
@@ -249,6 +250,7 @@ struct MainWindowChromeConfigurator: NSViewRepresentable {
                 button.isHidden = hidden
                 changed = true
             }
+            if changed { syncMute(in: window) }
             return changed
         }
 
@@ -288,6 +290,7 @@ struct MainWindowChromeConfigurator: NSViewRepresentable {
             guard !window.styleMask.contains(.fullScreen) else { return false }
             guard let container = titlebarContainer(of: window), let host = container.superview else { return false }
             var changed = false
+            var origins: [CGPoint] = []
             let wanted = containerFrame(in: host)
             if container.frame != wanted {
                 container.frame = wanted
@@ -301,11 +304,13 @@ struct MainWindowChromeConfigurator: NSViewRepresentable {
                     changed = true
                 }
                 let origin = buttonOrigin(index: index, placement: placement, button: button, in: parent, window: window)
+                origins.append(origin)
                 if button.frame.origin != origin {
                     if animated { button.animator().setFrameOrigin(origin) } else { button.setFrameOrigin(origin) }
                     changed = true
                 }
             }
+            syncMute(in: window, animated: animated, targetOrigins: origins)
             return changed
         }
 
