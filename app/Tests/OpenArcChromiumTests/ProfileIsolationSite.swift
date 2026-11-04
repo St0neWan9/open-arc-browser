@@ -143,6 +143,9 @@ final class ProfileIsolationServer: @unchecked Sendable {
             // B148: a two-step sign-in page (identifier, then password) for saved-password filling.
             case "/signin", "/signin/challenge/pwd":
                 (status, type, body) = ("200 OK", "text/html; charset=utf-8", PasswordFillTestPage.html)
+            // C13 (157): a login form whose submission offers to save the typed password.
+            case "/login": (status, type, body) = ("200 OK", "text/html; charset=utf-8", PasswordSaveTestPage.loginHTML)
+            case "/login/done": (status, type, body) = ("200 OK", "text/html; charset=utf-8", PasswordSaveTestPage.doneHTML)
             case "/link": (status, type, body) = ("200 OK", "text/html; charset=utf-8", SiteIconTestImage.linkHTML)
             // B132: the site icon the command bar fetches for a never visited site.
             case "/favicon.ico":

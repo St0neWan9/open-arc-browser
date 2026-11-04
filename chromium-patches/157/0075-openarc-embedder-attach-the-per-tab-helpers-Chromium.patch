@@ -17,23 +17,27 @@ TabHelpersAccess::AttachTabHelpers() now creates the WebContents-scoped helpers
 itself, in TabFeatures::WillDiscardContents() order and with its conditions
 (platform autofill, off-the-record, feature flags, build flags). The helpers
 TabFeatures keeps as plain members are owned by a WebContentsUserData that
-lives as long as the WebContents. Helpers that need a TabInterface
-(ManagePasswordsUIController, TabDialogs, CoreTabHelper, NetErrorTabHelper,
+lives as long as the WebContents. That holder also owns
+ManagePasswordsUIController through the embedder constructor of patch 0023
+(registered in the holder's UnownedUserDataHost, found through
+SetEmbedderUserDataHostLookup(), destroyed in WebContentsDestroyed()), so the
+password save/update prompt works again. Other helpers that need a
+TabInterface (TabDialogs, CoreTabHelper, NetErrorTabHelper,
 PopupOpenerTabHelper, ...) are skipped; the list is in the code.
 
 Needed by plan tasks C6b, C9, C13, C16 and B123 on Chromium 157. Upstream
 behaviour without it: a WebContents outside a Browser tab strip gets only
 session, zoom, infobar and autofill helpers.
 ---
- openarc/BUILD.gn                       |  25 ++
- openarc/browser/openarc_tab_helpers.mm | 332 ++++++++++++++++++++++++-
- 2 files changed, 356 insertions(+), 1 deletion(-)
+ openarc/BUILD.gn                       |  27 ++
+ openarc/browser/openarc_tab_helpers.mm | 370 ++++++++++++++++++++++++-
+ 2 files changed, 396 insertions(+), 1 deletion(-)
 
 diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
-index 837812f15330..35057cc3345a 100644
+index 837812f15330..d3df8923b9c7 100644
 --- a/openarc/BUILD.gn
 +++ b/openarc/BUILD.gn
-@@ -140,6 +140,31 @@ source_set("embedder") {
+@@ -140,6 +140,32 @@ source_set("embedder") {
      "//chrome/browser/ui:tab_helpers",
      "//chrome/browser/ui:tab_helpers_impl",
      "//chrome/browser/ui/login",
@@ -56,6 +60,7 @@ index 837812f15330..35057cc3345a 100644
 +    "//chrome/browser/ui/autofill",
 +    "//chrome/browser/ui/find_bar",
 +    "//chrome/browser/ui/javascript_dialogs",
++    "//chrome/browser/ui/passwords",
 +    "//chrome/browser/ui/prefs",
 +    "//components/captive_portal/content",
 +    "//components/client_hints/browser",
@@ -65,11 +70,19 @@ index 837812f15330..35057cc3345a 100644
      "//chrome/browser/ui:browser_window_header",
      "//chrome/browser/translate",
      "//chrome/browser/ui/translate",
+@@ -162,6 +188,7 @@ source_set("embedder") {
+     "//third_party/blink/public/common",
+     "//third_party/crashpad/crashpad/client",
+     "//ui/base",
++    "//ui/base/unowned_user_data",
+     "//ui/gfx",
+   ]
+   frameworks = [
 diff --git a/openarc/browser/openarc_tab_helpers.mm b/openarc/browser/openarc_tab_helpers.mm
-index d7dfcb776bb0..5c47e1bc3579 100644
+index d7dfcb776bb0..0f8fc96eaf42 100644
 --- a/openarc/browser/openarc_tab_helpers.mm
 +++ b/openarc/browser/openarc_tab_helpers.mm
-@@ -5,20 +5,348 @@
+@@ -5,20 +5,386 @@
  #include "openarc/browser/openarc_tab_helpers.h"
  
  #include <memory>
@@ -108,6 +121,7 @@ index d7dfcb776bb0..5c47e1bc3579 100644
 +#include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
 +#include "chrome/browser/ui/find_bar/find_bar_state.h"
 +#include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.h"
++#include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
 +#include "chrome/browser/ui/prefs/prefs_tab_helper.h"
  #include "chrome/browser/ui/tab_helpers.h"
 +#include "chrome/browser/web_applications/policy/pre_redirection_url_observer.h"
@@ -137,9 +151,11 @@ index d7dfcb776bb0..5c47e1bc3579 100644
 +#include "components/web_modal/web_contents_modal_dialog_manager.h"
 +#include "components/webapps/browser/installable/installable_manager.h"
  #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
 +#include "content/public/browser/web_contents_user_data.h"
 +#include "extensions/buildflags/buildflags.h"
 +#include "printing/buildflags/buildflags.h"
++#include "ui/base/unowned_user_data/unowned_user_data_host.h"
  #include "openarc/browser/openarc_ad_blocker.h"
  #include "openarc/browser/openarc_dialog_host.h"
  #include "openarc/browser/openarc_web_store_branding.h"
@@ -179,10 +195,20 @@ index d7dfcb776bb0..5c47e1bc3579 100644
 +// TabFeatures does for a Browser tab. Its presence also marks a WebContents
 +// whose 157 helpers are attached, so attaching twice is a no-op.
 +class TabFeatureHelpers
-+    : public content::WebContentsUserData<TabFeatureHelpers> {
++    : public content::WebContentsUserData<TabFeatureHelpers>,
++      public content::WebContentsObserver {
 + public:
 +  ~TabFeatureHelpers() override = default;
 +
++  // Where helpers that TabFeatures registers with the tab
++  // (tabs::TabInterface::GetUnownedUserDataHost()) register instead; declared
++  // first so it outlives them.
++  ui::UnownedUserDataHost unowned_user_data_host;
++
++  // Registered in `unowned_user_data_host`. Destroyed when the WebContents is
++  // (WebContentsDestroyed()), while the password manager client it uses is
++  // still there, as TabFeatures destroys it before the tab's WebContents.
++  std::unique_ptr<ManagePasswordsUIController> manage_passwords_ui_controller;
 +  std::unique_ptr<commerce::CommerceTabHelper> commerce_tab_helper;
 +  std::unique_ptr<history::WebContentsTopSitesObserver> top_sites_observer;
 +  std::unique_ptr<client_hints::ClientHintsWebContentsObserver>
@@ -196,7 +222,13 @@ index d7dfcb776bb0..5c47e1bc3579 100644
 + private:
 +  friend WebContentsUserData;
 +  explicit TabFeatureHelpers(content::WebContents* web_contents)
-+      : content::WebContentsUserData<TabFeatureHelpers>(*web_contents) {}
++      : content::WebContentsUserData<TabFeatureHelpers>(*web_contents),
++        content::WebContentsObserver(web_contents) {}
++
++  // content::WebContentsObserver:
++  void WebContentsDestroyed() override {
++    manage_passwords_ui_controller.reset();
++  }
 +
 +  WEB_CONTENTS_USER_DATA_KEY_DECL();
 +};
@@ -205,6 +237,13 @@ index d7dfcb776bb0..5c47e1bc3579 100644
 +
  namespace {
  
++// ManagePasswordsUIController::SetEmbedderUserDataHostLookup()'s lookup.
++ui::UnownedUserDataHost* TabFeatureUserDataHost(
++    content::WebContents* web_contents) {
++  TabFeatureHelpers* helpers = TabFeatureHelpers::FromWebContents(web_contents);
++  return helpers ? &helpers->unowned_user_data_host : nullptr;
++}
++
 +std::optional<int64_t> PageContentAnnotationsTabId(
 +    content::WebContents* web_contents) {
 +  SessionID id = sessions::SessionTabHelper::IdForTab(web_contents);
@@ -226,13 +265,15 @@ index d7dfcb776bb0..5c47e1bc3579 100644
 +// BreadcrumbManagerTabHelper, ChainedBackNavigationTracker,
 +// ChromeComposeClient, ChromeFacilitatedPaymentsClient, CoreTabHelper,
 +// extensions::AppTabHelper, LoadingPredictorTabHelper,
-+// ManagePasswordsUIController, MixedContentSettingsTabHelper,
++// MixedContentSettingsTabHelper,
 +// MLInstallabilityPromoter, NetErrorTabHelper, offline pages helpers,
 +// PageContentAnnotationsWebContentsObserver, PopupOpenerTabHelper,
 +// RecentlyAudibleHelper, SafeBrowsingTabObserver, SearchEngineTabHelper,
 +// SearchTabHelper, SupervisedUserNavigationObserver, TabDialogs,
 +// TriggerCreator, vr::VrTabHelper. Also skipped: the TabFeatures members that
 +// were never attached by TabHelpers (Open Arc did not have them before 157).
++// ManagePasswordsUIController has an embedder constructor for this
++// (registered in TabFeatureHelpers::unowned_user_data_host).
 +void AttachTabFeatureHelpers(content::WebContents* web_contents) {
 +  if (TabFeatureHelpers::FromWebContents(web_contents)) {
 +    return;
@@ -338,6 +379,16 @@ index d7dfcb776bb0..5c47e1bc3579 100644
 +
 +  webapps::PreRedirectionURLObserver::CreateForWebContents(web_contents);
 +
++  // Needs ChromePasswordManagerClient (gated on Chrome's own autofill above),
++  // as TabHelpers did before 157.
++  if (ChromePasswordManagerClient::FromWebContents(web_contents)) {
++    ManagePasswordsUIController::SetEmbedderUserDataHostLookup(
++        &TabFeatureUserDataHost);
++    owned->manage_passwords_ui_controller =
++        std::make_unique<ManagePasswordsUIController>(
++            owned->unowned_user_data_host, web_contents);
++  }
++
 +  owned->commerce_tab_helper = std::make_unique<commerce::CommerceTabHelper>(
 +      web_contents, profile->IsOffTheRecord(),
 +      commerce::ShoppingServiceFactory::GetForBrowserContext(profile),
@@ -418,7 +469,7 @@ index d7dfcb776bb0..5c47e1bc3579 100644
  // The prompt view of PermissionRequestManager: the shell's prompt through the
  // bridge (plan C12), or a dismissing one when no bridge is registered.
  std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
-@@ -35,8 +363,10 @@
+@@ -35,8 +401,10 @@
  // static
  void TabHelpersAccess::AttachTabHelpers(content::WebContents* web_contents) {
    TabHelpers::AttachTabHelpers(web_contents);

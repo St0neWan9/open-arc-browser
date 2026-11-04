@@ -55,16 +55,16 @@ enum PasswordFillTestPage {
 
 /// A window for the tab's page view: autofill needs a visible, focused page.
 @MainActor
-private final class FillTestSurfaceHost: SurfaceHost {
+final class FillTestSurfaceHost: SurfaceHost {
     let window: NSWindow
 
-    init() {
+    init(title: String = "Open Arc B148 test") {
         window = NSWindow(
             contentRect: NSRect(x: 80, y: 80, width: 520, height: 360),
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
-        window.title = "Open Arc B148 test"
+        window.title = title
         window.level = .floating
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)

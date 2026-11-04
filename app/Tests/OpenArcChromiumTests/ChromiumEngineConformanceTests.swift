@@ -171,6 +171,9 @@ final class ChromiumEngineConformanceTests: XCTestCase {
         // leaves the page usable; a successful one fills.
         try await checkPasswordFillReauth(engine, server: identityServer, dataDirectory: dataDirectory)
 
+        // Plan C13 (Chromium 157 regression): submitting a typed login offers to save it.
+        try await checkPasswordSavePrompt(engine, server: identityServer, profileID: UUID())
+
         // C9: a renderer crash is reported (`isCrashed` and `.renderProcessGone`); a reload brings
         // the page back in a new renderer.
         let crashEvents = tab.events()
