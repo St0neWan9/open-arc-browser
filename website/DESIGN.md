@@ -18,7 +18,7 @@ Warm, personal, spacious, and quietly playful. The visual system combines soft c
 
 ### Brand
 
-- Use the existing Open Arc application icon with a plain `Open Arc` wordmark.
+- Use the lavender folded-ribbon mark (`assets/logo.svg`) with a plain `Open Arc` wordmark.
 - The wordmark uses the UI sans-serif family at weight 700–750 with slightly tightened Latin tracking.
 - Minimum icon size: 28 px in navigation and 24 px in the footer.
 - Leave at least half the icon width between the brand lockup and unrelated elements.
@@ -174,7 +174,7 @@ Use content-driven adjustments within these ranges; do not depend on a single id
 
 ### Navigation
 
-- Existing app icon plus a plain `Open Arc` wordmark.
+- Folded-ribbon SVG mark plus a plain `Open Arc` wordmark.
 - Desktop links: Features / Move from Arc / Your data / GitHub.
 - One primary download action.
 - Pale translucent background; blur is progressive enhancement, with a readable solid fallback.
@@ -191,7 +191,7 @@ Use content-driven adjustments within these ranges; do not depend on a single id
 
 ### Application demonstrations
 
-- Use the existing Open Arc icon and independently authored sample content.
+- Use the Original app icon and independently authored sample content.
 - Preserve the recognizable browser structure: sidebar, Favorites, pinned folders, Today, Space switcher, and page area.
 - Show calm, plausible browsing contexts such as a project, a reading list, or weekend planning.
 - Caption HTML-built demonstrations as **Interactive illustration**. They are not evidence of pixel-perfect native UI.
@@ -258,7 +258,9 @@ Each section uses a distinct composition while retaining the same typography, sp
 ## 10. Assets and rendering
 
 - Use semantic document structure, real links, native buttons, and native disclosures.
-- The existing `app/Bundle/AppIcon.icns` is the source for the website icon export.
+- `AppIconArtwork.swift` defines the shared ribbon paths and palettes. `swift scripts/make-app-icon.swift` exports the SVG mark, website PNG, and native ICNS assets.
+- The mark uses lavender, periwinkle and blue-violet folds; never use pure black in logo artwork. Keep its triangular opening and broad ribbon proportions.
+- Native icon treatments are Original, Candy, Neon, Fluted Glass, Paper, and Spectrum. The default website identity always uses Original.
 - Paper textures and simple diagrams may use lightweight CSS or original SVG.
 - Keep decorative landscapes stylized and original. They illustrate sample page content, not product functionality.
 - Avoid remote trackers, unnecessary third-party scripts, and external fonts in the first preview.

@@ -263,6 +263,33 @@ final class SettingsB84Tests: XCTestCase {
         XCTAssertEqual(preferences.appIconChoice, .default)
     }
 
+    /// Existing device preferences remain valid after the artwork and labels change.
+    func testIconArtworkKeepsPersistedIdentifiers() {
+        let (preferences, _) = makePreferences()
+        for identifier in ["slate", "sunrise", "lagoon", "night", "paper", "prism"] {
+            preferences.setString(identifier, AppPreferences.appIconKey)
+            XCTAssertEqual(preferences.appIconChoice.rawValue, identifier)
+        }
+        XCTAssertEqual(AppIconChoice.default.rawValue, "slate")
+    }
+
+    /// Native icon canvases keep transparent corners at favicon, settings and export sizes.
+    func testIconArtworkSizesAndTransparency() throws {
+        for choice in AppIconChoice.allCases {
+            for size in [16, 104, 1024] {
+                let image = try XCTUnwrap(AppIconRenderer.cgImage(choice, pixels: size))
+                XCTAssertEqual(image.width, size)
+                XCTAssertEqual(image.height, size)
+                let rep = NSBitmapImageRep(cgImage: image)
+                XCTAssertLessThan(try XCTUnwrap(rep.colorAt(x: 0, y: 0)).alphaComponent, 0.01)
+                XCTAssertGreaterThan(try XCTUnwrap(rep.colorAt(x: size / 2, y: size / 2)).alphaComponent, 0.99)
+            }
+        }
+        XCTAssertNil(AppIconRenderer.cgImage(.default, pixels: 0))
+        XCTAssertNil(AppIconRenderer.cgImage(.default, pixels: -1))
+        XCTAssertNil(AppIconRenderer.image(.default, points: .infinity))
+    }
+
     /// Every variant renders, and they look different (sampled at the body's top).
     func testIconVariantsRenderDistinctly() throws {
         var colors: [[UInt8]] = []
