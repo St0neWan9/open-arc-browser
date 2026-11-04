@@ -88,11 +88,11 @@ public enum WebToolbarBackgroundSource: Hashable, Sendable {
     /// The color the engine sampled at the top-right of the visible page when its last load
     /// finished, copied exactly: no blend, no theme tint, the same in light and dark Spaces.
     case page(RGBAColor)
-    /// The Space-mode neutral: the sample landed on a classic scrollbar ([06 §17.4] observed), or
-    /// the page has not been sampled yet (inferred).
+    /// The Space-mode neutral: the sample landed on a classic scrollbar ([06 §17.4] observed).
     case neutral
-    /// No page (an empty panel or a new empty split pane): the bar is transparent over the panel
-    /// fill. [06 §17.4] observed the panel color; "transparent" is inferred.
+    /// No page (an empty panel or a new empty split pane), or a page not sampled yet (B166): the
+    /// bar is transparent over the panel fill. [06 §17.4] observed the panel color; "transparent"
+    /// is inferred.
     case transparent
 }
 

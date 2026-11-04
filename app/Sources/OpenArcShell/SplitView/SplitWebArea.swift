@@ -55,10 +55,6 @@ struct SplitWebArea: View {
                 .frame(width: divider.frame.width, height: divider.frame.height)
                 .offset(x: divider.frame.minX, y: divider.frame.minY)
             }
-            // The command bar sits inside its pane, outside the pane's rounded clip.
-            if let barTab = model.commandBarPaneTabID, let pane = panes.first(where: { $0.tabID == barTab }) {
-                PaneCommandBarOverlay(commandBar: model.paneCommandBar, palette: palette, paneFrame: pane.frame)
-            }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         // Panes other than the selected tab may not have an engine tab yet.
@@ -116,20 +112,6 @@ struct SplitPaneView: View {
             }
         }
         .background(PointerDownObserver(onPointerDown: { model.focusPane(bar.tabID) }))
-    }
-}
-
-/// The command bar in the lower right of the pane it belongs to. [06 §5] observed.
-struct PaneCommandBarOverlay: View {
-    @ObservedObject var commandBar: CommandBarViewModel
-    let palette: ThemePalette
-    let paneFrame: CGRect
-
-    var body: some View {
-        let layout = CommandBarLayout(presentation: .pane, resultCount: commandBar.results.count)
-        let frame = layout.panelFrame(in: paneFrame.size)
-        CommandBarView(viewModel: commandBar, palette: palette)
-            .offset(x: paneFrame.minX + frame.minX, y: paneFrame.minY + frame.minY)
     }
 }
 

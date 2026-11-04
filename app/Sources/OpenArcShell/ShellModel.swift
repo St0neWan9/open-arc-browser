@@ -141,10 +141,12 @@ public final class ShellModel: ObservableObject {
         self.commandBar = CommandBarViewModel(
             sources: commandBarDefaultSources(workspace: { @MainActor in controller.workspace })
         )
+        // A split pane's bar is the window bar (⌘T's size, place and rows); only its target is the
+        // pane. B165, observed in Arc 1.170 (2026-11-04): Add Split View opens the same centered bar.
         self.paneCommandBar = CommandBarViewModel(
             sources: commandBarDefaultSources(workspace: { @MainActor in controller.workspace }),
             mode: .currentTab,
-            presentation: .pane
+            presentation: .window
         )
         self.spaceFlow = SpaceFlowModel(sidebar: sidebar, now: controller.now, makeID: controller.makeID)
         self.profileFlow = ProfileFlowModel(sidebar: sidebar)
@@ -416,9 +418,10 @@ public final class ShellModel: ObservableObject {
         }
     }
 
-    /// Opens the command bar inside the split pane of `tabID`: lower right, 400 pt wide.
-    /// URLs and searches load into that pane's tab. [06 §5] observed. `currentURL` prefills the
-    /// bar like ⌘L (the pane top bar's domain pill, B18); nil opens it empty.
+    /// Opens the command bar for the split pane of `tabID`: drawn where ⌘T's bar is, at its size
+    /// (B165, observed in Arc 1.170, 2026-11-04; supersedes the lower-right 400 pt reading of
+    /// [06 §5]). URLs and searches load into that pane's tab. `currentURL` prefills the bar like
+    /// ⌘L (the pane top bar's domain pill, B18); nil opens it empty.
     public func presentCommandBarInPane(_ tabID: UUID, currentURL: URL? = nil) {
         if isCommandBarPresented && commandBarPaneTabID == nil { commandBar.dismiss() }
         paneCommandBar.open(mode: .currentTab, currentURL: currentURL, currentTabID: tabID, currentSpaceID: selectedSpaceID)

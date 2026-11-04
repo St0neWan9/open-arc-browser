@@ -86,7 +86,10 @@ extension ShellModel {
         guard let tabID, sidebar.linkURL(for: tabID) != nil else { return .transparent }
         switch sidebar.liveState(for: tabID)?.pageTopColor {
         case .color(let color): return .page(color)
-        case .scrollbar, nil: return .neutral
+        case .scrollbar: return .neutral
+        // Not sampled yet (the page is still loading): the bar stays as on the blank panel until
+        // the page's color arrives. B166 (user, 2026-11-04: the bar flashed another color first).
+        case nil: return .transparent
         }
     }
 

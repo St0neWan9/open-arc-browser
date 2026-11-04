@@ -125,7 +125,8 @@ final class WebToolbarTests: XCTestCase {
         model.toggleWebToolbar()
         let base = try await selectExample(model)
         let live = try XCTUnwrap(model.sidebar.liveTab(for: base) as? FakeTab)
-        XCTAssertEqual(model.webToolbarBackgroundSource(for: base), .neutral, "not sampled yet (inferred)")
+        XCTAssertEqual(model.webToolbarBackgroundSource(for: base), .transparent,
+                       "B166: not sampled yet, the bar stays as on the blank panel")
         live.simulatePageTopColor(.color(RGBAColor(hex: 0xFD0200)))
         try await waitUntil { model.webToolbarBackgroundSource(for: base) == .page(RGBAColor(hex: 0xFD0200)) }
         XCTAssertEqual(model.webToolbarColors(for: base).background, RGBAColor(hex: 0xFD0200))

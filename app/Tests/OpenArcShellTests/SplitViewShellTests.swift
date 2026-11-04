@@ -35,26 +35,19 @@ final class SplitViewShellTests: XCTestCase {
         XCTAssertEqual(model.selectedTabID, new)
         XCTAssertTrue(model.isCommandBarPresented)
         XCTAssertEqual(model.commandBarPaneTabID, new)
-        XCTAssertEqual(model.paneCommandBar.presentation, .pane)
+        XCTAssertEqual(model.paneCommandBar.presentation, .window, "B165: the ⌘T bar")
     }
 
-    /// [06 §5] observed: the bar is about 400 pt wide at the lower right of the new pane and does
-    /// not cover the left pane.
-    func testPaneCommandBarFrameIsLowerRightOfNewPane() async throws {
+    /// B165 (Arc 1.170, 2026-11-04, observed): Add Split View opens the same bar as ⌘T, at the
+    /// window's command bar frame, with window rows; only its target is the new pane.
+    func testPaneCommandBarIsTheWindowBar() async throws {
         let model = makeModel()
-        let (base, new) = try await splitModel(model)
-        let container = CGRect(origin: .zero, size: MainWindowLayout(windowSize: CGSize(width: 1920, height: 985)).webPanelFrame.size)
-        let panes = model.splitPaneFrames(in: container)
-        let left = try XCTUnwrap(panes.first { $0.tabID == base }).frame
-        let right = try XCTUnwrap(panes.first { $0.tabID == new }).frame
-        let bar = CommandBarLayout(presentation: .pane, resultCount: model.paneCommandBar.results.count)
-        let local = bar.panelFrame(in: right.size)
-        let inContainer = local.offsetBy(dx: right.minX, dy: right.minY)
-        XCTAssertEqual(inContainer.width, Metrics.SplitView.paneCommandBarWidth)
-        XCTAssertEqual(inContainer.maxX, right.maxX - CommandBarLayout.paneMargin, accuracy: 0.001)
-        XCTAssertEqual(inContainer.maxY, right.maxY - CommandBarLayout.paneMargin, accuracy: 0.001)
-        XCTAssertGreaterThanOrEqual(inContainer.minX, right.minX)
-        XCTAssertGreaterThan(inContainer.minX, left.maxX)
+        let (_, new) = try await splitModel(model)
+        XCTAssertEqual(model.commandBarPaneTabID, new)
+        XCTAssertEqual(model.paneCommandBar.presentation, .window)
+        let window = CGSize(width: 1920, height: 985)
+        XCTAssertEqual(CommandBarLayout(presentation: model.paneCommandBar.presentation, resultCount: 5).panelFrame(in: window),
+                       CommandBarLayout(presentation: .window, resultCount: 5).panelFrame(in: window))
     }
 
     /// [06 §5] observed: choosing a result loads it into the new pane's tab, even if the selection

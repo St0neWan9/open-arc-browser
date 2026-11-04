@@ -113,11 +113,13 @@ struct MainWindowContent: View {
                     )
                 }
 
-                // A pane command bar is drawn inside its pane by `SplitWebArea`. Opening is a
-                // one-frame jump; closing fades out over ≈ 50 ms ([07 §11], `Motion.commandBarClose`).
+                // The window bar, also for a split pane (B165: same size and place as ⌘T). Opening
+                // is a one-frame jump; closing fades out over ≈ 50 ms ([07 §11], `Motion.commandBarClose`).
                 ZStack(alignment: .topLeading) {
-                    if model.isCommandBarPresented && model.commandBarPaneTabID == nil {
-                        CommandBarOverlay(model: model, commandBar: model.commandBar, windowSize: proxy.size, palette: palette)
+                    if model.isCommandBarPresented {
+                        CommandBarOverlay(model: model,
+                                          commandBar: model.commandBarPaneTabID == nil ? model.commandBar : model.paneCommandBar,
+                                          windowSize: proxy.size, palette: palette)
                             .transition(.asymmetric(insertion: .identity, removal: .opacity))
                     }
                 }
@@ -155,7 +157,7 @@ struct MainWindowContent: View {
             // The dock "+" New menu runs its rows on this window. [06 §23] B75.
             .environment(\.sidebarNewMenuTarget, model)
             // The window command bar and onboarding cover the sidebar: presses go to them.
-            .environment(\.sidebarAcceptsPointer, !(model.isCommandBarPresented && model.commandBarPaneTabID == nil)
+            .environment(\.sidebarAcceptsPointer, !model.isCommandBarPresented
                          && !model.controller.onboarding.isShown(in: model) && !isModalPresented)
             .environment(\.windowDrawnPermissionTab, permissionTabAtSiteControls)
             // ⌘S: web panel resize and sidebar slide on one fast ease-out. [07 §11] B40.
