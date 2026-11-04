@@ -90,9 +90,8 @@ public enum WebToolbarBackgroundSource: Hashable, Sendable {
     case page(RGBAColor)
     /// The Space-mode neutral: the sample landed on a classic scrollbar ([06 §17.4] observed).
     case neutral
-    /// No page (an empty panel or a new empty split pane), or a page not sampled yet (B166): the
-    /// bar is transparent over the panel fill. [06 §17.4] observed the panel color; "transparent"
-    /// is inferred.
+    /// No page (an empty panel or a new empty split pane): the bar is transparent over the panel
+    /// fill. [06 §17.4] observed the panel color; "transparent" is inferred.
     case transparent
 }
 
@@ -125,6 +124,12 @@ public struct WebToolbarColors: Hashable, Sendable {
 }
 
 extension ThemeDerivation {
+    /// A blank page's color: #FFFFFF light, #121212 dark (Arc's about:blank, [07 §8.1] observed).
+    /// The bar shows it while a page loads and has not been sampled yet (B166).
+    public static func blankPageColor(_ appearance: ResolvedAppearance) -> RGBAColor {
+        appearance == .dark ? RGBAColor(hex: 0x121212) : RGBAColor(hex: 0xFFFFFF)
+    }
+
     /// The neutral bar when the sample hits a classic scrollbar: light #F3F2F3, dark #3E3E3E.
     /// [06 §17.4] observed (E18; E16's #EFEFEF–#F3F3F2 / #3D3E3D were this fallback, inferred).
     public static let webToolbarFallbackLight = RGBAColor(hex: 0xF3F2F3)

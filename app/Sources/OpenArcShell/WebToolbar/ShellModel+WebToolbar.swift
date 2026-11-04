@@ -87,9 +87,10 @@ extension ShellModel {
         switch sidebar.liveState(for: tabID)?.pageTopColor {
         case .color(let color): return .page(color)
         case .scrollbar: return .neutral
-        // Not sampled yet (the page is still loading): the bar stays as on the blank panel until
-        // the page's color arrives. B166 (user, 2026-11-04: the bar flashed another color first).
-        case nil: return .transparent
+        // Not sampled yet (the page is still loading): the bar takes the blank page's color until
+        // the page's own color arrives (#FFFFFF light, #121212 dark, Arc's about:blank, [07 §8.1]
+        // observed). B166 (user, 2026-11-04: not the gray neutral, and not the see-through panel tint).
+        case nil: return .page(ThemeDerivation.blankPageColor(windowPalette.appearance))
         }
     }
 
