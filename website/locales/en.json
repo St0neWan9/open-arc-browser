@@ -188,5 +188,7 @@
   "demo.ideas.kicker": "A SMALL SPARK. SOMETHING NEW.",
   "demo.ideas.description.first": "Keep the things that make you pause.",
   "demo.ideas.description.last": "Your next idea might start right here.",
-  "locale.menuLabel": "Choose language"
+  "locale.menuLabel": "Choose language",
+  "locale.currentName": "English",
+  "locale.currentShort": "EN"
 }

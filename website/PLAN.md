@@ -23,7 +23,7 @@
 
 - English: https://open-arc.trentaml.com/
 - Simplified Chinese: https://open-arc.trentaml.com/zh/
-- Cloudflare deployment version: `45492daf-3b6d-468f-9d53-ff235726a4ed`.
+- Cloudflare deployment version: `f3ba3420-b761-4d05-9f28-fb21839700a8`.
 - Acquisition buttons link to the public repository until a downloadable release exists.
 
 ## Brand rollout validation — November 4, 2026
@@ -43,3 +43,12 @@
 - Checked the desktop header and responsive layouts at 390 px and 320 px. The acquisition action remains visible at the trailing edge.
 - Verified current-language highlighting, English navigation, Enter opening and Escape dismissal. Opening mobile navigation dismisses the language dropdown.
 - Deployed HTML for both locales, CSS, JavaScript and SVG symbols match the local build. Visual evidence is in `website/design/header-refinement/`.
+
+- LP9 — Done: Add the current language beside the globe, with full desktop names and compact mobile names. Preserve accessible full-language labels and existing switching behavior.
+
+
+## Current-language label validation — November 4, 2026
+
+- Website build and static checks passed. Browser checks confirmed full desktop names, compact names at 320 px, full dropdown labels and the updated accessible control name after switching to English.
+- English and Chinese HTML and the stylesheet return HTTP 200 and match the deployed build. Screenshots: `website/design/language-label/`.
+- Native build passed without compiler warnings. The first full test run had one unrelated quit-sequence timeout; a full rerun passed all 2,089 tests (6 skipped, 0 failures), including that case. No native source changes were needed.

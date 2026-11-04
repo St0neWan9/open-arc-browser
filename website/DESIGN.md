@@ -176,7 +176,7 @@ Use content-driven adjustments within these ranges; do not depend on a single id
 
 - Folded-ribbon SVG mark plus a plain `Open Arc` wordmark.
 - Desktop links: Features / Move from Arc / Your data / GitHub.
-- Keep the primary acquisition action at the far right. Place a globe language disclosure immediately before it; list English and 简体中文 with a check beside the current language.
+- Keep the primary acquisition action at the far right. Place a globe language disclosure immediately before it. Show the current language beside the globe: English / 简体中文 on desktop, EN / 简中 at widths up to 640 px. The dropdown always lists full names, with a check beside the current language.
 - Language choices use real links, remember the selection, and preserve the current section. The disclosure closes on Escape, outside click, or focus leaving it.
 - On narrow screens, keep the acquisition button visible, collapse navigation links into a menu, and use the standalone brand mark when space is limited.
 - Pale translucent background; blur is progressive enhancement, with a readable solid fallback.
