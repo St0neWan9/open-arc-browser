@@ -1,0 +1,13 @@
+{
+  "name": "open-arc-landing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --check script.js && node scripts/check.mjs",
+    "dev": "npm run build && node scripts/serve.mjs",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "engines": { "node": ">=22" }
+}
