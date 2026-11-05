@@ -118,8 +118,10 @@ enum AppIconArtwork {
             }
         }
         ctx.restoreGState()
-        ctx.addPath(tile); ctx.setLineWidth(1.5)
-        ctx.setStrokeColor(color(0xFFFFFF, alpha: variant == "night" || variant == "prism" ? 0.12 : 0.65)); ctx.strokePath()
+        if variant != "slate" {
+            ctx.addPath(tile); ctx.setLineWidth(1.5)
+            ctx.setStrokeColor(color(0xFFFFFF, alpha: variant == "night" || variant == "prism" ? 0.12 : 0.65)); ctx.strokePath()
+        }
         return ctx.makeImage()
     }
 
