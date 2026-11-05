@@ -13,8 +13,9 @@ import OpenArcDesign
 //   captured; it uses the classic red / yellow / green (inferred).
 //
 // macOS 26 draws its own buttons in a newer style, so none of the system's drawing shows: the
-// standard buttons stay in place, clickable and in the accessibility tree, fully transparent, and a
-// mouse-transparent view in the same title bar view draws both looks over them.
+// standard buttons stay in place, clickable and in the accessibility tree, and a mouse-transparent
+// view above them in the same title bar view draws both looks. At rest the buttons are transparent;
+// while hovered they are opaque (AppKit ignores a transparent one) under our opaque 14 pt discs.
 
 /// What the traffic lights look like, independent of AppKit for the tests.
 enum WindowButtonLook {
@@ -177,8 +178,8 @@ private extension RGBAColor {
 }
 
 extension MainWindowChromeConfigurator.Coordinator {
-    /// Keeps the drawn buttons over the real ones. The real buttons stay transparent except in full
-    /// screen, where the system's title bar shows them. `animated` moves the view with the buttons
+    /// Keeps the drawn buttons over the real ones. The real buttons are transparent at rest, opaque
+    /// (and covered) while hovered, and shown as they are in full screen. `animated` moves the view with the buttons
     /// inside the caller's animation group. `lightInk` nil keeps the view's current ink.
     static func syncMute(in window: NSWindow, animated: Bool = false, targetOrigins: [CGPoint]? = nil, lightInk: Bool? = nil) {
         let buttons = WindowChromeLayout.buttonTypes.compactMap { window.standardWindowButton($0) }
@@ -188,6 +189,8 @@ extension MainWindowChromeConfigurator.Coordinator {
                 let view = WindowButtonMuteView()
                 view.identifier = WindowButtonMuteView.identifier
                 view.wantsLayer = true
+                // The buttons' own layers draw their rollover above later siblings: stay on top.
+                view.layer?.zPosition = 100
                 parent.addSubview(view, positioned: .above, relativeTo: buttons[2])
                 return view
             }()
@@ -205,7 +208,13 @@ extension MainWindowChromeConfigurator.Coordinator {
         }
         mute.discCenters = frames.map { CGPoint(x: $0.midX - union.minX, y: $0.midY - union.minY) }
         mute.isHidden = hidden
-        let alpha: CGFloat = hidden ? 1 : 0
+        // AppKit takes a title bar button at alpha 0 for absent: no click, no tiling menu on the
+        // zoom button. While hovered they are opaque under our opaque hovered discs (B175).
+        let alpha: CGFloat = hidden || mute.isHovered ? 1 : 0
         for button in buttons where button.alphaValue != alpha { button.alphaValue = alpha }
+        mute.onHover = { [weak window] _ in
+            guard let window else { return }
+            MainActor.assumeIsolated { syncMute(in: window) }
+        }
     }
 }
