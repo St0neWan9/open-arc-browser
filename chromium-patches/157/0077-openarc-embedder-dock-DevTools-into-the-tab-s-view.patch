@@ -1,0 +1,696 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Thu, 5 Nov 2026 23:08:31 +0700
+Subject: [PATCH] openarc: embedder: dock DevTools into the tab's view
+
+DevTools for an embedder tab now loads with can_dock and follows the
+front end's Dock side choice, like Chrome's docked DevTools: the tab's
+view (OpenArcTabContainerView, what OACTab.nativeView returns) holds
+the front end under the page and puts the page at the bounds the front
+end asks for (left, bottom or right); undocked, the front end moves to
+a window of its own. Developer Tools toggles a docked DevTools closed.
+---
+ openarc/BUILD.gn                              |   3 +
+ openarc/bridge/oac_tab.mm                     |  16 +-
+ openarc/bridge/public/OpenArcCore/OACTab.h    |  17 +-
+ openarc/browser/openarc_page_tools.h          |  15 +-
+ openarc/browser/openarc_page_tools.mm         | 197 +++++++++++++++---
+ openarc/browser/openarc_tab_container_view.h  |  48 +++++
+ openarc/browser/openarc_tab_container_view.mm | 103 +++++++++
+ 7 files changed, 347 insertions(+), 52 deletions(-)
+ create mode 100644 openarc/browser/openarc_tab_container_view.h
+ create mode 100644 openarc/browser/openarc_tab_container_view.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 12fe314c399f..92f65afe7cc4 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -205,6 +205,8 @@ source_set("page_tools") {
+   sources = [
+     "browser/openarc_page_tools.h",
+     "browser/openarc_page_tools.mm",
++    "browser/openarc_tab_container_view.h",
++    "browser/openarc_tab_container_view.mm",
+   ]
+   deps = [
+     "//base",
+@@ -227,6 +229,7 @@ source_set("page_tools") {
+     "//net/traffic_annotation",
+     "//third_party/blink/public/mojom:mojom_platform",
+     "//ui/base",
++    "//ui/gfx/geometry",
+     "//url",
+   ]
+   frameworks = [
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 7208565516d8..4041f6889f49 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -93,6 +93,7 @@
+ #import "openarc/bridge/oac_translation_internal.h"
+ #include "openarc/browser/openarc_ad_blocker.h"
+ #include "openarc/browser/openarc_link_preview.h"
++#import "openarc/browser/openarc_tab_container_view.h"
+ #include "openarc/browser/openarc_page_tools.h"
+ #include "openarc/browser/openarc_page_top_color.h"
+ #include "openarc/browser/openarc_tab_helpers.h"
+@@ -651,6 +652,8 @@ @implementation OACTab {
+   __weak id<OACTabDelegate> _delegate;
+   __weak id<OACDialogDelegate> _dialogDelegate;
+   std::unique_ptr<content::WebContents> _webContents;
++  // The view the shell hosts: the page's view, and DevTools docked under it.
++  OpenArcTabContainerView* __strong _containerView;
+   std::unique_ptr<openarc::TabWebContentsBridge> _bridge;
+   // Samples the page's top-right color after each load (plan B45).
+   std::unique_ptr<openarc::PageTopColorSampler> _pageTopColorSampler;
+@@ -805,7 +808,8 @@ - (void)setUpWithWebContents:(std::unique_ptr<content::WebContents>)contents
+   }
+   NSView* view = _webContents->GetNativeView().GetNativeNSView();
+   view.frame = NSMakeRect(0, 0, size.width, size.height);
+-  view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
++  _containerView = [[OpenArcTabContainerView alloc] initWithPageView:view];
++  _containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+ 
+   [LiveTabs() setObject:self forKey:_identifier];
+   [OACApplication.sharedApplication registerTab:self];
+@@ -911,7 +915,7 @@ - (NSData*)sessionHistory {
+ }
+ 
+ - (NSView*)nativeView {
+-  return _webContents ? _webContents->GetNativeView().GetNativeNSView() : nil;
++  return _webContents ? _containerView : nil;
+ }
+ 
+ // MARK: State
+@@ -1405,13 +1409,15 @@ - (void)setVisible:(BOOL)visible {
+   // (WebContentsViewMac::CreateView); WasShown() alone does not unhide the
+   // NSView, which Chrome does through its views host. Do both, in the order
+   // that never shows a stale frame.
+-  NSView* view = self.nativeView;
++  NSView* page = _webContents->GetNativeView().GetNativeNSView();
+   if (visible) {
+-    view.hidden = NO;
++    page.hidden = NO;
++    _containerView.hidden = NO;
+     _webContents->WasShown();
+   } else {
+     _webContents->WasHidden();
+-    view.hidden = YES;
++    page.hidden = YES;
++    _containerView.hidden = YES;
+   }
+ }
+ 
+diff --git a/openarc/bridge/public/OpenArcCore/OACTab.h b/openarc/bridge/public/OpenArcCore/OACTab.h
+index e31e2f69d813..375a729d4fb5 100644
+--- a/openarc/bridge/public/OpenArcCore/OACTab.h
++++ b/openarc/bridge/public/OpenArcCore/OACTab.h
+@@ -253,8 +253,9 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
+ 
+ // MARK: View hosting (`TabSurface`)
+ 
+-/// The view that shows the page. The shell's `SurfaceHost` adds it as a subview and sizes it;
+-/// the bridge never moves it between superviews itself. A view is in at most one superview at a
++/// The view that shows the page, and DevTools while it is docked into the tab (the page then
++/// takes the part DevTools leaves it). The shell's `SurfaceHost` adds it as a subview and sizes
++/// it; the bridge never moves it between superviews itself. A view is in at most one superview at a
+ /// time, which matches "a surface is in at most one host" in Surface.swift. nil after `-close`.
+ @property (nonatomic, readonly, nullable) NSView *nativeView;
+ 
+@@ -336,12 +337,14 @@ typedef NS_ENUM(NSInteger, OACSavePageFormat) {
+     NS_SWIFT_NAME(savePage(to:format:completionHandler:));
+ 
+ /// View ▸ Developer ▸ Developer Tools / Inspect Elements / JavaScript Console / Network Inspector
+-/// ([01 §View] observed items, plan C15). DevTools opens in its own window owned by the bridge,
+-/// one per tab, reused by later calls and closed with the tab (inferred: the spec records no
+-/// docked DevTools). `panel`: nil = the last panel used, `"elements"` = Inspect Elements (the
+-/// Elements panel in element-picking mode), `"console"`, `"network"`.
++/// ([01 §View] observed items, plan C15). One DevTools per tab, reused by later calls and closed
++/// with the tab. Like Arc's (observed, B180) it docks into `nativeView`, on the right by default;
++/// its own Dock side menu moves it to the left, the bottom or a window owned by the bridge.
++/// Developer Tools (`panel` nil) closes a docked DevTools again (a toggle) and brings an
++/// undocked one forward. `panel`: nil = the last panel used, `"elements"` = Inspect Elements
++/// (the Elements panel in element-picking mode), `"console"`, `"network"`.
+ - (void)showDevToolsWithPanel:(nullable NSString *)panel NS_SWIFT_NAME(showDevTools(panel:));
+-/// Closes this tab's DevTools window, if open.
++/// Closes this tab's DevTools, docked or in its window, if open.
+ - (void)closeDevTools;
+ /// View ▸ Developer ▸ View Source: asks the delegate for a new tab with `view-source:` +URL.
+ - (void)viewSource;
+diff --git a/openarc/browser/openarc_page_tools.h b/openarc/browser/openarc_page_tools.h
+index aa8f55781304..664ab6cbf415 100644
+--- a/openarc/browser/openarc_page_tools.h
++++ b/openarc/browser/openarc_page_tools.h
+@@ -37,12 +37,15 @@ enum class DevToolsCommand {
+   kShowPanel,
+ };
+ 
+-// Shows Chrome's DevTools front end for `inspected` in a window of its own,
+-// one per inspected tab; a second command reuses it. Chrome docks DevTools
+-// into its Browser window, which Open Arc does not have, and the spec records
+-// nothing about docking, so the front end gets a separate resizable window
+-// (inferred). The window closes with its tab, with ⌘W, or with its close
+-// button. Does nothing when policy forbids DevTools for the profile.
++// Shows Chrome's DevTools front end for `inspected`, one per inspected tab; a
++// second command reuses it. Like Arc's (observed), it docks into the tab's
++// view (OpenArcTabContainerView), on the right by default, and its Dock side
++// menu moves it to the left, the bottom or a window of its own; the choice is
++// DevTools' own setting, kept in the profile. Developer Tools (`kShow`) on a
++// tab whose DevTools is docked closes it again; on an undocked one it brings
++// the window forward. DevTools closes with its tab, its window's close button
++// or ⌘W in the window. Does nothing when policy forbids DevTools for the
++// profile.
+ void ShowDevTools(content::WebContents* inspected,
+                   DevToolsCommand command,
+                   const std::string& panel);
+diff --git a/openarc/browser/openarc_page_tools.mm b/openarc/browser/openarc_page_tools.mm
+index ae9ff0483b6e..efbd76c5dea3 100644
+--- a/openarc/browser/openarc_page_tools.mm
++++ b/openarc/browser/openarc_page_tools.mm
+@@ -21,6 +21,8 @@
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
++#include "chrome/browser/devtools/devtools_settings.h"
+ #include "chrome/browser/devtools/devtools_ui_bindings.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/printing/print_view_manager_common.h"
+@@ -52,6 +54,8 @@
+ #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
+ #include "url/gurl.h"
+ 
++#import "openarc/browser/openarc_tab_container_view.h"
++
+ @class OpenArcDevToolsWindowController;
+ 
+ namespace openarc {
+@@ -59,7 +63,8 @@
+ namespace {
+ 
+ // The front end Chrome loads for a tab target (DevToolsWindow::GetDevToolsURL
+-// for kFrontendDefault, without "can_dock": there is nothing to dock into).
++// for kFrontendDefault, with "can_dock": the front end offers its Dock side
++// choices, undocked, left, bottom and right, as Arc's does (observed).
+ constexpr char kFrontendURL[] = "devtools://devtools/bundled/devtools_app.html";
+ 
+ // Initial size of a DevTools window, in points. inferred: Chrome's own
+@@ -90,11 +95,14 @@
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+ 
+-// One DevTools front end (its own WebContents) in an NSWindow, attached to the
+-// inspected tab. Plays the role of Chrome's undocked DevToolsWindow for a tab
+-// that has no Browser: it serves the front end's bindings (through a
+-// forwarding DevToolsUIBindings::Delegate, which the bindings own) and is the
+-// delegate of the front end's WebContents.
++// One DevTools front end (its own WebContents) attached to the inspected tab,
++// docked into the tab's view (OpenArcTabContainerView) or in an NSWindow of
++// its own. Plays the role of Chrome's DevToolsWindow for a tab that has no
++// Browser: it serves the front end's bindings (through a forwarding
++// DevToolsUIBindings::Delegate, which the bindings own) and is the delegate of
++// the front end's WebContents. As in Chrome, the front end decides where it
++// goes: it reports docked or not once loaded and whenever its Dock side
++// changes, and where the page goes inside the tab's view.
+ class DevToolsHost : public content::WebContentsDelegate,
+                      public content::WebContentsObserver {
+  public:
+@@ -103,10 +111,11 @@
+   DevToolsHost& operator=(const DevToolsHost&) = delete;
+   ~DevToolsHost() override;
+ 
+-  // Loads the front end on `panel` ("" = last used), attaches it to the
+-  // inspected tab and shows the window. Returns false when DevTools is not
+-  // allowed for the profile.
++  // Loads the front end on `panel` ("" = last used) and attaches it to the
++  // inspected tab; it shows once loaded, docked or in its window. Returns
++  // false when DevTools is not allowed for the profile.
+   bool Start(const std::string& panel);
++  bool is_docked() const { return docked_; }
+   // Runs `command` now if the front end is loaded, else once it is.
+   void Run(DevToolsCommand command, const std::string& panel);
+   // Closes the window; the owner then destroys this host.
+@@ -121,6 +130,8 @@
+   void OpenSearchResultsInNewTab(const std::string& query);
+   void OnLoadCompleted();
+   void ConnectionReady();
++  void SetIsDocked(bool docked);
++  void SetInspectedPageBounds(const gfx::Rect& rect);
+ 
+   // content::WebContentsDelegate (the front end's contents):
+   content::WebContents* OpenURLFromTab(
+@@ -147,7 +158,11 @@ void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+  private:
+   void RunNow(DevToolsCommand command, const std::string& panel);
+   void MaybeBecomeReady();
++  // Shows the front end where it asked to be, once it loaded and said where.
++  void MaybePresent();
++  void Present();
+   void UpdateTitle();
++  NSView* FrontendView();
+ 
+   base::WeakPtr<content::WebContents> inspected_;
+   raw_ptr<DevToolsHostOwner> owner_;
+@@ -162,6 +177,13 @@ void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+   bool connection_ready_ = false;
+   bool loaded_ = false;
+   bool closing_ = false;
++  // The front end said whether it is docked (it does once it loaded), and
++  // was shown accordingly.
++  bool dock_set_ = false;
++  bool docked_ = false;
++  bool presented_ = false;
++  // The inspected tab's view, where the docked front end goes.
++  OpenArcTabContainerView* __weak container_ = nil;
+   bool has_pending_command_ = false;
+   DevToolsCommand pending_command_ = DevToolsCommand::kShow;
+   std::string pending_panel_;
+@@ -169,8 +191,8 @@ void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+ };
+ 
+ // The delegate the front end's bindings own. Forwards to the host while it
+-// lives; everything Chrome's docked-window features need (infobars, eye
+-// dropper, docking, certificate viewer) is unsupported.
++// lives; the rest of Chrome's window features (infobars, eye dropper,
++// certificate viewer) is unsupported.
+ class DevToolsBindingsForwarder : public DevToolsUIBindings::Delegate {
+  public:
+   explicit DevToolsBindingsForwarder(base::WeakPtr<DevToolsHost> host)
+@@ -190,9 +212,17 @@ void CloseWindow() override {
+     }
+   }
+   void Inspect(scoped_refptr<content::DevToolsAgentHost> host) override {}
+-  void SetInspectedPageBounds(const gfx::Rect& rect) override {}
++  void SetInspectedPageBounds(const gfx::Rect& rect) override {
++    if (host_) {
++      host_->SetInspectedPageBounds(rect);
++    }
++  }
+   void InspectElementCompleted() override {}
+-  void SetIsDocked(bool is_docked) override {}
++  void SetIsDocked(bool is_docked) override {
++    if (host_) {
++      host_->SetIsDocked(is_docked);
++    }
++  }
+   void OpenInNewTab(const std::string& url) override {
+     if (host_) {
+       host_->OpenInNewTab(url);
+@@ -239,10 +269,11 @@ void ShowCertificateViewer(const std::string& cert_chain) override {}
+ }  // namespace
+ }  // namespace openarc
+ 
+-// The NSWindow side of a DevToolsHost.
++// The NSWindow side of an undocked DevToolsHost.
+ @interface OpenArcDevToolsWindowController : NSObject <NSWindowDelegate>
+-- (instancetype)initWithHost:(openarc::DevToolsHost*)host
+-                        view:(NSView*)view;
++- (instancetype)initWithHost:(openarc::DevToolsHost*)host;
++// Puts the front end's view into the window.
++- (void)holdView:(NSView*)view;
+ @property(nonatomic, readonly) NSWindow* window;
+ - (void)detachHost;
+ @end
+@@ -252,7 +283,7 @@ @implementation OpenArcDevToolsWindowController {
+   NSWindow* __strong _window;
+ }
+ 
+-- (instancetype)initWithHost:(openarc::DevToolsHost*)host view:(NSView*)view {
++- (instancetype)initWithHost:(openarc::DevToolsHost*)host {
+   if ((self = [super init])) {
+     _host = host;
+     NSRect frame =
+@@ -274,13 +305,20 @@ - (instancetype)initWithHost:(openarc::DevToolsHost*)host view:(NSView*)view {
+     if (![_window setFrameUsingName:@"OpenArcDevToolsWindow"]) {
+       [_window center];
+     }
+-    view.frame = _window.contentView.bounds;
+-    view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+-    [_window.contentView addSubview:view];
+   }
+   return self;
+ }
+ 
++- (void)holdView:(NSView*)view {
++  if (view.superview == _window.contentView) {
++    return;
++  }
++  [view removeFromSuperview];
++  view.frame = _window.contentView.bounds;
++  view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
++  [_window.contentView addSubview:view];
++}
++
+ - (NSWindow*)window {
+   return _window;
+ }
+@@ -334,6 +372,9 @@ - (void)windowWillClose:(NSNotification*)notification {
+   [window_controller_.window orderOut:nil];
+   [window_controller_.window close];
+   window_controller_ = nil;
++  if (container_.devToolsView && container_.devToolsView == FrontendView()) {
++    [container_ setDevToolsView:nil];
++  }
+   if (bindings_) {
+     bindings_->Detach();
+   }
+@@ -370,7 +411,7 @@ - (void)windowWillClose:(NSNotification*)notification {
+   // The URL Chrome builds for a tab target, sanitized the same way.
+   std::string url = std::string(kFrontendURL) +
+                     "?remoteBase=" + DevToolsUI::GetRemoteBaseURL().spec() +
+-                    "&targetType=tab";
++                    "&targetType=tab&can_dock=true";
+   if (!panel.empty()) {
+     url += "&panel=" + panel;
+   }
+@@ -386,12 +427,10 @@ - (void)windowWillClose:(NSNotification*)notification {
+       new DevToolsBindingsForwarder(weak_factory_.GetWeakPtr()));
+   bindings_->AttachTo(content::DevToolsAgentHost::GetOrCreateForTab(inspected));
+ 
+-  window_controller_ = [[OpenArcDevToolsWindowController alloc]
+-      initWithHost:this
+-              view:frontend_->GetNativeView().GetNativeNSView()];
+-  UpdateTitle();
+-  [window_controller_.window makeKeyAndOrderFront:nil];
+-  frontend_->Focus();
++  // Shown once the front end loaded and said whether it is docked
++  // (DevToolsWindow waits for the same two), so it never flashes in the
++  // wrong place.
++  container_ = [OpenArcTabContainerView containerOf:inspected];
+   return true;
+ }
+ 
+@@ -427,9 +466,76 @@ - (void)windowWillClose:(NSNotification*)notification {
+ void DevToolsHost::OnLoadCompleted() {
+   document_loaded_ = true;
+   UpdateTitle();
++  MaybePresent();
+   MaybeBecomeReady();
+ }
+ 
++void DevToolsHost::SetIsDocked(bool docked) {
++  if (closing_) {
++    return;
++  }
++  // Docking needs the tab's view; a tab hosted elsewhere stays undocked.
++  if (!container_) {
++    docked = false;
++  }
++  const bool changed = !dock_set_ || docked != docked_;
++  dock_set_ = true;
++  docked_ = docked;
++  if (!presented_) {
++    MaybePresent();
++  } else if (changed) {
++    Present();
++  }
++}
++
++void DevToolsHost::SetInspectedPageBounds(const gfx::Rect& rect) {
++  // As DevToolsWindow::SetInspectedPageBounds: the dock side keeps
++  // DevTools' minimum room when the tab's view shrinks.
++  content::WebContents* inspected = inspected_.get();
++  devtools::DockSide side = devtools::DockSide::kNone;
++  if (docked_ && inspected) {
++    side = DevToolsSettings::GetDockSide(
++        Profile::FromBrowserContext(inspected->GetBrowserContext()));
++  }
++  [container_ setResizingStrategy:DevToolsContentsResizingStrategy(side, rect)];
++}
++
++NSView* DevToolsHost::FrontendView() {
++  return frontend_ ? frontend_->GetNativeView().GetNativeNSView() : nil;
++}
++
++void DevToolsHost::MaybePresent() {
++  if (presented_ || closing_ || !dock_set_ || !document_loaded_) {
++    return;
++  }
++  presented_ = true;
++  Present();
++}
++
++void DevToolsHost::Present() {
++  NSView* view = FrontendView();
++  if (!view) {
++    return;
++  }
++  if (docked_) {
++    // Into the tab's view, under the page; the window, if any, goes away.
++    [window_controller_.window orderOut:nil];
++    [container_ setDevToolsView:view];
++  } else {
++    if (container_.devToolsView == view) {
++      [container_ setDevToolsView:nil];
++    }
++    if (!window_controller_) {
++      window_controller_ =
++          [[OpenArcDevToolsWindowController alloc] initWithHost:this];
++    }
++    [window_controller_ holdView:view];
++    UpdateTitle();
++    [window_controller_.window makeKeyAndOrderFront:nil];
++  }
++  frontend_->Focus();
++}
++
+ void DevToolsHost::ConnectionReady() {
+   connection_ready_ = true;
+   MaybeBecomeReady();
+@@ -447,11 +553,13 @@ - (void)windowWillClose:(NSNotification*)notification {
+ }
+ 
+ void DevToolsHost::ActivateWindow() {
+-  if (closing_) {
++  if (closing_ || !presented_) {
+     return;
+   }
+-  UpdateTitle();
+-  [window_controller_.window makeKeyAndOrderFront:nil];
++  if (!docked_) {
++    UpdateTitle();
++    [window_controller_.window makeKeyAndOrderFront:nil];
++  }
+   if (frontend_) {
+     frontend_->Focus();
+   }
+@@ -475,6 +583,18 @@ - (void)windowWillClose:(NSNotification*)notification {
+   closing_ = true;
+   [window_controller_ detachHost];
+   [window_controller_.window orderOut:nil];
++  NSView* view = FrontendView();
++  if (view && container_.devToolsView == view) {
++    // The page takes the whole view back, and the focus if DevTools had it.
++    NSWindow* window = view.window;
++    NSResponder* responder = window.firstResponder;
++    const bool had_focus = [responder isKindOfClass:[NSView class]] &&
++                           [(NSView*)responder isDescendantOf:view];
++    [container_ setDevToolsView:nil];
++    if (had_focus && inspected_) {
++      inspected_->Focus();
++    }
++  }
+   owner_->ResetHostSoon();
+ }
+ 
+@@ -547,9 +667,9 @@ - (void)windowWillClose:(NSNotification*)notification {
+ bool DevToolsHost::HandleKeyboardEvent(
+     content::WebContents* source,
+     const input::NativeWebKeyboardEvent& event) {
+-  // Keys DevTools did not use: ⌘W closes the window (the window's own key
+-  // equivalent), the rest go to the app's menu (View ▸ Developer ▸ items keep
+-  // working while DevTools has focus).
++  // Keys DevTools did not use: ⌘W closes the DevTools window (the window's
++  // own key equivalent), the rest, and ⌘W while docked, go to the app's menu
++  // (View ▸ Developer ▸ items keep working while DevTools has focus).
+   if (event.skip_if_unhandled) {
+     return false;
+   }
+@@ -559,7 +679,8 @@ - (void)windowWillClose:(NSNotification*)notification {
+   }
+   if ((ns_event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) ==
+           NSEventModifierFlagCommand &&
+-      [ns_event.charactersIgnoringModifiers isEqualToString:@"w"]) {
++      [ns_event.charactersIgnoringModifiers isEqualToString:@"w"] &&
++      !docked_) {
+     [window_controller_.window performClose:nil];
+     return true;
+   }
+@@ -599,6 +720,14 @@ void ShowDevTools(content::WebContents* inspected,
+   }
+   DevToolsHostOwner::CreateForWebContents(inspected);
+   DevToolsHostOwner* owner = DevToolsHostOwner::FromWebContents(inspected);
++  if (owner->host() && command == DevToolsCommand::kShow &&
++      owner->host()->is_docked()) {
++    // Developer Tools (⌥⌘I) toggles docked DevTools, as Chrome's
++    // ToggleDevToolsWindow does and Arc's (observed); undocked it comes
++    // forward.
++    owner->host()->Close();
++    return;
++  }
+   if (!owner->host()) {
+     auto host = std::make_unique<DevToolsHost>(inspected, owner);
+     // Open on the requested panel; Inspect Elements also picks an element.
+diff --git a/openarc/browser/openarc_tab_container_view.h b/openarc/browser/openarc_tab_container_view.h
+new file mode 100644
+index 000000000000..18d07a7e9a55
+--- /dev/null
++++ b/openarc/browser/openarc_tab_container_view.h
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_TAB_CONTAINER_VIEW_H_
++#define OPENARC_BROWSER_OPENARC_TAB_CONTAINER_VIEW_H_
++
++#import <AppKit/AppKit.h>
++
++class DevToolsContentsResizingStrategy;
++
++namespace content {
++class WebContents;
++}
++
++NS_ASSUME_NONNULL_BEGIN
++
++// The view a tab hands to the embedding app (OACTab.nativeView): the page's
++// own view and, while DevTools is docked into the tab, DevTools' front end
++// under it. As in Chrome's docked DevTools, the front end fills the view and
++// draws its own splitter; the page sits on top at the bounds the front end
++// asks for, which give its dock side (left, bottom or right). Top-left origin.
++@interface OpenArcTabContainerView : NSView
++
++- (instancetype)initWithPageView:(NSView*)pageView NS_DESIGNATED_INITIALIZER;
++- (instancetype)initWithFrame:(NSRect)frameRect NS_UNAVAILABLE;
++- (nullable instancetype)initWithCoder:(NSCoder*)coder NS_UNAVAILABLE;
++
++@property(nonatomic, readonly) NSView* pageView;
++// The docked front end's view, or nil.
++@property(nonatomic, readonly, nullable) NSView* devToolsView;
++
++// Docks the front end's `view` under the page; nil undocks it, and the page
++// fills the view again.
++- (void)setDevToolsView:(nullable NSView*)view;
++// Where the page goes while DevTools is docked (Chrome's strategy: the front
++// end's bounds for the page, kept clear of DevTools' minimum size).
++- (void)setResizingStrategy:(const DevToolsContentsResizingStrategy&)strategy;
++
++// The container holding `contents`' view, if any.
+++ (nullable OpenArcTabContainerView*)containerOf:
++    (content::WebContents*)contents;
++
++@end
++
++NS_ASSUME_NONNULL_END
++
++#endif  // OPENARC_BROWSER_OPENARC_TAB_CONTAINER_VIEW_H_
+diff --git a/openarc/browser/openarc_tab_container_view.mm b/openarc/browser/openarc_tab_container_view.mm
+new file mode 100644
+index 000000000000..c81980c6dc8f
+--- /dev/null
++++ b/openarc/browser/openarc_tab_container_view.mm
+@@ -0,0 +1,103 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "openarc/browser/openarc_tab_container_view.h"
++
++#include <memory>
++
++#include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/gfx/geometry/rect.h"
++
++@implementation OpenArcTabContainerView {
++  NSView* __strong _pageView;
++  NSView* __strong _devToolsView;
++  std::unique_ptr<DevToolsContentsResizingStrategy> _strategy;
++}
++
++- (instancetype)initWithPageView:(NSView*)pageView {
++  if ((self = [super initWithFrame:pageView.frame])) {
++    _pageView = pageView;
++    _strategy = std::make_unique<DevToolsContentsResizingStrategy>();
++    pageView.autoresizingMask = NSViewNotSizable;
++    pageView.frame = self.bounds;
++    [self addSubview:pageView];
++  }
++  return self;
++}
++
++- (BOOL)isFlipped {
++  return YES;
++}
++
++- (NSView*)pageView {
++  return _pageView;
++}
++
++- (NSView*)devToolsView {
++  return _devToolsView;
++}
++
++- (void)setDevToolsView:(NSView*)view {
++  if (view == _devToolsView) {
++    return;
++  }
++  [_devToolsView removeFromSuperview];
++  _devToolsView = view;
++  _strategy = std::make_unique<DevToolsContentsResizingStrategy>();
++  if (view) {
++    [view removeFromSuperview];
++    view.autoresizingMask = NSViewNotSizable;
++    [self addSubview:view positioned:NSWindowBelow relativeTo:_pageView];
++  }
++  [self layoutContents];
++}
++
++- (void)setResizingStrategy:(const DevToolsContentsResizingStrategy&)strategy {
++  if (_strategy->Equals(strategy)) {
++    return;
++  }
++  _strategy->CopyFrom(strategy);
++  [self layoutContents];
++}
++
++- (void)setFrameSize:(NSSize)newSize {
++  [super setFrameSize:newSize];
++  [self layoutContents];
++}
++
++- (void)resizeSubviewsWithOldSize:(NSSize)oldSize {
++  [self layoutContents];
++}
++
++// The page fills the view; with DevTools docked, the front end does and the
++// page goes where the strategy puts it (hidden when it asks for no room).
++- (void)layoutContents {
++  NSRect bounds = self.bounds;
++  if (!_devToolsView) {
++    _pageView.frame = bounds;
++    return;
++  }
++  gfx::Rect devtools_bounds;
++  gfx::Rect contents_bounds;
++  ApplyDevToolsContentsResizingStrategy(
++      *_strategy,
++      gfx::Rect(0, 0, NSWidth(bounds), NSHeight(bounds)),
++      &devtools_bounds, &contents_bounds);
++  // Flipped view: gfx rects map one to one.
++  _devToolsView.frame = devtools_bounds.ToCGRect();
++  _pageView.frame = contents_bounds.ToCGRect();
++}
++
+++ (OpenArcTabContainerView*)containerOf:(content::WebContents*)contents {
++  if (!contents) {
++    return nil;
++  }
++  NSView* superview = contents->GetNativeView().GetNativeNSView().superview;
++  return [superview isKindOfClass:[OpenArcTabContainerView class]]
++             ? (OpenArcTabContainerView*)superview
++             : nil;
++}
++
++@end
