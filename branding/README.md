@@ -14,7 +14,7 @@ The approved identity is a broad folded ribbon with an open triangular counter. 
 
 | Visible name | File stem | Persisted identifier | Treatment |
 | --- | --- | --- | --- |
-| Original | original | slate | Lavender ribbon on a pale lilac tile |
+| Original | original | slate | Lavender ribbon on a pale lilac tile, without an outer outline |
 | Candy | candy | sunrise | Peach and lilac ribbon, pink tile, raised white edge |
 | Neon | neon | night | Luminous pink and violet contours on midnight indigo |
 | Fluted Glass | fluted-glass | lagoon | Muted lilac and coral under translucent vertical ribs |

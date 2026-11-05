@@ -52,3 +52,8 @@
 - Website build and static checks passed. Browser checks confirmed full desktop names, compact names at 320 px, full dropdown labels and the updated accessible control name after switching to English.
 - English and Chinese HTML and the stylesheet return HTTP 200 and match the deployed build. Screenshots: `website/design/language-label/`.
 - Native build passed without compiler warnings. The first full test run had one unrelated quit-sequence timeout; a full rerun passed all 2,089 tests (6 skipped, 0 failures), including that case. No native source changes were needed.
+
+- LP10 — Done: Removed the Original icon tile’s white outline and regenerated the native bundle icon, PNG/ICNS exports, collection preview and website asset. Other material treatments are unchanged.
+  - Native build passed without compiler warnings; 2,094 tests completed with 6 skipped and 0 failures. Website build and static checks passed.
+  - Deployed to Cloudflare version `a774f9cf-cc33-4acc-bd25-0039d44d4e35`. The live PNG matches the local build byte for byte.
+  - This removes the artwork outline. The installed application's appearance, including any macOS-applied icon treatment, has not been revalidated with a new bundle.
