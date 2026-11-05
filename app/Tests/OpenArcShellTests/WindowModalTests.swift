@@ -47,7 +47,6 @@ final class WindowModalTests: XCTestCase {
             ("newFolder", Metrics.Dialog.newFolderSize, { $0.sidebar.requestNewFolder() }),
             ("renameSpace", Metrics.Dialog.newFolderSize, { $0.spaceFlow.beginRename(spaceID: $0.sidebar.selectedSpaceID!) }),
             ("deleteSpace", Metrics.Dialog.deleteSpaceSize, { $0.sidebar.requestDeleteSpace($0.sidebar.selectedSpaceID!) }),
-            ("changeSpaceIcon", SpaceFlowLocalTokens.iconSheetSize, { $0.spaceFlow.beginChangeIcon(spaceID: $0.sidebar.selectedSpaceID!) }),
             ("changeItemIcon", SpaceFlowLocalTokens.iconSheetSize, { $0.sidebar.beginChangeIcon(SidebarFixture().folderA) }),
         ]
         for windowSize in [CGSize(width: 1281, height: 801), CGSize(width: 1000, height: 650)] {

@@ -20,15 +20,7 @@ enum SpaceFlowLocalTokens {
     /// colors at launch (`WorkspaceController.migratePlaceholderThemes`).
     static let legacyPlaceholderColor = RGBAColor(hex: 0x7FA6E8)
 
-    /// Generic emoji for the icon picker. The icon set of Arc is not ours to copy. inferred.
-    static let emoji: [String] = [
-        "🏠", "💼", "📚", "🎮", "🎵", "🎨", "🛒", "✈️", "🍳", "💡", "🔬", "🧪",
-        "📈", "🧠", "🌱", "🔥", "⭐️", "❤️", "🎓", "🏋️", "📷", "🎬", "🛠️", "🧩",
-        "🌍", "☕️", "🐶", "🚀", "💬", "📰", "🏦", "🧘",
-    ]
-
-    /// SF Symbol names offered next to the emoji. A symbol name is stored as the icon string
-    /// (`Space.icon`: "an emoji or an icon name"). inferred.
+    /// SF Symbol names an imported Arc icon may keep as it is (`ForeignSidebarMapper`).
     static let symbols: [String] = [
         "house", "briefcase", "book", "gamecontroller", "music.note", "paintbrush",
         "cart", "airplane", "leaf", "flame", "star", "heart",
@@ -209,6 +201,13 @@ public final class SpaceFlowModel: ObservableObject {
     }
 
     public func cancelChangeIcon() { iconPickerSpaceID = nil }
+
+    /// Applies an icon and keeps the picker up, as Arc's bubble does (B172, observed); nil resets.
+    public func applyIcon(_ icon: String?) {
+        guard let id = iconPickerSpaceID, liveSpace(id)?.icon != icon else { return }
+        let stamp = now()
+        commit { try TreeOps.setSpaceIcon($0, id: id, icon: icon, now: stamp) }
+    }
 
     /// Applies an icon and closes the picker; nil resets to the default icon.
     public func chooseIcon(_ icon: String?) {
