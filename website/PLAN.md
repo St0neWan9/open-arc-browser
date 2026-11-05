@@ -62,3 +62,7 @@
   - Native build passed without compiler warnings. The full suite passed 2,102 tests (6 skipped); after the final edge-opacity and fold-shadow adjustment, the build and all 16 settings/icon tests passed again.
   - Website build and static checks passed. Cloudflare version `ad6d576c-ab48-458a-9c52-76346bf4aad4` serves an icon matching the build byte for byte.
   - Reviewed the production collection and 256 px Original export. Installed applications were not replaced; macOS-applied icon effects still require verification with a new app bundle.
+
+- LP12 — Done: Matched the approved balanced lighting direction for Neon and Spectrum with broad muted-violet tile reflections, faint directional edges and satin Spectrum folds. Regenerated the two PNG/ICNS families and collection sheet; the other four variants and website assets are byte-for-byte unchanged.
+  - Reviewed the collection at large and settings-row sizes. Native build passed without compiler warnings; 2,107 tests completed with 6 skipped and no failures. Website build and static checks also passed.
+  - Runtime settings and Dock images use the shared renderer. Installed applications were not replaced; no website deployment was needed.

@@ -16,10 +16,10 @@ The approved identity is a broad folded ribbon with an open triangular counter. 
 | --- | --- | --- | --- |
 | Original | original | slate | Matte-satin lavender folds on a softly glazed lilac tile |
 | Candy | candy | sunrise | Peach and lilac ribbon, pink tile, raised white edge |
-| Neon | neon | night | Luminous pink and violet contours on midnight indigo |
+| Neon | neon | night | Luminous pink and violet contours on midnight indigo with a soft violet reflection |
 | Fluted Glass | fluted-glass | lagoon | Muted lilac and coral under translucent vertical ribs |
 | Paper | paper | paper | Blue, teal and orange sticker on butter-yellow paper |
-| Spectrum | spectrum | prism | Fuchsia, amber and violet on deep plum |
+| Spectrum | spectrum | prism | Satin fuchsia, amber and violet folds on deep plum with a soft violet reflection |
 
 Identifiers are retained for compatibility with existing device preferences. All six treatments are available without unlocking. Choosing an icon updates the running app's Dock and app-switcher image and persists the selection. Finder continues to show the signed bundle's Original icon; the bundle is never modified at runtime.
 

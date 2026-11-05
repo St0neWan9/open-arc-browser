@@ -73,8 +73,9 @@ enum AppIconArtwork {
     /// A shared light direction, with the finish tuned to each material.
     static func tileLighting(_ ctx: CGContext, tile: CGPath, variant: String) {
         let dark = variant == "night" || variant == "prism"
-        let strength: CGFloat = dark ? 0.22 : (variant == "paper" ? 0.45 : 1)
-        softLight(ctx, color: 0xFFFFFF, opacity: 0.42 * strength,
+        let strength: CGFloat = dark ? 0.6 : (variant == "paper" ? 0.45 : 1)
+        // Muted violet reflection keeps dark tiles rich without a bright corner hotspot.
+        softLight(ctx, color: dark ? 0xB49AE4 : 0xFFFFFF, opacity: dark ? 0.42 : 0.42 * strength,
                   center: CGPoint(x: 240, y: 140), radius: 740)
         if variant == "slate" {
             softLight(ctx, color: 0xB99BE8, opacity: 0.19,
@@ -83,7 +84,7 @@ enum AppIconArtwork {
         // An inset bevel catches light only near the top-left. No uniform white frame.
         ctx.saveGState()
         ctx.addPath(tile); ctx.setLineWidth(8); ctx.replacePathWithStrokedPath(); ctx.clip()
-        softLight(ctx, color: 0xFFFFFF, opacity: 0.16 * strength,
+        softLight(ctx, color: dark ? 0xC2A6F0 : 0xFFFFFF, opacity: 0.16 * strength,
                   center: CGPoint(x: 290, y: 120), radius: 560)
         softLight(ctx, color: 0x6E5C9F, opacity: 0.13 * strength,
                   center: CGPoint(x: 820, y: 880), radius: 570)
@@ -125,10 +126,10 @@ enum AppIconArtwork {
         }
         for (index, p) in paths.enumerated() {
             ctx.saveGState()
-            if variant == "slate" {
+            if variant == "slate" || variant == "prism" {
                 ctx.saveGState()
                 ctx.setShadow(offset: CGSize(width: 0, height: -4), blur: 9,
-                              color: color(0x6954A0, alpha: 0.12))
+                              color: variant == "prism" ? color(0x170C32, alpha: 0.30) : color(0x6954A0, alpha: 0.12))
                 ctx.setFillColor(color(palette.ribbons[index][1]))
                 ctx.addPath(p); ctx.fillPath()
                 ctx.restoreGState()
@@ -148,6 +149,13 @@ enum AppIconArtwork {
                     softLight(ctx, color: 0xF3E7FF, opacity: 0.12,
                               center: CGPoint(x: 220, y: 70), radius: 370)
                     softLight(ctx, color: 0x6556B1, opacity: index == 1 ? 0.19 : 0.10,
+                              center: CGPoint(x: 570, y: 440), radius: 350)
+                }
+                if variant == "prism" {
+                    // Satin folds stay dimensional without white outlines or glossy streaks.
+                    softLight(ctx, color: 0xFFE3F3, opacity: 0.20,
+                              center: CGPoint(x: 220, y: index == 1 ? 300 : 70), radius: 330)
+                    softLight(ctx, color: 0x48246F, opacity: 0.19,
                               center: CGPoint(x: 570, y: 440), radius: 350)
                 }
             }
