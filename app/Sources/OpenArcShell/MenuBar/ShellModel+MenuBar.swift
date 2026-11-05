@@ -13,6 +13,9 @@ extension ShellModel {
     // MARK: Arc menu
 
     /// Arc ▸ Privacy Policy ([01 §Arc] observed): the policy page in a new tab.
+    /// A credits link of the About window (B173).
+    func openAboutLink(_ url: URL) { openHelpLink(url, title: url.host() ?? url.absoluteString) }
+
     public func openPrivacyPolicy() { openHelpLink(OpenArcLinks.privacyPolicy, title: "Privacy Policy") }
 
     // MARK: File
