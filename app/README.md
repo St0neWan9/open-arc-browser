@@ -146,7 +146,7 @@ The bundle is ad hoc signed, so it only runs on the machine that built it. Build
 
 Which build for what:
 - **Release** (`/Applications/Open Arc.app`): the build the user runs, release checks (D6, D7), and one long-lived visual test instance.
-- **Dev** (`/Applications/Open Arc Dev.app`): any test instance you start yourself (Chromium bring-up, LCU-driven UI checks, `visual-diff.sh`), so it never collides with a release instance another task is driving.
+- **Dev** (`/Applications/Open Arc Dev.app`): any test instance you start yourself (Chromium bring-up, LCU-driven UI checks), so it never collides with a release instance another task is driving.
 
 Install and run it against a scratch data directory:
 
@@ -158,7 +158,6 @@ open -n --env OPENARC_DATA_DIR="$PWD/app/.build/my-data" "/Applications/Open Arc
 
 Addressing one instance:
 - LCU: `await cua.getApp("Open Arc Dev")` (or `"org.openarc.browser.dev"`); `cua.getApp("Open Arc")` is the release build. The dev app needs its own LCU approval the first time.
-- `scripts/visual-diff.sh` picks the dev build when it runs (`--ours-bundle` and `--ours-pid` choose explicitly), see `scripts/visual-diff/README.md`.
 - Several instances of one bundle: tell them apart with `ps eww <pid> | grep OPENARC_DATA_DIR` and pass the pid (`--ours-pid`).
 - Quitting: use the app's own menu (System Events `click menu item "Quit Open Arc Dev" of menu 1 of menu bar item 2 of menu bar 1 of (first process whose unix id is <pid>)`, or ⌘Q). `osascript -e 'tell application id "…" to quit'` does not quit either build today (found in B37; tccd logs a hardened-runtime Apple-events policy failure for the app, likely the missing `com.apple.security.automation.apple-events` entitlement, not confirmed; see the plan).
 

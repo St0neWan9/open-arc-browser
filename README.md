@@ -133,7 +133,7 @@ The engine is Chromium plus an ordered series of patches. Building Chromium need
 | [`app/`](app/README.md) | The Swift package: the SwiftUI and AppKit shell, data model, engine protocols, persistence, import and CloudKit sync |
 | [`chromium-bridge/`](chromium-bridge/README.md) | The Objective-C API between Swift and Chromium, and the framework build script |
 | [`chromium-patches/`](chromium-patches/README.md) | Our patch series on top of upstream Chromium releases |
-| [`scripts/`](scripts/) | App bundling, notarization, icon export, and performance and visual checks |
+| [`scripts/`](scripts/) | App bundling, notarization, icon export and performance checks |
 | [`branding/`](branding/README.md) | The Open Arc identity and app icons |
 | [`website/`](website/README.md) | The landing page |
 
