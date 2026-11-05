@@ -22,10 +22,16 @@ import OpenArcDesign
 enum WindowButtonLook {
     enum Kind: CaseIterable { case close, minimize, zoom }
 
-    /// Resting disc layer over the window. observed (see above); 7 % fits all three dark-ink
-    /// readings within 4/255.
+    /// Resting dark-ink disc as read on screen: black 7 % fits all three dark-ink readings
+    /// within 4/255. observed (see above).
+    static let restingDarkReading = 0.07
+
+    /// Resting disc layer over the window. Dark ink is drawn darker than the reading: at 7 % ours
+    /// read ≈ 1.5 % lighter than Arc's side by side on the same screen (B182, observed 2026-11-06:
+    /// Arc darkens #FFF1E6 by ≈ 7 %, ours #FBE6A3 by ≈ 5.5 %), the same kind of offset as the
+    /// hovered Graphite disc.
     static func restingDisc(lightInk: Bool) -> RGBAColor {
-        lightInk ? RGBAColor(hex: 0xFFFFFF, alpha: 0.27) : RGBAColor(hex: 0x000000, alpha: 0.07)
+        lightInk ? RGBAColor(hex: 0xFFFFFF, alpha: 0.27) : RGBAColor(hex: 0x000000, alpha: restingDarkReading + 0.015)
     }
 
     /// Disc diameter while the group is hovered. observed (12 pt at rest, `Metrics.WindowButtons`).
