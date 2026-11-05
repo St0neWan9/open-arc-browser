@@ -90,6 +90,15 @@ enum SidebarLocalTokens {
     /// Width of the Space header's "More" button while the header is hovered. [07 §4] observed only
     /// the 2 pt strip at rest; the hovered size is unknown.
     static let spaceMoreHoverWidth: CGFloat = 24
+    /// The hovered Space name row: a rounded fill across the row (x 8 to the content edge, y
+    /// 145–179), black ≈ 3.6 % over a dark-ink window (#F8E9DD → #EFE0D4). 2× Arc capture (B178),
+    /// observed; the light-ink amount is inferred from the favorites' hover.
+    static let spaceHeaderHoverBlack: Double = 0.036
+    static let spaceHeaderHoverWhite: Double = 0.06
+    static let spaceHeaderHoverHeight: CGFloat = 34
+    /// The chevron that takes the icon's place: ⌄ open, › collapsed (shown while collapsed even
+    /// without hover). Observed; its size is read off the capture (≈ 11 pt wide).
+    static let spaceHeaderChevronSize: CGFloat = 12
 
     // MARK: Split group row
 

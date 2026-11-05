@@ -171,6 +171,9 @@ extension SidebarViewModel {
     /// pinned tab shows the area again (`reveal`).
     public func toggleCollapsePinned() {
         guard let spaceID = selectedSpaceID, !isIncognito else { return }
+        // The pinned rows slide under the Space name row like a folder's. B178.
+        revealPinnedArea()
+        noteFolderDisclosure(in: spaceID)
         if collapsedPinnedSpaceIDs.contains(spaceID) { collapsedPinnedSpaceIDs.remove(spaceID) } else { collapsedPinnedSpaceIDs.insert(spaceID) }
     }
 

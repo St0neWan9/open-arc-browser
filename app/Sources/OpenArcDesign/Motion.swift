@@ -128,6 +128,11 @@ public enum Motion {
     /// critically damped, response ≈ 0.24 s (B176). observed (values fitted).
     public static let folderCollapse = MotionToken(.spring(response: 0.24, dampingFraction: 1.0), .observed)
 
+    /// Collapse Pinned Tabs (a click on the Space name row): the pinned rows slide up under the
+    /// header in ≈ 4 frames, much faster than a folder; expanding takes ≈ 11 frames like a folder
+    /// (`folderExpand`). 57 fps recording (B178); the spring is fitted from few frames. observed.
+    public static let pinnedCollapse = MotionToken(.spring(response: 0.07, dampingFraction: 1.0), .observed)
+
     /// Library enter/exit: [07 §11] observed one-frame frame change; the old view leaves after
     /// ≈ 0.5 s, so a cross-fade of at most that long may run on layers (curve unknown). Ours swaps
     /// in one frame.

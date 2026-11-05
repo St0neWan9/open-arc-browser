@@ -344,22 +344,32 @@ public final class SidebarViewModel: ObservableObject {
         var profileID: UUID?
         var isIncognito: Bool
         var isPinnedAreaCollapsed: Bool
+        /// The tab that stays shown in a collapsed pinned area: the page's selected tab. B178.
+        var keptPinnedTabID: UUID?
     }
 
     /// The key of Space `spaceID`'s rows: its profile (the Default profile for a Space whose
     /// profile is unknown here, as `currentProfileID`) and this window's Collapse Pinned Tabs.
     private func snapshotKey(for spaceID: UUID?) -> SnapshotKey {
         let profileID = liveSpace(spaceID).flatMap { workspace.localProfileID(for: $0.profileID) } ?? workspace.defaultProfileID
+        let collapsed = spaceID.map(collapsedPinnedSpaceIDs.contains) ?? false
         return SnapshotKey(generation: controller.sidebarRowsGeneration, spaceID: spaceID, profileID: profileID,
-                           isIncognito: isIncognito,
-                           isPinnedAreaCollapsed: spaceID.map(collapsedPinnedSpaceIDs.contains) ?? false)
+                           isIncognito: isIncognito, isPinnedAreaCollapsed: collapsed,
+                           keptPinnedTabID: collapsed ? pageSelectedTabID(for: spaceID) : nil)
     }
 
     private func makeSnapshot(_ key: SnapshotKey) -> SidebarSnapshot {
         var snapshot = SidebarSnapshot.make(workspace: workspace, spaceID: key.spaceID, profileID: key.profileID)
         snapshot.hidesPinnedArea = key.isIncognito
         // Collapse Pinned Tabs hides the pinned rows; the area keeps its content (B72, inferred).
-        if key.isPinnedAreaCollapsed { snapshot.pinned = [] }
+        // The selected pinned tab stays, at the top level. 57 fps recording of Arc (B178), observed.
+        if key.isPinnedAreaCollapsed {
+            snapshot.pinned = snapshot.pinned.filter { $0.shows(tab: key.keptPinnedTabID) }.map { item in
+                var item = item
+                item.depth = 0
+                return item
+            }
+        }
         return snapshot
     }
 
@@ -1147,13 +1157,20 @@ public final class SidebarViewModel: ObservableObject {
     /// rows ready to slide under it (`SidebarFolderRevealPlan`): a row that goes away keeps the
     /// transition of the update before. Kept after the pointer leaves. B176.
     @Published private(set) var revealFolderID: UUID?
+    /// The pinned area itself is the block that slides (Collapse Pinned Tabs), not a folder. B178.
+    @Published private(set) var revealsPinnedArea = false
+
+    /// Makes the pinned area the sliding block (header hover, Collapse Pinned Tabs). B178.
+    func revealPinnedArea() {
+        if !revealsPinnedArea { revealsPinnedArea = true }
+    }
 
     func folderDisclosureCount(in spaceID: UUID?) -> Int {
         spaceID.flatMap { folderDisclosureCounts[$0] } ?? 0
     }
 
     /// Before the change, so the update that draws it already sees the new count.
-    private func noteFolderDisclosure(in spaceID: UUID) {
+    func noteFolderDisclosure(in spaceID: UUID) {
         folderDisclosureCounts[spaceID, default: 0] += 1
     }
 
@@ -1195,6 +1212,7 @@ public final class SidebarViewModel: ObservableObject {
         dismissQuickList()
         // Opened from a menu or a key: its new rows still slide out from under it.
         if revealFolderID != id { revealFolderID = id }
+        if revealsPinnedArea { revealsPinnedArea = false }
         noteFolderDisclosure(in: folder.spaceID)
         mutate { try TreeOps.setFolderExpanded($0, id: id, isExpanded: !folder.isExpanded, now: now()) }
     }
@@ -1922,6 +1940,7 @@ extension SidebarViewModel {
     /// folder already lists its tabs below it. inferred.
     func folderHoverBegan(_ id: UUID) {
         if revealFolderID != id { revealFolderID = id }
+        if revealsPinnedArea { revealsPinnedArea = false }
         quickListHoveredFolderID = id
         guard draggingItem == nil, !isDraggingExternalURL, renamingItemID == nil, !isQuickListFocused,
               let folder = workspace.folders[id], !folder.meta.isTombstone, !folder.isExpanded,
