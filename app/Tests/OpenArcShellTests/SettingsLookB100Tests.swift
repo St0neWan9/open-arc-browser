@@ -91,6 +91,11 @@ final class SettingsLookB100Tests: XCTestCase {
         XCTAssertEqual(SettingsLayout.switchSize, CGSize(width: 36, height: 16))
         XCTAssertEqual(SettingsPalette.switchOffTrack, RGBAColor(hex: 0xEBEBEB))
         XCTAssertEqual(SettingsPalette.switchOnTrack, RGBAColor(hex: 0xE0E0E0))
+        // B168: observed on a 2× Arc screenshot; only a key window is this strong.
+        XCTAssertEqual(SettingsSwitchShape.colors(isOn: true, isKey: true).track, RGBAColor(hex: 0xA3A3A3))
+        XCTAssertEqual(SettingsSwitchShape.colors(isOn: false, isKey: true).track, RGBAColor(hex: 0xE6E6E6))
+        XCTAssertEqual(SettingsSwitchShape.colors(isOn: true, isKey: false).track, SettingsPalette.switchOnTrack)
+        XCTAssertEqual(SettingsSwitchShape.colors(isOn: false, isKey: false).knob, SettingsPalette.switchKnob)
         let host = host(SettingsSwitchShape(isOn: true), height: 40)
         XCTAssertEqual(host.fittingSize.width, 36, accuracy: 0.5)
         XCTAssertEqual(host.fittingSize.height, 16, accuracy: 0.5)
