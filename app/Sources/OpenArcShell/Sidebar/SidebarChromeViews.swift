@@ -536,13 +536,20 @@ struct SidebarSpaceHeaderLook: Equatable {
     var name: String
     var icon: String?
     var palette: ThemePalette
+    /// Collapse Pinned Tabs is on for the Space in this window (B178).
+    var isPinnedCollapsed = false
+    /// The Space has pinned rows to collapse: a click on the row toggles them (B178).
+    var canCollapsePinned = false
 }
 
 extension SidebarViewModel {
     /// What the header of Space `spaceID`'s page draws now.
     func spaceHeaderLook(for spaceID: UUID?) -> SidebarSpaceHeaderLook {
         let space = liveSpace(spaceID)
-        return SidebarSpaceHeaderLook(name: space?.name ?? "", icon: space?.icon, palette: palette(forSpace: spaceID))
+        let collapsed = spaceID.map(collapsedPinnedSpaceIDs.contains) ?? false
+        return SidebarSpaceHeaderLook(name: space?.name ?? "", icon: space?.icon, palette: palette(forSpace: spaceID),
+                                      isPinnedCollapsed: collapsed,
+                                      canCollapsePinned: !isIncognito && (collapsed || listContent(for: spaceID).snapshot.hasPinnedContent))
     }
 }
 
@@ -570,7 +577,14 @@ struct SidebarSpaceNameRowView: View {
         let s = Metrics.Sidebar.self
         let icon = look.icon
         let style = Typography.spaceName
-        let nameLeading = CGFloat(icon == nil ? s.spaceNameLeadingWithoutIcon : s.spaceNameLeadingWithIcon)
+        // A click on the row collapses or expands the pinned area; its chevron takes the icon's
+        // place while hovered, and stays while collapsed. 2× Arc capture (B178), observed.
+        let showsChevron = look.canCollapsePinned && (isHovering || look.isPinnedCollapsed)
+        let nameLeading = CGFloat(icon == nil && !showsChevron ? s.spaceNameLeadingWithoutIcon : s.spaceNameLeadingWithIcon)
+        let hoverFill = palette.usesLightInk
+            ? Color.white.opacity(SidebarLocalTokens.spaceHeaderHoverWhite)
+            : Color.black.opacity(SidebarLocalTokens.spaceHeaderHoverBlack)
+        let fillFrame = layout.rowFillFrame
         let more = s.spaceMoreButtonFrame
         // The name and "…" keep their distance to the sidebar's right edge. B144.
         let shift = layout.trailingShift
@@ -585,7 +599,21 @@ struct SidebarSpaceNameRowView: View {
                 .contentShape(Rectangle())
                 .sidebarDropRegion(.spaceName)
                 .offset(y: CGFloat(s.spaceHeaderTop) - layout.contentShift)
-            if let icon {
+            if isHovering && look.canCollapsePinned && !isDropTarget {
+                RoundedRectangle(cornerRadius: CGFloat(s.selectedRowCornerRadius), style: .continuous)
+                    .fill(hoverFill)
+                    .frame(width: fillFrame.width, height: SidebarLocalTokens.spaceHeaderHoverHeight)
+                    .offset(x: fillFrame.minX, y: CGFloat(s.spaceHeaderTop) - layout.contentShift)
+                    .allowsHitTesting(false)
+            }
+            if showsChevron {
+                Image(systemName: look.isPinnedCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: SidebarLocalTokens.spaceHeaderChevronSize, weight: .semibold))
+                    .foregroundStyle(palette.ink(\.spaceName).swiftUI)
+                    .frame(width: CGFloat(s.spaceIconFrame.width), height: CGFloat(s.spaceIconFrame.height))
+                    .accessibilityHidden(true)
+                    .offset(x: CGFloat(s.spaceIconFrame.x), y: CGFloat(s.spaceIconFrame.y) - layout.contentShift)
+            } else if let icon {
                 // A ≈ 14 pt glyph centered in the 26 pt cell (B33 round-2 PX), not a 26 pt glyph.
                 SidebarSpaceIconView(icon: icon, size: CGFloat(s.spaceIconFrame.width),
                                      glyphSize: SidebarLocalTokens.spaceIconGlyphSize, tint: palette.ink(\.spaceIcon).swiftUI)
@@ -621,8 +649,21 @@ struct SidebarSpaceNameRowView: View {
         // The header row (band, icon and name) is Space background: a right-click anywhere on it
         // opens the Space menu; the name text took the click and showed nothing. [06 §21.5]
         // observed. B147.
+        // Children carry the hit areas at their places (the band has its own content shape); a
+        // shape here would sit at the stack's unshifted frame, over the top bar.
+        .onTapGesture {
+            guard look.canCollapsePinned, spaceID == viewModel.selectedSpaceID else { return }
+            viewModel.toggleCollapsePinned()
+        }
+        .accessibilityAction(named: look.isPinnedCollapsed ? "Expand Pinned Tabs" : "Collapse Pinned Tabs") {
+            viewModel.toggleCollapsePinned()
+        }
         .contextMenu { SidebarSpaceMenu(viewModel: viewModel) }
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            isHovering = hovering
+            // Its pinned rows are the block that slides when the row is clicked (B178).
+            if hovering, look.canCollapsePinned { viewModel.revealPinnedArea() }
+        }
     }
 }
 

@@ -245,3 +245,54 @@ final class SidebarFolderRevealB176Tests: XCTestCase {
         XCTAssertEqual(window.noteDisclosure(count: 2, contentHeight: 1000, now: 13), -410)
     }
 }
+
+/// B178: a click on the Space name row collapses the pinned area; the selected pinned tab stays,
+/// and the pinned rows slide under the row as one block (2× and 57 fps Arc captures).
+@MainActor
+final class PinnedAreaCollapseB178Tests: XCTestCase {
+    func testCollapseKeepsTheSelectedPinnedTab() throws {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        vm.selectTab(f.pinnedTab)
+        let before = vm.folderDisclosureCount(in: f.home)
+        vm.toggleCollapsePinned()
+        XCTAssertTrue(vm.isPinnedAreaCollapsed)
+        XCTAssertEqual(vm.snapshot.pinned.map(\.id), [f.pinnedTab])
+        XCTAssertEqual(vm.snapshot.pinned.first?.depth, 0)
+        XCTAssertTrue(vm.revealsPinnedArea)
+        XCTAssertEqual(vm.folderDisclosureCount(in: f.home), before + 1, "animated like a folder")
+        XCTAssertTrue(vm.spaceHeaderLook(for: f.home).isPinnedCollapsed)
+        vm.toggleCollapsePinned()
+        XCTAssertGreaterThan(vm.snapshot.pinned.count, 1)
+    }
+
+    func testCollapseWithATodayTabSelectedHidesAllPinnedRows() {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        vm.selectTab(f.today1)
+        vm.toggleCollapsePinned()
+        XCTAssertEqual(vm.snapshot.pinned.count, 0)
+        XCTAssertTrue(vm.spaceHeaderLook(for: f.home).canCollapsePinned, "it can still be expanded")
+    }
+
+    func testPinnedPlanKeepsTheSelectedRow() throws {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        let geometry = vm.listGeometry
+        let plan = try XCTUnwrap(SidebarFolderRevealPlan(pinnedAreaOf: geometry, keptRowID: f.pinnedTab))
+        let pinned = vm.snapshot.pinned.count
+        XCTAssertEqual(plan.block, 0..<pinned)
+        XCTAssertEqual(plan.height, CGFloat(pinned) * SidebarLayout().rowPitch, accuracy: 0.01)
+        XCTAssertEqual(plan.distance, plan.height - SidebarLayout().rowPitch, accuracy: 0.01)
+        let kept = try XCTUnwrap(geometry.rowIndex[f.pinnedTab])
+        XCTAssertFalse(plan.contains(geometry.entries[kept]), "the selected row stays")
+        XCTAssertTrue(plan.contains(geometry.entries[0]))
+        XCTAssertEqual(plan.closedEnd, plan.clipY + SidebarLayout().rowPitch, accuracy: 0.01)
+    }
+
+    func testMotion() {
+        XCTAssertEqual(Motion.pinnedCollapse, MotionToken(.spring(response: 0.07, dampingFraction: 1.0), .observed))
+        XCTAssertEqual(ShellMotion.folderDisclosure(expanding: false, reduceMotion: false, pinnedArea: true), .spring(response: 0.07, dampingFraction: 1.0))
+        XCTAssertEqual(ShellMotion.folderDisclosure(expanding: true, reduceMotion: false, pinnedArea: true), .spring(response: 0.18, dampingFraction: 1.0))
+    }
+}

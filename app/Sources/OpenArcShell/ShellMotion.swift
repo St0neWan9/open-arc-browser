@@ -70,8 +70,10 @@ enum ShellMotion {
     }
     /// Folder rows opening (`Motion.folderExpand`) or closing (`Motion.folderCollapse`). B176. None
     /// when the user asked to reduce motion.
-    static func folderDisclosure(expanding: Bool, reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : (expanding ? Motion.folderExpand : Motion.folderCollapse).curve.swiftUI
+    static func folderDisclosure(expanding: Bool, reduceMotion: Bool, pinnedArea: Bool = false) -> Animation? {
+        guard !reduceMotion else { return nil }
+        if pinnedArea, !expanding { return Motion.pinnedCollapse.curve.swiftUI }
+        return (expanding ? Motion.folderExpand : Motion.folderCollapse).curve.swiftUI
     }
     /// The new empty Space's illustration fading away ([06 §1] observed that it goes away; the
     /// ease-out over `NewSpaceIllustrationTrigger.fadeDuration` is inferred). B75.

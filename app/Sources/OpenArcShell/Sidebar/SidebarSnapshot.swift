@@ -81,6 +81,18 @@ struct SidebarSplitGroup: Hashable {
 }
 
 /// One visible row of the pinned area or the Today area.
+extension SidebarItemModel {
+    /// Whether this row shows tab `id`: the tab's own row, or the split row that holds it.
+    func shows(tab id: UUID?) -> Bool {
+        guard let id else { return false }
+        switch kind {
+        case .tab(let tab): return tab.id == id
+        case .splitGroup(let group): return group.sidebarOrder.contains(id)
+        case .folder: return false
+        }
+    }
+}
+
 struct SidebarItemModel: Identifiable, Hashable {
     enum Kind: Hashable {
         case folder(Folder)
