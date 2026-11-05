@@ -126,6 +126,11 @@ enum SettingsPalette {
     static let switchOffTrack = RGBAColor(hex: 0xEBEBEB)
     static let switchOnTrack = RGBAColor(hex: 0xE0E0E0)
     static let switchKnob = RGBAColor(hex: 0xFAFAFA)
+    /// The same in a key window: Arc's on and off differ clearly there. Observed on a user's 2×
+    /// screenshot (B168); the colors above are the inactive window's.
+    static let switchOffTrackKey = RGBAColor(hex: 0xE6E6E6)
+    static let switchOnTrackKey = RGBAColor(hex: 0xA3A3A3)
+    static let switchKnobKey = RGBAColor(hex: 0xFFFFFF)
     static let switchRim = RGBAColor(hex: 0xDFDFDF)
     /// Profile list row ("Default · 8 Spaces").
     static let profileRowFill = RGBAColor(hex: 0xF7F7F7)
@@ -386,16 +391,24 @@ private struct SettingsSwitch: View {
 /// The track and knob, without behavior. Exposed for tests (size).
 struct SettingsSwitchShape: View {
     let isOn: Bool
+    @Environment(\.controlActiveState) private var activeState
+
+    /// Track and knob for a window that is key or not. B168.
+    static func colors(isOn: Bool, isKey: Bool) -> (track: RGBAColor, knob: RGBAColor) {
+        if isKey { return (isOn ? SettingsPalette.switchOnTrackKey : SettingsPalette.switchOffTrackKey, SettingsPalette.switchKnobKey) }
+        return (isOn ? SettingsPalette.switchOnTrack : SettingsPalette.switchOffTrack, SettingsPalette.switchKnob)
+    }
 
     var body: some View {
+        let colors = Self.colors(isOn: isOn, isKey: activeState == .key)
         let size = SettingsLayout.switchSize
         let knob = SettingsLayout.switchKnobSize
         let inset = (size.height - knob.height) / 2
         ZStack(alignment: isOn ? .trailing : .leading) {
             Capsule()
-                .fill((isOn ? SettingsPalette.switchOnTrack : SettingsPalette.switchOffTrack).swiftUI)
+                .fill(colors.track.swiftUI)
             Capsule()
-                .fill(SettingsPalette.switchKnob.swiftUI)
+                .fill(colors.knob.swiftUI)
                 .overlay(Capsule().strokeBorder(SettingsPalette.switchRim.swiftUI, lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.08), radius: 0.5, y: 0.5)
                 .frame(width: knob.width, height: knob.height)
