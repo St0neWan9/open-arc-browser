@@ -60,6 +60,36 @@ enum AppIconArtwork {
         ctx.drawLinearGradient(gradient, start: from, end: to, options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
     }
 
+    /// Broad, low-contrast light keeps the surface satin rather than mirror-like.
+    static func softLight(_ ctx: CGContext, color hex: UInt32, opacity: CGFloat,
+                          center: CGPoint, radius: CGFloat) {
+        let colors = [color(hex, alpha: opacity), color(hex, alpha: 0)]
+        let light = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                               colors: colors as CFArray, locations: [0, 1])!
+        ctx.drawRadialGradient(light, startCenter: center, startRadius: 0,
+                               endCenter: center, endRadius: radius, options: [])
+    }
+
+    /// A shared light direction, with the finish tuned to each material.
+    static func tileLighting(_ ctx: CGContext, tile: CGPath, variant: String) {
+        let dark = variant == "night" || variant == "prism"
+        let strength: CGFloat = dark ? 0.22 : (variant == "paper" ? 0.45 : 1)
+        softLight(ctx, color: 0xFFFFFF, opacity: 0.42 * strength,
+                  center: CGPoint(x: 240, y: 140), radius: 740)
+        if variant == "slate" {
+            softLight(ctx, color: 0xB99BE8, opacity: 0.19,
+                      center: CGPoint(x: 800, y: 840), radius: 740)
+        }
+        // An inset bevel catches light only near the top-left. No uniform white frame.
+        ctx.saveGState()
+        ctx.addPath(tile); ctx.setLineWidth(8); ctx.replacePathWithStrokedPath(); ctx.clip()
+        softLight(ctx, color: 0xFFFFFF, opacity: 0.16 * strength,
+                  center: CGPoint(x: 290, y: 120), radius: 560)
+        softLight(ctx, color: 0x6E5C9F, opacity: 0.13 * strength,
+                  center: CGPoint(x: 820, y: 880), radius: 570)
+        ctx.restoreGState()
+    }
+
     static func render(_ variant: String, pixels: Int) -> CGImage? {
         guard pixels > 0, pixels <= 4096,
               let space = CGColorSpace(name: CGColorSpace.sRGB),
@@ -77,6 +107,7 @@ enum AppIconArtwork {
         ctx.saveGState()
         ctx.addPath(tile); ctx.clip()
         gradient(ctx, palette.tile, from: CGPoint(x: 250, y: 100), to: CGPoint(x: 800, y: 924))
+        tileLighting(ctx, tile: tile, variant: variant)
         ctx.saveGState()
         ctx.translateBy(x: 208, y: 274)
         ctx.scaleBy(x: 0.95, y: 0.95)
@@ -94,6 +125,14 @@ enum AppIconArtwork {
         }
         for (index, p) in paths.enumerated() {
             ctx.saveGState()
+            if variant == "slate" {
+                ctx.saveGState()
+                ctx.setShadow(offset: CGSize(width: 0, height: -4), blur: 9,
+                              color: color(0x6954A0, alpha: 0.12))
+                ctx.setFillColor(color(palette.ribbons[index][1]))
+                ctx.addPath(p); ctx.fillPath()
+                ctx.restoreGState()
+            }
             if variant == "night" {
                 ctx.setLineJoin(.round)
                 ctx.setShadow(offset: .zero, blur: 19, color: color(palette.ribbons[index][0]))
@@ -104,6 +143,13 @@ enum AppIconArtwork {
             } else {
                 ctx.addPath(p); ctx.clip()
                 gradient(ctx, palette.ribbons[index], from: CGPoint(x: 180, y: 40), to: CGPoint(x: 550, y: 470))
+                if variant == "slate" {
+                    // Soft fold shading, without specular white strokes on the ribbon.
+                    softLight(ctx, color: 0xF3E7FF, opacity: 0.12,
+                              center: CGPoint(x: 220, y: 70), radius: 370)
+                    softLight(ctx, color: 0x6556B1, opacity: index == 1 ? 0.19 : 0.10,
+                              center: CGPoint(x: 570, y: 440), radius: 350)
+                }
             }
             ctx.restoreGState()
         }
@@ -118,10 +164,6 @@ enum AppIconArtwork {
             }
         }
         ctx.restoreGState()
-        if variant != "slate" {
-            ctx.addPath(tile); ctx.setLineWidth(1.5)
-            ctx.setStrokeColor(color(0xFFFFFF, alpha: variant == "night" || variant == "prism" ? 0.12 : 0.65)); ctx.strokePath()
-        }
         return ctx.makeImage()
     }
 
