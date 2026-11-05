@@ -449,6 +449,8 @@ struct SidebarFavoriteCell: View {
     let viewModel: SidebarViewModel
     let state: State
     @Environment(\.windowSurface) private var surface
+    /// Local, like the rows' hover fill: hovering never re-evaluates the favorites block.
+    @SwiftUI.State private var isHovering = false
     private var tab: TabNode { state.tab }
 
     var body: some View {
@@ -465,7 +467,15 @@ struct SidebarFavoriteCell: View {
             }
         }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.fill(palette: palette, isSelected: isSelected, surface: surface).swiftUI))
+            .background {
+                let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                ZStack {
+                    shape.fill(Self.fill(palette: palette, isSelected: isSelected, surface: surface).swiftUI)
+                    // Hover: a layer over the tile, under the icon. B177 observed; on the selected
+                    // tile inferred the same.
+                    if isHovering { shape.fill(Self.hoverLayer(palette: palette).swiftUI) }
+                }
+            }
             .overlay {
                 if isSelected {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -491,6 +501,7 @@ struct SidebarFavoriteCell: View {
             // "No unread emails, you can exhale! 🌿", [06 §12] observed) right of the block instead
             // of a system tooltip. [07 §12] observed (B89).
             .onHover { hovering in
+                isHovering = hovering
                 if hovering { viewModel.favoriteHoverBegan(tab.id) } else { viewModel.favoriteHoverEnded(tab.id) }
             }
             .accessibilityLabel(tab.displayTitle)
@@ -502,6 +513,12 @@ struct SidebarFavoriteCell: View {
     /// + ≈ 47 % white, ≈ #8F9099 on the default dark theme). [06 §21.3] observed (dark only; the
     /// light appearance keeps the control fill, inferred).
     /// On a see-through window both are layers over the window (B64, [07 §8.4]).
+    /// The layer a hovered tile adds over its fill. B177 observed.
+    static func hoverLayer(palette: ThemePalette) -> RGBAColor {
+        palette.usesLightInk ? RGBAColor(hex: 0xFFFFFF, alpha: Metrics.FavoritesGrid.hoverTileWhite)
+            : RGBAColor(hex: 0x000000, alpha: Metrics.FavoritesGrid.hoverTileBlack)
+    }
+
     static func fill(palette: ThemePalette, isSelected: Bool, surface: WindowSurface = .opaque) -> RGBAColor {
         guard isSelected, palette.isDark else { return palette.windowFills(on: surface).controlFill }
         if surface.isTranslucent { return RGBAColor(hex: 0xFFFFFF, alpha: Metrics.FavoritesGrid.selectedTileWhiteDark) }
