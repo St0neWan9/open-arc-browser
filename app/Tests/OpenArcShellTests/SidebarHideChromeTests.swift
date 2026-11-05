@@ -224,9 +224,13 @@ final class WindowButtonMuteB160Tests: XCTestCase {
 
     /// B174: resting discs follow the ink, within 4/255 of the 2× Arc captures.
     func testRestingDiscsFollowTheInk_07_2() {
+        // Dark ink as read on screen; ours is drawn 1.5 % darker to read the same (B182).
         func over(_ window: UInt32, lightInk: Bool) -> RGBAColor {
-            WindowTranslucency.composite(WindowButtonLook.restingDisc(lightInk: lightInk), over: RGBAColor(hex: window))
+            let layer = lightInk ? WindowButtonLook.restingDisc(lightInk: true)
+                : RGBAColor(hex: 0x000000, alpha: WindowButtonLook.restingDarkReading)
+            return WindowTranslucency.composite(layer, over: RGBAColor(hex: window))
         }
+        XCTAssertEqual(WindowButtonLook.restingDisc(lightInk: false).alpha, 0.085, accuracy: 1e-9)
         func close(_ a: RGBAColor, _ hex: UInt32, _ tolerance: Double, file: StaticString = #filePath, line: UInt = #line) {
             let b = RGBAColor(hex: hex)
             XCTAssertLessThan(max(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue)), tolerance / 255, file: file, line: line)
