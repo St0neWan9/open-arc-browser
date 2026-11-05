@@ -33,7 +33,7 @@ enum SidebarLocalTokens {
     static var textInkInset: CGFloat { CGFloat(Metrics.Sidebar.textInkInset) }
 
     /// Scroll-edge lines of the list. Round-1 PX (B32) observed (1 pt).
-    static let scrollEdgeLineThickness: CGFloat = 1
+    static let scrollEdgeLineThickness: CGFloat = 0.5
 
     /// Magnifier in front of the URL box placeholder: point size giving the ≈ 12 × 12 ink.
     /// Round-1 PX (B32) observed ink; the point size is fitted.
@@ -120,7 +120,6 @@ enum SidebarLocalTokens {
     static let folderGlyphInkOpacity: Double = 0.7
     /// The closed folder's tab band (between its top edge and the flap line) is filled with the
     /// glyph ink at this opacity. B149 observed (band luminance 182 between ink 84 and 235).
-    static let closedFolderTabFillOpacity: Double = 0.35
 
     // MARK: Space history
 

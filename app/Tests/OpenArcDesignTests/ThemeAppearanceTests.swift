@@ -360,7 +360,7 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(palette.secondaryText, RGBAColor(hex: 0xFFFFFF, alpha: ChromeInkOpacities.lightInk.spaceName))
         XCTAssertEqual(palette.controlFill, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkControlWhite))
         XCTAssertEqual(palette.separator, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkSeparatorWhite))
-        XCTAssertEqual(palette.scrollEdgeLine, palette.separator)
+        XCTAssertEqual(palette.scrollEdgeLine, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkScrollEdgeWhite), "lighter than the divider (B171)")
         XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(RGBAColor(hex: 0x0000FF), appearance: .light), "[07 §8.1] the content tint")
         // [07 §8.3] observed (B46): the selected row is a muted tone with the same white title.
         XCTAssertEqual(palette.selectedTabText, palette.rowTitleText, "selected rows keep the white title")
