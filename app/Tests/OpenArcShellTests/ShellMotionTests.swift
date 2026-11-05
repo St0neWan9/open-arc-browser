@@ -28,8 +28,9 @@ final class ShellMotionTests: XCTestCase {
 
     /// Folder rows use their token, and nothing with Reduce Motion. [07 §11.3] B167.
     func testFolderDisclosureFollowsReduceMotion() {
-        XCTAssertEqual(ShellMotion.folderDisclosure(reduceMotion: false), .spring(response: 0.25, dampingFraction: 1.0))
-        XCTAssertNil(ShellMotion.folderDisclosure(reduceMotion: true))
+        XCTAssertEqual(ShellMotion.folderDisclosure(expanding: true, reduceMotion: false), .spring(response: 0.18, dampingFraction: 1.0))
+        XCTAssertEqual(ShellMotion.folderDisclosure(expanding: false, reduceMotion: false), .spring(response: 0.24, dampingFraction: 1.0))
+        XCTAssertNil(ShellMotion.folderDisclosure(expanding: true, reduceMotion: true))
     }
 
     /// A collapse that pulls the content above the scroll offset is drawn without animation

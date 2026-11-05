@@ -205,3 +205,43 @@ final class SidebarListGeometryTests: XCTestCase {
         XCTAssertEqual(changed, [f.today1, f.today2], "only the old and new selection change")
     }
 }
+
+/// B176: a folder's rows open and close as one block that slides under the folder row.
+@MainActor
+final class SidebarFolderRevealB176Tests: XCTestCase {
+    func testPlanCoversTheFolderBlock() throws {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        let geometry = vm.listGeometry
+        let plan = try XCTUnwrap(SidebarFolderRevealPlan(geometry: geometry, folderID: f.folderA))
+        let folderIndex = try XCTUnwrap(geometry.rowIndex[f.folderA])
+        XCTAssertEqual(plan.block.lowerBound, folderIndex + 1)
+        XCTAssertEqual(plan.clipY, geometry.entries[folderIndex].bottom, accuracy: 0.01)
+        XCTAssertEqual(plan.distance, CGFloat(plan.block.count) * SidebarLayout().rowPitch, accuracy: 0.01)
+        for i in plan.block { XCTAssertNotNil(plan.transition(for: geometry.entries[i])) }
+        XCTAssertNil(plan.transition(for: geometry.entries[folderIndex]), "the folder row itself stays")
+        vm.toggleFolder(f.folderA)
+        XCTAssertNil(SidebarFolderRevealPlan(geometry: vm.listGeometry, folderID: f.folderA), "closed: nothing to slide yet")
+        XCTAssertNil(SidebarFolderRevealPlan(geometry: geometry, folderID: nil))
+    }
+
+    func testHoverAndToggleChooseTheFolder() {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        vm.folderHoverBegan(f.folderC)
+        XCTAssertEqual(vm.revealFolderID, f.folderC)
+        vm.toggleFolder(f.folderA)
+        XCTAssertEqual(vm.revealFolderID, f.folderA)
+    }
+
+    /// The growth is reported while the animation may run, then 0; a close also lets rows coming
+    /// into the band slide up from where they were.
+    func testDisclosureGrowth() {
+        let window = SidebarListWindow()
+        XCTAssertEqual(window.noteDisclosure(count: 0, contentHeight: 1000, now: 10), 0)
+        XCTAssertEqual(window.noteDisclosure(count: 1, contentHeight: 1410, now: 11), 410)
+        XCTAssertEqual(window.noteDisclosure(count: 1, contentHeight: 1410, now: 11.2), 410, "same animation")
+        XCTAssertEqual(window.noteDisclosure(count: 1, contentHeight: 1410, now: 12), 0, "settled")
+        XCTAssertEqual(window.noteDisclosure(count: 2, contentHeight: 1000, now: 13), -410)
+    }
+}

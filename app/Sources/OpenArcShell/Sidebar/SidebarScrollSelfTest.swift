@@ -239,7 +239,7 @@ enum SidebarScrollSelfTest {
     }
 
     /// Lets a folder's rows finish moving before the next toggle, so the late-frame count covers
-    /// the whole animation (`Motion.folderDisclosure`). B167.
+    /// the whole animation (`Motion.folderCollapse`). B167.
     private static let folderAnimationWait: Duration = .milliseconds(400)
 
     /// Expands and collapses the first top-level folders (each twice, so the state ends as found).

@@ -60,9 +60,10 @@ final class MotionTokenTests: XCTestCase {
         XCTAssertNil(MotionCurve.instant.springConstants)
     }
 
-    /// [07 §11.3] the folder's layer animation was not measured: a placeholder (B167).
+    /// B176: the folder animation measured on a screen recording.
     func testFolderDisclosureStaysUnknown() {
-        XCTAssertEqual(Motion.folderDisclosure, MotionToken(.spring(response: 0.25, dampingFraction: 1.0), .unknown))
+        XCTAssertEqual(Motion.folderExpand, MotionToken(.spring(response: 0.18, dampingFraction: 1.0), .observed))
+        XCTAssertEqual(Motion.folderCollapse, MotionToken(.spring(response: 0.24, dampingFraction: 1.0), .observed))
     }
 
     /// [07 §11] not measured: hover card, selection highlight. [06 §12] hover delay stays 0.5 s.

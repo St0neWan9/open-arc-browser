@@ -1143,6 +1143,11 @@ public final class SidebarViewModel: ObservableObject {
     /// any other reason (sync, a drop, another window) keep moving in one frame. B167.
     private var folderDisclosureCounts: [UUID: Int] = [:]
 
+    /// The folder row the pointer last entered. A click opens or closes it, so its list draws its
+    /// rows ready to slide under it (`SidebarFolderRevealPlan`): a row that goes away keeps the
+    /// transition of the update before. Kept after the pointer leaves. B176.
+    @Published private(set) var revealFolderID: UUID?
+
     func folderDisclosureCount(in spaceID: UUID?) -> Int {
         spaceID.flatMap { folderDisclosureCounts[$0] } ?? 0
     }
@@ -1169,6 +1174,17 @@ public final class SidebarViewModel: ObservableObject {
     /// so a double-click leaves the folder as it found it. inferred (B167).
     func folderRowClicked(_ id: UUID, clickCount: Int) {
         guard clickCount <= 2 else { return }
+        // A closing folder's rows slide under it only if the list drew them ready for that before
+        // the change (`revealFolderID`). Normally the hover did; a click into a window that was not
+        // key comes without one: draw a pass first, then close it. B176.
+        if revealFolderID != id, workspace.folders[id]?.isExpanded == true {
+            revealFolderID = id
+            Task { @MainActor [weak self] in
+                await MainRunLoopTurn.next()
+                self?.folderRowClicked(id, clickCount: clickCount)
+            }
+            return
+        }
         toggleFolder(id)
         if clickCount == 2 { beginRename(id) }
     }
@@ -1177,6 +1193,8 @@ public final class SidebarViewModel: ObservableObject {
         guard let folder = workspace.folders[id] else { return }
         // The folder opens in place: its quick list is no longer needed. inferred (B76).
         dismissQuickList()
+        // Opened from a menu or a key: its new rows still slide out from under it.
+        if revealFolderID != id { revealFolderID = id }
         noteFolderDisclosure(in: folder.spaceID)
         mutate { try TreeOps.setFolderExpanded($0, id: id, isExpanded: !folder.isExpanded, now: now()) }
     }
@@ -1903,6 +1921,7 @@ extension SidebarViewModel {
     /// opens it); the delay is inferred. Only a collapsed folder that holds tabs has one: an open
     /// folder already lists its tabs below it. inferred.
     func folderHoverBegan(_ id: UUID) {
+        if revealFolderID != id { revealFolderID = id }
         quickListHoveredFolderID = id
         guard draggingItem == nil, !isDraggingExternalURL, renamingItemID == nil, !isQuickListFocused,
               let folder = workspace.folders[id], !folder.meta.isTombstone, !folder.isExpanded,
