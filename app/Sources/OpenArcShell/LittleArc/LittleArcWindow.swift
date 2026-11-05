@@ -141,7 +141,7 @@ struct LittleArcBrowsingView: View {
         .background(TranslucentWindowConfigurator { isFullScreen = $0 })
         // Traffic lights centered on the 47 pt bar: the main window's measured spot (center y 24,
         // [07 §2] observed) suits it; using it here is inferred.
-        .background(MainWindowChromeConfigurator(placement: .pinned))
+        .background(MainWindowChromeConfigurator(placement: .pinned, lightInk: palette.usesLightInk))
     }
 }
 
