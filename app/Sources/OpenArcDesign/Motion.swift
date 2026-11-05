@@ -114,10 +114,15 @@ public enum Motion {
 
     // MARK: Layout changes Arc does not animate
 
-    /// Command bar open/close, tab row insert/remove (new tab, ⌘W), folder disclosure, split view
-    /// add/close: [07 §11] observed one-frame changes in AX, so no frame (layout) animation. Any
-    /// fade or scale on layers is unknown.
+    /// Command bar open/close, tab row insert/remove (new tab, ⌘W), split view add/close: [07 §11]
+    /// observed one-frame changes in AX, so no frame (layout) animation. Any fade or scale on
+    /// layers is unknown.
     public static let layoutChange = MotionToken(.instant, .observed)
+
+    /// Folder open/close: the rows below slide and the folder's rows fade. [07 §11.3] the layer
+    /// animation was not measured (AX jumps in one frame); the user reports Arc has one (B167).
+    /// Curve and duration are our own placeholder.
+    public static let folderDisclosure = MotionToken(.spring(response: 0.25, dampingFraction: 1.0), .unknown)
 
     /// Library enter/exit: [07 §11] observed one-frame frame change; the old view leaves after
     /// ≈ 0.5 s, so a cross-fade of at most that long may run on layers (curve unknown). Ours swaps

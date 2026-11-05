@@ -26,6 +26,23 @@ final class ShellMotionTests: XCTestCase {
         XCTAssertNil(MotionCurve.instant.swiftUI, "instant = no animation")
     }
 
+    /// Folder rows use their token, and nothing with Reduce Motion. [07 §11.3] B167.
+    func testFolderDisclosureFollowsReduceMotion() {
+        XCTAssertEqual(ShellMotion.folderDisclosure(reduceMotion: false), .spring(response: 0.25, dampingFraction: 1.0))
+        XCTAssertNil(ShellMotion.folderDisclosure(reduceMotion: true))
+    }
+
+    /// A collapse that pulls the content above the scroll offset is drawn without animation
+    /// (AppKit moves the offset in one frame); any other height keeps it. [07 §11.3] B167.
+    func testFolderDisclosureSkipsAnimationWhenTheOffsetMoves() {
+        let scrolled = SidebarScrollMetrics(offset: 500, contentHeight: 1200, viewportHeight: 700)
+        XCTAssertTrue(SidebarListRowsLayout.keepsScrollOffset(scrolled, newContentHeight: 1200))
+        XCTAssertTrue(SidebarListRowsLayout.keepsScrollOffset(scrolled, newContentHeight: 1600))
+        XCTAssertFalse(SidebarListRowsLayout.keepsScrollOffset(scrolled, newContentHeight: 1100))
+        let atTop = SidebarScrollMetrics(offset: 0, contentHeight: 400, viewportHeight: 700)
+        XCTAssertTrue(SidebarListRowsLayout.keepsScrollOffset(atTop, newContentHeight: 200), "shorter than the viewport")
+    }
+
     /// The window fade of a closing Little Arc follows how it closed. [07 §11] observed.
     func testLittleArcCloseMotionFollowsCloseStyle() {
         XCTAssertEqual(LittleArcWindowView.closeMotion(.dismiss), Motion.littleArcClose)
@@ -100,8 +117,8 @@ final class ShellMotionTests: XCTestCase {
         XCTAssertFalse(window.isVisible)
     }
 
-    /// Arc shows no frame animation for the command bar, row insert/remove, folder disclosure,
-    /// split view or the Library ([07 §11] observed one-frame changes). Every animation in the
+    /// Arc shows no frame animation for the command bar, row insert/remove, split view or the
+    /// Library ([07 §11] observed one-frame changes). Every animation in the
     /// shell goes through `ShellMotion` (or the own-design onboarding), so a new local curve on
     /// one of those surfaces shows up here.
     func testNoLocalAnimationCurves() throws {

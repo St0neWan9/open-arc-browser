@@ -598,8 +598,9 @@ struct SidebarFolderRowView: View, Equatable {
             // Hovering a folder opens its quick list. [06 §14] observed. B76.
             if hovering { viewModel.folderHoverBegan(folder.id) } else { viewModel.folderHoverEnded(folder.id) }
         }
-        .simultaneousGesture(TapGesture(count: 2).onEnded { viewModel.beginRename(folder.id) })
-        .onTapGesture { viewModel.toggleFolder(folder.id) }
+        // One tap gesture and the event's click count: a double tap gesture next to it holds every
+        // single click back until the double-click time has passed (≈ 370 ms, B167).
+        .onTapGesture { viewModel.folderRowClicked(folder.id, clickCount: NSApp.currentEvent?.clickCount ?? 1) }
         .contextMenu { SidebarFolderMenu(viewModel: viewModel, folder: folder) }
         .sidebarRowInteraction(isDropInto: row.isDropInto)
         .accessibilityElement(children: .combine)

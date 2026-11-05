@@ -365,6 +365,7 @@ private struct SidebarListRows: View {
     @ObservedObject var window: SidebarListWindow
     let isSidebarHovered: Bool
     let layout: SidebarLayout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let geometry = content.geometry
@@ -378,9 +379,21 @@ private struct SidebarListRows: View {
             ForEach(rows.entries) { entry in
                 entryView(entry.look)
                     .frame(width: layout.width, height: entry.entry.height, alignment: .topLeading)
+                    // Only takes effect in an animated update: scrolling builds rows without it.
+                    .transition(.opacity)
                     .layoutValue(key: SidebarListEntryTop.self, value: entry.entry.top)
             }
         }
+        // Applied here, inside the content's fixed frame: the rows move, the scroll view's content
+        // height changes at once. [07 §11.3] B167.
+        .animation(folderDisclosureAnimation(contentHeight: geometry.contentHeight),
+                   value: viewModel.folderDisclosureCount(in: spaceID))
+    }
+
+    private func folderDisclosureAnimation(contentHeight: CGFloat) -> Animation? {
+        guard let metrics = viewModel.listScroller?.metrics,
+              SidebarListRowsLayout.keepsScrollOffset(metrics, newContentHeight: contentHeight) else { return nil }
+        return ShellMotion.folderDisclosure(reduceMotion: reduceMotion)
     }
 
     @ViewBuilder
@@ -479,6 +492,13 @@ extension SidebarViewModel {
 /// (B99 profile), because the scroll view and the views around the content ask for them.
 struct SidebarListRowsLayout: Layout {
     var size: CGSize
+
+    /// Whether content of the new height still reaches the scroll offset. When it does not, AppKit
+    /// moves the offset in one frame and rows sliding from their old places would jump, so that
+    /// change is drawn without animation. B167.
+    static func keepsScrollOffset(_ metrics: SidebarScrollMetrics, newContentHeight: CGFloat) -> Bool {
+        metrics.offset <= max(0, newContentHeight - metrics.viewportHeight) + 0.5
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize { size }
 

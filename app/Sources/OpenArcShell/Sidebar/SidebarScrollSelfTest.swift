@@ -238,6 +238,10 @@ enum SidebarScrollSelfTest {
         return times.lines()
     }
 
+    /// Lets a folder's rows finish moving before the next toggle, so the late-frame count covers
+    /// the whole animation (`Motion.folderDisclosure`). B167.
+    private static let folderAnimationWait: Duration = .milliseconds(400)
+
     /// Expands and collapses the first top-level folders (each twice, so the state ends as found).
     private static func folders(sidebar: SidebarViewModel, windowView: NSView?) async -> [String] {
         let ids = sidebar.snapshot.pinned.compactMap { item -> UUID? in
@@ -246,7 +250,9 @@ enum SidebarScrollSelfTest {
         let times = Recorder("folder", windowView: windowView)
         for id in ids {
             await times.time { sidebar.toggleFolder(id) }
+            try? await Task.sleep(for: folderAnimationWait)
             await times.time { sidebar.toggleFolder(id) }
+            try? await Task.sleep(for: folderAnimationWait)
         }
         return times.lines()
     }
