@@ -14,7 +14,7 @@ The approved identity is a broad folded ribbon with an open triangular counter. 
 
 | Visible name | File stem | Persisted identifier | Treatment |
 | --- | --- | --- | --- |
-| Original | original | slate | Lavender ribbon on a pale lilac tile, without an outer outline |
+| Original | original | slate | Matte-satin lavender folds on a softly glazed lilac tile |
 | Candy | candy | sunrise | Peach and lilac ribbon, pink tile, raised white edge |
 | Neon | neon | night | Luminous pink and violet contours on midnight indigo |
 | Fluted Glass | fluted-glass | lagoon | Muted lilac and coral under translucent vertical ribs |
@@ -22,6 +22,10 @@ The approved identity is a broad folded ribbon with an open triangular counter. 
 | Spectrum | spectrum | prism | Fuchsia, amber and violet on deep plum |
 
 Identifiers are retained for compatibility with existing device preferences. All six treatments are available without unlocking. Choosing an icon updates the running app's Dock and app-switcher image and persists the selection. Finder continues to show the signed bundle's Original icon; the bundle is never modified at runtime.
+
+## Material consistency
+
+All variants share the same tile geometry, ribbon proportions, top-left lighting and soft cast shadow. Tile highlights fade with the light direction instead of forming a uniform white outline. Original uses a softly glazed lilac base and restrained fold shading, without white specular strokes on its ribbon. Dark and paper treatments use reduced surface illumination; Candy and Paper retain their sticker silhouettes, Neon retains its luminous contours, and Fluted Glass retains its vertical ribs.
 
 ## Regeneration
 

@@ -57,3 +57,8 @@
   - Native build passed without compiler warnings; 2,094 tests completed with 6 skipped and 0 failures. Website build and static checks passed.
   - Deployed to Cloudflare version `a774f9cf-cc33-4acc-bd25-0039d44d4e35`. The live PNG matches the local build byte for byte.
   - This removes the artwork outline. The installed application's appearance, including any macOS-applied icon treatment, has not been revalidated with a new bundle.
+
+- LP11 — Done: Applied the approved satin-glaze direction to Original with restrained fold shading. Aligned directional tile lighting across the collection while preserving each material. Regenerated the bundle icon, six PNG/ICNS families, collection sheet and website icon from the shared renderer.
+  - Native build passed without compiler warnings. The full suite passed 2,102 tests (6 skipped); after the final edge-opacity and fold-shadow adjustment, the build and all 16 settings/icon tests passed again.
+  - Website build and static checks passed. Cloudflare version `ad6d576c-ab48-458a-9c52-76346bf4aad4` serves an icon matching the build byte for byte.
+  - Reviewed the production collection and 256 px Original export. Installed applications were not replaced; macOS-applied icon effects still require verification with a new app bundle.
