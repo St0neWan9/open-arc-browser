@@ -3,13 +3,13 @@
     <channel>
         <title>Open Arc</title>
         <item>
-            <title>0.2.1</title>
-            <pubDate>Thu, 05 Nov 2026 14:13:15 +0700</pubDate>
-            <sparkle:version>16</sparkle:version>
-            <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
+            <title>0.2.2</title>
+            <pubDate>Fri, 06 Nov 2026 00:28:45 +0700</pubDate>
+            <sparkle:version>17</sparkle:version>
+            <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.1/OpenArc-0.2.1.zip" length="206515034" type="application/octet-stream" sparkle:edSignature="fykTYII6dVhz5C2ttf8Dtq+E31ekr6SiGH2NDOG4okM0OzLOBl1niUx9GS+B6zWj6KrUhsGTWigwwVTlxNPxCw=="/>
+            <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.2/OpenArc-0.2.2.zip" length="206518577" type="application/octet-stream" sparkle:edSignature="HZpziB/vyiOhlTnYpdN+VaSwKUpbDXZa7hWJhH5akI4LiMP50CCQEmoLEODML3eQzdL3vC49q7RkVZ5J6+OaBw=="/>
         </item>
     </channel>
 </rss>
