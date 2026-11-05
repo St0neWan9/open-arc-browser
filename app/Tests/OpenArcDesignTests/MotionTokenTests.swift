@@ -51,13 +51,18 @@ final class MotionTokenTests: XCTestCase {
         XCTAssertEqual(Motion.littleArcGrowOnLoad.curve, .instant)
     }
 
-    /// [07 §11] observed one-frame changes: command bar, rows, folders, split view, Library.
+    /// [07 §11] observed one-frame changes: command bar, rows, split view, Library.
     func testUnanimatedLayoutChanges() {
         XCTAssertEqual(Motion.layoutChange, MotionToken(.instant, .observed))
         XCTAssertEqual(Motion.library.curve, .instant)
         XCTAssertEqual(Motion.libraryCrossfadeMax, 0.5)
         XCTAssertEqual(MotionCurve.instant.nominalDuration, 0)
         XCTAssertNil(MotionCurve.instant.springConstants)
+    }
+
+    /// [07 §11.3] the folder's layer animation was not measured: a placeholder (B167).
+    func testFolderDisclosureStaysUnknown() {
+        XCTAssertEqual(Motion.folderDisclosure, MotionToken(.spring(response: 0.25, dampingFraction: 1.0), .unknown))
     }
 
     /// [07 §11] not measured: hover card, selection highlight. [06 §12] hover delay stays 0.5 s.

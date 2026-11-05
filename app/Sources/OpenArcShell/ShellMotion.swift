@@ -68,6 +68,11 @@ enum ShellMotion {
     static func commandBarPresence(isPresented: Bool) -> Animation? {
         isPresented ? nil : commandBarClose
     }
+    /// Folder rows opening and closing. `Motion.folderDisclosure` (unknown, B167). None when the
+    /// user asked to reduce motion.
+    static func folderDisclosure(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : Motion.folderDisclosure.curve.swiftUI
+    }
     /// The new empty Space's illustration fading away ([06 §1] observed that it goes away; the
     /// ease-out over `NewSpaceIllustrationTrigger.fadeDuration` is inferred). B75.
     static var newSpaceIllustrationFade: Animation { .easeOut(duration: NewSpaceIllustrationTrigger.fadeDuration) }

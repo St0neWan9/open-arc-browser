@@ -156,6 +156,34 @@ final class SidebarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.snapshot.pinned.count, 6)
     }
 
+    /// [06 §15] the release toggles a folder: the first click at once, the second of a double-click
+    /// puts it back and renames, a third does nothing. B167.
+    func testFolderRowClicks() {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        vm.folderRowClicked(f.folderA, clickCount: 1)
+        XCTAssertEqual(vm.workspace.folders[f.folderA]?.isExpanded, false)
+        XCTAssertNil(vm.renamingItemID)
+        vm.folderRowClicked(f.folderA, clickCount: 2)
+        XCTAssertEqual(vm.workspace.folders[f.folderA]?.isExpanded, true)
+        XCTAssertEqual(vm.renamingItemID, f.folderA)
+        vm.folderRowClicked(f.folderA, clickCount: 3)
+        XCTAssertEqual(vm.workspace.folders[f.folderA]?.isExpanded, true)
+    }
+
+    /// Only the user's own open / close counts as an animated change, in its own Space. [07 §11.3] B167.
+    func testFolderDisclosureCount() {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        XCTAssertEqual(vm.folderDisclosureCount(in: f.home), 0)
+        vm.toggleFolder(f.folderA)
+        XCTAssertEqual(vm.folderDisclosureCount(in: f.home), 1)
+        vm.setAllFoldersExpanded(true)
+        XCTAssertEqual(vm.folderDisclosureCount(in: f.home), 2)
+        XCTAssertEqual(vm.folderDisclosureCount(in: UUID()), 0)
+        XCTAssertEqual(vm.folderDisclosureCount(in: nil), 0)
+    }
+
     /// [06 §12] "Double-click to rename" / [05] Rename…: custom title for tabs, reset on empty.
     func testRename() {
         let f = SidebarFixture()

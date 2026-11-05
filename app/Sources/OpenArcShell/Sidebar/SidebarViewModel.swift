@@ -1138,6 +1138,20 @@ public final class SidebarViewModel: ObservableObject {
         isNewFolderSheetPresented = true
     }
 
+    /// How many times the user opened or closed folders, by Space. A list animates the rows of an
+    /// update where its count changed (`SidebarListRows`), and only those: rows that change for
+    /// any other reason (sync, a drop, another window) keep moving in one frame. B167.
+    private var folderDisclosureCounts: [UUID: Int] = [:]
+
+    func folderDisclosureCount(in spaceID: UUID?) -> Int {
+        spaceID.flatMap { folderDisclosureCounts[$0] } ?? 0
+    }
+
+    /// Before the change, so the update that draws it already sees the new count.
+    private func noteFolderDisclosure(in spaceID: UUID) {
+        folderDisclosureCounts[spaceID, default: 0] += 1
+    }
+
     /// Creates a folder at the top of the pinned area, expanded. [06 §3] observed.
     @discardableResult
     public func createFolder(title: String, parent: UUID? = nil) -> UUID? {
@@ -1150,10 +1164,20 @@ public final class SidebarViewModel: ObservableObject {
         return id
     }
 
+    /// A click on a folder row, at mouse-up ([06 §15] observed: the release toggles it). The first
+    /// click toggles at once; the second of a double-click puts the folder back and renames it,
+    /// so a double-click leaves the folder as it found it. inferred (B167).
+    func folderRowClicked(_ id: UUID, clickCount: Int) {
+        guard clickCount <= 2 else { return }
+        toggleFolder(id)
+        if clickCount == 2 { beginRename(id) }
+    }
+
     public func toggleFolder(_ id: UUID) {
         guard let folder = workspace.folders[id] else { return }
         // The folder opens in place: its quick list is no longer needed. inferred (B76).
         dismissQuickList()
+        noteFolderDisclosure(in: folder.spaceID)
         mutate { try TreeOps.setFolderExpanded($0, id: id, isExpanded: !folder.isExpanded, now: now()) }
     }
 
@@ -1161,6 +1185,7 @@ public final class SidebarViewModel: ObservableObject {
     public func setAllFoldersExpanded(_ expanded: Bool) {
         guard let spaceID = selectedSpaceID else { return }
         let ids = workspace.folders.values.filter { !$0.meta.isTombstone && $0.spaceID == spaceID && $0.isExpanded != expanded }.map(\.id)
+        noteFolderDisclosure(in: spaceID)
         mutate { state in
             try ids.reduce(state) { try TreeOps.setFolderExpanded($0, id: $1, isExpanded: expanded, now: now()) }
         }

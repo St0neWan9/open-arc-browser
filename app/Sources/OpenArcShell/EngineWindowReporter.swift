@@ -136,7 +136,8 @@ extension ShellModel: EngineWindowSource {
         if let spaceID = selectedSpaceID {
             let ws = workspace
             modelTabs += ws.favorites(profileID: profileID).map(\.id)
-            let inSpace = ws.allTabs(inSpace: spaceID)
+            // Only live tabs are listed: sort those, not a Space of thousands on every change (B167).
+            let inSpace = ws.allTabs(inSpace: spaceID).filter { controller.liveTab(for: $0.id) != nil }
             let order: (TabNode, TabNode) -> Bool = { SortKey.order(($0.sortKey, $0.id), ($1.sortKey, $1.id)) }
             modelTabs += inSpace.filter { if case .pinned = $0.location { return true } else { return false } }.sorted(by: order).map(\.id)
             modelTabs += inSpace.filter { if case .today = $0.location { return true } else { return false } }.sorted(by: order).map(\.id)
