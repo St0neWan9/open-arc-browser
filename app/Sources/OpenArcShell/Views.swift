@@ -190,11 +190,11 @@ struct MainWindowContent: View {
         }
         // Modal cards: centered in the window over the dimmed window. [07 §12] observed (B91).
         .modifier(SpaceFlowSheets(flow: model.spaceFlow,
-                                   pickerSpaceIcon: model.spaceFlow.iconPickerSpaceID.flatMap { sidebar.workspace.spaces[$0]?.icon },
                                    palette: model.windowPalette))
         .modifier(ProfileFlowSheets(flow: model.profileFlow, palette: model.windowPalette))
         .modifier(SidebarWindowModals(sidebar: sidebar))
         .overlay(alignment: .topLeading) { themeEditorAnchor }
+        .overlay(alignment: .topLeading) { spaceIconPickerAnchor(palette: palette).ignoresSafeArea() }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.
         .background(WindowAppearanceApplier(appearance: palette.appearance))
         // A clear, non-opaque window so the blur and the tint show the desktop. [07 §8.4] B64.
@@ -296,6 +296,36 @@ struct MainWindowContent: View {
             .frame(width: sidebarSize.width, height: max(0, list.dockFrame.minY - top))
             .offset(y: top)
         }
+    }
+
+    /// Change Space Icon…: a bubble under the Space's icon, its arrow pointing at it. Observed on
+    /// a 2× Arc capture (B172). The bubble stays up while icons are tried.
+    private func spaceIconPickerAnchor(palette: ThemePalette) -> some View {
+        let icon = Metrics.Sidebar.spaceIconFrame
+        let flow = model.spaceFlow
+        let isPresented = flow.iconPickerSpaceID != nil
+        return Color.clear
+            .frame(width: CGFloat(icon.width), height: CGFloat(icon.height))
+            .floatingBubble(isPresented: isPresented) {
+                FloatingBubbleRequest(
+                    placement: .attached(.below),
+                    style: FloatingBubbleStyle(width: IconPickerTokens.size, height: IconPickerTokens.size,
+                                               cornerRadius: IconPickerTokens.cornerRadius,
+                                               tint: palette.floatingPanelBackground, isDark: palette.isDark, becomesKey: true),
+                    content: AnyView(SpaceIconPickerBubble(flow: flow, sidebar: sidebar, palette: palette)),
+                    onDismiss: { _ in flow.cancelChangeIcon() }
+                )
+            }
+            // After the anchor: an offset moves what is drawn, and the anchor reads the view's place.
+            .padding(.leading, CGFloat(icon.x))
+            .padding(.top, spaceIconTop)
+            .allowsHitTesting(false)
+    }
+
+    /// Top of the Space icon in the window: below favorites, which may take several rows.
+    private var spaceIconTop: CGFloat {
+        let layout = SidebarLayout(isWebToolbarShown: model.isWebToolbarShown, favoritesTilesHeight: sidebar.favoritesTilesHeight)
+        return layout.spaceNameRowFrame.minY
     }
 
     /// The Edit Theme bubble (Spaces ▸ Edit Theme…, Space menu ▸ Edit Theme Color…). [07 §12]
