@@ -296,6 +296,9 @@ public enum ThemeDerivation {
     public static let controlFillScale: Double = 0.96
     /// Separator = window × 0.87. [07 §8] inferred (thin lines on a JPEG: up to ≈ 13/255 off).
     public static let separatorScale: Double = 0.87
+    /// Lines at the scrolled list's edges (under the Space name, above the dock): lighter than the
+    /// divider. inferred from the light-ink reading below (B171).
+    public static let scrollEdgeScale: Double = 0.95
     /// Control fill on a light-ink (dark) window: window + 11 % white, i.e. lighter, not darker.
     /// Round-1 PX (B32): #5247FE → #655CFE (≤ 1/255); inferred. The older "≈ 10 % white" of
     /// [04 §theme system] matches this case.
@@ -304,6 +307,9 @@ public enum ThemeDerivation {
     /// inferred: lossless E8 captures of the navy preset (light and dark) fit 0.16 within 0.5/255;
     /// the former 5 % came from a JPEG reading of the 1 px line (B32 round 1) and missed by 13/255.
     public static let lightInkSeparatorWhite: Double = 0.16
+    /// The same on a light-ink window: #6B9074 → #73977B, ≈ 5.5 % white. observed on a 2× Arc
+    /// capture (B171).
+    public static let lightInkScrollEdgeWhite: Double = 0.055
     /// Selected row fill with dark ink = mix(window, #F7F7F7, 0.894). [07 §8.4] inferred: refitted
     /// on 16 lossless E8 samples (8 presets × light / dark, max 0.6/255) and the 5 E11 samples
     /// (max 1.3/255); the former mix(window, #F5F5F5, 0.90) missed them by 2.4 / 3.0.
@@ -605,7 +611,7 @@ public enum ThemeDerivation {
         palette.usesLightInk = lightInk
         palette.inkOpacity = inkOpacity
         palette.separator = separator
-        palette.scrollEdgeLine = separator
+        palette.scrollEdgeLine = lightInk ? overlayWhite(window, amount: lightInkScrollEdgeWhite) : shade(window, by: scrollEdgeScale)
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
         palette.webPanelBackground = picked.isEmpty && !isDark
             ? defaultLightContent : contentBackground(theme, appearance: appearance)
@@ -655,6 +661,33 @@ public enum ThemeDerivation {
 
 /// OKLCH components of an sRGB color (Björn Ottosson's OKLab, polar form). Lightness 0...1,
 /// chroma ≥ 0, hue in degrees.
+/// The three colors of a folder glyph: its outline, the tab or back panel, and the body or front
+/// panel. All follow the window color, and a light-ink window turns them around: pale outline around
+/// a dark body, against a dark outline around a body as light as the window.
+public struct FolderGlyphColors: Equatable, Sendable {
+    public var outline: RGBAColor
+    public var back: RGBAColor
+    public var body: RGBAColor
+}
+
+extension ThemeDerivation {
+    /// Fitted on a 2× Arc capture, one window of each ink (B170): light ink #6B9074 → outline
+    /// #EDFEEF, back #64A574, body #396642; dark ink #F0ECE8 → #675345, #D2BAA2, #F3EEEA. observed
+    /// colors; the rule between them is inferred.
+    public static func folderGlyphColors(window: RGBAColor, lightInk: Bool) -> FolderGlyphColors {
+        let w = OKLCH(window)
+        func color(_ lightness: Double, _ chroma: Double) -> RGBAColor {
+            OKLCH(lightness: lightness, chroma: chroma, hue: w.hue).rgb(alpha: 1)
+        }
+        if lightInk {
+            return FolderGlyphColors(outline: color(0.98, 0.027), back: color(w.lightness + 0.047, w.chroma * 1.68),
+                                     body: color(w.lightness * 0.756, w.chroma * 1.3))
+        }
+        return FolderGlyphColors(outline: color(0.459, max(0.035, w.chroma * 1.7)), back: color(w.lightness - 0.142, max(0.043, w.chroma * 1.7)),
+                                 body: color(w.lightness + 0.007, w.chroma))
+    }
+}
+
 struct OKLCH {
     var lightness: Double
     var chroma: Double
