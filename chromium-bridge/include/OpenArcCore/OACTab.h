@@ -253,8 +253,9 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 
 // MARK: View hosting (`TabSurface`)
 
-/// The view that shows the page. The shell's `SurfaceHost` adds it as a subview and sizes it;
-/// the bridge never moves it between superviews itself. A view is in at most one superview at a
+/// The view that shows the page, and DevTools while it is docked into the tab (the page then
+/// takes the part DevTools leaves it). The shell's `SurfaceHost` adds it as a subview and sizes
+/// it; the bridge never moves it between superviews itself. A view is in at most one superview at a
 /// time, which matches "a surface is in at most one host" in Surface.swift. nil after `-close`.
 @property (nonatomic, readonly, nullable) NSView *nativeView;
 
@@ -336,12 +337,14 @@ typedef NS_ENUM(NSInteger, OACSavePageFormat) {
     NS_SWIFT_NAME(savePage(to:format:completionHandler:));
 
 /// View ▸ Developer ▸ Developer Tools / Inspect Elements / JavaScript Console / Network Inspector
-/// ([01 §View] observed items, plan C15). DevTools opens in its own window owned by the bridge,
-/// one per tab, reused by later calls and closed with the tab (inferred: the spec records no
-/// docked DevTools). `panel`: nil = the last panel used, `"elements"` = Inspect Elements (the
-/// Elements panel in element-picking mode), `"console"`, `"network"`.
+/// ([01 §View] observed items, plan C15). One DevTools per tab, reused by later calls and closed
+/// with the tab. Like Arc's (observed, B180) it docks into `nativeView`, on the right by default;
+/// its own Dock side menu moves it to the left, the bottom or a window owned by the bridge.
+/// Developer Tools (`panel` nil) closes a docked DevTools again (a toggle) and brings an
+/// undocked one forward. `panel`: nil = the last panel used, `"elements"` = Inspect Elements
+/// (the Elements panel in element-picking mode), `"console"`, `"network"`.
 - (void)showDevToolsWithPanel:(nullable NSString *)panel NS_SWIFT_NAME(showDevTools(panel:));
-/// Closes this tab's DevTools window, if open.
+/// Closes this tab's DevTools, docked or in its window, if open.
 - (void)closeDevTools;
 /// View ▸ Developer ▸ View Source: asks the delegate for a new tab with `view-source:` +URL.
 - (void)viewSource;
