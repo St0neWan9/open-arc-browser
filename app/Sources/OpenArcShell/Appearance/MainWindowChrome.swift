@@ -96,9 +96,12 @@ enum WindowChromeLayout {
 /// sidebar ([06 §26] observed).
 struct MainWindowChromeConfigurator: NSViewRepresentable {
     let placement: WindowButtonPlacement
+    /// The window color takes light ink: the traffic-light discs lighten it instead of darkening it.
+    var lightInk = false
 
-    init(placement: WindowButtonPlacement) {
+    init(placement: WindowButtonPlacement, lightInk: Bool = false) {
         self.placement = placement
+        self.lightInk = lightInk
     }
 
     /// `inLibrary` moves the buttons to the Library spot; `showsButtons` false sends them out of
@@ -114,11 +117,13 @@ struct MainWindowChromeConfigurator: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.probe = view
         view.onMoveToWindow = { [weak coordinator] in coordinator?.windowChanged() }
+        coordinator.lightInk = lightInk
         coordinator.request(placement)
         return view
     }
 
     func updateNSView(_ nsView: ProbeView, context: Context) {
+        context.coordinator.lightInk = lightInk
         context.coordinator.request(placement)
     }
 
@@ -129,6 +134,13 @@ struct MainWindowChromeConfigurator: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         weak var probe: NSView?
+        /// See `MainWindowChromeConfigurator.lightInk`.
+        var lightInk = false {
+            didSet {
+                guard lightInk != oldValue, let window = probe?.window else { return }
+                Self.syncMute(in: window, lightInk: lightInk)
+            }
+        }
         private weak var window: NSWindow?
         private var placement: WindowButtonPlacement = .pinned
         /// The placement the last pass laid out; nil before the first one (no animation then).
@@ -204,7 +216,7 @@ struct MainWindowChromeConfigurator: NSViewRepresentable {
                 if !placement.isOnScreen, Self.applyVisibility(to: window, showsButtons: false) { changed = true }
             }
             if changed { writeCount += 1 }
-            if !isAnimating { Self.syncMute(in: window) }
+            if !isAnimating { Self.syncMute(in: window, lightInk: lightInk) }
         }
 
         private func attach(to window: NSWindow) {

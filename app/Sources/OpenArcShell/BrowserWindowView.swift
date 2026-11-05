@@ -33,7 +33,7 @@ struct BrowserWindowRoot: View {
             // The menu bar observes this, not the model (B103).
             .focusedSceneObject(model.menuBar)
             .background(BrowserWindowObserver(model: model))
-            .background(MainWindowChromeConfigurator(placement: model.windowButtonPlacement))
+            .background(MainWindowChromeConfigurator(placement: model.windowButtonPlacement, lightInk: model.windowPalette.usesLightInk))
             .frame(minWidth: 800, minHeight: 500)
             .onAppear(perform: appeared)
     }

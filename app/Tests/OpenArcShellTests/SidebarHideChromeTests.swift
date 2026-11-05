@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import AppKit
+import OpenArcModel
 import OpenArcDesign
 @testable import OpenArcShell
 
@@ -192,8 +193,8 @@ final class SidebarHideChromeTests: XCTestCase {
     }
 }
 
-/// B160: Arc's traffic lights are muted discs (black ≈ 8 %, 12 pt, no rim) while the window is
-/// active; the real buttons show on hover. [07 §2] observed.
+/// B160, B174: Arc's traffic lights: plain discs at rest, the pre-macOS 26 buttons on hover, both
+/// drawn by us. [07 §2] observed.
 @MainActor
 final class WindowButtonMuteB160Tests: XCTestCase {
     func testMutedDiscsCoverTheButtonsUntilHovered_07_2() throws {
@@ -207,15 +208,46 @@ final class WindowButtonMuteB160Tests: XCTestCase {
         let mute = try XCTUnwrap(close.superview?.subviews.first { $0 is WindowButtonMuteView } as? WindowButtonMuteView)
         XCTAssertEqual(mute.discCenters.count, 3)
         XCTAssertNil(mute.hitTest(NSPoint(x: 5, y: 5)), "clicks reach the real buttons")
-        XCTAssertEqual(close.alphaValue, 0, "muted")
+        XCTAssertEqual(close.alphaValue, 0, "the system's drawing never shows")
         mute.setHovered(true)
-        XCTAssertEqual(close.alphaValue, 1, "hover shows the real buttons")
+        XCTAssertEqual(close.alphaValue, 0, "hover is drawn by us too (B174)")
         mute.setHovered(false)
-        XCTAssertEqual(close.alphaValue, 0)
-        let c = WindowButtonMuteView.discColor(isDark: false)
-        XCTAssertEqual(c.alphaComponent, 0.082, accuracy: 0.001)
-        // #DBDBEE × (1 − 0.082) ≈ #C9C9DB, the observed disc.
-        XCTAssertEqual(0xDB * (1 - c.alphaComponent), 0xC9, accuracy: 1.5)
+        MainWindowChromeConfigurator.Coordinator.syncMute(in: window, lightInk: true)
+        XCTAssertTrue(mute.usesLightInk)
+        MainWindowChromeConfigurator.Coordinator.syncMute(in: window)
+        XCTAssertTrue(mute.usesLightInk, "nil keeps the ink")
+    }
+
+    /// B174: resting discs follow the ink, within 4/255 of the 2× Arc captures.
+    func testRestingDiscsFollowTheInk_07_2() {
+        func over(_ window: UInt32, lightInk: Bool) -> RGBAColor {
+            WindowTranslucency.composite(WindowButtonLook.restingDisc(lightInk: lightInk), over: RGBAColor(hex: window))
+        }
+        func close(_ a: RGBAColor, _ hex: UInt32, _ tolerance: Double, file: StaticString = #filePath, line: UInt = #line) {
+            let b = RGBAColor(hex: hex)
+            XCTAssertLessThan(max(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue)), tolerance / 255, file: file, line: line)
+        }
+        close(over(0x77937C, lightInk: true), 0x9BB39E, 5)
+        close(over(0xDBDBEE, lightInk: false), 0xC9C9DB, 5)
+        close(over(0xE1E1F3, lightInk: false), 0xCFCFE1, 5)
+        close(over(0xEAE6E1, lightInk: false), 0xDDD8D6, 5)
+    }
+
+    /// B174: hovered buttons are the pre-macOS 26 ones; Graphite observed, white glyphs.
+    func testHoveredLook_07_2() {
+        for kind in WindowButtonLook.Kind.allCases {
+            let look = WindowButtonLook.hovered(kind, graphite: true)
+            XCTAssertEqual(look.fill, RGBAColor(hex: 0x9A9A98))
+            XCTAssertEqual(look.glyph, RGBAColor(hex: 0xFFFFFF))
+            let glyph = WindowButtonLook.glyph(kind, center: CGPoint(x: 7, y: 7), diameter: 14)
+            XCTAssertTrue(CGRect(x: 0, y: 0, width: 14, height: 14).insetBy(dx: 2.5, dy: 2.5).contains(glyph.path.boundingBox), "inside the disc")
+        }
+        XCTAssertEqual(WindowButtonLook.hoveredDiameter, 14, "observed: the discs grow on hover")
+        // Measured glyph boxes: − 8 × 2 pt, full screen 6 pt.
+        let minus = WindowButtonLook.glyph(.minimize, center: .zero, diameter: 14).path.boundingBox
+        XCTAssertEqual(minus.width, 8, accuracy: 0.1); XCTAssertEqual(minus.height, 2, accuracy: 0.1)
+        XCTAssertEqual(WindowButtonLook.glyph(.zoom, center: .zero, diameter: 14).path.boundingBox.width, 6, accuracy: 0.1)
+        XCTAssertEqual(WindowButtonLook.hovered(.close, graphite: false).fill, RGBAColor(hex: 0xFF5F57))
     }
 
     func testButtonsHiddenWithTheSidebarHideTheDiscs_06_26() throws {
