@@ -9,8 +9,9 @@ import OpenArcDesign
 // - Hovering the group: all three grow to 14 pt and turn into the pre-macOS 26 window buttons with
 //   their glyphs (✕ ≈ 7 pt wide with a ≈ 2 pt stroke, − 8 × 2 pt, the full-screen glyph a 6 pt square
 //   cut along its rising diagonal). With the Graphite accent: an opaque neutral gray disc reading
-//   #9F9F9D on screen, a half-point darker rim, white glyphs. The colored look for the other accents was not
-//   captured; it uses the classic red / yellow / green (inferred).
+//   #9F9F9D on screen, a half-point darker rim, white glyphs. With another accent (user's capture,
+//   2026-11-06, light-ink window): never red / yellow / green either, but a neutral gray disc reading
+//   #939393, the same darker rim and black glyphs.
 //
 // macOS 26 draws its own buttons in a newer style, so none of the system's drawing shows: the
 // standard buttons stay in place, clickable and in the accessibility tree, and a mouse-transparent
@@ -36,21 +37,14 @@ enum WindowButtonLook {
         var glyph: RGBAColor
     }
 
-    /// The hovered button. Graphite observed; the colored ones are the classic macOS colors (inferred).
+    /// The hovered button, the same for all three: gray with white glyphs under Graphite, gray
+    /// with black glyphs under the other accents. Both observed (see above). B181.
     static func hovered(_ kind: Kind, graphite: Bool) -> Hovered {
-        if graphite {
-            // Drawn a little darker than the reading: ours read ≈ 5/255 lighter on screen.
-            return Hovered(fill: RGBAColor(hex: 0x9A9A98), rim: RGBAColor(hex: 0x000000, alpha: 0.22),
-                           glyph: RGBAColor(hex: 0xFFFFFF))
-        }
-        switch kind {
-        case .close:
-            return Hovered(fill: RGBAColor(hex: 0xFF5F57), rim: RGBAColor(hex: 0xE0443E), glyph: RGBAColor(hex: 0x4D0000))
-        case .minimize:
-            return Hovered(fill: RGBAColor(hex: 0xFEBC2E), rim: RGBAColor(hex: 0xDEA123), glyph: RGBAColor(hex: 0x985712))
-        case .zoom:
-            return Hovered(fill: RGBAColor(hex: 0x28C840), rim: RGBAColor(hex: 0x1AAB29), glyph: RGBAColor(hex: 0x0A630F))
-        }
+        // Drawn a little darker than the readings: ours read ≈ 5/255 lighter on screen.
+        let rim = RGBAColor(hex: 0x000000, alpha: 0.22)
+        return graphite
+            ? Hovered(fill: RGBAColor(hex: 0x9A9A98), rim: rim, glyph: RGBAColor(hex: 0xFFFFFF))
+            : Hovered(fill: RGBAColor(hex: 0x8E8E8E), rim: rim, glyph: RGBAColor(hex: 0x000000))
     }
 
     /// Rim width of a hovered button. observed (one pixel at 2×).
