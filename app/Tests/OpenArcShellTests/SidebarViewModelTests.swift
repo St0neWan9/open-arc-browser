@@ -161,6 +161,7 @@ final class SidebarViewModelTests: XCTestCase {
     func testFolderRowClicks() {
         let f = SidebarFixture()
         let (vm, _) = makeSidebarViewModel(f)
+        vm.folderHoverBegan(f.folderA) // the pointer is on the row it clicks
         vm.folderRowClicked(f.folderA, clickCount: 1)
         XCTAssertEqual(vm.workspace.folders[f.folderA]?.isExpanded, false)
         XCTAssertNil(vm.renamingItemID)
@@ -169,6 +170,18 @@ final class SidebarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.renamingItemID, f.folderA)
         vm.folderRowClicked(f.folderA, clickCount: 3)
         XCTAssertEqual(vm.workspace.folders[f.folderA]?.isExpanded, true)
+    }
+
+    /// B176: closing a folder the list did not draw ready (no hover before the click) waits one pass.
+    func testCloseWithoutHoverWaitsOnePass() async {
+        let f = SidebarFixture()
+        let (vm, _) = makeSidebarViewModel(f)
+        vm.folderRowClicked(f.folderA, clickCount: 1)
+        XCTAssertEqual(vm.workspace.folders[f.folderA]?.isExpanded, true, "not yet")
+        XCTAssertEqual(vm.revealFolderID, f.folderA)
+        await MainRunLoopTurn.next()
+        await MainRunLoopTurn.next()
+        XCTAssertEqual(vm.workspace.folders[f.folderA]?.isExpanded, false)
     }
 
     /// Only the user's own open / close counts as an animated change, in its own Space. [07 §11.3] B167.

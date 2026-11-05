@@ -119,10 +119,14 @@ public enum Motion {
     /// layers is unknown.
     public static let layoutChange = MotionToken(.instant, .observed)
 
-    /// Folder open/close: the rows below slide and the folder's rows fade. [07 §11.3] the layer
-    /// animation was not measured (AX jumps in one frame); the user reports Arc has one (B167).
-    /// Curve and duration are our own placeholder.
-    public static let folderDisclosure = MotionToken(.spring(response: 0.25, dampingFraction: 1.0), .unknown)
+    /// Folder open: the folder's rows slide down out from under the folder row as one block and
+    /// push the rows below. Measured on a 57 fps screen recording (B176): ≈ 10 frames, no
+    /// overshoot; a critically damped spring of response ≈ 0.18 s fits. observed (values fitted).
+    public static let folderExpand = MotionToken(.spring(response: 0.18, dampingFraction: 1.0), .observed)
+
+    /// Folder close: the block slides up under the folder row, the rows below follow. ≈ 14 frames;
+    /// critically damped, response ≈ 0.24 s (B176). observed (values fitted).
+    public static let folderCollapse = MotionToken(.spring(response: 0.24, dampingFraction: 1.0), .observed)
 
     /// Library enter/exit: [07 §11] observed one-frame frame change; the old view leaves after
     /// ≈ 0.5 s, so a cross-fade of at most that long may run on layers (curve unknown). Ours swaps

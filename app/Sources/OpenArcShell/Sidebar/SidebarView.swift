@@ -369,31 +369,51 @@ private struct SidebarListRows: View {
 
     var body: some View {
         let geometry = content.geometry
+        // How much the content grew with the latest folder open / close, while it animates. B176.
+        let growth = window.noteDisclosure(count: viewModel.folderDisclosureCount(in: spaceID),
+                                           contentHeight: geometry.contentHeight)
+        let reveal = SidebarFolderRevealPlan(geometry: geometry, folderID: viewModel.revealFolderID)
+        // A close: the closed folder's rows stay drawn for the animation, slid up by the block's
+        // height under the folder row, so they move there with the rows below instead of being
+        // removed in place. B176.
+        let closingRows = window.closingRows(growth: growth) {
+            SidebarFolderRevealPlan.closingRows(previous: changes.drawnRows, folderID: viewModel.revealFolderID)
+        }
+        let closing = closingRows?.rows ?? []
         // Each row gets its state by value and is re-evaluated only when that state changed (B99).
-        // A page draws its own Space's colors and selection (B101).
-        let rows = viewModel.listRowsLook(content: content, spaceID: spaceID, minY: window.minY, maxY: window.maxY)
+        // A page draws its own Space's colors and selection (B101). While a folder opens, the rows
+        // it pushes past the band stay built until they have slid away.
+        let rows = viewModel.listRowsLook(content: content, spaceID: spaceID, minY: window.minY,
+                                          maxY: window.maxY + max(0, growth))
         // What this page drew, so a hidden page can tell whether it is still current (B106).
         // A plain record: never published.
         let _ = changes.noteDrawn(rows: rows)
+        // One list, so a closing row keeps its identity and slides instead of being replaced.
+        let drawn = rows.entries.filter { row in !closing.contains { $0.row.id == row.id } }
+            .map { SidebarPlacedListEntry(row: $0, top: $0.entry.top,
+                                          mask: reveal?.mask(for: $0.entry) ?? .none(for: $0.entry)) }
+            + closing.map { SidebarPlacedListEntry(row: $0.row, top: $0.top,
+                                                   mask: SidebarFolderRevealMask(clipTop: $0.clipY - $0.top, height: $0.row.entry.height)) }
         SidebarListRowsLayout(size: CGSize(width: layout.width, height: geometry.contentHeight)) {
-            ForEach(rows.entries) { entry in
-                entryView(entry.look)
-                    .frame(width: layout.width, height: entry.entry.height, alignment: .topLeading)
+            ForEach(drawn) { placed in
+                entryView(placed.row.look)
+                    .frame(width: layout.width, height: placed.row.entry.height, alignment: .topLeading)
+                    .modifier(SidebarFolderRevealEffect(shift: 0, mask: placed.mask))
                     // Only takes effect in an animated update: scrolling builds rows without it.
-                    .transition(.opacity)
-                    .layoutValue(key: SidebarListEntryTop.self, value: entry.entry.top)
+                    .transition(reveal?.transition(for: placed.row.entry) ?? SidebarFolderRevealPlan.otherRowTransition(closingTravel: closingRows?.travel))
+                    .layoutValue(key: SidebarListEntryTop.self, value: placed.top)
             }
         }
         // Applied here, inside the content's fixed frame: the rows move, the scroll view's content
-        // height changes at once. [07 §11.3] B167.
-        .animation(folderDisclosureAnimation(contentHeight: geometry.contentHeight),
+        // height changes at once. B167, B176.
+        .animation(folderDisclosureAnimation(contentHeight: geometry.contentHeight, growth: growth),
                    value: viewModel.folderDisclosureCount(in: spaceID))
     }
 
-    private func folderDisclosureAnimation(contentHeight: CGFloat) -> Animation? {
+    private func folderDisclosureAnimation(contentHeight: CGFloat, growth: CGFloat) -> Animation? {
         guard let metrics = viewModel.listScroller?.metrics,
               SidebarListRowsLayout.keepsScrollOffset(metrics, newContentHeight: contentHeight) else { return nil }
-        return ShellMotion.folderDisclosure(reduceMotion: reduceMotion)
+        return ShellMotion.folderDisclosure(expanding: growth >= 0, reduceMotion: reduceMotion)
     }
 
     @ViewBuilder
@@ -486,6 +506,117 @@ extension SidebarViewModel {
     }
 }
 
+/// A built row at its place in the content, and the part of it that shows (B176).
+struct SidebarPlacedListEntry: Identifiable {
+    let row: SidebarDrawnListEntry
+    let top: CGFloat
+    let mask: SidebarFolderRevealMask
+    var id: SidebarListEntry.ID { row.id }
+}
+
+/// How a folder's rows open and close (B176, observed on a 57 fps recording of Arc): they move as
+/// one block that slides down out from under the folder row, or up under it, cut off at the folder
+/// row's bottom edge; the rows below move with the block's end. The plan covers the folder the
+/// pointer is on: its block when open, where its rows will be when it opens.
+struct SidebarFolderRevealPlan {
+    /// Indices in `geometry.entries` of the folder's rows.
+    let block: Range<Int>
+    /// Content y of the folder row's bottom: rows are cut off above it.
+    let clipY: CGFloat
+    /// Height of the block: how far its rows slide.
+    let distance: CGFloat
+
+    init?(geometry: SidebarListGeometry, folderID: UUID?) {
+        guard let folderID, let index = geometry.rowIndex[folderID], case .row(let folder) = geometry.entries[index].content,
+              case .folder = folder.kind else { return nil }
+        var end = index + 1
+        while end < geometry.entries.count, case .row(let item) = geometry.entries[end].content,
+              item.depth > folder.depth, item.area == folder.area {
+            end += 1
+        }
+        guard end > index + 1 else { return nil }
+        block = (index + 1)..<end
+        clipY = geometry.entries[index + 1].top
+        let next = end < geometry.entries.count ? geometry.entries[end].top : geometry.entries[end - 1].bottom
+        distance = next - clipY
+    }
+
+    func contains(_ entry: SidebarListEntry) -> Bool {
+        entry.top >= clipY && entry.top < clipY + distance
+    }
+
+    /// The part of a block row below the folder row; nil for other rows.
+    func mask(for entry: SidebarListEntry) -> SidebarFolderRevealMask? {
+        contains(entry) ? SidebarFolderRevealMask(clipTop: clipY - entry.top, height: entry.height) : nil
+    }
+
+    /// A row of the block opening slides down by the block's height and is cut off at the folder
+    /// row; any other row: `otherRowTransition`.
+    func transition(for entry: SidebarListEntry) -> AnyTransition? {
+        guard let mask = mask(for: entry) else { return nil }
+        return .modifier(active: SidebarFolderRevealEffect(shift: -distance, mask: mask),
+                         identity: SidebarFolderRevealEffect(shift: 0, mask: mask))
+    }
+
+    /// A row of a closing folder, drawn where it slides to: `top` is its last place moved up by
+    /// the block's height, cut off at `clipY`.
+    struct ClosingRow {
+        let row: SidebarDrawnListEntry
+        let top: CGFloat
+        let clipY: CGFloat
+    }
+
+    /// The rows folder `folderID` drew before it closed, each moved up by the height of the part
+    /// that was drawn: a folder longer than the built band closes as if it ended there, so the rows
+    /// below follow right behind its last drawn row (`ClosingRows.travel`).
+    static func closingRows(previous: SidebarListRowsLook?, folderID: UUID?) -> ClosingRows {
+        guard let previous, let plan = SidebarFolderRevealPlan(geometry: previous.content.geometry, folderID: folderID) else {
+            return ClosingRows(rows: [], travel: 0)
+        }
+        let drawn = previous.entries.filter { plan.contains($0.entry) }
+        let travel = min(plan.distance, max(0, (drawn.map(\.entry.bottom).max() ?? plan.clipY) - plan.clipY))
+        return ClosingRows(rows: drawn.map { ClosingRow(row: $0, top: $0.entry.top - travel, clipY: plan.clipY) }, travel: travel)
+    }
+
+    struct ClosingRows {
+        var rows: [ClosingRow]
+        /// How far they slide; rows below that come into the band start this much lower.
+        var travel: CGFloat
+    }
+
+    /// Rows outside the block that come into the built band during a close come up from right
+    /// behind the closing rows, `closingTravel` lower; others fade.
+    static func otherRowTransition(closingTravel: CGFloat?) -> AnyTransition {
+        closingTravel.map { .offset(y: $0) } ?? .opacity
+    }
+}
+
+/// The part of a row below the folder row: row coordinates from `clipTop` down.
+struct SidebarFolderRevealMask: Equatable {
+    var clipTop: CGFloat
+    var height: CGFloat
+
+    /// No cut: the mask reaches the top of the content.
+    static func none(for entry: SidebarListEntry) -> Self {
+        SidebarFolderRevealMask(clipTop: -entry.top, height: entry.height)
+    }
+}
+
+struct SidebarFolderRevealEffect: ViewModifier {
+    var shift: CGFloat
+    let mask: SidebarFolderRevealMask
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: shift)
+            .mask(alignment: .topLeading) {
+                Rectangle()
+                    .frame(height: max(0, mask.height - mask.clipTop))
+                    .offset(y: mask.clipTop)
+            }
+    }
+}
+
 /// Places each list entry at its fixed top (`SidebarListEntryTop`), full width. Its size is given,
 /// never measured, and it reports no alignment guides of its own: a `ZStack` of offset rows made
 /// every scroll step and every frame of the Space slide walk the alignment guides of all built rows
@@ -557,6 +688,39 @@ final class SidebarListWindow: ObservableObject {
 
     @Published private(set) var minY: CGFloat = 0
     @Published private(set) var maxY: CGFloat = 1_200
+
+    // The latest folder open / close of this list (B176). Plain records, read by the rows' body.
+    private var lastContentHeight: CGFloat?
+    private var disclosureCount: Int?
+    private var disclosureGrowth: CGFloat = 0
+    private var disclosureEnds: CFTimeInterval = 0
+    /// The latest `noteDisclosure` saw a new open / close.
+    private(set) var disclosureIsNew = false
+    /// The rows of the folder closed last, drawn while it animates (`SidebarFolderRevealPlan.closingRows`).
+    private var closing: SidebarFolderRevealPlan.ClosingRows?
+
+    /// The closing rows to draw with `growth` (from `noteDisclosure`): taken from `make` when the
+    /// close is new, kept while it animates, nil otherwise.
+    func closingRows(growth: CGFloat, make: () -> SidebarFolderRevealPlan.ClosingRows) -> SidebarFolderRevealPlan.ClosingRows? {
+        if disclosureIsNew { closing = growth < 0 ? make() : nil }
+        return growth < 0 ? closing : nil
+    }
+    /// How long a folder animation may run: the slower spring settles within this. Own value.
+    static let disclosureWindow: CFTimeInterval = 0.5
+
+    /// Records the content height of this update and returns how much the latest folder open
+    /// (positive) or close (negative) changed it, while that animation may still run; else 0.
+    func noteDisclosure(count: Int, contentHeight: CGFloat, now: CFTimeInterval = CACurrentMediaTime()) -> CGFloat {
+        defer { lastContentHeight = contentHeight }
+        disclosureIsNew = false
+        if let disclosureCount, count != disclosureCount {
+            disclosureIsNew = true
+            disclosureGrowth = contentHeight - (lastContentHeight ?? contentHeight)
+            disclosureEnds = now + Self.disclosureWindow
+        }
+        disclosureCount = count
+        return now < disclosureEnds ? disclosureGrowth : 0
+    }
 
     func update(offset: CGFloat, viewportHeight: CGFloat) {
         let low = max(0, ((offset - Self.margin) / Self.step).rounded(.down) * Self.step)
