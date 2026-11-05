@@ -305,3 +305,16 @@ final class SidebarPeekTests: XCTestCase {
         model.stop()
     }
 }
+
+/// B169: the panel's controls are layers over its deeper fill, so favorites keep the pinned
+/// sidebar's contrast instead of the window's opaque color, which nearly matched the panel.
+final class SidebarPeekControlContrastB169Tests: XCTestCase {
+    func testControlFillStaysVisibleOnThePanel() {
+        let theme = Theme(id: UUID(), appearance: .light, colors: [RGBAColor(hex: 0xC8C8F0)], grain: 0, now: Date(timeIntervalSince1970: 0))
+        let palette = ThemeDerivation.palette(for: theme)
+        let panel = SidebarPeekTokens.panelFill(for: palette)
+        let tile = WindowTranslucency.composite(palette.windowLayers.controlFill, over: panel)
+        let difference: Double = abs(tile.red - panel.red) + abs(tile.green - panel.green) + abs(tile.blue - panel.blue)
+        XCTAssertGreaterThan(difference, 0.05)
+    }
+}

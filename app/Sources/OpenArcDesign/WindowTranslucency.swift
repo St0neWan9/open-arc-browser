@@ -71,13 +71,12 @@ public struct WindowLayers: Hashable, Sendable {
         func layer(_ c: RGBAColor, _ alpha: Double) -> RGBAColor {
             RGBAColor(red: c.red, green: c.green, blue: c.blue, alpha: alpha)
         }
-        let separator = lightInk ? layer(white, d.lightInkSeparatorWhite) : layer(black, 1 - d.separatorScale)
         return WindowLayers(
             controlFill: lightInk ? layer(white, d.lightInkControlWhite) : layer(black, 1 - d.controlFillScale),
-            separator: separator,
+            separator: lightInk ? layer(white, d.lightInkSeparatorWhite) : layer(black, 1 - d.separatorScale),
             selectedRowFill: lightInk ? layer(d.lightInkSelectedRowMixColor, d.lightInkSelectedRowMixAmount)
                 : layer(d.selectedRowMixColor, d.selectedRowMixAmount),
-            scrollEdgeLine: separator
+            scrollEdgeLine: lightInk ? layer(white, d.lightInkScrollEdgeWhite) : layer(black, 1 - d.scrollEdgeScale)
         )
     }
 }

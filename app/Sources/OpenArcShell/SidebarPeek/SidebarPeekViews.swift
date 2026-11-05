@@ -30,9 +30,10 @@ struct SidebarPeekOverlay: View {
                 .environment(\.siteControlsModel, siteControls)
                 .environment(\.sidebarPresentation, .peeking)
                 .environment(\.sidebarFillOverride, fill)
-                // The floating panel is opaque over the page ([06 §14] observed a solid deeper
-                // fill); its controls use the opaque colors. B64.
-                .environment(\.windowSurface, .opaque)
+                // The panel's fill is deeper than the window color, so the window's opaque control
+                // colors nearly vanish on it: its controls are layers over the panel, with the
+                // pinned sidebar's contrast. B169.
+                .environment(\.windowSurface, .translucent)
                 .frame(width: layout.sidebarSize.width, height: layout.sidebarSize.height)
         }
         .frame(width: panel.width, height: panel.height, alignment: .topLeading)
