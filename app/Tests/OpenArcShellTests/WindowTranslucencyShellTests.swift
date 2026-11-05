@@ -136,3 +136,22 @@ final class WindowTranslucencyShellTests: XCTestCase {
         vm.stop()
     }
 }
+
+/// B177: a hovered favorite tile darkens on a dark-ink window and lightens on a light-ink one,
+/// within 4/255 of the 2× Arc captures.
+final class FavoriteTileHoverB177Tests: XCTestCase {
+    private func close(_ a: RGBAColor, _ hex: UInt32, file: StaticString = #filePath, line: UInt = #line) {
+        let b = RGBAColor(hex: hex)
+        XCTAssertLessThan(max(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue)), 4.0 / 255, file: file, line: line)
+    }
+
+    @MainActor
+    func testHoverLayerFollowsTheInk() {
+        let dark = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .light, colors: [RGBAColor(hex: 0xF19CBB)]), appearance: .light)
+        XCTAssertFalse(dark.usesLightInk)
+        close(WindowTranslucency.composite(SidebarFavoriteCell.hoverLayer(palette: dark), over: RGBAColor(hex: 0xF0E1D5)), 0xE5D8CD)
+        let light = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .light, colors: [RGBAColor(hex: 0x0000FF)]), appearance: .light)
+        XCTAssertTrue(light.usesLightInk)
+        close(WindowTranslucency.composite(SidebarFavoriteCell.hoverLayer(palette: light), over: RGBAColor(hex: 0x7C9B83)), 0x84A189)
+    }
+}

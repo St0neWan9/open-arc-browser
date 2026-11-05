@@ -44,5 +44,10 @@ extension Metrics {
         /// (#2C283E → #8F9099, default dark purple theme). [06 §21.3] observed color, the white
         /// amount is derived from it. The light appearance was not captured.
         public static let selectedTileWhiteDark: Double = 0.47
+        /// A hovered tile: a layer over its own fill, darker on a dark-ink window, lighter on a
+        /// light-ink one. Observed on 2× Arc captures (B177): #F0E1D5 → #E5D8CD (black ≈ 4.5 %) on
+        /// window #F8E9DD; #7C9B83 → #84A189 (white ≈ 6 %) on window #6B9074.
+        public static let hoverTileBlack: Double = 0.045
+        public static let hoverTileWhite: Double = 0.06
     }
 }
