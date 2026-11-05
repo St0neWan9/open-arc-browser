@@ -14,11 +14,25 @@ struct AppMenuCommands: Commands {
     let controller: WorkspaceController
 
     var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("About \(AboutInfo(engineVersion: "").appName)") { showAbout() }
+        }
         CommandGroup(before: .systemServices) {
             Divider()
             BookmarkImportMenuItem(controller: controller)
             UpdateMenuItem(model: controller.updates)
             Divider()
+        }
+    }
+}
+
+extension AppMenuCommands {
+    /// Our About window (B173). Its links open in a tab of the window used last.
+    @MainActor
+    private func showAbout() {
+        let controller = self.controller
+        AboutWindowController.shared.show(info: AboutInfo(engineVersion: controller.dependencies.engine.engineVersion)) { url in
+            (controller.activeWindow ?? controller.appHost()).openAboutLink(url)
         }
     }
 }
