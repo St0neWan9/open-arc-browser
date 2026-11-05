@@ -65,7 +65,8 @@ struct SidebarPeekOverlay: View {
 /// web content view included): tracking areas fire by geometry, not by hit testing. Transparent to
 /// clicks. While it is in a window it also watches pointer moves outside the window (local and
 /// global mouse-moved monitors), because the left-edge zone reaches past the window's left edge
-/// (B145). Points are in window coordinates, top-left origin (negative x left of the window).
+/// (B145), only while the app is active (B179). Points are in window coordinates, top-left origin
+/// (negative x left of the window).
 struct SidebarPeekTracker: NSViewRepresentable {
     let onMove: @MainActor (CGPoint?, CGSize) -> Void
 
@@ -131,12 +132,21 @@ struct SidebarPeekTracker: NSViewRepresentable {
         }
 
         /// The current pointer position, for moves this view's tracking area does not see. Events
-        /// of this window are left to the tracking area.
+        /// of this window are left to the tracking area. While another app is active the pointer
+        /// counts as nowhere: Arc opens the panel only while it is the active app, from the strip
+        /// outside the window as from its border (B179, observed 2026-11-05).
         private func reportScreenPointer(unlessIn eventWindow: NSWindow?) {
             guard let window, eventWindow !== window else { return }
+            guard Self.tracksPointer(appIsActive: NSApp.isActive) else {
+                onMove?(nil, windowSize)
+                return
+            }
             let location = window.convertPoint(fromScreen: NSEvent.mouseLocation)
             onMove?(windowPoint(location), windowSize)
         }
+
+        /// Whether pointer moves outside the window count. B179.
+        static func tracksPointer(appIsActive: Bool) -> Bool { appIsActive }
 
         /// The window's content size, the coordinate space the peek layout uses.
         private var windowSize: CGSize { window?.contentView?.bounds.size ?? bounds.size }

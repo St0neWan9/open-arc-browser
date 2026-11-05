@@ -49,6 +49,19 @@ final class SidebarPeekOutsideEdgeB145Tests: XCTestCase {
         XCTAssertEqual(c.presentation, .hidden)
     }
 
+    /// B179, observed on Arc 2026-11-05: the 50 pt strip holds (45 pt opens, 55 pt does not), but
+    /// only while the app is active; with another app active the pointer counts as nowhere and the
+    /// strip never opens the panel.
+    func testOnlyWhileTheAppIsActive_B179() {
+        XCTAssertTrue(SidebarPeekTracker.TrackingView.tracksPointer(appIsActive: true))
+        XCTAssertFalse(SidebarPeekTracker.TrackingView.tracksPointer(appIsActive: false))
+        var pending: [(TimeInterval, @MainActor () -> Void)] = []
+        let c = SidebarPeekController(isPinned: false, schedule: { pending.append(($0, $1)) })
+        c.pointerMoved(to: nil, windowSize: size)
+        XCTAssertTrue(pending.isEmpty)
+        XCTAssertEqual(c.presentation, .hidden)
+    }
+
     func testFarLeftDoesNotOpen_06_26_2() {
         var pending: [(TimeInterval, @MainActor () -> Void)] = []
         let c = SidebarPeekController(isPinned: false, schedule: { pending.append(($0, $1)) })
