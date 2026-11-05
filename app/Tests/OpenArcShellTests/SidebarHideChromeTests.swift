@@ -251,7 +251,13 @@ final class WindowButtonMuteB160Tests: XCTestCase {
         let minus = WindowButtonLook.glyph(.minimize, center: .zero, diameter: 14).path.boundingBox
         XCTAssertEqual(minus.width, 8, accuracy: 0.1); XCTAssertEqual(minus.height, 2, accuracy: 0.1)
         XCTAssertEqual(WindowButtonLook.glyph(.zoom, center: .zero, diameter: 14).path.boundingBox.width, 6, accuracy: 0.1)
-        XCTAssertEqual(WindowButtonLook.hovered(.close, graphite: false).fill, RGBAColor(hex: 0xFF5F57))
+        // B181: never red / yellow / green; another accent gives gray with black glyphs.
+        for kind in WindowButtonLook.Kind.allCases {
+            let look = WindowButtonLook.hovered(kind, graphite: false)
+            XCTAssertEqual(look.fill, RGBAColor(hex: 0x8E8E8E))
+            XCTAssertEqual(look.glyph, RGBAColor(hex: 0x000000))
+            XCTAssertEqual(look.fill.red, look.fill.blue, "neutral gray")
+        }
     }
 
     func testButtonsHiddenWithTheSidebarHideTheDiscs_06_26() throws {
