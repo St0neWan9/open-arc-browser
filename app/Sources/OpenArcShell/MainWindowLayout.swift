@@ -49,14 +49,18 @@ public struct MainWindowLayout: Equatable, Sendable {
     /// drawing a 36 × 4 pt handle. Empty when the setting is off or the page area is too small.
     public func windowDragStripFrame(isEnabled: Bool) -> CGRect {
         guard isEnabled else { return .zero }
+        // The whole top edge of the page area takes the drag and the double-click: a 120 pt wide
+        // strip at its center was hard to hit (user, 2026-11-06). The handle stays small.
         let page = pageFrame
-        let width = min(Self.dragStripSize.width, page.width)
-        guard width > 0, page.height >= Self.dragStripSize.height else { return .zero }
-        return CGRect(x: page.midX - width / 2, y: page.minY, width: width, height: Self.dragStripSize.height)
+        let height = min(Self.dragStripSize.height, page.height)
+        guard page.width > 0, height > 0 else { return .zero }
+        return CGRect(x: page.minX, y: page.minY, width: page.width, height: height)
     }
 
-    /// Grab area of the drag strip. inferred.
-    public static let dragStripSize = CGSize(width: 120, height: 12)
+    /// Grab area of the drag strip: the page's full width and this height (the strip is as wide
+    /// as the page). Height inferred; widened from the original 12 pt after the user found it hard
+    /// to hit (issue #14 follow-up).
+    public static let dragStripSize = CGSize(width: 120, height: 22)
     /// The visible handle inside the grab area. inferred.
     public static let dragHandleSize = CGSize(width: 36, height: 4)
 
