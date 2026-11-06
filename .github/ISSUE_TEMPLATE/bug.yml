@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Open Arc is broken or behaves differently from Arc.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not include passwords, account names or other personal data in text or screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: Open Arc version
+      description: Open Arc ▸ About Open Arc
+      placeholder: "0.2.2 (17)"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS 26.5"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Hide the sidebar
+        2. Move the pointer to the left edge
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: arc
+    attributes:
+      label: What Arc does
+      description: If Arc behaves differently, describe it. A screenshot or screen recording of Arc helps most.
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or recordings
+      description: Drag files here. For a crash, attach the report from Settings ▸ Advanced ▸ Show Crash Reports in Finder (check it for personal data first).

@@ -1,0 +1,32 @@
+name: Feature request
+description: Something Arc does that Open Arc is missing, or an improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open Arc follows Arc. Features Arc never had, or ones listed under "Not included" in the README, may be declined.
+  - type: textarea
+    id: request
+    attributes:
+      label: What you would like
+      description: The use case, and what should happen.
+    validations:
+      required: true
+  - type: textarea
+    id: arc
+    attributes:
+      label: How Arc does it
+      description: Describe Arc's behavior and look. Screenshots or a screen recording of Arc help most.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Open Arc version
+      description: Open Arc ▸ About Open Arc
+      placeholder: "0.2.2 (17)"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
