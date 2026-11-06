@@ -64,8 +64,10 @@ struct MainWindowContent: View {
             let showsLinkPeek = model.linkPeek.isOpen && !model.library.isActive
             let layout = showsLinkPeek ? baseLayout.withPeekInset() : baseLayout
             ZStack(alignment: .topLeading) {
-                // The window background is the space theme color, with no separate title bar. [04 §window structure]
-                WindowBackgroundView(palette: palette, surface: surface)
+                // The window background is the space theme color, with no separate title bar.
+                // [04 §window structure] A Space swipe blends it toward the target Space's color
+                // by how far the swipe has gone (issue #15).
+                SwipeBackground(sidebar: sidebar, palette: palette, surface: surface)
 
                 if model.library.isActive {
                     // The whole window switches to the Library view. [06 §8] observed.
@@ -407,6 +409,32 @@ struct CommandBarOverlay: View {
                 .offset(x: frame.minX, y: top)
         }
         .frame(width: windowSize.width, height: windowSize.height, alignment: .topLeading)
+    }
+}
+
+/// The window background, blended toward the target Space's color while a two-finger swipe runs
+/// (issue #15: the color should move with the swipe, not jump after the switch).
+struct SwipeBackground: View {
+    let sidebar: SidebarViewModel
+    let palette: ThemePalette
+    let surface: WindowSurface
+    @ObservedObject private var swipe: SpaceSwipeState
+
+    init(sidebar: SidebarViewModel, palette: ThemePalette, surface: WindowSurface) {
+        self.sidebar = sidebar
+        self.palette = palette
+        self.surface = surface
+        _swipe = ObservedObject(wrappedValue: sidebar.spaceSwipe)
+    }
+
+    var body: some View {
+        ZStack {
+            WindowBackgroundView(palette: palette, surface: surface)
+            if let target = swipe.targetSpaceID, swipe.progress > 0 {
+                WindowBackgroundView(palette: sidebar.palette(forSpace: target), surface: surface)
+                    .opacity(swipe.progress)
+            }
+        }
     }
 }
 

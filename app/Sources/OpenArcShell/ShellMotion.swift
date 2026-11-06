@@ -178,22 +178,36 @@ final class SpaceSwipeState: ObservableObject {
     let events = PassthroughSubject<Event, Never>()
     /// What was sent, for tests.
     private(set) var lastEvent: Event?
+    /// How far the swipe has moved toward `targetSpaceID`, 0 (none) to 1 (a page). The window
+    /// background blends toward the target Space's color by this (issue #15).
+    @Published private(set) var progress: Double = 0
+    /// The Space the swipe reveals, nil at the ends; its color the background blends to.
+    @Published private(set) var targetSpaceID: UUID?
 
     func begin(previous: UUID?, next: UUID?) {
         self.previous = previous
         self.next = next
+        progress = 0
+        targetSpaceID = nil
         isActive = true
         send(.began(previous: previous, next: next))
     }
 
     func move(_ offset: CGFloat) {
         guard isActive else { return }
+        let direction = offset < 0 ? next : previous
+        // No Space that way: nothing to blend to.
+        let p = direction == nil || pageWidth <= 0 ? 0 : min(1, max(0, abs(offset) / pageWidth))
+        if targetSpaceID != direction { targetSpaceID = direction }
+        if abs(progress - Double(p)) > 0.001 { progress = Double(p) }
         send(.moved(offset))
     }
 
     func end(target: UUID?) {
         guard isActive else { return }
         isActive = false
+        progress = 0
+        targetSpaceID = nil
         send(.ended(target: target))
     }
 
