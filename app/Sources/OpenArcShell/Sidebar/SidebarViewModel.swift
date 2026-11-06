@@ -81,6 +81,8 @@ public final class SidebarViewModel: ObservableObject {
     }
     /// Direction of the latest Space switch, for the sidebar's paging transition. [07 §11] B40.
     let spacePager = SpacePagerState()
+    /// A two-finger swipe the Space pages follow (B184, issue #1).
+    let spaceSwipe = SpaceSwipeState()
     /// The Space about to be selected, sent before `selectedSpaceID` changes and before this view
     /// model's `objectWillChange` for that change. B104.
     let selectedSpaceWillChange = PassthroughSubject<UUID?, Never>()
@@ -1923,6 +1925,49 @@ extension SidebarViewModel {
     /// A horizontal two-finger swipe over the sidebar pages to the neighbor Space. [05 §window
     /// hierarchy] observed ("swipe or click the dock to switch"). Unlike ⌥⌘← / ⌥⌘→ it does not
     /// wrap: the Spaces are a row of pages and there is no page past the last one. inferred.
+    /// A horizontal two-finger swipe started over the sidebar: the pages follow it (B184, issue
+    /// #1). Returns whether it was taken (not during a drag). [05 §window hierarchy] observed swipe
+    /// paging; following the fingers is what the issue asks, from Arc.
+    @discardableResult
+    func spaceSwipeBegan() -> Bool {
+        guard draggingItem == nil, !isDraggingExternalURL else { return false }
+        let spaces = dockSpaces
+        guard let current = spaces.firstIndex(where: { $0.id == selectedSpaceID }) else { return false }
+        dismissQuickList()
+        // The rows slide away under the pointer: their hover cards go (as on a drag). inferred.
+        hoverTask?.cancel()
+        if hoverCardTabID != nil { hoverCardTabID = nil }
+        favoriteTooltipTask?.cancel()
+        if favoriteTooltipTabID != nil { favoriteTooltipTabID = nil }
+        let previous = current > 0 ? spaces[current - 1].id : nil
+        let next = current + 1 < spaces.count ? spaces[current + 1].id : nil
+        spaceSwipe.begin(previous: previous, next: next)
+        return true
+    }
+
+    /// The fingers moved the content by `offset` points since the swipe began.
+    func spaceSwipeMoved(offset: CGFloat) {
+        spaceSwipe.move(offset)
+    }
+
+    /// The fingers lifted: past half a page or on a flick the neighboring Space is selected (the
+    /// pages finish the slide), otherwise the pages spring back. inferred thresholds (`SpaceSwipe`).
+    func spaceSwipeEnded(offset: CGFloat, velocity: CGFloat) {
+        guard spaceSwipe.isActive else { return }
+        let neighbor = SpaceSwipe.step(forOffset: offset) > 0 ? spaceSwipe.next : spaceSwipe.previous
+        let commits = neighbor != nil && draggingItem == nil
+            && SpaceSwipe.commits(offset: offset, velocity: velocity, width: spaceSwipe.pageWidth)
+        let target = commits ? neighbor : nil
+        spaceSwipe.end(target: target)
+        if let target { selectSpace(target) }
+    }
+
+    /// The system cancelled the swipe: the pages spring back.
+    func spaceSwipeCancelled() {
+        guard spaceSwipe.isActive else { return }
+        spaceSwipe.end(target: nil)
+    }
+
     func swipeSpace(by delta: Int) {
         guard draggingItem == nil, !isDraggingExternalURL, delta != 0 else { return }
         let spaces = dockSpaces

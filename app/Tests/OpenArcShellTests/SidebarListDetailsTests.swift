@@ -292,27 +292,25 @@ final class SidebarListDetailsTests: XCTestCase {
         XCTAssertEqual(vm.selectedSpaceID, f.home, "no page before the first Space")
     }
 
-    /// [05 §window hierarchy]: a horizontal gesture past the threshold fires once; vertical
-    /// scrolling and short swipes do not.
-    func testSwipeRecognizer_05_windowHierarchy() {
-        var r = SidebarSwipeRecognizer()
-        XCTAssertNil(r.feed(phase: .began, deltaX: -10, deltaY: 0))
-        XCTAssertNil(r.feed(phase: .changed, deltaX: -20, deltaY: 1))
-        XCTAssertEqual(r.feed(phase: .changed, deltaX: -30, deltaY: 1), 1)
-        XCTAssertNil(r.feed(phase: .changed, deltaX: -100, deltaY: 0), "one step per gesture")
-        XCTAssertNil(r.feed(phase: .ended, deltaX: 0, deltaY: 0))
+    /// [05 §window hierarchy] + B184: a mostly horizontal gesture becomes a swipe the pages follow;
+    /// vertical scrolling and short moves do not.
+    func testSwipeTracker_05_windowHierarchy() {
+        var r = SidebarSwipeTracker()
+        XCTAssertEqual(r.feed(phase: .began, deltaX: -3, deltaY: 0, time: 0), [])
+        XCTAssertEqual(r.feed(phase: .changed, deltaX: -5, deltaY: 1, time: 0.01), [.start, .move(-8)])
+        XCTAssertTrue(r.isTracking)
+        XCTAssertEqual(r.feed(phase: .changed, deltaX: -30, deltaY: 1, time: 0.02), [.move(-38)])
+        XCTAssertEqual(r.feed(phase: .ended, deltaX: 0, deltaY: 0, time: 0.03).count, 1)
+        XCTAssertFalse(r.isTracking)
 
-        XCTAssertNil(r.feed(phase: .began, deltaX: 30, deltaY: 0))
-        XCTAssertEqual(r.feed(phase: .changed, deltaX: 30, deltaY: 0), -1)
-        _ = r.feed(phase: .ended, deltaX: 0, deltaY: 0)
-
-        // Mostly vertical: list scrolling, no page.
-        XCTAssertNil(r.feed(phase: .began, deltaX: 20, deltaY: 40))
-        XCTAssertNil(r.feed(phase: .changed, deltaX: 40, deltaY: 80))
-        _ = r.feed(phase: .ended, deltaX: 0, deltaY: 0)
+        // Mostly vertical: list scrolling, no swipe.
+        _ = r.feed(phase: .began, deltaX: 4, deltaY: 10, time: 1)
+        XCTAssertEqual(r.feed(phase: .changed, deltaX: 40, deltaY: 80, time: 1.01), [])
+        XCTAssertFalse(r.isTracking)
+        XCTAssertEqual(r.feed(phase: .ended, deltaX: 0, deltaY: 0, time: 1.02), [])
 
         // Changes without a began (momentum after the gesture): ignored.
-        XCTAssertNil(r.feed(phase: .changed, deltaX: -200, deltaY: 0))
+        XCTAssertEqual(r.feed(phase: .changed, deltaX: -200, deltaY: 0, time: 2), [])
     }
 
     /// No paging while a drag is running (the drag has its own edge switch, [06 §15.6]).
