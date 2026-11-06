@@ -147,17 +147,18 @@ final class SettingsB84Tests: XCTestCase {
 
     // MARK: [03 §Advanced] window dragging, [06 §13] drag strip
 
-    /// The strip is centered at the top of the page area; off, it has no frame.
+    /// The strip spans the top edge of the page area (widened in issue #14: a 120 pt strip was
+    /// hard to hit); off, it has no frame.
     func testWindowDragStripFrame() {
         let layout = MainWindowLayout(windowSize: CGSize(width: 1920, height: 985))
         let page = layout.pageFrame
         let strip = layout.windowDragStripFrame(isEnabled: true)
         XCTAssertEqual(strip.midX, page.midX, accuracy: 0.01)
         XCTAssertEqual(strip.minY, page.minY, accuracy: 0.01)
-        XCTAssertEqual(strip.size, MainWindowLayout.dragStripSize)
-        XCTAssertLessThan(strip.width, page.width / 4, "a short strip")
+        XCTAssertEqual(strip.height, MainWindowLayout.dragStripSize.height)
+        XCTAssertEqual(strip.width, layout.pageFrame.width, "the whole page top edge takes the drag")
         XCTAssertEqual(layout.windowDragStripFrame(isEnabled: false), .zero)
-        // Hidden sidebar: still centered on the (wider) page.
+        // Hidden sidebar: the (wider) page's whole top edge.
         let hidden = MainWindowLayout(windowSize: CGSize(width: 1920, height: 985), isSidebarVisible: false)
         XCTAssertEqual(hidden.windowDragStripFrame(isEnabled: true).midX, hidden.pageFrame.midX, accuracy: 0.01)
     }

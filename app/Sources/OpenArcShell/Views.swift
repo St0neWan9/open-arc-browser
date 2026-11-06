@@ -149,6 +149,12 @@ struct MainWindowContent: View {
                     .frame(width: max(0, layout.webPanelFrame.maxX - TranslationLocalTokens.noticeInset), alignment: .trailing)
                     .offset(y: layout.pageFrame.minY + TranslationLocalTokens.noticeInset)
 
+                // Double-click anywhere on the window's top strip zooms/minimizes per the system
+                // setting (issue #14 follow-up). A monitor, so it works over the page too.
+                WindowTopDoubleClickMonitor()
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+
                 // "New Tab Created" at the window's top right. [06 §34] observed. B186.
                 WindowToastView(toast: model.windowToast)
                     .padding(.top, WindowToastLocalTokens.inset)
@@ -601,17 +607,78 @@ struct WindowTopStrip: NSViewRepresentable {
     func updateNSView(_ nsView: StripView, context: Context) {}
 
     /// The view's frame already starts right of the traffic lights, so it takes every click in it.
-    final class StripView: NSView {
-        override var isFlipped: Bool { true }
-        override var mouseDownCanMoveWindow: Bool { true }
-        override func mouseDown(with event: NSEvent) {
+    final class StripView: WindowDragView {}
+}
+
+/// Watches the window's top strip for a double-click at the window level, so it works whatever
+/// view is under the pointer (the page area's engine view included). Issue #14 follow-up: the
+/// strip was hard to hit through hit-testing alone. It never consumes single clicks.
+struct WindowTopDoubleClickMonitor: NSViewRepresentable {
+    /// Height of the strip at the window's top edge.
+    var height: CGFloat = 36
+    /// Nothing is taken left of this (the traffic lights).
+    var leadingMargin: CGFloat = 80
+
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.height = height
+        view.leadingMargin = leadingMargin
+        return view
+    }
+
+    func updateNSView(_ nsView: MonitorView, context: Context) {}
+
+    final class MonitorView: NSView {
+        var height: CGFloat = 36
+        var leadingMargin: CGFloat = 80
+        private var token: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let token { NSEvent.removeMonitor(token); self.token = nil }
             guard let window else { return }
-            if event.clickCount == 2 {
+            token = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self, weak window] event in
+                guard let self, let window, event.window === window, event.clickCount == 2 else { return event }
+                let point = event.locationInWindow   // bottom-left origin
+                guard point.x > self.leadingMargin,
+                      point.y > window.contentView!.bounds.height - self.height else { return event }
                 WindowDoubleClickAction.current().perform(on: window)
-            } else {
-                window.performDrag(with: event)
+                return nil
             }
         }
+    }
+}
+
+/// A transparent strip that moves its window while dragged and performs the system's title-bar
+/// action on a double-click. Dragging starts on the first drag event, not on the press, so a
+/// double-click is never swallowed by a drag (the strip was hard to double-click before; issue
+/// #14 follow-up).
+class WindowDragView: NSView {
+    /// The press that may become a drag. The drag starts on the first drag event, so a press still
+    /// counts toward a double-click.
+    private var downEvent: NSEvent?
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        if event.clickCount == 2 {
+            downEvent = nil
+            WindowDoubleClickAction.current().perform(on: window)
+            return
+        }
+        downEvent = event
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, let down = downEvent else { return }
+        downEvent = nil
+        window.performDrag(with: down)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        downEvent = nil
     }
 }
 
@@ -631,11 +698,9 @@ struct PageTopDragArea: NSViewRepresentable {
         nsView.onHover = onHover
     }
 
-    final class DragView: NSView {
+    final class DragView: WindowDragView {
         var onHover: ((Bool) -> Void)?
         private var tracking: NSTrackingArea?
-
-        override var mouseDownCanMoveWindow: Bool { true }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -647,15 +712,6 @@ struct PageTopDragArea: NSViewRepresentable {
 
         override func mouseEntered(with event: NSEvent) { onHover?(true) }
         override func mouseExited(with event: NSEvent) { onHover?(false) }
-
-        override func mouseDown(with event: NSEvent) {
-            guard let window else { return }
-            if event.clickCount == 2 {
-                WindowDoubleClickAction.current().perform(on: window)
-            } else {
-                window.performDrag(with: event)
-            }
-        }
     }
 }
 
