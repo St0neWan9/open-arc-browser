@@ -925,10 +925,9 @@ struct SidebarListOverlays: View {
         let anchor = id.flatMap { scroll.rowFrame(of: $0, viewModel: viewModel, layout: layout) }.map {
             CGRect(x: fill.minX, y: $0.minY + fill.minY, width: fill.width, height: fill.height)
         }
-        let palette = viewModel.palette
         return FolderQuickListPresenter(viewModel: viewModel, folderID: id, anchor: anchor,
                                         rowCount: id.map { viewModel.quickListRows(folderID: $0).count } ?? 0,
-                                        tint: palette.floatingPanelBackground, isDark: palette.isDark)
+                                        isDark: viewModel.palette.isDark)
             .frame(width: layout.width, height: layout.windowSize.height)
             .allowsHitTesting(false)
     }
