@@ -4,9 +4,10 @@ import OpenArcEngine
 import OpenArcSyncAPI
 @testable import OpenArcShell
 
-/// Plan B186 (issue #7): a window shows a "New Tab Created" notice when a tab is created. Spec:
-/// docs/arc-spec/06-flows.md §34 (observed from a screenshot of Arc): a lavender pill with dark
-/// text at the window's top right; which actions show it and how long it stays were not captured.
+/// Plan B186 (issue #7): a window shows a "New Tab Created" notice when a page opens a tab while
+/// the sidebar is hidden. Spec: docs/arc-spec/06-flows.md §34 (observed in Arc): a lavender pill
+/// with dark text at the window's top right; a tab the user starts and a page tab with the
+/// sidebar shown show nothing; how long it stays was not captured.
 @MainActor
 final class NewTabToastB186Tests: XCTestCase {
     private var engine: FakeEngine!
@@ -39,20 +40,20 @@ final class NewTabToastB186Tests: XCTestCase {
         XCTFail("condition not met", file: file, line: line)
     }
 
-    /// [06 §34]: a tab created in the window shows the notice.
-    func testNewTabShowsTheNotice() async throws {
-        XCTAssertNil(model.windowToast.text)
+    /// [06 §34] observed: a tab the user starts (⌘T, the New Tab row) shows no notice.
+    func testUserStartedTabShowsNoNotice() async throws {
         let id = try await model.openNewTab(url: try XCTUnwrap(URL(string: "https://site.example")))
         XCTAssertNotNil(id)
-        try await waitUntil { self.model.windowToast.text == "New Tab Created" }
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertNil(model.windowToast.text)
     }
 
-    /// The page-request path (a link opened in a new tab) shows it too.
-    func testPageOpenedTabShowsTheNotice() async throws {
+    /// [06 §34] observed: a tab a page opens while the sidebar is hidden shows the notice.
+    func testPageOpenedTabWithSidebarHiddenShowsTheNotice() async throws {
         let opened = try await model.openNewTab(url: try XCTUnwrap(URL(string: "https://site.example")))
         let opener = try XCTUnwrap(opened)
+        if model.isSidebarVisible { model.toggleSidebar() }
         model.windowToast.dismiss()
-        XCTAssertNil(model.windowToast.text)
         engine.simulateNewTabRequest(NewTabRequest(
             opener: try XCTUnwrap(model.sidebar.liveTab(for: opener)?.id),
             url: try XCTUnwrap(URL(string: "https://next.example")),
@@ -61,14 +62,20 @@ final class NewTabToastB186Tests: XCTestCase {
         try await waitUntil { self.model.windowToast.text == "New Tab Created" }
     }
 
-    /// Two tabs in a row both show it (the notice counts creations, not tabs).
-    func testEveryNewTabShowsIt() async throws {
-        let first = try await model.openNewTab(url: try XCTUnwrap(URL(string: "https://a.example")))
-        XCTAssertNotNil(first)
-        let before = model.sidebar.newTabNotice
-        let second = try await model.openNewTab(url: try XCTUnwrap(URL(string: "https://b.example")))
-        XCTAssertNotNil(second)
-        XCTAssertEqual(model.sidebar.newTabNotice, before + 1)
+    /// [06 §34] observed: with the sidebar shown the new row is visible, so no notice.
+    func testPageOpenedTabWithSidebarShownShowsNoNotice() async throws {
+        let opened = try await model.openNewTab(url: try XCTUnwrap(URL(string: "https://site.example")))
+        let opener = try XCTUnwrap(opened)
+        if !model.isSidebarVisible { model.toggleSidebar() }
+        model.windowToast.dismiss()
+        engine.simulateNewTabRequest(NewTabRequest(
+            opener: try XCTUnwrap(model.sidebar.liveTab(for: opener)?.id),
+            url: try XCTUnwrap(URL(string: "https://next.example")),
+            disposition: .foregroundTab, hasUserGesture: true
+        ))
+        try await Task.sleep(nanoseconds: 300_000_000)
+        await model.controller.settleEngineWork()
+        XCTAssertNil(model.windowToast.text)
     }
 
     /// The pill goes away on its own (how long is unknown in the spec; 2 s here).

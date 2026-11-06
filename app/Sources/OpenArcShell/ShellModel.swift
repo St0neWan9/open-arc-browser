@@ -203,7 +203,10 @@ public final class ShellModel: ObservableObject {
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         pinnedExtensionChanges = siteControls.$pinnedActions.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
         newTabNoticeChanges = sidebar.$newTabNotice.dropFirst().sink { [weak self] _ in
-            self?.windowToast.show("New Tab Created")
+            guard let self else { return }
+            // [06 §34] observed: only with the sidebar hidden (the new row cannot be seen). A tab
+            // the user starts shows no notice.
+            if !self.isSidebarVisible { self.windowToast.show("New Tab Created") }
         }
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         profileFlowChanges = profileFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
