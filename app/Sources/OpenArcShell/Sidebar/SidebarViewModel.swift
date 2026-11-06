@@ -83,6 +83,11 @@ public final class SidebarViewModel: ObservableObject {
     let spacePager = SpacePagerState()
     /// A two-finger swipe the Space pages follow (B184, issue #1).
     let spaceSwipe = SpaceSwipeState()
+    /// Tabs selected in this window, most recent first: closing a tab returns to the one used
+    /// before it. [06 §35] observed/decided (issue #10). Capped; dead or other-Space ids are
+    /// skipped when read.
+    var selectionHistory: [UUID] = []
+    private static let selectionHistoryLimit = 20
     /// The Space about to be selected, sent before `selectedSpaceID` changes and before this view
     /// model's `objectWillChange` for that change. B104.
     let selectedSpaceWillChange = PassthroughSubject<UUID?, Never>()
@@ -570,6 +575,9 @@ public final class SidebarViewModel: ObservableObject {
             return false
         }
         selectedTabID = id
+        selectionHistory.removeAll { $0 == id }
+        selectionHistory.insert(id, at: 0)
+        if selectionHistory.count > Self.selectionHistoryLimit { selectionHistory.removeLast() }
         if let spaceID = tab.location.spaceID ?? selectedSpaceID { lastSelectedTab[spaceID] = id }
         if let layout = SplitPaneLayout.activeLayout(in: workspace, containing: id) { lastFocusedPane[layout.id] = id }
         // Only the activity time changes: the list keeps its rows (B99).
@@ -912,12 +920,40 @@ public final class SidebarViewModel: ObservableObject {
     /// Archives a tab (⌘W / ✕ on a Today row). [05 §window and app entry points] observed.
     public func closeTab(_ id: UUID) {
         guard workspace.tabs[id].map({ !$0.meta.isTombstone }) == true else { return }
-        let next = selectedTabID == id ? neighbor(of: id) : nil
+        let wasSelected = selectedTabID == id
+        selectionHistory.removeAll { $0 == id }
+        let next = wasSelected ? nextSelection(after: id) : nil
         guard mutate({ try TreeOps.archiveTab($0, id: id, reason: .closed, now: now()) }) else { return }
         closeLive(id)
-        if selectedTabID == id {
+        if wasSelected {
             selectedTabID = nil
             if let next { selectTab(next, focusingOtherWindow: false) }
+        }
+    }
+
+    /// The tab selected after closing `id` (issue #10, decided with the user): the tab that was
+    /// active before it, else its neighbor below (then above), else the nearest pinned tab (the
+    /// last one, next to the Today area). [06 §35] observed that Arc picks the neighbor below;
+    /// the history and pinned fallbacks follow the issue's wording.
+    private func nextSelection(after id: UUID) -> UUID? {
+        let spaceID = selectedSpaceID
+        let isLive = { (candidate: UUID) -> Bool in
+            guard let tab = self.workspace.tabs[candidate], !tab.meta.isTombstone else { return false }
+            guard let tabSpace = tab.location.spaceID else { return true }
+            return tabSpace == spaceID
+        }
+        if let previous = selectionHistory.first(where: isLive) { return previous }
+        if let neighbor = neighbor(of: id) { return neighbor }
+        return pinnedOrder().last
+    }
+
+    /// The Space's pinned tabs in sidebar order (folders flattened). [06 §35].
+    func pinnedOrder() -> [UUID] {
+        guard let spaceID = selectedSpaceID else { return [] }
+        return snapshot.visibleTabOrder.filter { id in
+            guard let tab = workspace.tabs[id], !tab.meta.isTombstone else { return false }
+            if case .pinned(let tabSpace, _) = tab.location { return tabSpace == spaceID }
+            return false
         }
     }
 
