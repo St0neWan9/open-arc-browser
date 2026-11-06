@@ -303,7 +303,8 @@ public enum Metrics {
         public static let minKnobLength: Double = 24
         /// Knob ink (black, or white on a light-ink theme) at this opacity. unknown.
         /// Its fade: `Motion.sidebarScrollerFade`.
-        public static let knobOpacity: Double = 0.3
+        /// Lighter than before (0.3): the user found ours darker than Arc's (issue #16).
+        public static let knobOpacity: Double = 0.18
     }
 
     // MARK: Web panel
