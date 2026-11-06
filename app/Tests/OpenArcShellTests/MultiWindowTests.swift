@@ -48,8 +48,9 @@ private final class RecordingSync: SyncStore, @unchecked Sendable {
 /// Observed: the File menu items New Window, Blank Window, New Incognito Window, Close Window
 /// [01 §File] and their keys ⌘N, ⌃⌘N, ⇧⌘N, ⇧⌘W [02 §窗口与应用]; the "restore windows from
 /// previous session" setting [03 §Advanced]. Inferred (the spec records no window behavior): shared
-/// workspace, the one-window-per-tab rule (selecting a tab another window shows focuses that
-/// window), New Window on the current Space, Blank Window without a tab, incognito isolation,
+/// workspace, one live page per tab (selecting a tab another window shows moves the page there
+/// and dims it in the other window, issue #10 part 2; a split pane and a Space switch keep the
+/// older "focus that window" rule), New Window on the current Space, Blank Window without a tab, incognito isolation,
 /// closing the last window keeps the app, restoring every window at launch.
 @MainActor
 final class MultiWindowTests: XCTestCase {
@@ -162,8 +163,9 @@ final class MultiWindowTests: XCTestCase {
 
     // MARK: One window per tab
 
-    /// A tab shown in window A, selected in window B, brings A to the front; B's selection stays.
-    func testSelectingATabShownInAnotherWindowFocusesThatWindow() async throws {
+    /// Issue #10 (part 2): a tab shown in window A, selected in window B, moves its page to B;
+    /// A keeps its selection and dims the page. [06 §36] observed in Arc.
+    func testSelectingATabShownInAnotherWindowTakesThePageOver() async throws {
         let f = SidebarFixture()
         let controller = makeController(f)
         let a = window(controller, space: f.home)
@@ -174,23 +176,29 @@ final class MultiWindowTests: XCTestCase {
         try await b.activate(tabID: f.today2)
 
         b.sidebar.selectTab(f.today1)
-        XCTAssertEqual(aFocused, 1)
-        XCTAssertEqual(a.focusRequestCount, 1)
-        XCTAssertEqual(b.selectedTabID, f.today2, "B keeps its own tab")
-        XCTAssertEqual(a.selectedTabID, f.today1)
+        XCTAssertEqual(b.selectedTabID, f.today1, "B shows the tab it selected")
+        XCTAssertEqual(a.selectedTabID, f.today1, "A keeps its own selection")
+        XCTAssertEqual(a.sidebar.pageTakenElsewhere, f.today1, "A dims the page")
+        XCTAssertNil(b.sidebar.pageTakenElsewhere)
+        XCTAssertEqual(aFocused, 0, "A is not brought to the front")
 
-        // The command bar's Switch to Tab follows the same rule, and does not switch B's Space.
+        // A click on the dimmed page takes it back, and B now dims it.
+        a.sidebar.takePageBack()
+        XCTAssertNil(a.sidebar.pageTakenElsewhere)
+        XCTAssertEqual(b.sidebar.pageTakenElsewhere, f.today1)
+
+        // The command bar's Switch to Tab follows the same rule.
         b.selectSpace(f.work)
         b.perform(.switchToTab(tabID: f.today1))
-        XCTAssertEqual(aFocused, 2)
-        XCTAssertEqual(b.selectedSpaceID, f.work)
+        XCTAssertEqual(b.selectedSpaceID, f.work, "B does not switch Space")
+        try await b.activate(tabID: f.today1)
+        XCTAssertEqual(a.sidebar.pageTakenElsewhere, f.today1)
 
-        // Once A shows something else, B may take the tab.
-        a.sidebar.selectTab(f.today3)
-        b.selectSpace(f.home)
-        b.sidebar.selectTab(f.today1)
-        XCTAssertEqual(b.selectedTabID, f.today1)
-        XCTAssertEqual(aFocused, 2)
+        // A takes it back by selecting it again.
+        a.sidebar.selectTab(f.today1)
+        XCTAssertNil(a.sidebar.pageTakenElsewhere)
+        XCTAssertEqual(b.sidebar.pageTakenElsewhere, f.today1)
+        XCTAssertEqual(aFocused, 0)
     }
 
     /// Split partners count as on screen too: a pane of A's split is not shown by B.
