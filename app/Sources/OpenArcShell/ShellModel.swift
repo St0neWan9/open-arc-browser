@@ -128,6 +128,10 @@ public final class ShellModel: ObservableObject {
     private var linkPeekChanges: AnyCancellable?
     /// Redraws the toolbar when the pinned extensions change (B183).
     private var pinnedExtensionChanges: AnyCancellable?
+    /// Bumped when a tab is created in this window (issue #7).
+    private var newTabNoticeChanges: AnyCancellable?
+    /// The window's "New Tab Created" notice. [06 §34] observed.
+    let windowToast = WindowToastModel()
 
     /// A window on `controller` that opens with `window`'s selection. A stale Space id falls back to
     /// the first Space, a stale or foreign tab id to no selection.
@@ -198,6 +202,9 @@ public final class ShellModel: ObservableObject {
         // Menu enablement (split items, back/forward) reads sidebar state through this model.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         pinnedExtensionChanges = siteControls.$pinnedActions.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
+        newTabNoticeChanges = sidebar.$newTabNotice.dropFirst().sink { [weak self] _ in
+            self?.windowToast.show("New Tab Created")
+        }
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         profileFlowChanges = profileFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         libraryChanges = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

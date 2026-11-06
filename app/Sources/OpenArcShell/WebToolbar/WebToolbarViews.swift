@@ -333,6 +333,61 @@ final class WebToolbarCopyToast: ObservableObject {
     }
 }
 
+/// The window's "New Tab Created" notice (B186, issue #7). [06 §34] observed: a lavender pill
+/// with dark text at the window's top right; how long it stays is unknown (2 s here).
+@MainActor
+final class WindowToastModel: ObservableObject {
+    @Published private(set) var text: String?
+    /// Seconds a notice stays; tests shorten it.
+    var duration: Double = 2
+    private var hideTask: Task<Void, Never>?
+
+    func show(_ text: String) {
+        self.text = text
+        hideTask?.cancel()
+        let duration = self.duration
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.text = nil
+        }
+    }
+
+    /// Hides the notice now (tests, and a window closing).
+    func dismiss() { hideTask?.cancel(); text = nil }
+
+    deinit { hideTask?.cancel() }
+}
+
+enum WindowToastLocalTokens {
+    /// Distance from the window's right edge and top. [06 §34] observed (2× capture): ≈ 15 pt right,
+    /// ≈ 10 pt down.
+    static let inset: CGFloat = 15
+}
+
+/// The "New Tab Created" pill. [06 §34] observed (2× capture): fill #A69DF6 on the left to
+/// #B0A7F8 at the right edge (a flat lavender here), dark text ~15 pt semibold, ≈ 137 × 39 pt,
+/// corner radius ≈ 13 pt, 15 pt from the window's right edge. Own wording of the look; sizes are
+/// the capture's.
+struct WindowToastView: View {
+    @ObservedObject var toast: WindowToastModel
+
+    var body: some View {
+        if let text = toast.text {
+            Text(text)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.black)
+                .padding(.horizontal, 16)
+                .frame(height: 39)
+                .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(RGBAColor(hex: 0xA9A0F7).swiftUI))
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                .transition(.opacity)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("openarc.windowToast")
+        }
+    }
+}
+
 private struct WebToolbarCopyToastKey: EnvironmentKey {
     static let defaultValue: WebToolbarCopyToast? = nil
 }
