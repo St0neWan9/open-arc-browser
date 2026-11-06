@@ -17,7 +17,7 @@ import OpenArcDesign
 //              the centered domain pill and ✕.
 
 /// One button of the web toolbar.
-public enum WebToolbarItem: String, Hashable, Sendable, CaseIterable {
+public enum WebToolbarItem: Hashable, Sendable {
     /// Shows the hidden sidebar again (pinned). First item while the sidebar is hidden. [06 §17.2]
     case showSidebar
     case back
@@ -33,6 +33,8 @@ public enum WebToolbarItem: String, Hashable, Sendable, CaseIterable {
     case splitMenu
     /// Closes this split pane. [06 §17.6] observed.
     case closePane
+    /// A pinned extension (B183), left of the site controls in pin order. [06 §31] observed.
+    case pinnedExtension(String)
 }
 
 /// What a bar belongs to.
@@ -62,8 +64,11 @@ public struct WebToolbarItems: Equatable, Sendable {
     /// - `showsTranslate`: the bar's page offers translation; the bar then leads its right group
     ///   with the translation button ([06 §19.1] observed for the single page; for the active split
     ///   pane inferred, it carries the site controls too).
+    /// - `pinnedExtensions`: ids of the pinned extensions with an action on this bar's page, in pin
+    ///   order; they lead the right group of a bar that carries the site controls (B183, [06 §31]
+    ///   observed for the single page; active split pane inferred).
     public static func make(role: WebToolbarRole, isToolbarShown: Bool, showsSidebarButton: Bool,
-                            showsTranslate: Bool = false) -> WebToolbarItems {
+                            showsTranslate: Bool = false, pinnedExtensions: [String] = []) -> WebToolbarItems {
         guard isToolbarShown else {
             switch role {
             case .page: return WebToolbarItems(leading: [], trailing: [])
@@ -71,7 +76,7 @@ public struct WebToolbarItems: Equatable, Sendable {
             }
         }
         let sidebar: [WebToolbarItem] = showsSidebarButton ? [.showSidebar] : []
-        let translate: [WebToolbarItem] = showsTranslate ? [.translate] : []
+        let translate: [WebToolbarItem] = pinnedExtensions.map(WebToolbarItem.pinnedExtension) + (showsTranslate ? [.translate] : [])
         switch role {
         case .page:
             return WebToolbarItems(leading: sidebar + [.back, .forward, .reload], trailing: translate + [.siteControls, .splitMenu])

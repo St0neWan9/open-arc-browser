@@ -176,7 +176,14 @@ struct SidebarURLBoxView: View, Equatable {
         let textStart = showsMagnifier || showsLock ? s.addressFieldTextLeadingAfterIcon : s.addressFieldTextLeading
         let textLeading = CGFloat(textStart - s.addressFieldHorizontalInset)
         // The text ends at the same distance from the sidebar's right edge at any width. B144.
-        let textWidth = SidebarLayout(width: sidebarWidth).trailingX(s.addressFieldTextTrailing) - CGFloat(textStart)
+        // While hovered with pinned extensions, their icons sit left of copy link and the text
+        // ends before the leftmost icon instead of running under it (B183, [06 §31] observed
+        // icons on hover; where the text ends inferred). Without pins the text is unchanged.
+        let pinnedCount = isHovering ? (siteControls?.pinnedActions.count ?? 0) : 0
+        // The text's end (x 264) is where the site controls icon ends, so the icons take
+        // (pins + copy link + site controls) × 30 pt from it. [07 §12] observed icon frames.
+        let pinnedReserve = pinnedCount > 0 ? CGFloat(pinnedCount + 2) * SiteControlsLocalTokens.urlBoxButtonSize : 0
+        let textWidth = max(0, SidebarLayout(width: sidebarWidth).trailingX(s.addressFieldTextTrailing) - CGFloat(textStart) - pinnedReserve)
         let style = showsMagnifier ? Typography.addressPlaceholder : Typography.addressField
         let icon = s.addressFieldIconFrame
         ZStack(alignment: .leading) {

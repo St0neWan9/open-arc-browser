@@ -281,6 +281,25 @@ public final class AppPreferences: @unchecked Sendable {
         set { setValue(newValue.map(\.uuidString).sorted(), Self.unreadBadgeTabIDsKey) }
     }
 
+    // MARK: Extensions
+
+    static func pinnedExtensionsKey(_ profileID: UUID) -> String { profileKey(profileID, "pinnedExtensions") }
+
+    /// Extensions the user pinned for a profile, in pin order (plan B183, issue #2). [06 §31]
+    /// observed pinning; kept per profile on this device like the extensions themselves
+    /// (inferred).
+    public func pinnedExtensionIDs(for profileID: UUID) -> [String] {
+        (value(Self.pinnedExtensionsKey(profileID)) as? [String]) ?? []
+    }
+
+    public func setPinnedExtensionIDs(_ ids: [String], for profileID: UUID) {
+        if ids.isEmpty {
+            removeValue(Self.pinnedExtensionsKey(profileID))
+        } else {
+            setValue(ids, Self.pinnedExtensionsKey(profileID))
+        }
+    }
+
     // MARK: Storage
 
     func boolValue(_ key: String) -> Bool? { value(key) as? Bool }

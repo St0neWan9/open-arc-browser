@@ -126,6 +126,8 @@ public final class ShellModel: ObservableObject {
     private var libraryFlagChanges: AnyCancellable?
     private var peekChanges: AnyCancellable?
     private var linkPeekChanges: AnyCancellable?
+    /// Redraws the toolbar when the pinned extensions change (B183).
+    private var pinnedExtensionChanges: AnyCancellable?
 
     /// A window on `controller` that opens with `window`'s selection. A stale Space id falls back to
     /// the first Space, a stale or foreign tab id to no selection.
@@ -166,6 +168,7 @@ public final class ShellModel: ObservableObject {
             pasteboard: SystemPasteboardWriter()
         )
         siteControls.engineExtensions = engine.extensions
+        siteControls.preferences = controller.dependencies.preferences
         self.findBar = FindBarModel(sidebar: sidebar)
         self.pageCapture = PageCaptureModel(sidebar: sidebar, preferences: controller.dependencies.preferences,
                                             pasteboard: SystemCaptureImagePasteboard(), now: controller.now)
@@ -194,6 +197,7 @@ public final class ShellModel: ObservableObject {
         }
         // Menu enablement (split items, back/forward) reads sidebar state through this model.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        pinnedExtensionChanges = siteControls.$pinnedActions.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         profileFlowChanges = profileFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         libraryChanges = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

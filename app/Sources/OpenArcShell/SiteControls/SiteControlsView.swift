@@ -61,6 +61,13 @@ struct SiteControlsURLBoxAccessories: View {
                 // A waiting permission request keeps the button its bubble hangs from. inferred.
                 if isHovering || model.isPresented || model.isLinkCopied || model.extensionPopup != nil || prompt != nil {
                     URLBoxIconRow {
+                        // Pinned extensions, left of copy link, in pin order (B183). [06 §31] observed.
+                        ForEach(model.pinnedActions) { action in
+                            PinnedExtensionButton(model: model, action: action,
+                                                  size: CGSize(width: SiteControlsLocalTokens.urlBoxButtonSize,
+                                                               height: SiteControlsLocalTokens.urlBoxButtonSize),
+                                                  palette: chrome)
+                        }
                         URLBoxIconButton(symbol: model.isLinkCopied ? "checkmark" : "link",
                                          label: model.isLinkCopied ? "Copied" : "Copy link",
                                          id: URLBoxIconButton.copyLinkID, tint: tint) {
@@ -209,6 +216,9 @@ struct SiteControlsLayout: Equatable {
 /// `SiteControlsLayout`.
 struct SiteControlsView: View {
     @ObservedObject var model: SiteControlsModel
+    /// Fill of a pinned extension's pin badge: the theme's strongest tone. [06 §31] observed a
+    /// dark theme-colored badge.
+    var pinnedBadgeFill: Color = .accentColor
 
     private typealias T = SiteControlsLocalTokens
 
@@ -269,18 +279,9 @@ struct SiteControlsView: View {
             .frame(height: T.headerHeight)
             ZStack(alignment: .topLeading) {
                 ForEach(Array(model.settings.extensions.enumerated()), id: \.element.id) { index, ext in
-                    Button { model.runExtension(ext.id) } label: {
-                        ExtensionActionIcon(action: ext)
-                            .frame(width: T.toolButtonSize.width, height: T.toolButtonSize.height)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!ext.isEnabled)
-                    .help(ext.title)
-                    .accessibilityLabel(ext.name)
-                    .accessibilityIdentifier("openarc.siteControls.extension.\(ext.id)")
-                    .contextMenu { extensionMenu(ext) }
-                    .offset(cellOffset(layout, index: index))
+                    ExtensionCell(model: model, action: ext, pinnedBadgeFill: pinnedBadgeFill)
+                        .contextMenu { extensionMenu(ext) }
+                        .offset(cellOffset(layout, index: index))
                 }
                 Button { model.addExtensionHandler?() } label: {
                     Image(systemName: "plus").font(.system(size: 12, weight: .medium))
@@ -419,7 +420,7 @@ func siteControlsBubbleRequest(_ model: SiteControlsModel, palette: ThemePalette
         style: FloatingBubbleStyle(width: layout.width, height: layout.height,
                                    cornerRadius: SiteControlsLocalTokens.cornerRadius,
                                    tint: palette.floatingPanelBackground, isDark: palette.isDark, usesGradient: true),
-        content: AnyView(SiteControlsView(model: model).environment(\.colorScheme, palette.isDark ? .dark : .light)),
+        content: AnyView(SiteControlsView(model: model, pinnedBadgeFill: palette.seamIndicator.swiftUI).environment(\.colorScheme, palette.isDark ? .dark : .light)),
         onDismiss: { reason in model.close(reason == .escape ? .escape : .clickOutside) }
     )
 }
@@ -471,6 +472,85 @@ private struct SharePickerAnchor: NSViewRepresentable {
 }
 
 // MARK: - Extension actions (C14)
+
+/// One extension's cell in the "Extensions" section: its action button, and the pin badge at the
+/// lower right that shows on hover (light gray) and stays while pinned (theme color). A click on
+/// the badge pins or unpins; the bubble stays open. [06 §31] observed (B183, issue #2).
+struct ExtensionCell: View {
+    @ObservedObject var model: SiteControlsModel
+    let action: SiteExtensionAction
+    let pinnedBadgeFill: Color
+    @State private var isHovering = false
+
+    private typealias T = SiteControlsLocalTokens
+
+    var body: some View {
+        let isPinned = model.isPinned(action.id)
+        ZStack(alignment: .topLeading) {
+            Button { model.runExtension(action.id) } label: {
+                ExtensionActionIcon(action: action)
+                    .frame(width: T.toolButtonSize.width, height: T.toolButtonSize.height)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!action.isEnabled)
+            .help(action.title)
+            .accessibilityLabel(action.name)
+            .accessibilityIdentifier("openarc.siteControls.extension.\(action.id)")
+            if (isHovering || isPinned) && model.preferences != nil {
+                Button { model.togglePin(action.id) } label: {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: T.pinBadgeGlyphSize, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: T.pinBadgeSize, height: T.pinBadgeSize)
+                        .background(Circle().fill(isPinned ? pinnedBadgeFill : Color.primary.opacity(T.pinBadgeRestingOpacity)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(isPinned ? "Unpin" : "Pin")
+                .accessibilityLabel(isPinned ? "Unpin \(action.name)" : "Pin \(action.name)")
+                .accessibilityIdentifier("openarc.siteControls.extensionPin.\(action.id)")
+                .offset(x: T.toolButtonSize.width - T.pinBadgeCenterInset.width - T.pinBadgeSize / 2,
+                        y: T.toolButtonSize.height - T.pinBadgeCenterInset.height - T.pinBadgeSize / 2)
+            }
+        }
+        .frame(width: T.toolButtonSize.width, height: T.toolButtonSize.height, alignment: .topLeading)
+        .onHover { isHovering = $0 }
+    }
+}
+
+/// A pinned extension's icon in the URL box or the toolbar (B183): a click runs its action (the
+/// popup hangs from this icon), right-click shows Remove… · Unpin ‖ Manage Extension. [06 §31]
+/// observed.
+struct PinnedExtensionButton: View {
+    @ObservedObject var model: SiteControlsModel
+    let action: SiteExtensionAction
+    let size: CGSize
+    let palette: ThemePalette
+
+    var body: some View {
+        Button { model.runPinnedExtension(action.id) } label: {
+            ExtensionActionIcon(action: action)
+                .frame(width: size.width, height: size.height)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!action.isEnabled)
+        .help(action.title)
+        .accessibilityLabel(action.name)
+        .accessibilityIdentifier("openarc.pinnedExtension.\(action.id)")
+        .contextMenu {
+            Text(action.name)
+            Divider()
+            ForEach(model.pinnedExtensionMenuItems(for: action.id), id: \.self) { item in
+                if item == .manage { Divider() }
+                Button(item.title(extensionName: action.name)) { model.perform(item, extensionID: action.id) }
+                    .disabled(!model.isEnabled(item, extensionID: action.id))
+            }
+        }
+        .extensionPopupBubble(model, tabID: model.extensionPopup?.tabID, palette: palette, pinnedExtensionID: action.id)
+    }
+}
 
 /// One extension's button in the "Extensions" section: its action icon for the tab (an SF Symbol
 /// until it loads) with the badge the extension set. [06 §12] observed section and "+" button; the
@@ -542,9 +622,16 @@ private struct ExtensionPopupHostView: NSViewRepresentable {
 
 extension View {
     /// Anchors the extension popup bubble to this view (the site controls button). inferred.
-    func extensionPopupBubble(_ model: SiteControlsModel, tabID: UUID?, palette: ThemePalette) -> some View {
+    /// - `pinnedExtensionID`: this view is that extension's pinned icon (B183); it carries only
+    ///   popups opened from it, and the site controls button (nil) only the others.
+    func extensionPopupBubble(_ model: SiteControlsModel, tabID: UUID?, palette: ThemePalette,
+                              pinnedExtensionID: String? = nil) -> some View {
         let popup = model.extensionPopup
-        let isPresented = popup.map { $0.isLoaded && $0.tabID == tabID } ?? false
+        let isPresented = popup.map { popup in
+            let anchoredHere = pinnedExtensionID.map { popup.isFromPinnedIcon && popup.extensionID == $0 }
+                ?? !popup.isFromPinnedIcon
+            return popup.isLoaded && popup.tabID == tabID && anchoredHere
+        } ?? false
         return floatingBubble(isPresented: isPresented) {
             let inset = SiteControlsLocalTokens.extensionPopupInset * 2
             return FloatingBubbleRequest(
