@@ -229,29 +229,56 @@ final class SidebarListDetailsTests: XCTestCase {
     }
 
     /// [06 §14] observed: the list holds the folder's items with their relative times and a
-    /// "Search <folder>…" field. Nested folders are flattened, in sidebar order (inferred).
-    func testQuickListRowsAndSearch_06_14() {
-        let f = SidebarFixture()
+    /// "Search <folder>…" field. Nested folders are flattened (inferred); [06 §33] observed: most
+    /// recently active first, times written out ("3 hours ago").
+    func testQuickListRowsAndSearch_06_14() throws {
+        var f = SidebarFixture()
         let now = f.now.addingTimeInterval(3 * 3_600)
-        let rows = FolderQuickList.rows(folderID: f.folderA, workspace: f.ws, query: "", now: now)
+        // Equal activity times keep sidebar order.
+        var rows = FolderQuickList.rows(folderID: f.folderA, workspace: f.ws, query: "", now: now)
         XCTAssertEqual(rows.map(\.tabID), [f.deepTab, f.inFolderTab])
-        XCTAssertEqual(rows.first?.relativeTime, "3h")
+        XCTAssertEqual(rows.first?.relativeTime, "3 hours ago")
+        // The tab used last comes first.
+        var tab = try XCTUnwrap(f.ws.tabs[f.inFolderTab])
+        tab.lastActiveAt = f.now.addingTimeInterval(3_600)
+        f.ws.tabs[f.inFolderTab] = tab
+        rows = FolderQuickList.rows(folderID: f.folderA, workspace: f.ws, query: "", now: now)
+        XCTAssertEqual(rows.map(\.tabID), [f.inFolderTab, f.deepTab])
         XCTAssertEqual(FolderQuickList.rows(folderID: f.folderA, workspace: f.ws, query: "DEEP", now: now).map(\.tabID), [f.deepTab])
         XCTAssertTrue(FolderQuickList.rows(folderID: f.folderA, workspace: f.ws, query: "zzz", now: now).isEmpty)
         XCTAssertEqual(FolderQuickList.searchPlaceholder(folderTitle: "A"), "Search A…")
     }
 
-    /// Relative time format (inferred).
-    func testRelativeTime_06_14() {
+    /// [06 §33] observed "2 months ago", "10 months ago", "1 year ago"; the shorter units follow
+    /// the same pattern (inferred).
+    func testRelativeTime_06_33() {
         let base = Date(timeIntervalSince1970: 0)
         func r(_ s: TimeInterval) -> String { FolderQuickList.relativeTime(from: base, to: base.addingTimeInterval(s)) }
-        XCTAssertEqual(r(10), "now")
-        XCTAssertEqual(r(5 * 60), "5m")
-        XCTAssertEqual(r(2 * 86_400), "2d")
-        XCTAssertEqual(r(14 * 86_400), "2w")
-        XCTAssertEqual(r(60 * 86_400), "2mo")
-        XCTAssertEqual(r(400 * 86_400), "1y")
-        XCTAssertEqual(FolderQuickList.relativeTime(from: base.addingTimeInterval(10), to: base), "now")
+        XCTAssertEqual(r(10), "just now")
+        XCTAssertEqual(r(60), "1 minute ago")
+        XCTAssertEqual(r(5 * 60), "5 minutes ago")
+        XCTAssertEqual(r(2 * 86_400), "2 days ago")
+        XCTAssertEqual(r(14 * 86_400), "2 weeks ago")
+        XCTAssertEqual(r(60 * 86_400), "2 months ago")
+        XCTAssertEqual(r(300 * 86_400), "10 months ago")
+        XCTAssertEqual(r(400 * 86_400), "1 year ago")
+        XCTAssertEqual(FolderQuickList.relativeTime(from: base.addingTimeInterval(10), to: base), "just now")
+    }
+
+    /// [06 §33] observed: the panel sits right of the sidebar, centered on the folder row, and
+    /// is at most ≈ 320 pt tall; it stays inside the window (inferred).
+    func testQuickListPanelFrame_06_33() {
+        let t = FolderQuickListTokens.self
+        XCTAssertEqual(t.height(rowCount: 20), 320)
+        XCTAssertLessThan(t.height(rowCount: 2), 320, "a short list makes a shorter panel")
+        let size = CGSize(width: t.width, height: 320)
+        let row = CGRect(x: 8, y: 300, width: 260, height: 34)
+        let frame = t.frame(anchor: row, sidebarMaxX: 276, size: size, window: CGSize(width: 1280, height: 800))
+        XCTAssertEqual(frame.minX, 276 + t.sidebarGap)
+        XCTAssertEqual(frame.midY, row.midY, accuracy: 0.001)
+        let high = t.frame(anchor: CGRect(x: 8, y: 20, width: 260, height: 34), sidebarMaxX: 276, size: size,
+                           window: CGSize(width: 1280, height: 800))
+        XCTAssertGreaterThanOrEqual(high.minY, 0, "kept inside the window")
     }
 
     /// Picking an item selects that tab and closes the list; Space switches close it too.
