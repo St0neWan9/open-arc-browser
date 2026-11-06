@@ -11,14 +11,14 @@ body:
     attributes:
       label: Open Arc version
       description: Open Arc ▸ About Open Arc
-      placeholder: "0.2.2 (17)"
+      placeholder: "e.g. 0.2.2"
     validations:
       required: true
   - type: input
     id: macos
     attributes:
       label: macOS version
-      placeholder: "macOS 26.5"
+      placeholder: "e.g. macOS 26.5"
     validations:
       required: true
   - type: textarea
