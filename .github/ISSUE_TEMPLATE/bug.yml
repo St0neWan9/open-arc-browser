@@ -40,14 +40,10 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: What you expected
+      label: What should happen
+      description: Usually what Arc does. A screenshot or screen recording of Arc helps most.
     validations:
       required: true
-  - type: textarea
-    id: arc
-    attributes:
-      label: What Arc does
-      description: If Arc behaves differently, describe it. A screenshot or screen recording of Arc helps most.
   - type: textarea
     id: media
     attributes:
