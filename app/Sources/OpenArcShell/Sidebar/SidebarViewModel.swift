@@ -876,8 +876,10 @@ public final class SidebarViewModel: ObservableObject {
 
     // MARK: - Tab intents
 
-    /// A tab was just created: the window shows its "New Tab Created" toast. [06 §34] observed
-    /// (issue #7). Bumped rather than a tab id, so two tabs in a row both show it.
+    /// A tab was just created by a page and the window may have no visible feedback for it: the
+    /// window shows "New Tab Created". [06 §34] observed (issue #7): only with the sidebar hidden;
+    /// a new tab the user starts (⌘T, the New Tab row) shows none. Bumped, not a tab id, so two in
+    /// a row both count.
     @Published public private(set) var newTabNotice = 0
 
     /// Opens a tab at the top of Today in the current space and selects it. [06 §13] observed.
@@ -887,12 +889,11 @@ public final class SidebarViewModel: ObservableObject {
         let id = makeID()
         guard mutate({ try TreeOps.openTab($0, id: id, spaceID: spaceID, url: url, title: title, now: now()) }) else { return nil }
         selectTab(id)
-        noteNewTab()
         return id
     }
 
     /// A tab the page asked for (`window.open`, a link opened in a new tab) was created here.
-    /// [06 §34] observed: the window shows "New Tab Created".
+    /// [06 §34] observed: the window shows "New Tab Created" when it kept the tab out of sight.
     public func noteNewTab() { newTabNotice &+= 1 }
 
     /// Click on the "+ New Tab" row: opens the command bar when a shell is attached, otherwise
