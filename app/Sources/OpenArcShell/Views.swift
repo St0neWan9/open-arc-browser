@@ -263,6 +263,15 @@ struct MainWindowContent: View {
                 .offset(x: layout.webPanelFrame.minX, y: layout.webPanelFrame.minY)
         } else {
             singlePanel(layout: layout, palette: palette)
+                // Rebuilt when this window takes a page back, so the engine attaches it here.
+                // [06 §36] observed (issue #10 part 2).
+                .id(sidebar.surfaceGeneration)
+                .overlay {
+                    // The page lives in another window: this one dims it. [06 §36] observed.
+                    if let taken = sidebar.pageTakenElsewhere, taken == sidebar.selectedTabID {
+                        PageTakenElsewhereOverlay(palette: palette) { sidebar.takePageBack() }
+                    }
+                }
                 .frame(width: layout.webPanelFrame.width, height: layout.webPanelFrame.height)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
                 .webPanelEdgeShadow(palette.appearance)
@@ -383,6 +392,30 @@ struct CommandBarOverlay: View {
                 .offset(x: frame.minX, y: top)
         }
         .frame(width: windowSize.width, height: windowSize.height, alignment: .topLeading)
+    }
+}
+
+/// Dims the page area while another window shows the page (issue #10 part 2). [06 §36] observed:
+/// Arc dims the page in the window that no longer holds it. A click takes it back.
+struct PageTakenElsewhereOverlay: View {
+    let palette: ThemePalette
+    var takeBack: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+            Text("This page is open in another window")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(.black.opacity(0.35)))
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { takeBack() }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("openarc.webPanel.takenElsewhere")
     }
 }
 

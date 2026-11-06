@@ -83,6 +83,29 @@ public final class SidebarViewModel: ObservableObject {
     let spacePager = SpacePagerState()
     /// A two-finger swipe the Space pages follow (B184, issue #1).
     let spaceSwipe = SpaceSwipeState()
+    /// A page that moved to another window (Arc: the page follows the window you clicked in and
+    /// the other window dims it). [06 §36] observed. Bumped when this window takes a page back, so
+    /// its surface host is rebuilt and the engine re-attaches the page here.
+    @Published public private(set) var surfaceGeneration = 0
+    /// The selected tab's page is shown in another window: this window dims its page area.
+    @Published public private(set) var pageTakenElsewhere: UUID?
+
+    /// Another window took `id`'s page: dim it here.
+    func markPageTakenElsewhere(_ id: UUID) {
+        if selectedTabID == id { pageTakenElsewhere = id }
+    }
+
+    /// This window takes the page (a click on the dimmed page or on its row): it re-attaches here
+    /// and the window that had it now dims it.
+    public func takePageBack() {
+        guard pageTakenElsewhere != nil else { return }
+        pageTakenElsewhere = nil
+        surfaceGeneration &+= 1
+        if let id = selectedTabID, let other = controller.sidebar(showing: id, except: self) {
+            other.markPageTakenElsewhere(id)
+        }
+    }
+
     /// Tabs selected in this window, most recent first: closing a tab returns to the one used
     /// before it. [06 §35] observed/decided (issue #10). Capped; dead or other-Space ids are
     /// skipped when read.
@@ -559,8 +582,8 @@ public final class SidebarViewModel: ObservableObject {
     /// A favorite opens in the current space. [06 §12] observed.
     ///
     /// A tab's page can be on screen in one window only (one engine surface). When another window
-    /// already shows the tab, that window comes to the front and this window's selection stays as
-    /// it is. inferred (B14; the spec records nothing about tabs across windows).
+    /// already shows the tab, the page moves here and that window dims it, as Arc does (issue #10
+    /// part 2, [06 §36] observed). A split pane is not moved: its window comes to the front.
     public func selectTab(_ id: UUID) {
         selectTab(id, focusingOtherWindow: true)
     }
@@ -571,10 +594,21 @@ public final class SidebarViewModel: ObservableObject {
     func selectTab(_ id: UUID, focusingOtherWindow: Bool) -> Bool {
         guard let tab = workspace.tabs[id], !tab.meta.isTombstone else { return false }
         if let other = controller.sidebar(showing: id, except: self) {
-            if focusingOtherWindow { other.onFocusRequest?() }
-            return false
+            // Arc (issue #10 part 2): the page follows the window you selected it in; the other
+            // window keeps its selection and dims the page. [06 §36] observed.
+            // A split pane stays where it is: selecting its tab focuses that window.
+            let isSplitPane = SplitPaneLayout.activeLayout(in: workspace, containing: id) != nil
+            if focusingOtherWindow, !isSplitPane {
+                other.markPageTakenElsewhere(id)
+                surfaceGeneration &+= 1
+            } else {
+                // A Space switch restoring a remembered tab selects nothing and steals no focus.
+                if focusingOtherWindow { other.onFocusRequest?() }
+                return false
+            }
         }
         selectedTabID = id
+        if pageTakenElsewhere != nil { pageTakenElsewhere = nil }
         selectionHistory.removeAll { $0 == id }
         selectionHistory.insert(id, at: 0)
         if selectionHistory.count > Self.selectionHistoryLimit { selectionHistory.removeLast() }
