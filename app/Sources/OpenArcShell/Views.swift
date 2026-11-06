@@ -140,6 +140,13 @@ struct MainWindowContent: View {
                     .frame(width: max(0, layout.webPanelFrame.maxX - TranslationLocalTokens.noticeInset), alignment: .trailing)
                     .offset(y: layout.pageFrame.minY + TranslationLocalTokens.noticeInset)
 
+                // "New Tab Created" at the window's top right. [06 §34] observed. B186.
+                WindowToastView(toast: model.windowToast)
+                    .padding(.top, WindowToastLocalTokens.inset)
+                    .padding(.trailing, WindowToastLocalTokens.inset)
+                    .frame(width: layout.windowSize.width, height: layout.windowSize.height, alignment: .topTrailing)
+                    .allowsHitTesting(false)
+
                 // Copy link notice at the panel's top right, under the toolbar. [06 §17.3] observed. B43.
                 if layout.isWebToolbarShown {
                     WebToolbarCopyToastView(toast: copyToast, palette: palette)
