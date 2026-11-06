@@ -17,3 +17,4 @@ DerivedData/
 
 # Local Claude Code state
 /.claude/
+/release/
