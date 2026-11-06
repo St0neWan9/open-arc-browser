@@ -118,6 +118,8 @@ extension WorkspaceController {
             return
         }
         let id = makeID()
+        // The window shows "New Tab Created". [06 §34] observed (issue #7).
+        (window ?? activeWindowSidebar)?.noteNewTab()
         let title = request.url.host ?? request.url.absoluteString
         let position = openerTabID.map { childPosition(opener: $0, spaceID: spaceID) } ?? .first
         let stamp = now()
