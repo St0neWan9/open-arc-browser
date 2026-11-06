@@ -141,7 +141,7 @@ private struct SidebarContent: View, Equatable {
 
             // Two-finger horizontal swipes page between Spaces. [05 §window hierarchy] observed.
             // Transparent to clicks and scrolls (it only watches them). B76.
-            SidebarSwipeMonitor(onSwipe: { viewModel.swipeSpace(by: $0) })
+            SidebarSwipeMonitor(viewModel: viewModel)
                 .frame(width: layout.width, height: layout.windowSize.height)
                 .allowsHitTesting(false)
 
@@ -310,7 +310,7 @@ struct SidebarListView: View {
     var body: some View {
         list
             .overlay(alignment: .topLeading) {
-                SidebarListDecorations(viewModel: viewModel, changes: changes, scrollChanges: scrollChanges,
+                SidebarListDecorations(viewModel: viewModel, spaceSwipe: viewModel.spaceSwipe, changes: changes, scrollChanges: scrollChanges,
                                        scroll: scroll, spaceID: spaceID,
                                        isSidebarHovered: isSidebarHovered, layout: layout)
             }
@@ -799,6 +799,8 @@ final class SidebarListWindow: ObservableObject {
 /// The scroll-edge lines and the overlay scroller knob of one list: they follow the offset.
 private struct SidebarListDecorations: View {
     let viewModel: SidebarViewModel
+    /// Published only when a swipe starts or ends.
+    @ObservedObject var spaceSwipe: SpaceSwipeState
     @ObservedObject var changes: SidebarSpacePageChanges
     /// Relays `scroll`'s changes while the page is shown: the offset is read from `scroll`.
     @ObservedObject var scrollChanges: SidebarSpacePageChanges
@@ -831,7 +833,9 @@ private struct SidebarListDecorations: View {
         let knob = SidebarScrollerGeometry.knobFrame(contentFrame: contentFrame, viewport: viewport)
         let palette = viewModel.palette(forSpace: spaceID)
         let ink: Color = palette.isDark || palette.usesLightInk ? .white : .black
-        let visible = isSidebarHovered && knob != nil
+        // Hidden while a two-finger swipe moves the pages (B184, issue #1: Arc hides it as the
+        // swipe starts).
+        let visible = isSidebarHovered && knob != nil && !spaceSwipe.isActive
         Capsule(style: .continuous)
             .fill(ink.opacity(Metrics.SidebarScroller.knobOpacity))
             .frame(width: knob?.width ?? 0, height: knob?.height ?? 0)
@@ -1135,66 +1139,148 @@ enum SidebarSelectionJump {
     }
 }
 
-// MARK: - Trackpad swipe between Spaces (B76)
+// MARK: - Trackpad swipe between Spaces (B76, B184)
 
-/// Turns the scroll events of one trackpad gesture into at most one Space step. [05 §window
-/// hierarchy] observed: Spaces are horizontal pages switched by a swipe or the dock. Threshold
-/// and the "mostly horizontal" rule are inferred. Pure, for tests.
-struct SidebarSwipeRecognizer {
-    /// Horizontal travel (points) before the gesture pages.
-    static let threshold: CGFloat = 50
-    /// The gesture must be this many times more horizontal than vertical (keeps list scrolling
-    /// from switching Spaces).
+/// Turns the scroll events of one trackpad gesture into an interactive Space swipe. [05 §window
+/// hierarchy] observed: Spaces are horizontal pages switched by a swipe or the dock. Issue #1
+/// (B184): the pages follow the fingers while the swipe runs. The lock distance and the "mostly
+/// horizontal" rule are inferred. Pure, for tests.
+struct SidebarSwipeTracker {
+    /// Travel (points, either axis) before the gesture picks its axis.
+    static let lockDistance: CGFloat = 6
+    /// The gesture must be this many times more horizontal than vertical to page (keeps list
+    /// scrolling from switching Spaces).
     static let dominance: CGFloat = 1.5
+    /// Velocity is measured over the events of this last stretch of the gesture (seconds).
+    static let velocityWindow: TimeInterval = 0.08
 
-    enum Phase { case began, changed, ended, other }
+    enum Phase { case began, changed, ended, cancelled, other }
 
+    enum Output: Equatable {
+        /// The gesture became a horizontal swipe.
+        case start
+        /// The content moved by `offset` points since the gesture began (negative: to the left,
+        /// toward the next Space).
+        case move(CGFloat)
+        /// The fingers lifted; `velocity` in points per second, same sign convention.
+        case end(offset: CGFloat, velocity: CGFloat)
+        /// The system cancelled the gesture.
+        case cancel
+    }
+
+    private enum State { case idle, deciding, horizontal, vertical }
+    private var state = State.idle
     private var dx: CGFloat = 0
     private var dy: CGFloat = 0
-    private var fired = false
-    private var tracking = false
+    private var samples: [(time: TimeInterval, x: CGFloat)] = []
+
+    /// A horizontal swipe is running: its events belong to it, not to the list.
+    var isTracking: Bool { state == .horizontal }
 
     /// Feeds one event of the gesture (`deltaX`/`deltaY` as AppKit's `scrollingDelta`, content
-    /// direction). Returns +1 (next Space) or -1 (previous Space) the moment the gesture qualifies;
-    /// nil otherwise. Content moving left (fingers to the left with natural scrolling) reveals
-    /// the next page on the right, as a horizontal page view does.
-    mutating func feed(phase: Phase, deltaX: CGFloat, deltaY: CGFloat) -> Int? {
+    /// direction; `time` the event's timestamp).
+    mutating func feed(phase: Phase, deltaX: CGFloat, deltaY: CGFloat, time: TimeInterval) -> [Output] {
         switch phase {
         case .began:
-            dx = 0; dy = 0; fired = false; tracking = true
-        case .ended, .other:
-            tracking = false
-            return nil
+            state = .deciding
+            dx = 0; dy = 0; samples = []
+            return accumulate(deltaX, deltaY, time)
         case .changed:
-            guard tracking else { return nil }
+            guard state == .deciding || state == .horizontal else { return [] }
+            return accumulate(deltaX, deltaY, time)
+        case .ended:
+            defer { state = .idle }
+            guard state == .horizontal else { return [] }
+            return [.end(offset: dx, velocity: velocity())]
+        case .cancelled:
+            defer { state = .idle }
+            return state == .horizontal ? [.cancel] : []
+        case .other:
+            return []
         }
+    }
+
+    private mutating func accumulate(_ deltaX: CGFloat, _ deltaY: CGFloat, _ time: TimeInterval) -> [Output] {
         dx += deltaX
         dy += deltaY
-        guard !fired, abs(dx) >= Self.threshold, abs(dx) >= Self.dominance * abs(dy) else { return nil }
-        fired = true
-        return dx < 0 ? 1 : -1
+        samples.append((time, dx))
+        samples.removeAll { time - $0.time > Self.velocityWindow }
+        switch state {
+        case .deciding:
+            guard max(abs(dx), abs(dy)) >= Self.lockDistance else { return [] }
+            guard abs(dx) >= Self.dominance * abs(dy) else {
+                state = .vertical
+                return []
+            }
+            state = .horizontal
+            return [.start, .move(dx)]
+        case .horizontal:
+            return [.move(dx)]
+        case .idle, .vertical:
+            return []
+        }
+    }
+
+    private func velocity() -> CGFloat {
+        guard let first = samples.first, let last = samples.last, last.time > first.time else { return 0 }
+        return (last.x - first.x) / CGFloat(last.time - first.time)
     }
 }
 
-/// Watches two-finger trackpad swipes over the sidebar (window-local event monitor) and reports
-/// one Space step per gesture. Never consumes the events, so vertical list scrolling and pages
-/// behind are untouched. Momentum events and mouse wheels (no gesture phase) are ignored.
+/// How an interactive Space swipe draws and ends (B184, issue #1). All values inferred: Arc's
+/// swipe could not be sampled (it does not take synthetic gestures), so they follow how macOS
+/// pages (half a page or a flick commits; a rubber band past the ends).
+enum SpaceSwipe {
+    /// Past the first or last Space the page moves this fraction of the finger travel.
+    static let edgeResistance: CGFloat = 0.3
+    /// Dragged this fraction of the page width, the swipe commits on release.
+    static let commitFraction: CGFloat = 0.5
+    /// A flick at least this fast (points per second) toward the neighbor commits, once it moved
+    /// at least `flickMinimumOffset`.
+    static let flickVelocity: CGFloat = 300
+    static let flickMinimumOffset: CGFloat = 20
+
+    /// The Space step the content travel points at: content to the left reveals the next Space.
+    static func step(forOffset offset: CGFloat) -> Int { offset < 0 ? 1 : -1 }
+
+    /// Where the shown page is drawn for a finger travel of `offset`: one page at most, resisted
+    /// when there is no Space that way.
+    static func displayedOffset(_ offset: CGFloat, width: CGFloat, hasNeighbor: Bool) -> CGFloat {
+        guard hasNeighbor else { return offset * edgeResistance }
+        return min(max(offset, -width), width)
+    }
+
+    /// Whether releasing at `offset` with `velocity` moves to the neighbor.
+    static func commits(offset: CGFloat, velocity: CGFloat, width: CGFloat) -> Bool {
+        guard offset != 0 else { return false }
+        // A flick back toward the start cancels.
+        if velocity != 0, (velocity < 0) != (offset < 0), abs(velocity) >= flickVelocity { return false }
+        if abs(offset) >= width * commitFraction { return true }
+        return abs(offset) >= flickMinimumOffset && abs(velocity) >= flickVelocity && (velocity < 0) == (offset < 0)
+    }
+}
+
+/// Watches two-finger trackpad swipes over the sidebar (window-local event monitor) and drives the
+/// interactive Space swipe (B184). Events of a horizontal swipe are consumed, so the list does not
+/// scroll under it; every other event passes through untouched. Momentum events and mouse wheels
+/// (no gesture phase) are ignored.
 struct SidebarSwipeMonitor: NSViewRepresentable {
-    let onSwipe: @MainActor (Int) -> Void
+    let viewModel: SidebarViewModel
 
     func makeNSView(context: Context) -> MonitorView {
         let view = MonitorView()
-        view.onSwipe = onSwipe
+        view.viewModel = viewModel
         return view
     }
 
     func updateNSView(_ nsView: MonitorView, context: Context) {
-        nsView.onSwipe = onSwipe
+        nsView.viewModel = viewModel
     }
 
     final class MonitorView: NSView {
-        var onSwipe: (@MainActor (Int) -> Void)?
-        private var recognizer = SidebarSwipeRecognizer()
+        weak var viewModel: SidebarViewModel?
+        private var tracker = SidebarSwipeTracker()
+        private var isSwiping = false
         private var token: SwipeMonitorToken?
 
         override var isFlipped: Bool { true }
@@ -1206,33 +1292,56 @@ struct SidebarSwipeMonitor: NSViewRepresentable {
             guard window != nil else { return }
             let monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 let phase = event.phase, momentum = event.momentumPhase, precise = event.hasPreciseScrollingDeltas
-                let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
+                let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY, time = event.timestamp
                 let location = event.locationInWindow, number = event.windowNumber
-                MainActor.assumeIsolated {
-                    self?.handle(phase: phase, momentum: momentum, precise: precise, dx: dx, dy: dy,
-                                 location: location, windowNumber: number)
+                let consumed = MainActor.assumeIsolated {
+                    self?.handle(phase: phase, momentum: momentum, precise: precise, dx: dx, dy: dy, time: time,
+                                 location: location, windowNumber: number) ?? false
                 }
-                return event
+                return consumed ? nil : event
             }
             token = monitor.map(SwipeMonitorToken.init)
         }
 
+        /// Returns whether the event belongs to a running swipe.
         private func handle(phase: NSEvent.Phase, momentum: NSEvent.Phase, precise: Bool, dx: CGFloat, dy: CGFloat,
-                            location: NSPoint, windowNumber: Int) {
-            guard let window, windowNumber == window.windowNumber, precise, momentum.isEmpty, !phase.isEmpty else { return }
-            let mapped: SidebarSwipeRecognizer.Phase
+                            time: TimeInterval, location: NSPoint, windowNumber: Int) -> Bool {
+            guard let window, windowNumber == window.windowNumber, precise, momentum.isEmpty, !phase.isEmpty else { return false }
+            let mapped: SidebarSwipeTracker.Phase
             if phase.contains(.began) {
                 // A gesture counts only when it starts over the sidebar.
-                guard bounds.contains(convert(location, from: nil)) else { return }
+                guard bounds.contains(convert(location, from: nil)) else { return false }
                 mapped = .began
             } else if phase.contains(.changed) {
                 mapped = .changed
-            } else if phase.contains(.ended) || phase.contains(.cancelled) {
+            } else if phase.contains(.ended) {
                 mapped = .ended
+            } else if phase.contains(.cancelled) {
+                mapped = .cancelled
             } else {
                 mapped = .other
             }
-            if let step = recognizer.feed(phase: mapped, deltaX: dx, deltaY: dy) { onSwipe?(step) }
+            let wasTracking = tracker.isTracking
+            for output in tracker.feed(phase: mapped, deltaX: dx, deltaY: dy, time: time) {
+                apply(output)
+            }
+            return wasTracking || tracker.isTracking
+        }
+
+        private func apply(_ output: SidebarSwipeTracker.Output) {
+            guard let viewModel else { return }
+            switch output {
+            case .start:
+                isSwiping = viewModel.spaceSwipeBegan()
+            case .move(let offset):
+                if isSwiping { viewModel.spaceSwipeMoved(offset: offset) }
+            case .end(let offset, let velocity):
+                if isSwiping { viewModel.spaceSwipeEnded(offset: offset, velocity: velocity) }
+                isSwiping = false
+            case .cancel:
+                if isSwiping { viewModel.spaceSwipeCancelled() }
+                isSwiping = false
+            }
         }
     }
 }

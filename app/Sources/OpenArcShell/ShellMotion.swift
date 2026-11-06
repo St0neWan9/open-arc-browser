@@ -1,5 +1,6 @@
 import SwiftUI
 import QuartzCore
+import Combine
 import OpenArcDesign
 
 // SwiftUI and Core Animation forms of the motion tokens in `OpenArcDesign.Motion`
@@ -154,6 +155,53 @@ final class SpacePagerState {
 
 /// The incoming (`insertion`) or outgoing (`removal`) page of a Space switch.
 enum SpacePageRole: Sendable { case insertion, removal }
+
+/// A two-finger swipe between Spaces that the pages follow (B184, issue #1). The view model feeds
+/// it; `SidebarSpacePagerView` moves the pages from `events` without SwiftUI work per frame, and
+/// the list's scroll knob hides while `isActive`.
+@MainActor
+final class SpaceSwipeState: ObservableObject {
+    enum Event: Equatable {
+        case began(previous: UUID?, next: UUID?)
+        /// Content travel in points since the swipe began (negative: toward the next Space).
+        case moved(CGFloat)
+        /// The swipe ended: `target` is the Space it moves to, nil to spring back.
+        case ended(target: UUID?)
+    }
+
+    /// Published only when a swipe starts or ends, so observers do no work per frame.
+    @Published private(set) var isActive = false
+    private(set) var previous: UUID?
+    private(set) var next: UUID?
+    /// Width of one page: the window's sidebar width, set by the pager. [07 §11] observed default.
+    var pageWidth: CGFloat = CGFloat(Metrics.Sidebar.width)
+    let events = PassthroughSubject<Event, Never>()
+    /// What was sent, for tests.
+    private(set) var lastEvent: Event?
+
+    func begin(previous: UUID?, next: UUID?) {
+        self.previous = previous
+        self.next = next
+        isActive = true
+        send(.began(previous: previous, next: next))
+    }
+
+    func move(_ offset: CGFloat) {
+        guard isActive else { return }
+        send(.moved(offset))
+    }
+
+    func end(target: UUID?) {
+        guard isActive else { return }
+        isActive = false
+        send(.ended(target: target))
+    }
+
+    private func send(_ event: Event) {
+        lastEvent = event
+        events.send(event)
+    }
+}
 
 // MARK: - Theme bubble
 

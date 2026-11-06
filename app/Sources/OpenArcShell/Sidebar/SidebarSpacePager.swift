@@ -247,6 +247,9 @@ final class SidebarSpacePagerView: NSView {
     private var modelChanges: AnyCancellable?
     private var spaceWillChange: AnyCancellable?
     private var scrollStateChanges: AnyCancellable?
+    private var swipeEvents: AnyCancellable?
+    /// The running interactive swipe (B184): the Space it reveals, nil at an end (rubber band).
+    private var swipe: (previous: UUID?, next: UUID?, neighbor: UUID??)?
     private weak var observedModel: SidebarViewModel?
     private weak var observedScroll: SidebarListScrollState?
     /// Bumped by every slide, so the completion of an overtaken slide does nothing.
@@ -322,6 +325,9 @@ final class SidebarSpacePagerView: NSView {
             // page coming back is brought up to date at the same moment (B106).
             spaceWillChange = viewModel.selectedSpaceWillChange.sink { [weak self] next in
                 MainActor.assumeIsolated { self?.spaceWillChange(to: next) }
+            }
+            swipeEvents = viewModel.spaceSwipe.events.sink { [weak self] event in
+                MainActor.assumeIsolated { self?.handleSwipe(event) }
             }
             modelChanges = viewModel.objectWillChange.sink { [weak self] _ in
                 // Both objects are main-actor isolated and publish on the main thread.
@@ -458,9 +464,12 @@ final class SidebarSpacePagerView: NSView {
         recent.removeAll { $0 == spaceID }
         recent.append(spaceID)
         let incoming = page(for: spaceID)
-        // A page already moving (a switch during a slide, e.g. straight back) starts from where it
-        // is drawn now: read before `attach` stops its animation.
-        let incomingPresented = presentedOffset(incoming.host)
+        // A page already moving (a switch during a slide, e.g. straight back, or a swipe that let
+        // go, B184) starts from where it is drawn now: read before `attach` stops its animation.
+        let incomingPresented = presentedOffset(incoming.host) ?? heldOffset(incoming.host)
+        let outgoingHeld = previous.flatMap { pages[$0] }.flatMap { heldOffset($0.host) }
+        swipe = nil
+        resetHeldOffsets()
         attach(incoming)
         // The list on screen is the one drag auto-scroll and the jump button move.
         if let hook = inputs.scroll.scrollHook(for: spaceID) { inputs.viewModel.listScroller = hook }
@@ -475,7 +484,7 @@ final class SidebarSpacePagerView: NSView {
             return
         }
         let incomingStart = incomingPresented ?? pager.offset(for: .insertion, width: inputs.layout.width)
-        let outgoingStart = presentedOffset(outgoing.host) ?? 0
+        let outgoingStart = presentedOffset(outgoing.host) ?? outgoingHeld ?? 0
         // Any third page of an overtaken slide leaves at once.
         detachAll(except: [spaceID, previous])
         slidingSpaceIDs = [spaceID, previous]
@@ -496,6 +505,108 @@ final class SidebarSpacePagerView: NSView {
         slideOut.isRemovedOnCompletion = false
         outgoing.host.layer?.add(slideOut, forKey: SpacePagerMotion.key)
         CATransaction.commit()
+    }
+
+    // MARK: Interactive swipe (B184, issue #1)
+
+    /// Follows the swipe: the shown page and the Space it reveals move with the fingers; the
+    /// neighbor waits one page width beside it. Layer translations only, no SwiftUI work.
+    private func handleSwipe(_ event: SpaceSwipeState.Event) {
+        guard let inputs, let shown = shownSpaceID else { return }
+        let width = inputs.layout.width
+        inputs.viewModel.spaceSwipe.pageWidth = width
+        switch event {
+        case .began(let previous, let next):
+            // A slide still running lands at once: the swipe starts from the page at rest.
+            if !slidingSpaceIDs.isEmpty {
+                slideGeneration &+= 1
+                for page in pages.values { page.host.layer?.removeAnimation(forKey: SpacePagerMotion.key) }
+                detachAll(except: [shown])
+                slidingSpaceIDs = []
+            }
+            swipe = (previous, next, nil)
+        case .moved(let offset):
+            guard var current = swipe, let page = pages[shown] else { return }
+            let neighbor = SpaceSwipe.step(forOffset: offset) > 0 ? current.next : current.previous
+            if current.neighbor != .some(neighbor) {
+                if let old = current.neighbor, let oldID = old, let oldPage = pages[oldID] {
+                    detach(oldPage)
+                    setHeldOffset(nil, oldPage.host)
+                }
+                if let neighbor {
+                    let incoming = self.page(for: neighbor)
+                    bringUpToDate(incoming, spaceID: neighbor)
+                    attach(incoming)
+                    recent.removeAll { $0 == neighbor }
+                    recent.insert(neighbor, at: max(0, recent.count - 1))
+                }
+                current.neighbor = .some(neighbor)
+                swipe = current
+                slidingSpaceIDs = neighbor.map { [shown, $0] } ?? [shown]
+            }
+            let shownOffset = SpaceSwipe.displayedOffset(offset, width: width, hasNeighbor: neighbor != nil)
+            setHeldOffset(shownOffset, page.host)
+            if let neighbor, let incoming = pages[neighbor] {
+                setHeldOffset(shownOffset + (offset < 0 ? width : -width), incoming.host)
+            }
+        case .ended(let target):
+            guard target == nil else {
+                // The selection follows; `show` slides on from where the pages are now.
+                return
+            }
+            springBack(shown: shown, width: width)
+        }
+    }
+
+    /// The swipe let go short of the neighbor: both pages spring back to rest on the Space-switch
+    /// spring ([07 §11] observed curve) and the neighbor is hidden again.
+    private func springBack(shown: UUID?, width: CGFloat) {
+        let neighborID = swipe?.neighbor.flatMap { $0 }
+        swipe = nil
+        slideGeneration &+= 1
+        let generation = slideGeneration
+        guard let page = pages[shown] else { return }
+        let shownStart = heldOffset(page.host) ?? 0
+        let neighborPage = neighborID.flatMap { pages[$0] }
+        let neighborStart = neighborPage.flatMap { heldOffset($0.host) }
+        resetHeldOffsets()
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            MainActor.assumeIsolated { self?.slideEnded(generation: generation) }
+        }
+        page.host.layer?.add(SpacePagerMotion.slide(from: shownStart), forKey: SpacePagerMotion.key)
+        if let neighborPage, let neighborStart {
+            let back = SpacePagerMotion.slide(from: neighborStart)
+            back.toValue = neighborStart < 0 ? -width : width
+            back.fillMode = .forwards
+            back.isRemovedOnCompletion = false
+            neighborPage.host.layer?.add(back, forKey: SpacePagerMotion.key)
+        }
+        CATransaction.commit()
+    }
+
+    /// The translation a swipe holds a page at (the layer's model value), nil at rest.
+    private func heldOffset(_ host: NSView) -> CGFloat? {
+        guard let value = host.layer?.value(forKeyPath: "transform.translation.x") as? NSNumber else { return nil }
+        let offset = CGFloat(value.doubleValue)
+        return offset == 0 ? nil : offset
+    }
+
+    private func setHeldOffset(_ offset: CGFloat?, _ host: NSView) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        host.layer?.setValue(offset ?? 0, forKeyPath: "transform.translation.x")
+        CATransaction.commit()
+    }
+
+    /// Puts every page's layer back at rest (slides animate from an offset to 0).
+    private func resetHeldOffsets() {
+        for page in pages.values where heldOffset(page.host) != nil { setHeldOffset(nil, page.host) }
+    }
+
+    /// For tests: the translation a swipe holds `spaceID`'s page at (0 at rest).
+    func heldOffsetForTesting(_ spaceID: UUID?) -> CGFloat {
+        pages[spaceID].flatMap { heldOffset($0.host) } ?? 0
     }
 
     /// The horizontal offset a page is drawn at by a running slide, nil when it is not sliding.
@@ -536,6 +647,7 @@ final class SidebarSpacePagerView: NSView {
     /// Hides a page; it stays in the view tree, but is not updated until it is shown again.
     private func detach(_ page: Page) {
         page.host.layer?.removeAnimation(forKey: SpacePagerMotion.key)
+        if heldOffset(page.host) != nil { setHeldOffset(nil, page.host) }
         page.host.isHidden = true
         page.setShown(false)
     }
