@@ -209,6 +209,11 @@ final class SidebarListScrollState: ObservableObject {
     @Published private(set) var contentFrames: [UUID: CGRect] = [:]
     /// Viewport size of each list.
     private(set) var viewportSizes: [UUID: CGSize] = [:]
+    /// A list is being scrolled: the scroll knob shows only then (issue #16).
+    @Published private(set) var isScrolling = false
+    /// Seconds the knob stays after the last scroll step; tests shorten it.
+    var scrollEndDelay: Double = 0.6
+    private var scrollEndTask: Task<Void, Never>?
     /// Speaker glyph frames on screen (root space), by tab id. Read on a press only, so they
     /// are not published.
     var audioGlyphFrames: [UUID: CGRect] = [:]
@@ -232,7 +237,22 @@ final class SidebarListScrollState: ObservableObject {
     func update(_ spaceID: UUID?, contentFrame: CGRect, viewportSize: CGSize) {
         guard let spaceID else { return }
         viewportSizes[spaceID] = viewportSize
+        let scrolled = contentFrames[spaceID]?.minY != contentFrame.minY
         if contentFrames[spaceID] != contentFrame { contentFrames[spaceID] = contentFrame }
+        if scrolled { noteScrolled() }
+    }
+
+    /// A scroll step: the knob shows now and for `scrollEndDelay` after the last step.
+    /// [06 §38] decided with the user (issue #16).
+    func noteScrolled() {
+        isScrolling = true
+        scrollEndTask?.cancel()
+        let delay = scrollEndDelay
+        scrollEndTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.isScrolling = false
+        }
     }
 
     /// A Space's page was dropped (`SidebarSpacePagerView`): its list starts at the top when the

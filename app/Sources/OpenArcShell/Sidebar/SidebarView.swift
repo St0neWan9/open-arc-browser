@@ -355,6 +355,27 @@ struct SidebarListView: View {
     }
 }
 
+/// The scroll knob: visible while its list scrolls and not while a Space swipe runs.
+struct ScrollKnob: View {
+    @ObservedObject var scroll: SidebarListScrollState
+    let contentFrame: CGRect
+    let viewport: CGSize
+    let ink: Color
+    let isSwiping: Bool
+
+    var body: some View {
+        let knob = SidebarScrollerGeometry.knobFrame(contentFrame: contentFrame, viewport: viewport)
+        let visible = scroll.isScrolling && knob != nil && !isSwiping
+        Capsule(style: .continuous)
+            .fill(ink.opacity(Metrics.SidebarScroller.knobOpacity))
+            .frame(width: knob?.width ?? 0, height: knob?.height ?? 0)
+            .offset(x: knob?.minX ?? 0, y: knob?.minY ?? 0)
+            .opacity(visible ? 1 : 0)
+            .animation(ShellMotion.sidebarScrollerFade, value: visible)
+            .accessibilityHidden(true)
+    }
+}
+
 /// The part of the list around the visible area (`SidebarListWindow`), each entry placed at its
 /// fixed position. A scroll of a few points does not change which rows exist.
 private struct SidebarListRows: View {
@@ -824,25 +845,15 @@ private struct SidebarListDecorations: View {
         .allowsHitTesting(false)
     }
 
-    /// Thin overlay knob at the list's right edge, shown while the pointer is over the sidebar
-    /// and the list overflows. [04 §sidebar] observed ("thin, visible on hover"); the knob's size,
-    /// ink and fade are placeholders (`Metrics.SidebarScroller`, `Motion.sidebarScrollerFade`, unknown). It only indicates the
-    /// position: scrolling stays with the wheel / trackpad.
-    @ViewBuilder
+    /// Thin overlay knob at the list's right edge. It shows only while the list scrolls (issue
+    /// #16, decided with the user; [04 §sidebar] observed it on hover, ours follows the issue) and
+    /// a two-finger Space swipe hides it too (B184). It observes the scroll state itself, so a
+    /// hidden Space page's decorations do not redraw on every scroll step (B104).
     private func scroller(contentFrame: CGRect, viewport: CGSize) -> some View {
-        let knob = SidebarScrollerGeometry.knobFrame(contentFrame: contentFrame, viewport: viewport)
-        let palette = viewModel.palette(forSpace: spaceID)
-        let ink: Color = palette.isDark || palette.usesLightInk ? .white : .black
-        // Hidden while a two-finger swipe moves the pages (B184, issue #1: Arc hides it as the
-        // swipe starts).
-        let visible = isSidebarHovered && knob != nil && !spaceSwipe.isActive
-        Capsule(style: .continuous)
-            .fill(ink.opacity(Metrics.SidebarScroller.knobOpacity))
-            .frame(width: knob?.width ?? 0, height: knob?.height ?? 0)
-            .offset(x: knob?.minX ?? 0, y: knob?.minY ?? 0)
-            .opacity(visible ? 1 : 0)
-            .animation(ShellMotion.sidebarScrollerFade, value: visible)
-            .accessibilityHidden(true)
+        ScrollKnob(scroll: scroll, contentFrame: contentFrame, viewport: viewport,
+                   ink: (viewModel.palette(forSpace: spaceID).isDark || viewModel.palette(forSpace: spaceID).usesLightInk)
+                       ? .white : .black,
+                   isSwiping: spaceSwipe.isActive)
     }
 
     /// Full-width 1 pt line at the list's top or bottom edge while rows are scrolled under it.
