@@ -75,7 +75,8 @@ extension ShellModel {
         let offersTranslation = translation.entryLabel(for: selectedTabID) != nil
         return WebToolbarItems.make(role: role, isToolbarShown: isWebToolbarShown,
                                     showsSidebarButton: isTopLeading && !isSidebarVisible && !spaceFlow.isCreating,
-                                    showsTranslate: offersTranslation)
+                                    showsTranslate: offersTranslation,
+                                    pinnedExtensions: siteControls.pinnedActions.map(\.id))
     }
 
     /// Where the bar of `tabID` takes its background (plan B45, [06 §17.4] observed, E18): the

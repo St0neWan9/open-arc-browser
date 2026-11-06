@@ -48,12 +48,15 @@ public enum SiteControlsTool: String, CaseIterable, Sendable {
 /// the spec records no such menu; see `SiteControlsModel.extensionMenuItems(for:)`.
 public enum SiteExtensionMenuItem: String, CaseIterable, Sendable {
     case manage, remove
+    /// A pinned extension's toolbar icon menu (B183). [06 §31] observed "Unpin".
+    case unpin
 
-    /// Title for the extension named `name`. Our wording (unknown in the spec).
+    /// Title for the extension named `name`. Our wording (unknown in the spec), except Unpin.
     public func title(extensionName name: String) -> String {
         switch self {
         case .manage: "Manage Extension"
         case .remove: "Remove “\(name)”…"
+        case .unpin: "Unpin"
         }
     }
 }
@@ -131,6 +134,9 @@ public struct ExtensionPopupState: Equatable, Sendable {
     public var height: Double
     /// The page finished its first load; the bubble shows only then (Chrome does the same).
     public var isLoaded: Bool
+    /// Opened from the extension's pinned icon (B183): the bubble hangs from that icon instead of
+    /// the site controls button. inferred.
+    public var isFromPinnedIcon: Bool = false
 }
 
 /// One row of the "Settings" section: round icon + title + small status. [06 §12] observed shape.
@@ -215,12 +221,19 @@ public final class SiteControlsModel: ObservableObject {
             guard let self else { return }
             // A popup belongs to its tab; switching tabs closes it (Chrome does). inferred.
             if let popup = self.extensionPopup, popup.tabID != newID { self.closeExtensionPopup() }
+            self.refreshPinned(tabID: newID)
             guard self.isPresented, newID != self.tabID else { return }
             self.close(.tabChanged)
         }
         // Rows read the tab's live audio state from the sidebar; redraw the bubble when it changes.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in
-            guard let self, self.isPresented else { return }
+            guard let self else { return }
+            // The selected tab's page got (or changed) its engine tab after the selection moved:
+            // its actions can be read now (B183). Read on the next turn, after the change landed.
+            if !self.pinnedExtensionIDs.isEmpty {
+                Task { @MainActor [weak self] in self?.refreshPinnedIfEngineTabChanged() }
+            }
+            guard self.isPresented else { return }
             self.objectWillChange.send()
         }
     }
@@ -243,7 +256,24 @@ public final class SiteControlsModel: ObservableObject {
     @Published public private(set) var extensionActionMenuItems: [String: [PageContextMenuItem]] = [:]
 
     /// Engine extensions (C14): installed list and change events for the bubble's section.
-    var engineExtensions: (any EngineExtensions)?
+    var engineExtensions: (any EngineExtensions)? {
+        didSet { refreshPinned() }
+    }
+
+    // MARK: Pinned extensions (B183, issue #2)
+
+    /// Where pins are kept (per profile, this device). nil: nothing can be pinned.
+    var preferences: AppPreferences? {
+        didSet { refreshPinned() }
+    }
+    /// Pinned extension ids of the current profile, in pin order. [06 §31] observed pinning.
+    @Published public private(set) var pinnedExtensionIDs: [String] = []
+    /// The selected tab's actions of the pinned extensions, in pin order: the icons shown in the
+    /// URL box (left of copy link) or the toolbar (left of site controls). [06 §31] observed.
+    @Published public private(set) var pinnedActions: [SiteExtensionAction] = []
+    private var pinnedGeneration = 0
+    private var pinnedEvents: Task<Void, Never>?
+    private var pinnedEventsProfile: UUID?
 
     /// Rows of the "Settings" section. The first two are always there [06 §12] observed. The
     /// others show only when they carry state (inferred: none of them was visible on a fresh site).
@@ -436,6 +466,87 @@ public final class SiteControlsModel: ObservableObject {
         }
     }
 
+    public func isPinned(_ extensionID: String) -> Bool { pinnedExtensionIDs.contains(extensionID) }
+
+    /// Pins or unpins an extension for the current profile. A new pin goes last (next to the
+    /// site controls). The bubble stays open. [06 §31] observed toggle; order inferred.
+    public func togglePin(_ extensionID: String) {
+        guard let preferences, let profile = sidebar.currentProfileID else { return }
+        var ids = preferences.pinnedExtensionIDs(for: profile)
+        if let index = ids.firstIndex(of: extensionID) { ids.remove(at: index) } else { ids.append(extensionID) }
+        preferences.setPinnedExtensionIDs(ids, for: profile)
+        refreshPinned()
+    }
+
+    /// Runs a pinned extension's action on the selected tab, from its pinned icon. Its popup hangs
+    /// from that icon. [06 §31] observed: a click opens the popup; anchor inferred.
+    public func runPinnedExtension(_ extensionID: String) {
+        guard let id = sidebar.selectedTabID, let url = sidebar.linkURL(for: id), let site = SiteOrigin(url: url) else { return }
+        let profile = sidebar.currentProfileID
+        let provider = provider
+        closeExtensionPopup()
+        close(.action)
+        work.append(Task { [weak self] in
+            guard let popup = await provider.runExtensionAction(extensionID, tabID: id, site: site, profileID: profile) else { return }
+            self?.show(popup, tabID: id, fromPinnedIcon: true)
+        })
+    }
+
+    /// Items of a pinned icon's right-click menu. [06 §31] observed: … Remove from Arc · Unpin ‖
+    /// Manage Extension (Options and View Web Permissions are not in v1).
+    public func pinnedExtensionMenuItems(for extensionID: String) -> [SiteExtensionMenuItem] {
+        guard pinnedActions.contains(where: { $0.id == extensionID }) else { return [] }
+        return [.remove, .unpin, .manage]
+    }
+
+    /// Reloads the pinned icons for `tabID` (default: the selected tab) and follows the profile's
+    /// extension changes so icons and badges stay current.
+    func refreshPinned(tabID requested: UUID?? = nil) {
+        let profile = sidebar.currentProfileID
+        let ids = profile.flatMap { preferences?.pinnedExtensionIDs(for: $0) } ?? []
+        if pinnedExtensionIDs != ids { pinnedExtensionIDs = ids }
+        observePinned(profileID: profile)
+        pinnedGeneration &+= 1
+        let generation = pinnedGeneration
+        let selected = requested ?? sidebar.selectedTabID
+        pinnedEngineTab = selected.flatMap { sidebar.liveTab(for: $0) }?.id
+        guard !ids.isEmpty, let tab = selected else {
+            if !pinnedActions.isEmpty { pinnedActions = [] }
+            return
+        }
+        let provider = provider
+        work.append(Task { [weak self] in
+            let actions = await provider.extensionActions(tabID: tab, profileID: profile) ?? []
+            guard let self, generation == self.pinnedGeneration else { return }
+            let byID = Dictionary(actions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let pinned = ids.compactMap { byID[$0] }
+            if self.pinnedActions != pinned { self.pinnedActions = pinned }
+        })
+    }
+
+    private var pinnedEngineTab: EngineTabID?
+
+    private func refreshPinnedIfEngineTabChanged() {
+        let engineTab = sidebar.selectedTabID.flatMap { sidebar.liveTab(for: $0) }?.id
+        guard engineTab != pinnedEngineTab else { return }
+        refreshPinned()
+    }
+
+    private func observePinned(profileID: UUID?) {
+        guard pinnedEventsProfile != profileID || pinnedEvents == nil else { return }
+        pinnedEvents?.cancel()
+        pinnedEvents = nil
+        pinnedEventsProfile = profileID
+        guard let engineExtensions, let profileID else { return }
+        let events = engineExtensions.events(profileID: profileID)
+        pinnedEvents = Task { [weak self] in
+            for await _ in events {
+                guard let self else { return }
+                if !self.pinnedExtensionIDs.isEmpty { self.refreshPinned() }
+            }
+        }
+    }
+
     /// Runs an extension's action on the bubble's tab, as a click on Chrome's toolbar button does.
     /// The Site Control Center closes and the extension's popup, if it has one, opens in its own
     /// bubble at the same button once its page loaded. inferred (see `ExtensionPopupState`).
@@ -482,6 +593,7 @@ public final class SiteControlsModel: ObservableObject {
         switch item {
         case .manage: manageExtensionHandler != nil
         case .remove: confirmExtensionRemoval != nil && engineExtensions != nil && sidebar.currentProfileID != nil
+        case .unpin: preferences != nil && isPinned(extensionID)
         }
     }
 
@@ -489,8 +601,11 @@ public final class SiteControlsModel: ObservableObject {
     /// and then uninstalls through the engine (the section updates from the engine's events).
     public func perform(_ item: SiteExtensionMenuItem, extensionID: String) {
         guard isEnabled(item, extensionID: extensionID),
-              let action = settings.extensions.first(where: { $0.id == extensionID }) else { return }
+              let action = settings.extensions.first(where: { $0.id == extensionID })
+                ?? pinnedActions.first(where: { $0.id == extensionID }) else { return }
         switch item {
+        case .unpin:
+            togglePin(extensionID)
         case .manage:
             close(.action)
             manageExtensionHandler?(extensionID)
@@ -499,6 +614,7 @@ public final class SiteControlsModel: ObservableObject {
                   confirmExtensionRemoval?(action.name) == true else { return }
             close(.action)
             if openPopup?.extensionID == extensionID { closeExtensionPopup() }
+            if isPinned(extensionID) { togglePin(extensionID) }
             work.append(Task { await engineExtensions.uninstall(extensionID, profileID: profile) })
         }
     }
@@ -518,7 +634,7 @@ public final class SiteControlsModel: ObservableObject {
         return true
     }
 
-    private func show(_ popup: any ExtensionPopup, tabID: UUID) {
+    private func show(_ popup: any ExtensionPopup, tabID: UUID, fromPinnedIcon: Bool = false) {
         // The tab changed while the engine opened it.
         guard sidebar.selectedTabID == tabID else {
             Task { await popup.close() }
@@ -527,7 +643,8 @@ public final class SiteControlsModel: ObservableObject {
         openPopup = popup
         let minimum = SiteControlsLocalTokens.extensionPopupMinimumSize
         extensionPopup = ExtensionPopupState(extensionID: popup.extensionID, tabID: tabID,
-                                             width: minimum, height: minimum, isLoaded: false)
+                                             width: minimum, height: minimum, isLoaded: false,
+                                             isFromPinnedIcon: fromPinnedIcon)
         let events = popup.events()
         popupEvents?.cancel()
         popupEvents = Task { [weak self, weak popup] in
@@ -673,6 +790,8 @@ public final class SiteControlsModel: ObservableObject {
     func stop() {
         closeExtensionPopup()
         extensionEvents?.cancel()
+        pinnedEvents?.cancel()
+        pinnedEvents = nil
         work.forEach { $0.cancel() }
         work.removeAll()
         copiedTask?.cancel()

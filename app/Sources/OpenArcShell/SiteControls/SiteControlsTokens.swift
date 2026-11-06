@@ -53,6 +53,15 @@ enum SiteControlsLocalTokens {
     static let pointerLeaveGrace: Double = 0.3
     /// An extension's action icon in the "Extensions" section: Chrome's toolbar size. inferred.
     static let extensionIconSize: CGFloat = 16
+    /// Pin badge on an extension cell (B183): ≈ 14 pt circle near the cell's lower right, center
+    /// ≈ 4 pt in from the right edge and ≈ 7 pt up from the bottom. [06 §31] observed (2× capture).
+    static let pinBadgeSize: CGFloat = 14
+    static let pinBadgeCenterInset = CGSize(width: 4, height: 7)
+    /// Pin glyph inside the badge. Our own symbol; size inferred.
+    static let pinBadgeGlyphSize: CGFloat = 7
+    /// The unpinned badge's light gray (shown on hover). [06 §31] observed light warm gray; the
+    /// value is inferred.
+    static let pinBadgeRestingOpacity: Double = 0.2
     /// Extension popup limits: Chromium's (25×25 to 800×600 points), the page sizes itself in
     /// between. inferred (the spec records no extension popup).
     static let extensionPopupMinimumSize: Double = 25

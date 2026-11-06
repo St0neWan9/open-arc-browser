@@ -176,6 +176,14 @@ struct WebToolbarView: View {
             TranslationToolbarButton(model: model.translation, tabID: state.tabID, colors: colors, palette: model.windowPalette)
         case .splitMenu:
             WebToolbarSplitMenu(colors: colors) { placement in model.addSplit(placement, beside: state.tabID) }
+        case .pinnedExtension(let id):
+            // A pinned extension left of the site controls (B183). [06 §31] observed.
+            if let action = siteControls.pinnedActions.first(where: { $0.id == id }) {
+                PinnedExtensionButton(model: siteControls, action: action,
+                                      size: CGSize(width: Metrics.WebToolbar.trailingButtonSize.width,
+                                                   height: Metrics.WebToolbar.trailingButtonSize.height),
+                                      palette: model.windowPalette)
+            }
         case .closePane:
             WebToolbarButton(symbol: "xmark", glyphSize: t.closeGlyphSize, label: "Close Split Pane",
                              identifier: "openarc.webToolbar.closePane", colors: colors) { model.webToolbarClosePane(state.tabID) }
