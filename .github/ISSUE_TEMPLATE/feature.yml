@@ -10,14 +10,7 @@ body:
     id: request
     attributes:
       label: What you would like
-      description: The use case, and what should happen.
-    validations:
-      required: true
-  - type: textarea
-    id: arc
-    attributes:
-      label: How Arc does it
-      description: Describe Arc's behavior and look. Screenshots or a screen recording of Arc help most.
+      description: What should happen, usually what Arc does. Screenshots or a screen recording of Arc help most.
     validations:
       required: true
   - type: input
