@@ -96,6 +96,15 @@ struct MainWindowContent: View {
                     }
                 }
 
+                // The top background strip over the sidebar is a title bar (issue #14): drag to
+                // move, double-click to zoom or minimize per the system setting.
+                if model.isSidebarVisible && !model.spaceFlow.isCreating && sidebar.selectedEaselID == nil && !model.library.isActive {
+                    WindowTopStrip()
+                        .frame(width: max(0, layout.sidebarFrame.width - 96), height: 40)
+                        .offset(x: 96, y: 0)
+                        .accessibilityHidden(true)
+                }
+
                 // Hidden sidebar: it floats out over the web panel from the left edge. [06 §14] B34.
                 if model.showsSidebarPeek {
                     SidebarPeekOverlay(sidebar: sidebar, siteControls: model.siteControls, windowSize: proxy.size,
@@ -556,6 +565,56 @@ struct WindowDragStripLayer: View {
     }
 }
 
+/// What a double-click on the window's background does: the user's title-bar setting
+/// (`AppleActionOnDoubleClick`), "Maximize" (macOS's default) when unset. [00 §A] the system
+/// setting; issue #14.
+enum WindowDoubleClickAction: Equatable {
+    case minimize, zoom, none
+
+    static func action(for setting: String?) -> Self {
+        switch setting {
+        case "Minimize": return .minimize
+        case "None": return .none
+        default: return .zoom
+        }
+    }
+
+    static func current() -> Self {
+        action(for: UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick"))
+    }
+
+    @MainActor func perform(on window: NSWindow) {
+        switch self {
+        case .minimize: window.performMiniaturize(nil)
+        case .zoom: window.performZoom(nil)
+        case .none: break
+        }
+    }
+}
+
+/// The window's top background strip over the sidebar: a title bar for dragging, and a
+/// double-click zooms or minimizes per the user's setting (issue #14). It starts right of the
+/// traffic lights, which stay clickable.
+struct WindowTopStrip: NSViewRepresentable {
+    func makeNSView(context: Context) -> StripView { StripView() }
+
+    func updateNSView(_ nsView: StripView, context: Context) {}
+
+    /// The view's frame already starts right of the traffic lights, so it takes every click in it.
+    final class StripView: NSView {
+        override var isFlipped: Bool { true }
+        override var mouseDownCanMoveWindow: Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            guard let window else { return }
+            if event.clickCount == 2 {
+                WindowDoubleClickAction.current().perform(on: window)
+            } else {
+                window.performDrag(with: event)
+            }
+        }
+    }
+}
+
 /// AppKit grab area of the drag strip: drags the window, zooms it on a double-click (the user's
 /// title-bar double-click setting, like a title bar; inferred) and reports hover. An AppKit view
 /// so it sits above the engine's native page view and gets the mouse before it.
@@ -592,12 +651,7 @@ struct PageTopDragArea: NSViewRepresentable {
         override func mouseDown(with event: NSEvent) {
             guard let window else { return }
             if event.clickCount == 2 {
-                let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
-                switch action {
-                case "Minimize": window.performMiniaturize(nil)
-                case "None": break
-                default: window.performZoom(nil)
-                }
+                WindowDoubleClickAction.current().perform(on: window)
             } else {
                 window.performDrag(with: event)
             }
