@@ -43,9 +43,13 @@ for (index, variant) in AppIconArtwork.variants.enumerated() {
 let bundle = CommandLine.arguments.count > 2 ? URL(fileURLWithPath: CommandLine.arguments[2]) : root.appendingPathComponent("app/Bundle/AppIcon.icns")
 try fm.createDirectory(at: bundle.deletingLastPathComponent(), withIntermediateDirectories: true)
 try Data(contentsOf: output.appendingPathComponent("original.icns")).write(to: bundle)
-try AppIconArtwork.svg().write(to: root.appendingPathComponent("website/assets/logo.svg"), atomically: true, encoding: .utf8)
 try AppIconArtwork.svg().write(to: root.appendingPathComponent("branding/open-arc.svg"), atomically: true, encoding: .utf8)
-try writePNG(AppIconArtwork.render("slate", pixels: 256)!, root.appendingPathComponent("website/assets/app-icon.png"))
+if let websiteDirectory = ProcessInfo.processInfo.environment["OPENARC_WEBSITE_DIR"], !websiteDirectory.isEmpty {
+    let assets = URL(fileURLWithPath: websiteDirectory).appendingPathComponent("assets")
+    try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+    try AppIconArtwork.svg().write(to: assets.appendingPathComponent("logo.svg"), atomically: true, encoding: .utf8)
+    try writePNG(AppIconArtwork.render("slate", pixels: 256)!, assets.appendingPathComponent("app-icon.png"))
+}
 
 // Contact sheet, including a small preview at the settings row's actual icon size.
 let width = 1500, height = 1140

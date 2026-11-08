@@ -35,7 +35,7 @@ From the repository root on macOS:
 swift scripts/make-app-icon.swift
 ```
 
-An optional argument overrides the destination for the default ICNS. The full collection and website assets are always refreshed. The script uses system Swift, CoreGraphics, ImageIO, CoreText and `iconutil`; no third-party installation is required.
+An optional argument overrides the destination for the default ICNS. The full collection is always refreshed. To also export the SVG mark and 256 px tile into a separately maintained site's `assets/` directory, set `OPENARC_WEBSITE_DIR` to that site's root. The script uses system Swift, CoreGraphics, ImageIO, CoreText and `iconutil`; no third-party installation is required.
 
 The shared source is `app/Sources/OpenArcShell/Appearance/AppIconArtwork.swift`. Its ribbon paths drive both the SVG master and bitmap rendering. Runtime settings previews use the same renderer as the exports. Each ICNS size is rendered directly, with transparent margins and an 824-unit tile on a 1024-unit canvas.
 

@@ -135,7 +135,6 @@ The engine is Chromium plus an ordered series of patches. Building Chromium need
 | [`chromium-patches/`](chromium-patches/README.md) | Our patch series on top of upstream Chromium releases |
 | [`scripts/`](scripts/) | App bundling, notarization, icon export and performance checks |
 | [`branding/`](branding/README.md) | The Open Arc identity and app icons |
-| [`website/`](website/README.md) | The landing page |
 
 The shell only talks to the `BrowserEngine` protocol, so most interface work needs neither Chromium nor a real network. Module boundaries and the dependency graph are described in [`app/README.md`](app/README.md).
 
