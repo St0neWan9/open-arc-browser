@@ -21,20 +21,21 @@ final class AppLinksTests: XCTestCase {
             OpenArcLinks.profilesHelp, OpenArcLinks.contactTheTeam, OpenArcLinks.organizingTips,
         ])
         XCTAssertEqual(Set(OpenArcLinks.all).count, OpenArcLinks.all.count)
-        for url in OpenArcLinks.all {
+        for url in OpenArcLinks.all where url != OpenArcLinks.contactTheTeam {
             XCTAssertEqual(url.scheme, "https", "\(url)")
             XCTAssertEqual(url.host, OpenArcLinks.siteHost, "\(url)")
             XCTAssertTrue(url.absoluteString.hasPrefix(OpenArcLinks.site.absoluteString), "\(url)")
             XCTAssertFalse(url.absoluteString.contains(".example"), "no placeholder host: \(url)")
         }
-        let pages = "/\(OpenArcLinks.repository)/blob/updates/pages/"
-        XCTAssertEqual(OpenArcLinks.homepage.path, pages + "README.md")
-        XCTAssertEqual(OpenArcLinks.privacyPolicy.path, pages + "privacy.md")
-        XCTAssertEqual(OpenArcLinks.helpCenter.path, pages + "help/README.md")
-        XCTAssertEqual(OpenArcLinks.profilesHelp.path, pages + "help/profiles.md")
+        // B193: the site is getopenarc.app; the issues stay on the GitHub repository.
+        XCTAssertEqual(OpenArcLinks.site.absoluteString, "https://getopenarc.app/")
+        XCTAssertEqual(OpenArcLinks.homepage, OpenArcLinks.site)
+        XCTAssertEqual(OpenArcLinks.privacyPolicy.path, "/privacy")
+        XCTAssertEqual(OpenArcLinks.helpCenter.path, "/help")
+        XCTAssertEqual(OpenArcLinks.profilesHelp.path, "/help/profiles")
         // B133: the incognito bar's "Tips for Organizing" row ([06 §20.1] observed row, our page).
-        XCTAssertEqual(OpenArcLinks.organizingTips.path, pages + "help/organizing.md")
-        XCTAssertEqual(OpenArcLinks.contactTheTeam.path, "/\(OpenArcLinks.repository)/issues")
+        XCTAssertEqual(OpenArcLinks.organizingTips.path, "/help/organizing")
+        XCTAssertEqual(OpenArcLinks.contactTheTeam.absoluteString, "https://github.com/\(OpenArcLinks.repository)/issues")
     }
 
     /// No shipped file other than AppLinks.swift spells out the site host or a URL to the
@@ -57,8 +58,9 @@ final class AppLinksTests: XCTestCase {
                       file.standardizedFileURL != linksFile,
                       let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
                 scanned += 1
-                if text.contains(OpenArcLinks.site.absoluteString + "/blob/updates/pages")
-                    || text.contains(OpenArcLinks.site.absoluteString + "/issues") {
+                if text.contains("https://" + OpenArcLinks.siteHost)
+                    || text.contains(OpenArcLinks.repositoryURL.absoluteString + "/blob/updates/pages")
+                    || text.contains(OpenArcLinks.repositoryURL.absoluteString + "/issues") {
                     offenders.append("\(file.path): spells out a project page URL")
                 }
                 let range = NSRange(text.startIndex..., in: text)
