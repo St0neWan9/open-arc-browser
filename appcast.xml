@@ -4,14 +4,15 @@
         <title>Open Arc</title>
         <item>
             <title>0.2.5</title>
-            <pubDate>Sun, 08 Nov 2026 13:04:00 +0700</pubDate>
-            <sparkle:version>20</sparkle:version>
+            <pubDate>Sun, 08 Nov 2026 17:40:37 +0700</pubDate>
+            <sparkle:version>21</sparkle:version>
             <sparkle:shortVersionString>0.2.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.5/OpenArc-0.2.5.zip" length="206646116" type="application/octet-stream" sparkle:edSignature="LfkiaVG45uF9ME+7kRpLByp4SKA8yXPCHjYAXczLrFZMQbX1fm1rTqfSZizAPucv8FCKXnmNJyNDykxwiXpJAw=="/>
+            <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.5/OpenArc-0.2.5.zip" length="206645324" type="application/octet-stream" sparkle:edSignature="THmBPxIjLnI0sPdCi8qx8hN1z1ificxP3JOssGHlj1MQsFVXefjhgswm7KVjnktRbLB4W2aleN7duQ/AWpl2AQ=="/>
             <sparkle:deltas>
-                <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.5/OpenArc-20-19.delta" sparkle:deltaFrom="19" length="11059014" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="976432" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="JRyc+syvFAXhVGb4quRUIbpmk1LjpSk2xZexcOOIAq+3QwlFEvJSUwmySO5Vnpr7FKAZDrv2emePfOev7kpdBg=="/>
+                <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.5/OpenArc-21-20.delta" sparkle:deltaFrom="20" length="590074" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="976432" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="pZVEJHxO7PO08brWfmFzVCA567ws+7EKtvf85R2XrzhwgkY9r1rDyUfOapYigpJcWp3XnvMlQZn6ueQrjR2FDQ=="/>
+                <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.5/OpenArc-21-19.delta" sparkle:deltaFrom="19" length="11048994" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="976432" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="iF2kjohD2wIWvJK9YNReKTKU3OWLvY1Fa50/h/YBRhwCEVDbhGc4er3ild33DDCyJ8X59zIsFW23fB6WdZXMBw=="/>
             </sparkle:deltas>
         </item>
         <item>
