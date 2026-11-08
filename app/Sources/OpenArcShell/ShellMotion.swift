@@ -184,9 +184,24 @@ final class SpaceSwipeState: ObservableObject {
     /// The Space the swipe reveals, nil at the ends; its color the background blends to.
     @Published private(set) var targetSpaceID: UUID?
 
-    func begin(previous: UUID?, next: UUID?) {
+    /// The Space shown when the swipe began. The background keeps its color under the blend until
+    /// the blend has settled, so letting go finishes the blend instead of jumping (the selection
+    /// changes at once when the swipe commits).
+    @Published private(set) var fromSpaceID: UUID?
+    /// Bumped by every swipe and every let-go, so a settle that was overtaken does not clear the
+    /// blend of a newer swipe.
+    private var settleGeneration = 0
+    /// Runs the blend's settle: `change` animated, then `completion`. The pages finish on the
+    /// Space-switch spring ([07 §11] observed curve), so the color does too. Tests replace it.
+    var animateSettle: (_ change: () -> Void, _ completion: @escaping () -> Void) -> Void = { change, completion in
+        withAnimation(ShellMotion.spaceSwitch, change, completion: completion)
+    }
+
+    func begin(from current: UUID? = nil, previous: UUID?, next: UUID?) {
+        settleGeneration &+= 1
         self.previous = previous
         self.next = next
+        fromSpaceID = current
         progress = 0
         targetSpaceID = nil
         isActive = true
@@ -203,12 +218,32 @@ final class SpaceSwipeState: ObservableObject {
         send(.moved(offset))
     }
 
+    /// The fingers lifted. The blend settles on the pages' spring: to the target Space's color when
+    /// the swipe commits (`target`), back to the current Space's when it springs back (nil).
     func end(target: UUID?) {
         guard isActive else { return }
         isActive = false
+        send(.ended(target: target))
+        settleGeneration &+= 1
+        let generation = settleGeneration
+        guard let blended = target ?? targetSpaceID else {
+            clearBlend()
+            return
+        }
+        if targetSpaceID != blended { targetSpaceID = blended }
+        let settled: Double = target == nil ? 0 : 1
+        animateSettle({ self.progress = settled }) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.settleGeneration == generation else { return }
+                self.clearBlend()
+            }
+        }
+    }
+
+    private func clearBlend() {
         progress = 0
         targetSpaceID = nil
-        send(.ended(target: target))
+        fromSpaceID = nil
     }
 
     private func send(_ event: Event) {

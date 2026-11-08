@@ -413,7 +413,8 @@ struct CommandBarOverlay: View {
 }
 
 /// The window background, blended toward the target Space's color while a two-finger swipe runs
-/// (issue #15: the color should move with the swipe, not jump after the switch).
+/// and while its pages finish sliding after the fingers lift (issue #15: the color should move
+/// with the swipe, not jump after the switch).
 struct SwipeBackground: View {
     let sidebar: SidebarViewModel
     let palette: ThemePalette
@@ -428,9 +429,12 @@ struct SwipeBackground: View {
     }
 
     var body: some View {
+        // Under the blend, the Space the swipe started from: a committed swipe selects the target at
+        // once, and the color finishes on the pages' spring instead of jumping to it.
+        let base = swipe.fromSpaceID.map { sidebar.palette(forSpace: $0) } ?? palette
         ZStack {
-            WindowBackgroundView(palette: palette, surface: surface)
-            if let target = swipe.targetSpaceID, swipe.progress > 0 {
+            WindowBackgroundView(palette: base, surface: surface)
+            if let target = swipe.targetSpaceID {
                 WindowBackgroundView(palette: sidebar.palette(forSpace: target), surface: surface)
                     .opacity(swipe.progress)
             }

@@ -2034,7 +2034,7 @@ extension SidebarViewModel {
         if favoriteTooltipTabID != nil { favoriteTooltipTabID = nil }
         let previous = current > 0 ? spaces[current - 1].id : nil
         let next = current + 1 < spaces.count ? spaces[current + 1].id : nil
-        spaceSwipe.begin(previous: previous, next: next)
+        spaceSwipe.begin(from: selectedSpaceID, previous: previous, next: next)
         return true
     }
 
