@@ -114,7 +114,14 @@ public final class SidebarViewModel: ObservableObject {
     /// The Space about to be selected, sent before `selectedSpaceID` changes and before this view
     /// model's `objectWillChange` for that change. B104.
     let selectedSpaceWillChange = PassthroughSubject<UUID?, Never>()
-    @Published public private(set) var selectedTabID: UUID?
+    @Published public private(set) var selectedTabID: UUID? {
+        didSet {
+            guard oldValue != selectedTabID else { return }
+            // The outgoing tab (and its split partners) was on screen until now: its archive
+            // clock starts here, not at its selection. B192.
+            controller.noteTabsLeftScreen(onScreenTabIDs(selecting: oldValue).subtracting(onScreenTabIDs))
+        }
+    }
     /// The open Peek page's URL and its source tab (B49, set by `LinkPeekModel`).
     @Published var linkPeekURL: URL?
     @Published var linkPeekSourceTabID: UUID?
@@ -1016,6 +1023,12 @@ public final class SidebarViewModel: ObservableObject {
         if spaceID != selectedSpaceID { selectedSpaceID = spaceID }
         selectTab(newID)
         return newID
+    }
+
+    /// Deletes one archive item for good (Library ▸ Archived Tabs row menu, inferred).
+    @discardableResult
+    public func deleteArchived(_ itemID: UUID) -> Bool {
+        mutate { try TreeOps.deleteArchiveItem($0, id: itemID, now: now()) }
     }
 
     /// Restore Last Closed Tab (⇧⌘T). [02 §tabs and sidebar] observed. Repeated calls walk back through

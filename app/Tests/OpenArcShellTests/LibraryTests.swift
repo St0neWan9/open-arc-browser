@@ -174,6 +174,23 @@ final class LibraryTests: XCTestCase {
         model.stop()
     }
 
+    /// The row menu's "Delete from Archive" removes one item for good and leaves the others;
+    /// the empty text tells "nothing archived" from "no match". inferred (B192).
+    func testDeleteFromArchiveAndEmptyTexts() throws {
+        let model = makeModel()
+        XCTAssertFalse(model.library.hasArchivedItems)
+        model.sidebar.closeTab(fixture.today2)
+        model.sidebar.closeTab(fixture.today3)
+        let item = try XCTUnwrap(model.workspace.archiveNewestFirst.first { $0.title == "today2" })
+        XCTAssertTrue(model.library.deleteArchived(item.id))
+        XCTAssertEqual(model.workspace.archive[item.id]?.meta.isTombstone, true)
+        XCTAssertEqual(model.library.archiveGroups.flatMap(\.items).map(\.title), ["today3"])
+        XCTAssertFalse(model.library.deleteArchived(item.id), "already deleted")
+        XCTAssertTrue(model.library.hasArchivedItems)
+        XCTAssertNotEqual(LibraryTexts.archiveEmpty, LibraryTexts.archiveNoMatches)
+        model.stop()
+    }
+
     // MARK: Archive menu [01 §Archive] (B69)
 
     /// Clear Archive asks first: Cancel keeps every item; confirming empties the archive and

@@ -409,6 +409,29 @@ public enum TreeOps {
         return s
     }
 
+    /// Records when several tabs were last seen (on screen, or playing sound). Each time only
+    /// moves `lastActiveAt` forward; missing and tombstoned tabs are skipped. Stamps `activity`
+    /// with the recorded time. inferred: Arc's archive clock runs from when a tab was last
+    /// viewed, not from when it was last selected.
+    public static func markTabsActive(_ state: WorkspaceState, at times: [UUID: Date]) -> WorkspaceState {
+        var s = state
+        for (id, time) in times {
+            guard var tab = s.tabs[id], !tab.meta.isTombstone, time > tab.lastActiveAt else { continue }
+            tab.lastActiveAt = time
+            tab.meta.stamp([TabNode.FieldGroup.activity], at: time)
+            s.tabs[id] = tab
+        }
+        return s
+    }
+
+    /// Deletes one archive item for good (the Library's "Delete from Archive", inferred).
+    public static func deleteArchiveItem(_ state: WorkspaceState, id: UUID, now: Date) throws -> WorkspaceState {
+        _ = try live(state.archive, id)
+        var s = state
+        s.archive[id]?.meta.markDeleted(at: now)
+        return s
+    }
+
     // MARK: Folders
 
     /// Creates a folder at the **top** of the pinned container, expanded by default

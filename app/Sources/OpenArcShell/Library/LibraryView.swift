@@ -214,21 +214,43 @@ struct LibraryArchiveList: View {
 
     var body: some View {
         let text = palette.primaryText.swiftUI
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(library.archiveGroups, id: \.group) { group in
-                    Text(group.group.title)
-                        .textStyle(Typography.libraryGroupHeader, ink: palette.chromeInk)
-                        .padding(.top, 6)
-                    ForEach(group.items, id: \.id) { item in
-                        LibraryArchiveRow(item: item, iconData: library.faviconImage(for: item), textColor: text, secondary: palette.secondaryText.swiftUI) {
-                            library.restore(item.id)
+        let groups = library.archiveGroups
+        if groups.isEmpty {
+            Text(library.hasArchivedItems ? LibraryTexts.archiveNoMatches : LibraryTexts.archiveEmpty)
+                .font(Typography.libraryEmptyDetail.font)
+                .foregroundStyle(Typography.libraryEmptyDetail.color(palette.chromeInk))
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
+                .accessibilityIdentifier("openarc.library.archive.empty")
+        } else {
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(groups, id: \.group) { group in
+                        Text(group.group.title)
+                            .textStyle(Typography.libraryGroupHeader, ink: palette.chromeInk)
+                            .padding(.top, 6)
+                        ForEach(group.items, id: \.id) { item in
+                            LibraryArchiveRow(item: item, iconData: library.faviconImage(for: item), textColor: text, secondary: palette.secondaryText.swiftUI) {
+                                library.restore(item.id)
+                            }
+                            // Row menu: ours (inferred), the spec records only the click.
+                            .contextMenu {
+                                Button("Restore Tab") { library.restore(item.id) }
+                                if let url = item.url {
+                                    Button("Copy Link") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                                    }
+                                }
+                                Divider()
+                                Button("Delete from Archive") { library.deleteArchived(item.id) }
+                            }
                         }
                     }
                 }
             }
+            .accessibilityIdentifier("openarc.library.archive")
         }
-        .accessibilityIdentifier("openarc.library.archive")
     }
 }
 

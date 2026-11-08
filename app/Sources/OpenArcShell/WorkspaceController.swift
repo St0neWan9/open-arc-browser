@@ -864,15 +864,22 @@ public final class WorkspaceController: ObservableObject {
     /// Returns the archived ids.
     @discardableResult
     func runAutoArchive(lifetimeOverride: TimeInterval? = nil) -> [UUID] {
-        let base = workspace
+        let stamp = now()
+        // The archive clock runs from when a tab was last seen: first record that time.
+        let base = TreeOps.markTabsActive(workspace, at: seenTimes(now: stamp, refreshingAfter: Self.seenRefreshInterval))
+        leftScreenAt.removeAll()
         // Windows of the last session that are not open yet keep their tab too.
-        var onScreen = liveSidebars.filter(\.countsAsVisibleWindow).reduce(into: Set<UUID>()) { $0.formUnion($1.onScreenTabIDs) }
+        var onScreen = visibleTabIDs.union(audibleTabIDs)
         for pending in pendingRestores {
             guard let tabID = pending.selectedTabID else { continue }
             onScreen.insert(tabID)
             if let layout = SplitPaneLayout.activeLayout(in: base, containing: tabID) { onScreen.formUnion(layout.root.tabIDs) }
         }
-        let after = TreeOps.autoArchive(base, lifetimeOverride: lifetimeOverride, excluding: onScreen, now: now())
+        let after = TreeOps.autoArchive(base, lifetimeOverride: lifetimeOverride, excluding: onScreen, now: stamp)
+        if after == base, base != workspace {
+            commit(base, origin: nil, kind: .activity)
+            return []
+        }
         guard after != base else { return [] }
         let archived = base.tabs.values
             .filter { !$0.meta.isTombstone && after.tabs[$0.id]?.meta.isTombstone == true }
@@ -882,7 +889,55 @@ public final class WorkspaceController: ObservableObject {
         return archived
     }
 
-    /// Starts the auto-archive scheduler (first run now, then hourly). [B3] Idempotent. Not for an
+    /// Tabs on screen in an open window: each window's selected tab and its split partners.
+    var visibleTabIDs: Set<UUID> {
+        liveSidebars.filter(\.countsAsVisibleWindow).reduce(into: Set<UUID>()) { $0.formUnion($1.onScreenTabIDs) }
+    }
+
+    /// Tabs whose page is playing sound. They count as in use, like a tab on screen. inferred.
+    var audibleTabIDs: Set<UUID> {
+        Set(liveStates.compactMap { $0.value.isAudible ? $0.key : nil })
+    }
+
+    /// How stale the stored time of a tab still on screen (or playing sound) may get before an
+    /// auto-archive pass writes it again. Leaving the screen records the exact time, so this only
+    /// bounds what a crash loses while keeping sync writes rare. inferred.
+    static let seenRefreshInterval: TimeInterval = 60 * 60
+
+    /// When tabs left the screen (another tab, Space or window took it) since the last
+    /// auto-archive pass; written to `lastActiveAt` by the next pass or at quit.
+    private var leftScreenAt: [UUID: Date] = [:]
+
+    /// A window stopped showing `ids`. B192.
+    func noteTabsLeftScreen(_ ids: Set<UUID>) {
+        guard !ids.isEmpty, !isOffTheRecord else { return }
+        let stamp = now()
+        for id in ids { leftScreenAt[id] = stamp }
+    }
+
+    /// The last-seen time of every tab that has one to record: tabs that left the screen, and
+    /// tabs on screen or playing sound now (only when their stored time is older than
+    /// `refreshingAfter`; nil writes them all, as at quit).
+    func seenTimes(now stamp: Date, refreshingAfter: TimeInterval?) -> [UUID: Date] {
+        var times = leftScreenAt
+        for id in visibleTabIDs.union(audibleTabIDs) {
+            guard let tab = workspace.tabs[id] else { continue }
+            if let refreshingAfter, stamp.timeIntervalSince(tab.lastActiveAt) < refreshingAfter { continue }
+            times[id] = stamp
+        }
+        return times
+    }
+
+    /// Writes the last-seen times before the app quits, so the next launch's auto-archive
+    /// pass measures from now for the tabs that were on screen. B192.
+    func recordSeenTabsForTermination() {
+        guard !isOffTheRecord else { return }
+        let marked = TreeOps.markTabsActive(workspace, at: seenTimes(now: now(), refreshingAfter: nil))
+        leftScreenAt.removeAll()
+        if marked != workspace { commit(marked, origin: nil, kind: .activity) }
+    }
+
+    /// Starts the auto-archive scheduler (first run now, then every few minutes). [B3] Idempotent. Not for an
     /// incognito window: its tabs go away with the window.
     func startAutoArchive() {
         guard autoArchiveScheduler == nil, !isStopped, !isOffTheRecord else { return }
@@ -912,6 +967,7 @@ public final class WorkspaceController: ObservableObject {
     }
 
     func unregister(_ sidebar: SidebarViewModel) {
+        if sidebar.countsAsVisibleWindow { noteTabsLeftScreen(sidebar.onScreenTabIDs) }
         sidebars.removeAll { $0.object == nil || $0.object === sidebar }
     }
 
@@ -1266,6 +1322,7 @@ public final class WorkspaceController: ObservableObject {
     ) {
         guard !isTerminationPrepared, !isTerminationRunning else { return }
         isTerminationPrepared = true
+        recordSeenTabsForTermination()
         saveUIState()
         isTerminating = true
         saveTabHistoriesBlocking(timeout: timeout)

@@ -227,6 +227,39 @@ final class TreeOpsTests: XCTestCase {
         XCTAssertNil(s.archive[pinned])
     }
 
+    /// B192: last-seen times only move forward, stamp `activity` at the recorded time, and skip
+    /// tombstoned and unknown tabs.
+    func testMarkTabsActiveMovesClocksForwardOnly() throws {
+        var f = try Fixture()
+        let a = UUID(), b = UUID(), gone = UUID()
+        f.state = try TreeOps.openTab(f.state, id: a, spaceID: f.spaceID, url: nil, title: "", now: f.t0)
+        f.state = try TreeOps.openTab(f.state, id: b, spaceID: f.spaceID, url: nil, title: "", now: f.at(100))
+        f.state = try TreeOps.openTab(f.state, id: gone, spaceID: f.spaceID, url: nil, title: "", now: f.t0)
+        f.state = try TreeOps.archiveTab(f.state, id: gone, now: f.at(10))
+        let before = f.state
+        let s = TreeOps.markTabsActive(f.state, at: [a: f.at(50), b: f.at(40), gone: f.at(60), UUID(): f.at(70)])
+        XCTAssertEqual(s.tabs[a]?.lastActiveAt, f.at(50))
+        XCTAssertEqual(s.tabs[a]?.meta.modifiedAt(TabNode.FieldGroup.activity), f.at(50))
+        XCTAssertEqual(s.tabs[a]?.meta.modifiedAt(TabNode.FieldGroup.placement), before.tabs[a]?.meta.modifiedAt(TabNode.FieldGroup.placement))
+        XCTAssertEqual(s.tabs[b], before.tabs[b], "an older time never moves the clock back")
+        XCTAssertEqual(s.tabs[gone], before.tabs[gone])
+        XCTAssertEqual(s.tabs.count, before.tabs.count)
+    }
+
+    func testDeleteArchiveItemTombstonesOnlyThatItem() throws {
+        var f = try Fixture()
+        let a = UUID(), b = UUID()
+        f.state = try TreeOps.openTab(f.state, id: a, spaceID: f.spaceID, url: nil, title: "", now: f.t0)
+        f.state = try TreeOps.openTab(f.state, id: b, spaceID: f.spaceID, url: nil, title: "", now: f.t0)
+        f.state = try TreeOps.archiveTab(f.state, id: a, now: f.at(1))
+        f.state = try TreeOps.archiveTab(f.state, id: b, now: f.at(1))
+        let s = try TreeOps.deleteArchiveItem(f.state, id: a, now: f.at(2))
+        XCTAssertEqual(s.archive[a]?.meta.isTombstone, true)
+        XCTAssertEqual(s.archive[a]?.meta.deletedAt, f.at(2))
+        XCTAssertEqual(s.archive[b], f.state.archive[b])
+        XCTAssertThrowsError(try TreeOps.deleteArchiveItem(s, id: a, now: f.at(3)))
+    }
+
     func testRestoreFromArchiveOpensNewTabAtTopOfToday() throws {
         var f = try Fixture()
         let old = UUID(), other = UUID(), restored = UUID()
