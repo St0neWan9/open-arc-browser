@@ -18,9 +18,9 @@
 
 <p align="center">
   <a href="https://github.com/St0neWan9/open-arc-browser/releases/latest">Download</a> ·
-  <a href="https://open-arc.trentaml.com/">Website</a> ·
-  <a href="https://github.com/St0neWan9/open-arc-browser/blob/updates/pages/help/README.md">Help</a> ·
-  <a href="https://github.com/St0neWan9/open-arc-browser/blob/updates/pages/privacy.md">Privacy</a> ·
+  <a href="https://getopenarc.app/">Website</a> ·
+  <a href="https://getopenarc.app/help">Help</a> ·
+  <a href="https://getopenarc.app/privacy">Privacy</a> ·
   <a href="https://github.com/St0neWan9/open-arc-browser/issues">Issues</a>
 </p>
 
@@ -90,7 +90,7 @@ Release builds are signed with a Developer ID, notarized by Apple, and update th
 - iCloud sync is optional and off by default. It syncs supported Spaces and sidebar content through your own private iCloud database. Profiles and signed-in sessions stay on your Mac.
 - Crash reports stay on your Mac until you choose to share one.
 
-The [privacy policy](https://github.com/St0neWan9/open-arc-browser/blob/updates/pages/privacy.md) lists every connection the app makes on its own.
+The [privacy policy](https://getopenarc.app/privacy) lists every connection the app makes on its own.
 
 ## Build from source
 
