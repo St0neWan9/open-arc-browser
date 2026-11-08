@@ -457,37 +457,104 @@ struct SettingsOption<Value: Hashable>: Hashable {
 
 /// A popup menu drawn as Arc's: a light-gray filled box with the choice and ⌃⌄ chevrons.
 /// The menu checks the current choice.
+///
+/// The menu is an `NSMenu` popped up over the box (the current choice over the box, like a native
+/// popup button). A SwiftUI `Menu` holding an inline `Picker` showed every choice disabled in the
+/// Settings window, so nothing could be picked.
 struct SettingsPopup<Value: Hashable>: View {
     let label: String
     @Binding var selection: Value
     let options: [SettingsOption<Value>]
     var icon: (Value) -> NSImage? = { _ in nil }
 
+    @State private var anchor = SettingsMenuAnchor()
+
     var body: some View {
-        Menu {
-            Picker(label, selection: $selection) {
-                ForEach(options, id: \.self) { option in
-                    if let image = icon(option.value) {
-                        Label { Text(option.title) } icon: { Image(nsImage: image) }.tag(option.value)
-                    } else {
-                        Text(option.title).tag(option.value)
-                    }
-                }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
+        Button(action: showMenu) {
             SettingsPopupLabel(title: title, image: icon(selection))
         }
-        .menuStyle(.button)
         .buttonStyle(SettingsPopupButtonStyle())
-        .menuIndicator(.hidden)
+        .background(SettingsMenuAnchorView(anchor: anchor))
         .fixedSize()
         .accessibilityLabel(label)
         .accessibilityValue(title)
     }
 
     private var title: String { options.first { $0.value == selection }?.title ?? "" }
+
+    private func showMenu() {
+        let binding = $selection
+        let items = options.map { option in
+            SettingsMenuChoice(title: option.title, image: icon(option.value), isSelected: option.value == selection) {
+                binding.wrappedValue = option.value
+            }
+        }
+        anchor.popUp(items)
+    }
+}
+
+/// One row of the popup's `NSMenu`.
+struct SettingsMenuChoice {
+    let title: String
+    let image: NSImage?
+    let isSelected: Bool
+    let action: @MainActor () -> Void
+}
+
+/// The AppKit view a `SettingsPopup` pops its menu up in.
+@MainActor
+final class SettingsMenuAnchor {
+    weak var view: NSView?
+
+    /// Shows `choices` with the selected one over the anchor view. The menu runs modally;
+    /// the chosen row's action runs when it returns.
+    func popUp(_ choices: [SettingsMenuChoice]) {
+        guard let view else { return }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let handler = SettingsMenuHandler()
+        var selected: NSMenuItem?
+        for (index, choice) in choices.enumerated() {
+            let item = NSMenuItem(title: choice.title, action: #selector(SettingsMenuHandler.choose(_:)), keyEquivalent: "")
+            item.target = handler
+            item.tag = index
+            item.isEnabled = true
+            item.state = choice.isSelected ? .on : .off
+            if let image = choice.image?.copy() as? NSImage {
+                image.size = NSSize(width: 16, height: 16)
+                item.image = image
+            }
+            menu.addItem(item)
+            if choice.isSelected { selected = item }
+        }
+        // The selected row sits over the box's text, as in a native popup button.
+        // `popUp(positioning:at:in:)` takes the item's top-left corner; 24 pt is the menu's check
+        // column. inferred (matches AppKit's popup button).
+        let origin = NSPoint(x: SettingsLayout.popupLeadingPadding - 24, y: view.isFlipped ? 0 : view.bounds.height)
+        menu.popUp(positioning: selected, at: origin, in: view)
+        if let chosen = handler.chosen, choices.indices.contains(chosen) { choices[chosen].action() }
+    }
+}
+
+/// Target of the popup's menu items; remembers the chosen row.
+@MainActor
+final class SettingsMenuHandler: NSObject {
+    var chosen: Int?
+
+    @objc func choose(_ sender: NSMenuItem) { chosen = sender.tag }
+}
+
+/// Puts an empty `NSView` behind the popup box and hands it to the anchor.
+struct SettingsMenuAnchorView: NSViewRepresentable {
+    let anchor: SettingsMenuAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        anchor.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) { anchor.view = view }
 }
 
 /// A popup with nothing to choose (a disabled row): the same box, one title.
