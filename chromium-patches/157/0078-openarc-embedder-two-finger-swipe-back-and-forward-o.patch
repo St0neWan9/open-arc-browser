@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 8 Nov 2026 11:54:15 +0700
+Subject: [PATCH] openarc: embedder: two-finger swipe back and forward on web
+ pages
+
+Issue #21. A horizontal two-finger swipe on a page did nothing. Chrome's
+history swiper (the edge arrow that follows the fingers, then navigates)
+lives in the render widget view's event delegate, which Chrome's
+WebContentsViewDelegate creates; Open Arc returned no view delegate
+(patch 0012) so that the shell could draw the page's menus.
+
+The embedder now returns its own OpenArcWebContentsViewDelegate. It
+gives each page's render widget view Chrome's
+ChromeRenderWidgetHostViewMacDelegate (none for popups), which navigates
+with chrome::GoBack / GoForward on the WebContents and needs no Chrome
+window. Everything else keeps content's defaults: the context menu is
+still drawn by the shell from the tab's WebContentsDelegate
+(HandleContextMenu runs before the view delegate is asked), drops pass
+through unchanged, and focus handling is content's own.
+---
+ openarc/BUILD.gn                              |  4 ++
+ .../browser/openarc_content_browser_client.mm |  9 ++--
+ .../openarc_web_contents_view_delegate.h      | 45 +++++++++++++++++++
+ .../openarc_web_contents_view_delegate.mm     | 34 ++++++++++++++
+ 4 files changed, 88 insertions(+), 4 deletions(-)
+ create mode 100644 openarc/browser/openarc_web_contents_view_delegate.h
+ create mode 100644 openarc/browser/openarc_web_contents_view_delegate.mm
+
+diff --git a/openarc/BUILD.gn b/openarc/BUILD.gn
+index 92f65afe7cc4..f4a21b9c1555 100644
+--- a/openarc/BUILD.gn
++++ b/openarc/BUILD.gn
+@@ -100,6 +100,8 @@ source_set("embedder") {
+     "browser/openarc_translate.h",
+     "browser/openarc_web_store_branding.cc",
+     "browser/openarc_web_store_branding.h",
++    "browser/openarc_web_contents_view_delegate.h",
++    "browser/openarc_web_contents_view_delegate.mm",
+     "common/openarc_paths.h",
+     "common/openarc_paths.mm",
+   ]
+@@ -137,6 +139,8 @@ source_set("embedder") {
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/extensions",
+     "//chrome/browser/profiles:profile",
++    "//chrome/browser/renderer_host:delegate",
++    "//chrome/browser/renderer_host:delegate_impl",
+     "//chrome/browser/ui:tab_helpers",
+     "//chrome/browser/ui:tab_helpers_impl",
+     "//chrome/browser/ui/login",
+diff --git a/openarc/browser/openarc_content_browser_client.mm b/openarc/browser/openarc_content_browser_client.mm
+index bf9809cb18e6..82af7821d721 100644
+--- a/openarc/browser/openarc_content_browser_client.mm
++++ b/openarc/browser/openarc_content_browser_client.mm
+@@ -24,6 +24,7 @@
+ #include "openarc/browser/openarc_dialog_host.h"
+ #include "openarc/browser/openarc_link_preview.h"
+ #include "openarc/browser/openarc_tab_preferences.h"
++#include "openarc/browser/openarc_web_contents_view_delegate.h"
+ #include "openarc/common/openarc_paths.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ 
+@@ -143,10 +144,10 @@ void CreateLoginTabHelper(content::WebContents* web_contents) override {
+ std::unique_ptr<content::WebContentsViewDelegate>
+ OpenArcContentBrowserClient::GetWebContentsViewDelegate(
+     content::WebContents* web_contents) {
+-  // Chrome's view delegate shows Chrome's context menu and drag-and-drop UI.
+-  // The shell draws its own menus (OACTabDelegate tab:willShowContextMenu:),
+-  // so content's default behaviour stays.
+-  return nullptr;
++  // Not Chrome's view delegate: that one shows Chrome's context menu and
++  // drag-and-drop UI, and the shell draws its own menus. Ours only adds the
++  // two-finger history swipe to each page (issue #21).
++  return CreateWebContentsViewDelegate(web_contents);
+ }
+ 
+ void OpenArcContentBrowserClient::OverrideWebPreferences(
+diff --git a/openarc/browser/openarc_web_contents_view_delegate.h b/openarc/browser/openarc_web_contents_view_delegate.h
+new file mode 100644
+index 000000000000..e77679b415a7
+--- /dev/null
++++ b/openarc/browser/openarc_web_contents_view_delegate.h
+@@ -0,0 +1,45 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef OPENARC_BROWSER_OPENARC_WEB_CONTENTS_VIEW_DELEGATE_H_
++#define OPENARC_BROWSER_OPENARC_WEB_CONTENTS_VIEW_DELEGATE_H_
++
++#include <memory>
++
++#include "content/public/browser/web_contents_view_delegate.h"
++
++namespace content {
++class WebContents;
++}
++
++namespace openarc {
++
++// The view delegate of every tab's WebContents. Its only job is to give each
++// page's render widget view Chrome's event delegate, which carries the
++// two-finger swipe back and forward through the tab's history (with its arrow
++// overlay) and the spelling menu validation. Everything else keeps content's
++// defaults: the shell draws the page's context menu from the tab's
++// WebContentsDelegate (HandleContextMenu runs first, so ShowContextMenu here
++// is never reached), and drops pass through unchanged.
++class OpenArcWebContentsViewDelegate : public content::WebContentsViewDelegate {
++ public:
++  OpenArcWebContentsViewDelegate();
++  OpenArcWebContentsViewDelegate(const OpenArcWebContentsViewDelegate&) =
++      delete;
++  OpenArcWebContentsViewDelegate& operator=(
++      const OpenArcWebContentsViewDelegate&) = delete;
++  ~OpenArcWebContentsViewDelegate() override;
++
++  // content::WebContentsViewDelegate:
++  NSObject<RenderWidgetHostViewMacDelegate>* GetDelegateForHost(
++      content::RenderWidgetHost* render_widget_host,
++      bool is_popup) override;
++};
++
++std::unique_ptr<content::WebContentsViewDelegate>
++CreateWebContentsViewDelegate(content::WebContents* web_contents);
++
++}  // namespace openarc
++
++#endif  // OPENARC_BROWSER_OPENARC_WEB_CONTENTS_VIEW_DELEGATE_H_
+diff --git a/openarc/browser/openarc_web_contents_view_delegate.mm b/openarc/browser/openarc_web_contents_view_delegate.mm
+new file mode 100644
+index 000000000000..5b493692fa1d
+--- /dev/null
++++ b/openarc/browser/openarc_web_contents_view_delegate.mm
+@@ -0,0 +1,34 @@
++// Copyright 2026 The Open Arc Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "openarc/browser/openarc_web_contents_view_delegate.h"
++
++#import "chrome/browser/renderer_host/chrome_render_widget_host_view_mac_delegate.h"
++
++namespace openarc {
++
++OpenArcWebContentsViewDelegate::OpenArcWebContentsViewDelegate() = default;
++
++OpenArcWebContentsViewDelegate::~OpenArcWebContentsViewDelegate() = default;
++
++NSObject<RenderWidgetHostViewMacDelegate>*
++OpenArcWebContentsViewDelegate::GetDelegateForHost(
++    content::RenderWidgetHost* render_widget_host,
++    bool is_popup) {
++  // Popups (<select> lists, date pickers) have no history to swipe through.
++  if (is_popup) {
++    return nil;
++  }
++  // Chrome's delegate navigates with chrome::GoBack(WebContents*) and
++  // GoForward, which need no Chrome window.
++  return [[ChromeRenderWidgetHostViewMacDelegate alloc]
++      initWithRenderWidgetHost:render_widget_host];
++}
++
++std::unique_ptr<content::WebContentsViewDelegate>
++CreateWebContentsViewDelegate(content::WebContents* web_contents) {
++  return std::make_unique<OpenArcWebContentsViewDelegate>();
++}
++
++}  // namespace openarc
