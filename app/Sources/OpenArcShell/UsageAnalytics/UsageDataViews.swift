@@ -30,7 +30,7 @@ enum UsageDataTexts {
         ("Events", "That the app was used on a day; which of these features you used that day: Spaces, Split View, Peek, the command bar, archiving tabs; whether an Arc import succeeded; and the archive interval you chose. At most 20 events a day."),
         ("With each event", "The app version, the macOS major version, the processor type and a random identifier for this installation, so returning installations can be counted."),
         ("Never", "Websites, addresses, page titles or contents, searches, bookmarks, passwords, the clipboard, file names, names of Spaces or Profiles, email addresses, Apple Account or iCloud identifiers, and anything from incognito windows."),
-        ("Where it goes", "PostHog Cloud in the US. Any internet request reveals an IP address to the receiving service; Open Arc asks PostHog not to derive a location from it. Events are kept for up to one year."),
+        ("Where it goes", "PostHog Cloud in the US. Any internet request reveals an IP address to the receiving service. PostHog uses it to estimate a country and city, then discards it; the address is not stored with the events. Events are kept for up to one year."),
         ("Your choice", "Turn sharing off in Settings → General at any time; it applies only to this Mac. Turning it off stops sending at once and removes events waiting to be sent and the installation identifier. Events already sent are not erased automatically."),
     ]
 }

@@ -306,8 +306,9 @@ public final class UsageAnalytics: ObservableObject {
 
         var properties: [String: Any] = [
             "distinct_id": installID(),
+            // No `$geoip_disable`: PostHog derives a country and city from the connecting address,
+            // and the project's "Discard client IP data" setting drops the address itself.
             "$process_person_profile": false,
-            "$geoip_disable": true,
             "$lib": "openarc-macos",
             "schema_version": 1,
             "app_version": configuration.appVersion,
