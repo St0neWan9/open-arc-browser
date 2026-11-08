@@ -5,8 +5,9 @@ command bar and the rest of its interface follow Arc's design. It is not made by
 or affiliated with The Browser Company.
 
 - Download: [Releases](https://github.com/St0neWan9/open-arc-browser/releases)
-- Help: [Help Center](help/README.md)
-- Privacy: [Privacy Policy](privacy.md)
+- Website: [getopenarc.app](https://getopenarc.app/)
+- Help: [Help Center](https://getopenarc.app/help)
+- Privacy: [Privacy Policy](https://getopenarc.app/privacy)
 - Contact the team: [open an issue](https://github.com/St0neWan9/open-arc-browser/issues)
 
 Requires macOS 14 or later.

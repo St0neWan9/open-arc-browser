@@ -1,5 +1,7 @@
 # Open Arc Help Center
 
+The current version of this page is at **https://getopenarc.app/help**.
+
 - **Getting started and keyboard shortcuts**: Help ▸ Getting Started and Help ▸ Essential Keyboard
   Shortcuts in the app.
 - **Profiles**: see [Profiles](profiles.md).

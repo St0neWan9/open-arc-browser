@@ -1,5 +1,7 @@
 # Tips for organizing
 
+The current version of this page is at **https://getopenarc.app/help/organizing**.
+
 Open Arc keeps your tabs in the sidebar, grouped by Space. A few habits keep it tidy.
 
 - **Spaces for each part of your life.** Make one Space per project or role (work, home, a class)

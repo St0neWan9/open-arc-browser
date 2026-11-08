@@ -1,5 +1,7 @@
 # Profiles
 
+The current version of this page is at **https://getopenarc.app/help/profiles**.
+
 Profiles keep your data separate across Spaces: history, logins, cookies and extensions. Every
 Space uses one Profile, and a Profile can be used by several Spaces.
 

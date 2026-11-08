@@ -1,24 +1,31 @@
 # Open Arc privacy policy
 
-Open Arc has no accounts and no servers of its own, and it collects no analytics.
+The current privacy policy is at **https://getopenarc.app/privacy**. This page is kept for older
+versions of the app that link here.
+
+Open Arc has no accounts and no servers of its own.
 
 **What stays on your Mac.** Your sidebar (Spaces, tabs, folders, favorites), history, passwords,
 cookies, downloads and settings are stored only on your Mac.
 
 **iCloud sync (optional, off by default).** If you turn on Settings ▸ Account ▸ Sync Sidebar,
 your sidebar is synced through your own private iCloud database (Apple CloudKit). The developer
-cannot read it. Names and colors you choose are additionally encrypted before they are stored.
+cannot read it.
 
-**Connections the app makes on its own.**
-- Update checks, from this project's public GitHub repository (release builds only).
-- Ad-block filter-list updates, from the same repository, while "Block ads and trackers" is on.
-- Certificate revocation lists from Google, the same as every Chromium browser.
-- Updates for extensions you installed from the Chrome Web Store.
+**Usage data (version 0.2.6 and later).** The app shares a few basic usage events with PostHog
+(US): that it was used on a day, which of five features were used, whether an Arc import succeeded
+and the archive interval chosen, with the app version, macOS version, processor type and a random
+installation identifier. It never sends websites, page contents, searches, passwords or anything
+from incognito windows. Sharing is on by default, starts only after the app has told you, and can
+be turned off anytime in Settings ▸ General ▸ Share usage data. Versions before 0.2.6 send no usage
+data.
 
-**When you ask for it.** Searches and search suggestions go to the search engine you chose; page
-translation goes to Google Translate; the Chrome Web Store is Google's.
+**Connections the app makes on its own.** Update checks and ad-block filter lists from this
+project's GitHub repository; certificate revocation lists from Google, as in every Chromium
+browser; updates for extensions you installed from the Chrome Web Store; and, from 0.2.6, the usage
+data above.
 
-**Off.** Google sign-in and Chromium sync, Safe Browsing, usage metrics upload, crash report upload
-and field trials are turned off. Crash reports stay on your Mac until you choose to share one.
+**Off.** Google sign-in and Chromium sync, Safe Browsing, usage metrics upload of the engine, crash
+report upload and field trials are turned off. Crash reports stay on your Mac.
 
 Questions: [open an issue](https://github.com/St0neWan9/open-arc-browser/issues).
