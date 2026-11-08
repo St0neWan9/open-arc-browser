@@ -64,6 +64,13 @@ public struct AppDependencies: Sendable {
     /// System-wide hot keys: ⌥⌘N in any app (B82). The default only records, so tests and previews
     /// never take a key combination from other apps; the app passes `CarbonGlobalHotKeyService`.
     public var globalHotKeys: any GlobalHotKeyService
+    /// Where usage analytics go (B194). nil (the default) never collects, so tests and previews
+    /// never send. The release app passes `UsageAnalyticsConfiguration.live()`; a development
+    /// build passes `.developmentPreview()` with the recording transport, so its controls show
+    /// but nothing leaves the Mac.
+    public var usageAnalyticsConfiguration: UsageAnalyticsConfiguration?
+    /// Sends usage analytics. The default only records; the release app passes the URLSession transport.
+    public var usageAnalyticsTransport: any UsageAnalyticsTransport
 
     public init(
         engine: any BrowserEngine,
@@ -78,7 +85,9 @@ public struct AppDependencies: Sendable {
         appIconDisplay: (any AppIconDisplay)? = nil,
         exportPicker: (any ExportDestinationPicker)? = nil,
         desktop: (any DesktopServices)? = nil,
-        globalHotKeys: (any GlobalHotKeyService)? = nil
+        globalHotKeys: (any GlobalHotKeyService)? = nil,
+        usageAnalyticsConfiguration: UsageAnalyticsConfiguration? = nil,
+        usageAnalyticsTransport: (any UsageAnalyticsTransport)? = nil
     ) {
         self.engine = engine
         self.sync = sync
@@ -93,6 +102,8 @@ public struct AppDependencies: Sendable {
         self.exportPicker = exportPicker ?? CancelledExportPicker()
         self.desktop = desktop ?? RecordingDesktopServices()
         self.globalHotKeys = globalHotKeys ?? RecordingGlobalHotKeyService()
+        self.usageAnalyticsConfiguration = usageAnalyticsConfiguration
+        self.usageAnalyticsTransport = usageAnalyticsTransport ?? RecordingUsageAnalyticsTransport()
     }
 
     /// FakeEngine + sync disabled + no persistence (never touches the disk). Used for UI

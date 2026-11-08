@@ -281,6 +281,46 @@ public final class AppPreferences: @unchecked Sendable {
         set { setValue(newValue.map(\.uuidString).sorted(), Self.unreadBadgeTabIDsKey) }
     }
 
+    // MARK: Usage analytics (B194; this Mac only, never synced)
+
+    static let usageAnalyticsPreferenceKey = "\(keyPrefix)analyticsPreference"
+    static let usageAnalyticsNoticeVersionKey = "\(keyPrefix)analyticsNoticeVersion"
+    static let usageAnalyticsInstallIDKey = "\(keyPrefix)analyticsInstallID"
+    static let usageAnalyticsLedgerKey = "\(keyPrefix)analyticsLedger"
+
+    /// "Share usage data". Missing: on by default; a value this build does not know: off.
+    public var usageAnalyticsPreference: UsageAnalyticsPreference {
+        get {
+            guard let raw = value(Self.usageAnalyticsPreferenceKey) else { return .defaultEnabled }
+            return (raw as? String).flatMap(UsageAnalyticsPreference.init(rawValue:)) ?? .disabled
+        }
+        set { setValue(newValue.rawValue, Self.usageAnalyticsPreferenceKey) }
+    }
+
+    /// The notice version shown on this Mac; nil before the first notice.
+    public var usageAnalyticsNoticeVersion: Int? {
+        get { value(Self.usageAnalyticsNoticeVersionKey) as? Int }
+        set {
+            if let newValue { setValue(newValue, Self.usageAnalyticsNoticeVersionKey) } else { removeValue(Self.usageAnalyticsNoticeVersionKey) }
+        }
+    }
+
+    /// Random id of this installation's analytics; removed when sharing is turned off.
+    var usageAnalyticsInstallID: String? {
+        get { value(Self.usageAnalyticsInstallIDKey) as? String }
+        set {
+            if let newValue { setValue(newValue, Self.usageAnalyticsInstallIDKey) } else { removeValue(Self.usageAnalyticsInstallIDKey) }
+        }
+    }
+
+    /// Today's event counters (`UsageDailyLedger`).
+    var usageAnalyticsLedger: [String: Any]? {
+        get { value(Self.usageAnalyticsLedgerKey) as? [String: Any] }
+        set {
+            if let newValue { setValue(newValue, Self.usageAnalyticsLedgerKey) } else { removeValue(Self.usageAnalyticsLedgerKey) }
+        }
+    }
+
     // MARK: Extensions
 
     static func pinnedExtensionsKey(_ profileID: UUID) -> String { profileKey(profileID, "pinnedExtensions") }

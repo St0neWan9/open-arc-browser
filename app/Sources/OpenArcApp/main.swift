@@ -15,6 +15,8 @@ import OpenArcChromium
 // app delegate forwards them to the sync controller. Updates use Sparkle
 // (D7, `SparkleUpdateChecker`) once the Info.plist carries a real EdDSA public key. Crash reports
 // stay local (D8, decision Q8): Chromium's Crashpad writes them to `<app data dir>/Crash Reports`.
+// Usage analytics (B194) are separate: a few allowlisted events to PostHog from the release
+// bundle only, on by default after a notice, off in Settings ▸ General (`UsageAnalytics`).
 
 struct OpenArcApp: App {
     /// Receives links and files opened from other apps (`application(_:open:)`, D2).

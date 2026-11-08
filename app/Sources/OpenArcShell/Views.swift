@@ -157,6 +157,11 @@ struct MainWindowContent: View {
                     .frame(width: 1, height: 1)
                     .allowsHitTesting(false)
 
+                // Usage-data notice, once, at the window's bottom right (B194, our own design).
+                UsageDataNoticeLayer(model: model, analytics: model.controller.usageAnalytics, onboarding: model.controller.onboarding)
+                    .padding(20)
+                    .frame(width: layout.windowSize.width, height: layout.windowSize.height, alignment: .bottomTrailing)
+
                 // "New Tab Created" at the window's top right. [06 §34] observed. B186.
                 WindowToastView(toast: model.windowToast)
                     .padding(.top, WindowToastLocalTokens.inset)

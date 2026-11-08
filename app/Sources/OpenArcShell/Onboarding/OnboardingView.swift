@@ -397,6 +397,10 @@ struct OnboardingStepColumn: View {
                 .padding(.top, T.titleToBody)
             OnboardingStepControls(onboarding: onboarding)
                 .padding(.top, T.bodyToControls)
+            if onboarding.showsUsageDataCard {
+                OnboardingUsageDataCard(onboarding: onboarding)
+                    .padding(.top, T.bodyToControls)
+            }
             Button(onboarding.step == .done ? T.done : T.next) { onboarding.next() }
                 .buttonStyle(OnboardingPrimaryButtonStyle())
                 .disabled(!onboarding.isContinueEnabled)

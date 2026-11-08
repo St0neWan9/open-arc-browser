@@ -129,6 +129,14 @@ public final class WorkspaceController: ObservableObject {
     public func requestAirTrafficControl() {
         if let parent { parent.requestAirTrafficControl() } else { airTrafficControlRequests += 1 }
     }
+    /// Counts requests for Settings ▸ General with the usage-data card (the notice's "Review
+    /// settings", B194). The Settings window follows the app controller's count.
+    @Published public private(set) var usageDataSettingsRequests = 0
+    /// The last request a Settings window acted on.
+    var handledUsageDataSettingsRequests = 0
+    public func requestUsageDataSettings() {
+        if let parent { parent.requestUsageDataSettings() } else { usageDataSettingsRequests += 1 }
+    }
     /// Where links and files from other apps open (D2): the Air Traffic Control rules and their
     /// Default row, which includes the Links setting for Little Arc (B24, B52).
     public lazy var externalLinkRouter: any ExternalLinkRouting = AirTrafficControlRouter(preferences: dependencies.preferences)
@@ -177,6 +185,15 @@ public final class WorkspaceController: ObservableObject {
     let pageRequests = PageRequestState()
     /// Link preview triggers sent to live tabs (B49, LinkPeek/WorkspaceController+LinkPeek.swift).
     let linkPeekRouting = LinkPeekRouting()
+    /// Usage analytics (B194): one per app; an incognito controller shares its parent's and
+    /// records nothing (`recordUsage`).
+    public let usageAnalytics: UsageAnalytics
+
+    /// Records a usage event of a deliberate action in this controller's windows.
+    func recordUsage(_ event: UsageEvent) {
+        usageAnalytics.record(event, isPrivate: isOffTheRecord)
+    }
+
     /// Open Little Arc windows and their idle-archive timer (B82, LittleArc/LittleArcArchive.swift).
     let littleArcArchive = LittleArcArchiveState()
     /// The windows the engine's extensions see (plan B126). One per app: an incognito controller
@@ -267,6 +284,13 @@ public final class WorkspaceController: ObservableObject {
         self.autoArchiveTicker = autoArchiveTicker
         self.syncNotificationCenter = notificationCenter
         self.isOffTheRecord = false
+        self.usageAnalytics = UsageAnalytics(
+            preferences: dependencies.preferences,
+            configuration: dependencies.usageAnalyticsConfiguration,
+            transport: dependencies.usageAnalyticsTransport,
+            now: now,
+            makeID: makeID
+        )
         self.systemAppearance = dependencies.systemAppearance.current
         self.favicons = dependencies.persistence.map { FaviconCache(dataDirectory: $0.directory) } ?? FaviconCache(directory: nil)
         // With a persistence store, a workspace read from disk replaces the caller's default. First
@@ -346,6 +370,7 @@ public final class WorkspaceController: ObservableObject {
         self.makeID = parent.makeID
         self.autoArchiveTicker = parent.autoArchiveTicker
         self.isOffTheRecord = true
+        self.usageAnalytics = parent.usageAnalytics
         self.parent = parent
         self.favicons = FaviconCache(directory: nil)
         let stamp = parent.now()
@@ -403,6 +428,7 @@ public final class WorkspaceController: ObservableObject {
         autoArchiveScheduler?.stop()
         autoArchiveScheduler = nil
         littleArcArchive.stop()
+        if parent == nil { usageAnalytics.stop() }
         if parent == nil { ownEngineWindows.stop() }
         if !isOffTheRecord { dependencies.globalHotKeys.unregisterLittleArcHotKey() }
         syncForwarding?.cancel()
@@ -453,6 +479,9 @@ public final class WorkspaceController: ObservableObject {
         // tab's place and its Space, which last-active times and page content never change. These
         // walk every live tab, so the commits of each selection and each page load skip them (B107).
         guard kind == .any else { return }
+        // A split made in this app (B194): commits are the app's own changes, merges from sync
+        // go through `replaceWorkspace`.
+        if new.splits.count > old.splits.count { recordUsage(.featureUsed(.splitView)) }
         syncWebColorSchemes()
         syncLinkPreviewTriggers()
         reconcileLiveTabProfiles()

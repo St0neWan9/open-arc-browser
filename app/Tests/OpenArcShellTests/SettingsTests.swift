@@ -438,6 +438,8 @@ final class SettingsTests: XCTestCase {
             "links.littleArcHotKey", "links.littleArcModifierClick", "links.archiveLittleArcsAfter",
             // B68: 03 §General Warn before quitting, 03 §Advanced reorder haptics.
             "general.warnBeforeQuitting", "advanced.reorderHaptics",
+            // B194: Privacy & Usage Data.
+            "general.shareUsageData",
             // B84: Previews Settings…, sounds, haptics, window dragging, Export Data.
             "general.previewsSettings", "advanced.soundEffects", "advanced.windowDragging", "advanced.exportData",
             // B83: Profiles data rows, Download location, Learn more, More Settings… (03 §Profiles).

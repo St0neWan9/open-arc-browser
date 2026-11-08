@@ -237,6 +237,8 @@ struct GeneralPane: View {
                     CatalogButton(id: "general.profileSettings") { model.openProfileSettings() }
                 }
             }
+            // B194: usage analytics, this Mac only.
+            UsageDataSettingsCard(model: model, analytics: model.usageAnalytics)
         }
     }
 

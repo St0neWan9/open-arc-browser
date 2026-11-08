@@ -192,6 +192,8 @@ public final class SettingsModel: ObservableObject {
     /// The Links pane's Air Traffic Control sheet is showing (B52; opened from the command bar, B61).
     @Published public var isAirTrafficControlShown = false
     private var airTrafficControlRequests: AnyCancellable?
+    private var usageDataRequests: AnyCancellable?
+    private var usageAnalyticsChanges: AnyCancellable?
 
     /// Opens a folder in Finder. Injectable so tests do not open Finder.
     var revealInFinder: (URL) -> Void = { url in
@@ -212,6 +214,14 @@ public final class SettingsModel: ObservableObject {
             controller.handledAirTrafficControlRequests = count
             self?.showAirTrafficControl()
         }
+        // The usage-data notice's "Review settings" (B194).
+        usageDataRequests = controller.$usageDataSettingsRequests.sink { [weak self, weak controller] count in
+            guard let controller, count > controller.handledUsageDataSettingsRequests else { return }
+            controller.handledUsageDataSettingsRequests = count
+            self?.selectedPane = .general
+        }
+        // The switch follows changes made elsewhere (the notice's "Turn off", onboarding).
+        usageAnalyticsChanges = controller.usageAnalytics.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
     /// Shows the Links pane with the Air Traffic Control sheet.
@@ -402,7 +412,11 @@ public final class SettingsModel: ObservableObject {
 
     public var archiveLifetime: ArchiveLifetime {
         get { ArchiveLifetime.closest(to: editedProfileSettings.todayLifetime) }
-        set { updateEditedProfileSettings { $0.todayLifetime = newValue.interval } }
+        set {
+            let changed = newValue.interval != editedProfileSettings.todayLifetime
+            updateEditedProfileSettings { $0.todayLifetime = newValue.interval }
+            if changed { shell.controller.recordUsage(.archiveIntervalChanged(UsageArchiveInterval(seconds: newValue.interval))) }
+        }
     }
 
     // MARK: Shortcuts
