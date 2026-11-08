@@ -12,12 +12,12 @@ cookies, downloads and settings are stored only on your Mac.
 your sidebar is synced through your own private iCloud database (Apple CloudKit). The developer
 cannot read it.
 
-**Usage data.** The app shares a few basic usage events with PostHog
-(US): that it was used on a day, which of five features were used, whether an Arc import succeeded
+**Usage data.** The app shares a few basic usage events with an analytics
+service (US): that it was used on a day, which of five features were used, whether an Arc import succeeded
 and the archive interval chosen, with the app version, macOS version, processor type and a random
 installation identifier. It never sends websites, page contents, searches, passwords or anything
 from incognito windows. Sharing is on by default, starts only after the app has told you, and can
-be turned off anytime in Settings ▸ General ▸ Share usage data. The address of each request lets PostHog estimate a country and city; the address itself is
+be turned off anytime in Settings ▸ General ▸ Share usage data. The address of each request lets the service estimate a country and city; the address itself is
 discarded and not stored.
 
 **Connections the app makes on its own.** Update checks and ad-block filter lists from this
