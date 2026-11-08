@@ -112,10 +112,10 @@ final class AutoArchiveTests: XCTestCase {
         let vm = makeVM(elapsed: 20 * hour, f)
         vm.selectTab(f.today2)
         await vm.settleEngineWork()
-        let partner = try XCTUnwrap(vm.workspace.tabs[f.today1])
         let archived = vm.runAutoArchive()
         XCTAssertEqual(Set(archived), [f.today3, f.workTab])
-        XCTAssertEqual(vm.workspace.tabs[f.today1], partner, "the partner is neither archived nor stamped")
+        // On screen counts as seen (B192): the partner's clock is brought up to now.
+        XCTAssertEqual(vm.workspace.tabs[f.today1]?.lastActiveAt, f.now.addingTimeInterval(20 * hour))
         XCTAssertEqual(vm.workspace.splits[SidebarFixture.id(900)]?.meta.isTombstone, false)
         vm.stop()
     }
@@ -158,6 +158,77 @@ final class AutoArchiveTests: XCTestCase {
         let vm = makeVM(elapsed: 7 * hour, f)
         XCTAssertTrue(vm.updateProfileSettings(f.profile, ProfileSettings(todayLifetime: 6 * hour)))
         XCTAssertEqual(Set(vm.runAutoArchive()), [f.today1, f.today2, f.today3, f.workTab])
+    }
+
+    // MARK: Last seen (B192)
+
+    /// inferred: the archive clock runs from when a tab was last on screen. A tab selected in
+    /// the morning and left in the evening lives 12 h from the evening, not from the morning.
+    func testClockStartsWhenTheTabLeavesTheScreen() async {
+        final class Clock { var offset: TimeInterval = 0 }
+        let clock = Clock()
+        let f = SidebarFixture()
+        let vm = SidebarViewModel(
+            engine: FakeEngine(), workspace: f.ws, selectedSpaceID: f.home,
+            now: { f.now.addingTimeInterval(clock.offset) }, makeID: { UUID() }
+        )
+        clock.offset = 1 * hour
+        vm.selectTab(f.today1)
+        clock.offset = 6 * hour
+        vm.selectTab(f.today2) // today1 leaves the screen at 6 h
+        await vm.settleEngineWork()
+        clock.offset = 6 * hour + 12 * hour - 60
+        let early = vm.runAutoArchive()
+        XCTAssertFalse(early.contains(f.today1), "seen 12 h ago minus a minute")
+        XCTAssertTrue(early.contains(f.today3), "never seen since the fixture time")
+        XCTAssertEqual(vm.workspace.tabs[f.today1]?.lastActiveAt, f.now.addingTimeInterval(6 * hour))
+        clock.offset = 6 * hour + 12 * hour
+        XCTAssertTrue(vm.runAutoArchive().contains(f.today1))
+        vm.stop()
+    }
+
+    /// inferred: a tab playing sound is in use, like a tab on screen; it is kept and its clock
+    /// moves while it plays.
+    func testAudibleTabIsKept() async throws {
+        final class Clock { var offset: TimeInterval = 0 }
+        let clock = Clock()
+        let f = SidebarFixture()
+        let vm = SidebarViewModel(
+            engine: FakeEngine(), workspace: f.ws, selectedSpaceID: f.home,
+            now: { f.now.addingTimeInterval(clock.offset) }, makeID: { UUID() }
+        )
+        vm.selectTab(f.today1)
+        await vm.settleEngineWork()
+        let tab = try XCTUnwrap(vm.liveTab(for: f.today1) as? FakeTab)
+        vm.selectTab(f.fav1)
+        await vm.settleEngineWork()
+        tab.simulateAudio(true)
+        let audible = await eventually { vm.liveState(for: f.today1)?.isAudible == true }
+        XCTAssertTrue(audible)
+        clock.offset = 13 * hour
+        let archived = vm.runAutoArchive()
+        XCTAssertFalse(archived.contains(f.today1))
+        XCTAssertTrue(archived.contains(f.today2))
+        XCTAssertEqual(vm.workspace.tabs[f.today1]?.lastActiveAt, f.now.addingTimeInterval(13 * hour))
+        vm.stop()
+    }
+
+    /// Quitting writes the tabs on screen as seen now, so the next launch measures from the quit.
+    func testQuitRecordsTheTabsOnScreen() async {
+        final class Clock { var offset: TimeInterval = 0 }
+        let clock = Clock()
+        let f = SidebarFixture()
+        let vm = SidebarViewModel(
+            engine: FakeEngine(), workspace: f.ws, selectedSpaceID: f.home,
+            now: { f.now.addingTimeInterval(clock.offset) }, makeID: { UUID() }
+        )
+        vm.selectTab(f.today1)
+        await vm.settleEngineWork()
+        clock.offset = 5 * hour
+        vm.controller.recordSeenTabsForTermination()
+        XCTAssertEqual(vm.workspace.tabs[f.today1]?.lastActiveAt, f.now.addingTimeInterval(5 * hour))
+        XCTAssertEqual(vm.workspace.tabs[f.today2]?.lastActiveAt, f.now, "off screen: untouched")
+        vm.stop()
     }
 
     // MARK: Scheduler

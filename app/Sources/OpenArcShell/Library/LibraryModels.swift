@@ -115,6 +115,10 @@ public enum LibraryTexts {
     /// records no Media list): inferred.
     public static let mediaEmpty = "No screenshots, images or videos yet."
     public static let mediaNoMatches = "No matching media."
+    /// Archived Tabs with nothing archived, and with no item matching the search or filter. Not
+    /// observed (the spec records no empty Archive): inferred.
+    public static let archiveEmpty = "Tabs you close or that are archived automatically show up here."
+    public static let archiveNoMatches = "No matching tabs."
 
     public static let filterButton = "Filter"
     /// Filter panel (B94). [06 §8] Filter (E24), observed, word for word.

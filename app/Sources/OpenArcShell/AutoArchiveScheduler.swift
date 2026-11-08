@@ -25,12 +25,13 @@ public struct SystemAutoArchiveTicker: AutoArchiveTicker {
     }
 }
 
-/// Runs an action once at start (launch) and then on every tick (hourly by default).
+/// Runs an action once at start (launch) and then on every tick (every 10 minutes by default).
 /// [05 §window and app entry points] observed: tabs are auto-archived after 12 hours by
-/// default; the hourly cadence is inferred (the spec gives the lifetime, not the check period).
+/// default; the 10-minute cadence is inferred (the spec gives the lifetime, not the check
+/// period), short enough that a tab goes within minutes of its lifetime ending.
 @MainActor
 public final class AutoArchiveScheduler {
-    public static let defaultInterval: TimeInterval = 60 * 60
+    public static let defaultInterval: TimeInterval = 10 * 60
 
     private let interval: TimeInterval
     private let ticker: any AutoArchiveTicker

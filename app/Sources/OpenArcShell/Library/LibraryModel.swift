@@ -188,6 +188,16 @@ public final class LibraryModel: ObservableObject {
         return id
     }
 
+    /// Whether anything is archived at all (the empty text tells "nothing yet" from "no match").
+    public var hasArchivedItems: Bool { !sidebar.workspace.archiveNewestFirst.isEmpty }
+
+    /// "Delete from Archive" in a row's menu: removes the item for good. inferred.
+    @discardableResult
+    public func deleteArchived(_ itemID: UUID) -> Bool {
+        objectWillChange.send()
+        return sidebar.deleteArchived(itemID)
+    }
+
     // MARK: Spaces board
 
     /// One column per live space, in dock order. [06 §8] observed.
