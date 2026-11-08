@@ -130,6 +130,8 @@ public enum SettingsCatalog {
         SettingsControl("general.previewsSettings", "Previews Settings…", .button, .live),
         // Observed hint: search engine, auto-archive and download location live in Profile settings.
         SettingsControl("general.profileSettings", "Profile Settings…", .button, .live),
+        // Usage analytics (B194, our own row): on by default, this Mac only.
+        SettingsControl("general.shareUsageData", "Share usage data", .toggle(defaultValue: true), .live),
     ]
 
     // MARK: Profiles [03 §Profiles]

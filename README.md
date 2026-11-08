@@ -86,7 +86,8 @@ Release builds are signed with a Developer ID, notarized by Apple, and update th
 ## Your data
 
 - Your sidebar, history, passwords, cookies, downloads and settings stay on your Mac.
-- There is no Open Arc account, no Open Arc server and no analytics.
+- There is no Open Arc account and no Open Arc server.
+- From 0.2.6 the app shares a few basic usage events with PostHog (US) unless you turn it off in Settings ▸ General: that it was used on a day, which of five features were used, Arc import results and the archive interval. It never sends websites, page contents, searches or anything from incognito windows, and it starts only after telling you.
 - iCloud sync is optional and off by default. It syncs supported Spaces and sidebar content through your own private iCloud database. Profiles and signed-in sessions stay on your Mac.
 - Crash reports stay on your Mac until you choose to share one.
 

@@ -169,6 +169,13 @@
 	<string>https://raw.githubusercontent.com/St0neWan9/open-arc-browser/updates/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>W8mu5CaK9nzI4tBi8jqF4qlmMpdUtA4ECqJyWhniJrQ=</string>
+	<!-- Usage analytics (plan B194): the PostHog project's public ingestion token (not a
+	     credential) and the US capture host. Only the release bundle id uses them; development
+	     builds, tests and previews never send. -->
+	<key>OpenArcUsageAnalyticsToken</key>
+	<string>phc_qXBbgrxQb3tXmx9247GdcDE5rPd8TYxgFgSvjApqikSK</string>
+	<key>OpenArcUsageAnalyticsHost</key>
+	<string>us.i.posthog.com</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 

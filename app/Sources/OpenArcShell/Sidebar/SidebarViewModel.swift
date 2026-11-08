@@ -623,6 +623,7 @@ public final class SidebarViewModel: ObservableObject {
         if let layout = SplitPaneLayout.activeLayout(in: workspace, containing: id) { lastFocusedPane[layout.id] = id }
         // Only the activity time changes: the list keeps its rows (B99).
         commitChange { try self.controller.markTabActive(id, origin: self) }
+        controller.recordUsage(.activeDay)
         let controller = self.controller, fallback = currentProfileID
         // Quick successive selections make their engine tabs once the run of selections ends (B107).
         let inBurst = controller.noteTabSelection() && controller.liveTab(for: id) == nil
@@ -965,6 +966,7 @@ public final class SidebarViewModel: ObservableObject {
         selectionHistory.removeAll { $0 == id }
         let next = wasSelected ? nextSelection(after: id) : nil
         guard mutate({ try TreeOps.archiveTab($0, id: id, reason: .closed, now: now()) }) else { return }
+        controller.recordUsage(.featureUsed(.tabArchive))
         closeLive(id)
         if wasSelected {
             selectedTabID = nil
@@ -1131,6 +1133,7 @@ public final class SidebarViewModel: ObservableObject {
         guard let spaceID = selectedSpaceID else { return }
         let ids = workspace.today(spaceID: spaceID).map(\.id)
         guard mutate({ try TreeOps.clearToday($0, spaceID: spaceID, now: now()) }) else { return }
+        if !ids.isEmpty { controller.recordUsage(.featureUsed(.tabArchive)) }
         // Our own clear sound when "Play Open Arc sound effects" is on (B84, [03 §Advanced]).
         if !ids.isEmpty { controller.feedback.play(.clear) }
         ids.forEach(closeLive)
@@ -1328,6 +1331,7 @@ public final class SidebarViewModel: ObservableObject {
         guard workspace.spaces[id].map({ !$0.meta.isTombstone }) == true, id != selectedSpaceID else { return }
         dismissQuickList()
         selectedSpaceID = id
+        controller.recordUsage(.featureUsed(.spaces))
         // The remembered tab stays unselected while another window shows it. inferred.
         if let remembered = lastSelectedTab[id], workspace.tabs[remembered].map({ !$0.meta.isTombstone }) == true {
             selectTab(remembered, focusingOtherWindow: false)

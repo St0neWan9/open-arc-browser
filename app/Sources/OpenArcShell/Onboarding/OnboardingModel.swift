@@ -52,6 +52,8 @@ public final class OnboardingModel: ObservableObject {
     @Published public var spaceName = ""
     /// The "Sync Sidebar" choice as shown on step 5.
     @Published public private(set) var syncEnabled: Bool
+    /// "Share usage data" on the last page (B194): a draft, saved by Start Browsing.
+    @Published public var shareUsageDataDraft = true
     /// The import step opened the import flow at least once (for tests and the button label).
     @Published public private(set) var didOpenImport = false
 
@@ -132,10 +134,12 @@ public final class OnboardingModel: ObservableObject {
         guard isPresented else { return }
         if step == .space { applySpaceName() }
         guard let following = Step(rawValue: step.rawValue + 1) else {
+            applyUsageDataChoice()
             finish()
             return
         }
         step = following
+        if step == .done { shareUsageDataDraft = controller?.usageAnalytics.isSharingEnabled ?? false }
     }
 
     public func back() {
@@ -164,6 +168,17 @@ public final class OnboardingModel: ObservableObject {
         guard let controller else { return }
         controller.onboardingCompleted = true
         controller.saveUIState()
+    }
+
+    /// The last page shows the usage-data card when this build can send (B194).
+    public var showsUsageDataCard: Bool { step == .done && (controller?.usageAnalytics.isAvailable ?? false) }
+
+    /// Start Browsing on the last page: the card was on screen, so it counts as the notice; an
+    /// explicit change is saved, an untouched default stays the default.
+    private func applyUsageDataChoice() {
+        guard showsUsageDataCard, let analytics = controller?.usageAnalytics else { return }
+        if shareUsageDataDraft != analytics.isSharingEnabled { analytics.setSharingEnabled(shareUsageDataDraft) }
+        analytics.markNoticePresented()
     }
 
     // MARK: Step 2: name and theme of the first Space

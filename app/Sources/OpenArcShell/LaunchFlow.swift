@@ -88,6 +88,11 @@ extension AppDependencies {
         makeChromiumEngine: ((URL) -> any BrowserEngine)? = nil
     ) -> AppDependencies {
         let dataDirectory = AppDataLocation.directory(environment: environment)
+        // Usage analytics (B194): the release bundle sends; a development build only shows the
+        // controls and records in memory.
+        let analyticsConfiguration = UsageAnalyticsConfiguration.live()
+        let analyticsTransport: any UsageAnalyticsTransport = analyticsConfiguration == nil
+            ? RecordingUsageAnalyticsTransport() : URLSessionUsageAnalyticsTransport()
         return AppDependencies(
             engine: engine(environment: environment, dataDirectory: dataDirectory, makeChromiumEngine: makeChromiumEngine),
             sync: syncStore(environment: environment, isCloudKitEntitled: isCloudKitEntitled, makeCloudKitStore: makeCloudKitStore),
@@ -100,7 +105,9 @@ extension AppDependencies {
             appIconDisplay: SystemAppIconDisplay(),
             exportPicker: SavePanelExportPicker(),
             desktop: SystemDesktopServices(),
-            globalHotKeys: CarbonGlobalHotKeyService()
+            globalHotKeys: CarbonGlobalHotKeyService(),
+            usageAnalyticsConfiguration: analyticsConfiguration ?? .developmentPreview(),
+            usageAnalyticsTransport: analyticsTransport
         )
     }
 

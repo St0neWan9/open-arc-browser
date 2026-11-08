@@ -77,6 +77,7 @@ public final class LinkPeekModel: ObservableObject {
         guard let tab = controller.workspace.tabs[sourceTabID], !tab.meta.isTombstone,
               let profileID = controller.engineProfileID(forTab: tab) ?? sidebar.currentProfileID else { return }
         session = Session(sourceTabID: sourceTabID, url: url, tab: nil)
+        controller.recordUsage(.featureUsed(.peek))
         page = SidebarTabLiveState()
         page.url = url
         page.title = url.host ?? url.absoluteString

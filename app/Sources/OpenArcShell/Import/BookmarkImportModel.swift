@@ -307,6 +307,14 @@ public final class BookmarkImportModel: ObservableObject {
             }
         }
         phase = .done(lines)
+        if case .arc = source { controller.recordUsage(.arcImportFinished(Self.usageResult(lines))) }
+    }
+
+    /// The import's outcome for usage analytics (B194): only the fixed result, never the lines.
+    static func usageResult(_ lines: [ImportSummaryLine]) -> UsageImportResult {
+        let errors = lines.filter(\.isError).count
+        if lines.isEmpty || errors == lines.count { return .failed }
+        return errors > 0 ? .partial : .success
     }
 
     /// Kept for D3 callers: imports the selected profile's bookmarks only.
@@ -331,6 +339,7 @@ public final class BookmarkImportModel: ObservableObject {
         if ext == "json", let sidebar = try? ArcSidebarReader.read(contentsOf: url) {
             let line = importSidebar(sidebar, controller: controller)
             phase = line.isError ? .failed(line.text) : .done([line])
+            controller.recordUsage(.arcImportFinished(Self.usageResult([line])))
             return
         }
         let bookmarks = Result { try BookmarkFileReader.read(contentsOf: url) }

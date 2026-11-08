@@ -448,6 +448,7 @@ public final class ShellModel: ObservableObject {
         // A pane bar loads into its own pane's tab, so make that pane the selected tab first.
         let pane = commandBarPaneTabID
         dismissCommandBar()
+        controller.recordUsage(.featureUsed(.commandBar))
         switch action {
         case .openURL(_, .currentTab), .searchWeb(_, .currentTab):
             if let pane, selectedTabID != pane { sidebar.selectTab(pane) }
