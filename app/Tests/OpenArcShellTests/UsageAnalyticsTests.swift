@@ -138,7 +138,7 @@ final class UsageAnalyticsTests: XCTestCase {
         XCTAssertEqual(sent.apiKey, "phc_test")
         XCTAssertEqual(sent.events.map { $0["event"] as? String }, ["feature_used", "arc_import_finished"])
         let allowed: Set<String> = [
-            "distinct_id", "$process_person_profile", "$geoip_disable", "$lib", "schema_version", "app_version",
+            "distinct_id", "$process_person_profile", "$lib", "schema_version", "app_version",
             "os_major", "architecture", "environment", "surface", "feature", "result", "interval",
         ]
         for event in sent.events {
@@ -146,7 +146,7 @@ final class UsageAnalyticsTests: XCTestCase {
             let properties = try XCTUnwrap(event["properties"] as? [String: Any])
             XCTAssertTrue(Set(properties.keys).isSubset(of: allowed), "\(properties.keys)")
             XCTAssertEqual(properties["$process_person_profile"] as? Bool, false)
-            XCTAssertEqual(properties["$geoip_disable"] as? Bool, true)
+            XCTAssertNil(properties["$ip"], "the address comes from the connection, never from the app")
             XCTAssertEqual(properties["surface"] as? String, "macos")
             XCTAssertEqual(properties["app_version"] as? String, "0.2.6")
             XCTAssertEqual(properties["distinct_id"] as? String, "00000000-0000-0000-0000-000000000001")
