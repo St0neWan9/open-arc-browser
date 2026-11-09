@@ -141,17 +141,7 @@ struct PageSaveCard: View {
     }
 
     private var iconBlock: some View {
-        let t = PageSaveCardTokens.self
-        let side = CGFloat(Metrics.Dialog.appIconSize)
-        return Image(systemName: presentation.symbol ?? "questionmark")
-            .font(.system(size: t.iconGlyphSize))
-            .foregroundStyle((palette.isDark ? palette.dialogInk : t.titleInk).swiftUI)
-            .frame(width: side, height: side)
-            .background(
-                RoundedRectangle(cornerRadius: t.iconBlockCornerRadius, style: .continuous)
-                    .fill((palette.isDark ? t.iconBlockDarkFill : t.iconBlockFill).swiftUI)
-            )
-            .accessibilityHidden(true)
+        PromptCardSymbolBlock(symbol: presentation.symbol ?? "questionmark", palette: palette)
     }
 
     @ViewBuilder

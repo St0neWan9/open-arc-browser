@@ -54,6 +54,9 @@ final class ShellDialogsF1Tests: XCTestCase {
         let presentation = DialogPresentation(request)
         XCTAssertEqual(presentation.style, .sheet)
         XCTAssertEqual(presentation.buttons, ["Leave Page", "Wait"])
+        // B197: Esc waits (the default); "Leave Page" carries no ESC cap.
+        XCTAssertNil(presentation.cancelButtonIndex)
+        XCTAssertEqual(PromptCardRoles.roles(count: 2, cancelIndex: presentation.cancelButtonIndex), [.plain, .primary])
         XCTAssertTrue(presentation.message.contains("stuck.example"))
         XCTAssertEqual(DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false),
                        .unresponsivePage(.wait))

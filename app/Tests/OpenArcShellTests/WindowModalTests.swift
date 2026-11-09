@@ -71,6 +71,43 @@ final class WindowModalTests: XCTestCase {
         }
     }
 
+    /// B197: the prompt cards (here the extension removal card, `06 §31` observed, and the
+    /// launch notice) are 450 pt wide, as tall as their content, centered in the window over the
+    /// dimmed window, and go away with their answer.
+    func testPromptCardsAreCenteredAndFitTheirContent() throws {
+        let windowSize = CGSize(width: 1281, height: 801)
+        let (model, window, host) = makeWindow(size: windowSize)
+        let before = brightness(pixel(host, at: CGPoint(x: 140, y: windowSize.height - 20)))
+        var answer: Bool?
+        Task { answer = await model.siteControls.askToRemoveExtension("Pop Blocker") }
+        settle(host)
+        let question = try XCTUnwrap(model.siteControls.extensionRemovalQuestion)
+        let frame = try XCTUnwrap(cardFrame(in: host, id: "removeExtension.\(question.id.uuidString)"))
+        XCTAssertEqual(frame.width, 450, accuracy: 0.5)
+        XCTAssertGreaterThan(frame.height, 150, "icon, title and buttons")
+        XCTAssertLessThan(frame.height, 300, "no body: shorter than Delete Space")
+        XCTAssertEqual(frame.midX, windowSize.width / 2, accuracy: 1)
+        XCTAssertEqual(frame.midY, windowSize.height / 2, accuracy: 1)
+        XCTAssertNil(window.attachedSheet)
+        let after = brightness(pixel(host, at: CGPoint(x: 140, y: windowSize.height - 20)))
+        XCTAssertLessThan(after, before - 0.05, "the veil")
+        // Return presses Remove Extension.
+        _ = host.window?.contentView?.performKeyEquivalent(with: key(36, "\r", window))
+        settle(host)
+        XCTAssertEqual(answer, true)
+        XCTAssertNil(model.siteControls.extensionRemovalQuestion)
+        XCTAssertNil(cardFrame(in: host, id: "removeExtension.\(question.id.uuidString)"))
+
+        model.launchNotice = LaunchNotice(title: "Your data couldn’t be loaded", message: "A backup was restored.")
+        settle(host)
+        let notice = try XCTUnwrap(cardFrame(in: host, id: "launchNotice"), "the launch notice is a card, not a system alert")
+        XCTAssertEqual(notice.width, 450, accuracy: 0.5)
+        XCTAssertEqual(notice.midY, windowSize.height / 2, accuracy: 1)
+        _ = host.window?.contentView?.performKeyEquivalent(with: key(53, "\u{1b}", window))
+        settle(host)
+        XCTAssertNil(model.launchNotice, "Esc clears the notice")
+    }
+
     /// The card goes away with its state.
     func testCardClosesWithItsState() {
         let (model, _, host) = makeWindow(size: CGSize(width: 1281, height: 801))

@@ -24,8 +24,10 @@ import OpenArcDesign
 // - One FIFO queue per tab: a tab shows one dialog at a time, the next one after it is answered.
 // - A request shows only while its tab is on screen. Its card, sheet or bubble goes away with the
 //   tab and comes back, still unanswered, when the tab returns.
-// - The other dialogs (HTTP auth, external protocol, ...) are tab-modal: they cover only that tab's
-//   web panel or split pane, never the window.
+// - The extension install confirmation is a prompt card centered in the window over the dimmed
+//   window ([06 §41] observed). The other dialogs (HTTP auth, external protocol, unresponsive page,
+//   certificates, passkeys) use the same card (B197, inferred); they show while their tab is on
+//   screen.
 // - The autofill dropdown (C13) is not queued: one per tab, under its form field, beside whatever
 //   dialog shows.
 // - Engine info bars (C23, [00 §A] inferred) are not queued either: every open bar of a
@@ -199,7 +201,8 @@ public final class DialogCenter: ObservableObject {
 /// [06 §30] observed where a comment says so; the rest are our own wording: unknown.
 public struct DialogPresentation: Equatable, Sendable {
     public enum Style: Equatable, Sendable {
-        /// A card attached to the top of the tab's panel, over a dimmed page.
+        /// A prompt card centered in the window over the dimmed window (`PromptCard`). [06 §41]
+        /// observed for the extension install; the others inferred (B197).
         case sheet
         /// A bubble from the site controls button (or at the panel's top left). [06 §30] observed.
         case permissionBubble
@@ -211,8 +214,8 @@ public struct DialogPresentation: Equatable, Sendable {
         case filePanel
         /// The autofill dropdown under a form field (C13; drawn by `AutofillDropdownView`).
         case dropdown
-        /// The passkey / security-key sheet (C21; drawn by `WebAuthnSheetView`, its steps change
-        /// while it is open).
+        /// The passkey / security-key card (C21; drawn by `WebAuthnSheetView` as a prompt card, its
+        /// steps change while it is open).
         case webAuthn
         /// An engine info bar: a strip above the page (C23; drawn by `InfoBarStrip`).
         case infoBar
@@ -239,8 +242,14 @@ public struct DialogPresentation: Equatable, Sendable {
     public var checkbox: String?
     /// Rows to choose one from (the first is selected at first); empty for most dialogs.
     public var choices: [Choice] = []
+    /// A bulleted list under the message (the extension's permissions). [06 §41] observed.
+    public var bullets: [String] = []
     /// Buttons from left to right; the last one is the default (Return).
     public var buttons: [String]
+    /// The button Esc presses (it shows the ESC key cap): the one before the default, unless that
+    /// one is not the request's default answer (then Esc closes with the default, no button).
+    public var cancelButtonIndex: Int? { cancelsWithEsc && buttons.count > 1 ? buttons.count - 2 : nil }
+    private var cancelsWithEsc = true
 
     public init(_ request: EngineDialogRequest) {
         let site = request.origin?.displayHost ?? "This page"
@@ -272,6 +281,7 @@ public struct DialogPresentation: Equatable, Sendable {
         case .authentication(let challenge):
             style = .sheet
             title = "Sign in"
+            symbol = "lock.fill"
             var text = challenge.isProxy
                 ? "The proxy \(challenge.challengerHostPort) requires a username and password."
                 : "\(challenge.challengerHostPort) requires a username and password."
@@ -344,13 +354,13 @@ public struct DialogPresentation: Equatable, Sendable {
             checkbox = nil
             buttons = ["No", "Save"]
         case .extensionInstall(let prompt):
-            // Chrome's install dialog, tab-modal over the store page. The spec does not record the
-            // Web Store flow (C14): title and buttons are Chrome's meaning in our words, unknown.
+            // [06 §41] observed: a prompt card with the app icon ← the extension's icon, "Add the
+            // “<name>” extension to <app>?", "It can:" and the permissions as bullets, Cancel ESC /
+            // Add Extension ↵. Without permissions there is no "It can:": inferred.
             style = .sheet
-            title = "Add “\(prompt.extensionName)”?"
-            message = prompt.permissionWarnings.isEmpty
-                ? ""
-                : "It can:\n" + prompt.permissionWarnings.map { "• " + $0 }.joined(separator: "\n")
+            title = "Add the “\(prompt.extensionName)” extension to \(AppIdentity.displayName)?"
+            message = prompt.permissionWarnings.isEmpty ? "" : "It can:"
+            bullets = prompt.permissionWarnings
             fields = []
             checkbox = nil
             buttons = ["Cancel", "Add Extension"]
@@ -361,14 +371,18 @@ public struct DialogPresentation: Equatable, Sendable {
             style = .sheet
             title = "This page isn’t responding"
             message = "\(site) has stopped responding. You can wait for it, or leave the page."
+            symbol = "hourglass"
             fields = []
             checkbox = nil
             buttons = ["Leave Page", "Wait"]
+            // Esc waits (the default), never leaves.
+            cancelsWithEsc = false
         case .clientCertificate(let prompt):
             // [00 §A] inferred: a picker for sites that ask for a certificate. Look and
             // wording are ours (unknown). Cancel continues without a certificate, as Chrome's does.
             style = .sheet
             title = "Select a certificate"
+            symbol = "person.text.rectangle.fill"
             message = "\(prompt.hostPort) needs a certificate to identify you."
             fields = []
             checkbox = nil
@@ -381,6 +395,7 @@ public struct DialogPresentation: Equatable, Sendable {
             // Drawn by `WebAuthnSheetView` from the session's live state (`WebAuthnPresentation`).
             let live = WebAuthnPresentation(dialog.session.state)
             style = .webAuthn
+            symbol = "person.badge.key.fill"
             title = live.title
             message = live.message
             fields = []
@@ -410,6 +425,7 @@ public struct DialogPresentation: Equatable, Sendable {
             let app = external.handlerApplicationName ?? "the application"
             title = "Open \(external.handlerApplicationName.map { "“\($0)”" } ?? "application")?"
             message = "\(site) wants to open \(app)."
+            symbol = "arrow.up.forward.app.fill"
             fields = []
             checkbox = external.canRememberForOrigin
                 ? request.origin.map { "Always allow \($0.displayHost) to open links of this type" } : nil

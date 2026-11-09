@@ -102,12 +102,22 @@ struct ModalCardTextField: View {
     @Binding var text: String
     let palette: ThemePalette
     let identifier: String
+    /// A password field (the HTTP sign-in prompt card, B197).
+    var isSecure = false
+    /// Takes the keyboard when it appears; only the first of several fields does.
+    var focusesOnAppear = true
     let onSubmit: () -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
         let d = Metrics.Dialog.self
-        TextField(placeholder, text: $text)
+        Group {
+            if isSecure {
+                SecureField(placeholder, text: $text)
+            } else {
+                TextField(placeholder, text: $text)
+            }
+        }
             .textFieldStyle(.plain)
             .font(Typography.dialogTextField.font)
             .foregroundStyle(palette.dialogInk.swiftUI)
@@ -123,7 +133,7 @@ struct ModalCardTextField: View {
             )
             .focused($focused)
             .onSubmit(onSubmit)
-            .onAppear { focused = true }
+            .onAppear { if focusesOnAppear { focused = true } }
             .accessibilityIdentifier(identifier)
     }
 }

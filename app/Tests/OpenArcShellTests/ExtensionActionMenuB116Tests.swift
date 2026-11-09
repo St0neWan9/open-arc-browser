@@ -89,16 +89,60 @@ final class ExtensionActionMenuB116Tests: XCTestCase {
         XCTAssertEqual(model.sidebar.selectedURL, URL(string: "chrome://extensions/?id=pop"))
     }
 
-    /// B116: Remove asks first; Cancel keeps the extension and the bubble.
+    /// B116: Remove asks first; Cancel keeps the extension. The bubble closes before the question,
+    /// which is a card in the window (`06 §31` observed, B197).
     func testRemoveCancelledKeepsExtension() async throws {
         let sc = try await presentWithExtension(name: "Pop Blocker")
         removalAnswer = false
         sc.perform(.remove, extensionID: "pop")
         await sc.settle()
         XCTAssertEqual(removalQuestions, ["Pop Blocker"])
-        XCTAssertTrue(sc.isPresented)
+        XCTAssertFalse(sc.isPresented)
         let installed = await engine.fakeExtensionService.installed(profileID: profileID)
         XCTAssertEqual(installed.map(\.id), ["pop"])
+    }
+
+    /// B197 (`06 §31` observed): the app's question is the window's removal card. Remove waits
+    /// for its answer: "Remove Extension" uninstalls, a newer question or closing the window
+    /// answers "keep".
+    func testRemovalCardQuestion() async throws {
+        let sc = try await presentWithExtension(name: "Pop Blocker")
+        sc.confirmExtensionRemoval = { [weak sc] name in await sc?.askToRemoveExtension(name) ?? false }
+        sc.perform(.remove, extensionID: "pop")
+        try await waitForQuestion(sc) { $0 != nil }
+        XCTAssertEqual(sc.extensionRemovalQuestion?.extensionName, "Pop Blocker")
+        XCTAssertEqual(ExtensionRemovalCard.title(extensionName: "Pop Blocker"), "Remove “Pop Blocker” extension from Open Arc?")
+        XCTAssertEqual(ExtensionRemovalCard.removeButton, "Remove Extension")
+        XCTAssertFalse(sc.isPresented, "the bubble closed first")
+        var installed = await engine.fakeExtensionService.installed(profileID: profileID)
+        XCTAssertEqual(installed.map(\.id), ["pop"], "nothing removed before the answer")
+
+        // A second question answers the first with "keep".
+        var first: Bool?
+        let pending = Task { first = await sc.askToRemoveExtension("A") }
+        try await waitForQuestion(sc) { $0?.extensionName == "A" }
+        sc.answerExtensionRemoval(false)
+        await pending.value
+        XCTAssertEqual(first, false)
+
+        sc.perform(.remove, extensionID: "pop")
+        try await waitForQuestion(sc) { $0 != nil }
+        sc.answerExtensionRemoval(true)
+        await sc.settle()
+        installed = await engine.fakeExtensionService.installed(profileID: profileID)
+        XCTAssertEqual(installed.map(\.id), [])
+        XCTAssertNil(sc.extensionRemovalQuestion)
+    }
+
+    /// Polls the removal question without `settle()`, whose wait includes the removal task that
+    /// is waiting for this very answer.
+    private func waitForQuestion(_ sc: SiteControlsModel, _ condition: (ExtensionRemovalQuestion?) -> Bool,
+                                 file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<400 {
+            if condition(sc.extensionRemovalQuestion) { return }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTFail("question not shown", file: file, line: line)
     }
 
     /// B116: Remove, confirmed, closes the bubble and the extension's open popup, and uninstalls

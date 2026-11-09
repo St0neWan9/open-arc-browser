@@ -7,18 +7,8 @@ import OpenArcDesign
 
 // SwiftUI drawing of engine dialog requests (C7b). Behavior and placement: DialogCenter.swift. The
 // prompts [06 §30] records have files of their own (PageSaveCard.swift, SystemAlertPresenter.swift,
-// PermissionPromptBubble.swift). For the rest, sizes and colors are our own: unknown. Fonts follow
-// the sheet scale of [07 §3] (title Bold 17 is for full sheets; these small cards use the 13 / 14 pt
-// chrome sizes).
-
-/// Local tokens of the dialog views. All unknown.
-enum DialogLocalTokens {
-    static let sheetWidth: CGFloat = 340
-    static let cornerRadius: CGFloat = 12
-    static let padding: CGFloat = 16
-    static let topInset: CGFloat = 12
-    static let scrimOpacity: Double = 0.18
-}
+// PermissionPromptBubble.swift). The rest are prompt cards (PromptCard.swift, B197): [06 §41]
+// observed for the extension install, the others in the same style (inferred).
 
 private struct DialogCenterKey: EnvironmentKey {
     static let defaultValue: DialogCenter? = nil
@@ -79,6 +69,18 @@ struct TabDialogOverlay: View {
                 PageSaveCard(center: center, request: offer, presentation: DialogPresentation(offer), palette: palette)
             }
         }
+        // The prompt cards: centered in the window over the dimmed window as tall as their content.
+        // [06 §41] observed for the extension install; the others inferred (B197).
+        .windowModal(id: "enginePrompt.\(prompt?.id.uuidString ?? "")", isPresented: prompt != nil,
+                     width: Double(PromptCardTokens.width)) {
+            if let prompt {
+                if case .webAuthn(let dialog) = prompt {
+                    WebAuthnSheetView(center: center, dialog: dialog, palette: palette)
+                } else {
+                    EngineDialogCard(center: center, request: prompt, presentation: DialogPresentation(prompt), palette: palette)
+                }
+            }
+        }
     }
 
     /// The head of the queue when it is a save offer.
@@ -86,27 +88,27 @@ struct TabDialogOverlay: View {
         center.current(for: tabID).flatMap { DialogPresentation($0).style == .saveCard ? $0 : nil }
     }
 
+    /// The head of the queue when it is a prompt card.
+    private var prompt: EngineDialogRequest? {
+        center.current(for: tabID).flatMap { request in
+            switch DialogPresentation(request).style {
+            case .sheet, .webAuthn: request
+            default: nil
+            }
+        }
+    }
+
     @ViewBuilder
     private var queuedDialog: some View {
         if let request = center.current(for: tabID) {
             let presentation = DialogPresentation(request)
             switch presentation.style {
-            case .sheet:
-                ZStack(alignment: .top) {
-                    Color.black.opacity(DialogLocalTokens.scrimOpacity)
-                        .contentShape(Rectangle())
-                    DialogCardView(center: center, request: request, presentation: presentation)
-                        .frame(width: DialogLocalTokens.sheetWidth)
-                        .padding(.top, DialogLocalTokens.topInset)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-                .id(request.id)
             case .permissionBubble:
                 if windowDrawnPermissionTab != tabID {
                     PermissionPromptInPanel(prompt: PendingPermissionPrompt(center: center, request: request), palette: palette)
                         .id(request.id)
                 }
-            case .saveCard:
+            case .saveCard, .sheet, .webAuthn:
                 // Declared to the window in `body`.
                 EmptyView()
             case .systemAlert:
@@ -116,18 +118,6 @@ struct TabDialogOverlay: View {
             case .filePanel:
                 FileChooserPresenter(center: center, request: request)
                     .id(request.id)
-            case .webAuthn:
-                if case .webAuthn(let dialog) = request {
-                    ZStack(alignment: .top) {
-                        Color.black.opacity(DialogLocalTokens.scrimOpacity)
-                            .contentShape(Rectangle())
-                        WebAuthnSheetView(center: center, dialog: dialog)
-                            .frame(width: DialogLocalTokens.sheetWidth)
-                            .padding(.top, DialogLocalTokens.topInset)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                    .id(request.id)
-                }
             case .dropdown, .infoBar:
                 // Never queued (`DialogCenter.autofillPopups`, `DialogCenter.infoBarLists`).
                 EmptyView()
@@ -136,89 +126,110 @@ struct TabDialogOverlay: View {
     }
 }
 
-/// One dialog card: title, message, fields, checkbox and buttons. The last button is the default
-/// (Return); Escape closes without a choice (the request's default answer).
-struct DialogCardView: View {
+/// The prompt card of an engine request: icon, title, message, bullets, fields, choices, checkbox
+/// and buttons. The last button is the default (Return); Esc presses the cancel button, or closes
+/// with the request's default answer when there is none (`DialogPresentation.cancelButtonIndex`).
+struct EngineDialogCard: View {
     let center: DialogCenter
     let request: EngineDialogRequest
     let presentation: DialogPresentation
-    @State private var values: [String] = []
+    let palette: ThemePalette
+    @State private var values: [String]
     @State private var isChecked = false
     @State private var selection = 0
 
+    init(center: DialogCenter, request: EngineDialogRequest, presentation: DialogPresentation, palette: ThemePalette) {
+        self.center = center
+        self.request = request
+        self.presentation = presentation
+        self.palette = palette
+        _values = State(initialValue: presentation.fields.map {
+            if case .text(_, let initial) = $0 { return initial }
+            return ""
+        })
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(presentation.title)
-                .font(Typography.dialogBody.font.weight(.semibold))
+        let t = PromptCardTokens.self
+        PromptCard(palette: palette, header: header, title: presentation.title, buttons: buttonItems,
+                   onEscape: { center.dismiss(request.id) }) {
             if !presentation.message.isEmpty {
-                Text(presentation.message)
-                    .font(Typography.settingsBody.font)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                PromptCardBodyText(text: presentation.message, palette: palette)
+                    .padding(.top, t.bodyGap)
             }
-            ForEach(Array(presentation.fields.enumerated()), id: \.offset) { index, field in
-                fieldView(field, index: index)
+            if !presentation.bullets.isEmpty {
+                PromptCardBullets(items: presentation.bullets, palette: palette)
+                    .padding(.top, t.bulletGap)
+            }
+            if !presentation.fields.isEmpty {
+                VStack(alignment: .leading, spacing: t.fieldSpacing) {
+                    ForEach(Array(presentation.fields.enumerated()), id: \.offset) { index, field in
+                        fieldView(field, index: index)
+                    }
+                }
+                .padding(.top, t.controlGap)
             }
             if !presentation.choices.isEmpty {
                 choiceList
+                    .padding(.top, t.controlGap)
             }
             if let checkbox = presentation.checkbox {
-                Toggle(checkbox, isOn: $isChecked)
-                    .toggleStyle(.checkbox)
-                    .font(Typography.settingsBody.font)
-            }
-            HStack {
-                Spacer()
-                ForEach(Array(presentation.buttons.enumerated()), id: \.offset) { index, title in
-                    button(title, index: index)
-                }
+                PromptCardCheckbox(title: checkbox, isOn: $isChecked, palette: palette)
+                    .padding(.top, t.controlGap)
             }
         }
-        .padding(DialogLocalTokens.padding)
-        .background(
-            RoundedRectangle(cornerRadius: DialogLocalTokens.cornerRadius, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
-                .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
-        )
-        .onAppear {
-            values = presentation.fields.map {
-                if case .text(_, let initial) = $0 { return initial }
-                return ""
-            }
-        }
-        .onExitCommand { center.dismiss(request.id) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.dialog")
     }
 
+    private var header: PromptCardHeader? {
+        if case .extensionInstall(let prompt) = request {
+            return .extensionInstall(prompt.iconPNGData.flatMap(NSImage.init(data:)))
+        }
+        return presentation.symbol.map(PromptCardHeader.symbol)
+    }
+
+    private var buttonItems: [PromptCardButtonItem] {
+        let roles = PromptCardRoles.roles(count: presentation.buttons.count, cancelIndex: presentation.cancelButtonIndex)
+        return presentation.buttons.enumerated().map { index, title in
+            PromptCardButtonItem(title: title, role: roles[index]) { press(index) }
+        }
+    }
+
+    private func press(_ index: Int) {
+        let answer = DialogPresentation.answer(
+            for: request, button: index, fieldValues: values, checkbox: isChecked, selection: selection
+        )
+        center.answer(request.id, with: answer)
+    }
+
     /// Single-choice rows (C25 certificates): a click selects, a double click selects and accepts.
     private var choiceList: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        let t = PromptCardTokens.self
+        return VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(presentation.choices.enumerated()), id: \.offset) { index, choice in
                 let chosen = index == selection
                 VStack(alignment: .leading, spacing: 1) {
                     Text(choice.title)
-                        .font(Typography.settingsBody.font.weight(.medium))
+                        .font(Typography.dialogButton.font.weight(.medium))
                         .lineLimit(1)
                     Text(choice.detail)
-                        .font(Typography.settingsBody.font)
-                        .foregroundStyle(chosen ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        .font(Typography.dialogButton.font)
+                        .opacity(chosen ? 0.85 : 0.6)
                         .lineLimit(1)
                 }
-                .foregroundStyle(chosen ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .foregroundStyle(chosen ? Color.white : PromptCardInk.title(palette).swiftUI)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(chosen ? Color.accentColor : Color.clear))
+                .background(
+                    RoundedRectangle(cornerRadius: t.choiceRowCornerRadius, style: .continuous)
+                        .fill(chosen ? PromptCardChoiceInk.selection(palette) : Color.clear)
+                )
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
                     selection = index
-                    let answer = DialogPresentation.answer(
-                        for: request, button: presentation.buttons.count - 1, fieldValues: values,
-                        checkbox: isChecked, selection: index
-                    )
-                    center.answer(request.id, with: answer)
+                    press(presentation.buttons.count - 1)
                 }
                 .onTapGesture { selection = index }
                 .accessibilityElement(children: .combine)
@@ -226,7 +237,14 @@ struct DialogCardView: View {
             }
         }
         .padding(4)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.secondary.opacity(0.3)))
+        .background(
+            RoundedRectangle(cornerRadius: t.choiceListCornerRadius, style: .continuous)
+                .fill(palette.isDark ? Color.white.opacity(0.06) : Color.white)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: t.choiceListCornerRadius, style: .continuous)
+                .strokeBorder(palette.dialogInk.swiftUI.opacity(0.12), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -235,30 +253,23 @@ struct DialogCardView: View {
             get: { index < values.count ? values[index] : "" },
             set: { if index < values.count { values[index] = $0 } }
         )
+        let submit = { press(presentation.buttons.count - 1) }
         switch field {
         case .text(let placeholder, _):
-            TextField(placeholder, text: binding).textFieldStyle(.roundedBorder)
+            ModalCardTextField(placeholder: placeholder, text: binding, palette: palette,
+                               identifier: "openarc.dialog.field\(index)", focusesOnAppear: index == 0, onSubmit: submit)
         case .secure(let placeholder):
-            SecureField(placeholder, text: binding).textFieldStyle(.roundedBorder)
+            ModalCardTextField(placeholder: placeholder, text: binding, palette: palette,
+                               identifier: "openarc.dialog.field\(index)", isSecure: true,
+                               focusesOnAppear: index == 0, onSubmit: submit)
         }
     }
+}
 
-    @ViewBuilder
-    private func button(_ title: String, index: Int) -> some View {
-        let action = {
-            let answer = DialogPresentation.answer(
-                for: request, button: index, fieldValues: values, checkbox: isChecked, selection: selection
-            )
-            center.answer(request.id, with: answer)
-        }
-        if index == presentation.buttons.count - 1 {
-            Button(title, action: action)
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.small)
-        } else {
-            Button(title, action: action)
-                .controlSize(.small)
-        }
+/// The selected row of a prompt card's list: the primary button's blue. inferred.
+enum PromptCardChoiceInk {
+    static func selection(_ palette: ThemePalette) -> Color {
+        (palette.isDark ? palette.dialogPrimaryButtonFill : PageSaveCardTokens.primaryFill).swiftUI
     }
 }
 

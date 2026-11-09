@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import OpenArcEngine
+import OpenArcDesign
 
 // Extension entry points of a browser window (plan C14).
 // - Extensions menu: "Add Extension…" and "Manage Extensions…" [01 §Extensions] observed.
@@ -26,24 +27,53 @@ enum ExtensionPages {
     }
 }
 
-/// The question before an action's "Remove" (B116). inferred: the spec records no such menu; the
-/// wording is ours.
-@MainActor
-enum ExtensionRemovalAlert {
-    static func title(extensionName: String) -> String { "Remove “\(extensionName)”?" }
-    static let message = "The extension and its data are removed from this profile."
-    static let removeButton = "Remove"
+/// The question before an action's "Remove" (B116). `06 §31` observed: Arc's own card, the
+/// puzzle icon, "Remove “<name>” extension from Arc?" and Cancel (ESC) / Remove Extension (↵);
+/// ours names Open Arc. A prompt card (B197) centered in the window over the dimmed window.
+enum ExtensionRemovalCard {
+    static func title(extensionName: String) -> String {
+        "Remove “\(extensionName)” extension from \(AppIdentity.displayName)?"
+    }
+    static let removeButton = "Remove Extension"
     static let cancelButton = "Cancel"
+    /// [06 §31] observed: the puzzle icon.
+    static let symbol = "puzzlepiece.extension.fill"
+}
 
-    /// Shows the alert and waits for the answer. Return removes, Esc cancels.
-    static func run(extensionName: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = title(extensionName: extensionName)
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: removeButton)
-        alert.addButton(withTitle: cancelButton).keyEquivalent = "\u{1b}"
-        return alert.runModal() == .alertFirstButtonReturn
+/// Declares the removal card to the window while the Site Control Center asks.
+struct ExtensionRemovalCardModal: ViewModifier {
+    @ObservedObject var siteControls: SiteControlsModel
+    let palette: ThemePalette
+
+    func body(content: Content) -> some View {
+        let question = siteControls.extensionRemovalQuestion
+        content
+            .windowModal(id: "removeExtension.\(question?.id.uuidString ?? "")", isPresented: question != nil,
+                         width: Double(PromptCardTokens.width)) {
+                if let question {
+                    ExtensionRemovalCardView(question: question, siteControls: siteControls, palette: palette)
+                }
+            }
+    }
+}
+
+/// The removal card itself.
+struct ExtensionRemovalCardView: View {
+    let question: ExtensionRemovalQuestion
+    let siteControls: SiteControlsModel
+    let palette: ThemePalette
+
+    var body: some View {
+        let cancel = PromptCardButtonItem(title: ExtensionRemovalCard.cancelButton, role: .cancel) {
+            siteControls.answerExtensionRemoval(false)
+        }
+        let remove = PromptCardButtonItem(title: ExtensionRemovalCard.removeButton, role: .primary) {
+            siteControls.answerExtensionRemoval(true)
+        }
+        PromptCard(palette: palette, header: .symbol(ExtensionRemovalCard.symbol),
+                   title: ExtensionRemovalCard.title(extensionName: question.extensionName),
+                   buttons: [cancel, remove]) { EmptyView() }
+            .accessibilityIdentifier("openarc.removeExtension")
     }
 }
 
@@ -55,7 +85,15 @@ extension ShellModel {
         // An action's right-click menu (B116). Incognito windows cannot remove extensions, as the
         // Extensions menu is disabled there.
         siteControls.manageExtensionHandler = { [weak self] id in self?.openManageExtension(id) }
-        siteControls.confirmExtensionRemoval = isIncognito ? nil : { name in ExtensionRemovalAlert.run(extensionName: name) }
+        if isIncognito {
+            siteControls.confirmExtensionRemoval = nil
+        } else {
+            let controls = siteControls
+            siteControls.confirmExtensionRemoval = { @MainActor [weak controls] name in
+                guard let controls else { return false }
+                return await controls.askToRemoveExtension(name)
+            }
+        }
     }
 
     /// An action's "Manage Extension": that extension's details page in a new tab (B116).

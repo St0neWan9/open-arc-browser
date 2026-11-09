@@ -7,7 +7,8 @@ import OpenArcDesign
 // the shell draws it; Arc's look and wording are not recorded, so every text, size and layout here is
 // ours (unknown). Behavior is the engine's: each step of its flow arrives as a `WebAuthnState`
 // (OACWebAuthn.h), and the buttons send `WebAuthnCommand`s. Cancel answers the request (the page gets
-// NotAllowedError); everything else keeps it open until the engine withdraws it.
+// NotAllowedError); everything else keeps it open until the engine withdraws it. Since B197 it is
+// drawn as a prompt card (PromptCard.swift: the card family of [06 §41]), inferred.
 //
 // Plan B155, phones and tablets (hybrid): the method list offers "Phone or tablet"; its step shows a
 // QR code the phone's camera scans, then "connecting" and "continue on your phone". Bluetooth must
@@ -259,86 +260,68 @@ public struct WebAuthnPresentation: Equatable, Sendable {
     }
 }
 
-/// The sheet: title, message, rows or PIN fields, and Cancel / "Use another method" / the main
-/// button. Its content follows the session's state.
+/// The passkey card: title, message, rows or PIN fields, and "Use Another Method" / Cancel / the
+/// main button, as a prompt card (B197, inferred). Its content follows the session's state.
 struct WebAuthnSheetView: View {
     let center: DialogCenter
     let dialog: WebAuthnDialog
+    let palette: ThemePalette
     @State private var state: WebAuthnState
     @State private var pin = ""
     @State private var confirmation = ""
     @State private var localError: String?
 
-    init(center: DialogCenter, dialog: WebAuthnDialog) {
+    init(center: DialogCenter, dialog: WebAuthnDialog, palette: ThemePalette) {
         self.center = center
         self.dialog = dialog
+        self.palette = palette
         _state = State(initialValue: dialog.session.state)
     }
 
     var body: some View {
         let presentation = WebAuthnPresentation(state)
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "person.badge.key.fill")
-                    .foregroundStyle(.secondary)
-                Text(presentation.title)
-                    .font(Typography.dialogBody.font.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        let t = PromptCardTokens.self
+        PromptCard(palette: palette, header: .symbol("person.badge.key.fill"), title: presentation.title,
+                   buttons: buttons(presentation), onEscape: cancel,
+                   accessory: presentation.showsProgress ? AnyView(ProgressView().controlSize(.small)) : nil) {
             if !presentation.message.isEmpty {
-                Text(presentation.message)
-                    .font(Typography.settingsBody.font)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                PromptCardBodyText(text: presentation.message, palette: palette)
+                    .padding(.top, t.bodyGap)
             }
             if !presentation.rows.isEmpty {
                 rows(presentation.rows)
+                    .padding(.top, t.controlGap)
             }
             if let code = presentation.qrCode {
                 WebAuthnQRCodeView(text: code)
                     .frame(maxWidth: .infinity)
+                    .padding(.top, t.controlGap)
             }
             switch presentation.input {
             case .none:
                 EmptyView()
             case .pin:
-                SecureField("PIN", text: $pin).textFieldStyle(.roundedBorder).onSubmit(accept)
+                ModalCardTextField(placeholder: "PIN", text: $pin, palette: palette,
+                                   identifier: "openarc.dialog.webauthn.pin", isSecure: true, onSubmit: accept)
+                    .padding(.top, t.controlGap)
             case .newPIN:
-                SecureField("New PIN", text: $pin).textFieldStyle(.roundedBorder)
-                SecureField("Confirm PIN", text: $confirmation).textFieldStyle(.roundedBorder).onSubmit(accept)
+                VStack(alignment: .leading, spacing: t.fieldSpacing) {
+                    ModalCardTextField(placeholder: "New PIN", text: $pin, palette: palette,
+                                       identifier: "openarc.dialog.webauthn.newPIN", isSecure: true, onSubmit: accept)
+                    ModalCardTextField(placeholder: "Confirm PIN", text: $confirmation, palette: palette,
+                                       identifier: "openarc.dialog.webauthn.confirmPIN", isSecure: true,
+                                       focusesOnAppear: false, onSubmit: accept)
+                }
+                .padding(.top, t.controlGap)
             }
             if let error = localError ?? presentation.errorText {
                 Text(error)
-                    .font(Typography.settingsBody.font)
-                    .foregroundStyle(.red)
-            }
-            HStack {
-                if presentation.showsProgress {
-                    ProgressView().controlSize(.small)
-                }
-                if presentation.showsChooseAnotherMethod {
-                    Button("Use Another Method") { dialog.session.send(.chooseAnotherMethod) }
-                        .controlSize(.small)
-                        .disabled(state.isBusy)
-                }
-                Spacer()
-                Button("Cancel") { center.answer(dialog.id, with: .webAuthn(.cancel)) }
-                    .controlSize(.small)
-                if let accept = presentation.acceptTitle {
-                    Button(accept, action: self.accept)
-                        .keyboardShortcut(.defaultAction)
-                        .controlSize(.small)
-                        .disabled(state.isBusy || !presentation.acceptEnabled)
-                }
+                    .font(Typography.dialogButton.font)
+                    .foregroundStyle(palette.dialogDestructiveFill.swiftUI)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, t.fieldSpacing)
             }
         }
-        .padding(DialogLocalTokens.padding)
-        .background(
-            RoundedRectangle(cornerRadius: DialogLocalTokens.cornerRadius, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
-                .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
-        )
-        .onExitCommand { center.dismiss(dialog.id) }
         .task {
             for await next in dialog.session.updates() {
                 if next.step != state.step {
@@ -353,8 +336,31 @@ struct WebAuthnSheetView: View {
         .accessibilityIdentifier("openarc.dialog.webauthn")
     }
 
+    /// "Use Another Method" at the left, Cancel (ESC) and the main button (↵) at the right; with
+    /// no main button, Cancel is the only keyed one.
+    private func buttons(_ presentation: WebAuthnPresentation) -> [PromptCardButtonItem] {
+        var items: [PromptCardButtonItem] = []
+        if presentation.showsChooseAnotherMethod {
+            items.append(PromptCardButtonItem(title: "Use Another Method", role: .plain, isEnabled: !state.isBusy) {
+                dialog.session.send(.chooseAnotherMethod)
+            })
+        }
+        items.append(PromptCardButtonItem(title: "Cancel", role: .cancel, action: cancel))
+        if let title = presentation.acceptTitle {
+            items.append(PromptCardButtonItem(title: title, role: .primary,
+                                              isEnabled: !state.isBusy && presentation.acceptEnabled, action: accept))
+        }
+        return items
+    }
+
+    private func cancel() {
+        center.answer(dialog.id, with: .webAuthn(.cancel))
+    }
+
     private func rows(_ rows: [WebAuthnPresentation.Row]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        let t = PromptCardTokens.self
+        let ink = PromptCardInk.title(palette).swiftUI
+        return VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 Button {
                     if let command = WebAuthnPresentation.rowCommand(for: state, row: index) {
@@ -364,17 +370,21 @@ struct WebAuthnSheetView: View {
                     HStack(spacing: 10) {
                         Image(systemName: row.symbol)
                             .frame(width: 20)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(ink.opacity(0.6))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(row.title).font(Typography.settingsBody.font.weight(.medium))
+                            Text(row.title)
+                                .font(Typography.dialogButton.font.weight(.medium))
+                                .foregroundStyle(ink)
                             if !row.detail.isEmpty {
-                                Text(row.detail).font(Typography.settingsBody.font).foregroundStyle(.secondary)
+                                Text(row.detail)
+                                    .font(Typography.dialogButton.font)
+                                    .foregroundStyle(ink.opacity(0.6))
                             }
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -382,7 +392,15 @@ struct WebAuthnSheetView: View {
                 .accessibilityLabel(row.detail.isEmpty ? row.title : "\(row.title), \(row.detail)")
             }
         }
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.secondary.opacity(0.3)))
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: t.choiceListCornerRadius, style: .continuous)
+                .fill(palette.isDark ? Color.white.opacity(0.06) : Color.white)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: t.choiceListCornerRadius, style: .continuous)
+                .strokeBorder(palette.dialogInk.swiftUI.opacity(0.12), lineWidth: 1)
+        )
     }
 
     private func accept() {
