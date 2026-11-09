@@ -62,6 +62,8 @@ enum ShellMotion {
     static var littleArcExpandToMain: Animation? { Motion.littleArcExpandToMain.curve.swiftUI }
     /// Peek opening (B49). `Motion.peekOpen` (curve unknown).
     static var peekOpen: Animation? { Motion.peekOpen.curve.swiftUI }
+    /// The dock Space icon's hover fill (B201). `Motion.dockSpaceHover`.
+    static var dockSpaceHover: Animation? { Motion.dockSpaceHover.curve.swiftUI }
     /// The recent-files shelf rising in or leaving (B200). `Motion.downloadsShelfOpen` / `downloadsShelfClose`.
     static func downloadsShelf(isShown: Bool) -> Animation? {
         (isShown ? Motion.downloadsShelfOpen : Motion.downloadsShelfClose).curve.swiftUI

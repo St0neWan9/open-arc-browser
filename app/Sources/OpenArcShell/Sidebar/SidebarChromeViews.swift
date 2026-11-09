@@ -797,6 +797,10 @@ struct SidebarDockView: View, Equatable {
     /// The window whose New menu rows run. nil (previews) draws them disabled.
     @Environment(\.sidebarNewMenuTarget) private var newMenuTarget
     @SwiftUI.State private var isNewMenuShown = false
+    /// The Space icon under the pointer: a fill behind it, its own theme color, and after a moment
+    /// a tag with its name and ⌃ number above it. [07 §4.1] observed (B201).
+    @SwiftUI.State private var hoveredSpaceID: UUID?
+    @SwiftUI.StateObject private var spaceTooltip = WebToolbarTooltipTimer(delay: SidebarDockHoverTokens.tooltipDelay)
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.state == rhs.state && lhs.layout == rhs.layout && lhs.isCreatingSpace == rhs.isCreatingSpace
@@ -822,6 +826,14 @@ struct SidebarDockView: View, Equatable {
                 case .space(let space): dockItem(space, frame: frame, top: top, palette: palette)
                 case .createSpacePlaceholder: createSpacePlaceholder(frame: frame, top: top, palette: palette)
                 }
+            }
+            if spaceTooltip.isShown, let id = hoveredSpaceID,
+               let index = entries.firstIndex(where: { if case .space(let space) = $0 { return space.id == id } else { return false } }),
+               case .space(let space) = entries[index] {
+                let frames = layout.dockItemFrames(count: entries.count)
+                let spaceNumber = entries[..<index].filter { if case .space = $0 { return true } else { return false } }.count + 1
+                SidebarDockSpaceTooltip(name: space.name, keys: SidebarDockSpaceTooltipLayout.keys(spaceNumber: spaceNumber), palette: palette,
+                                        icon: frames[index].offsetBy(dx: 0, dy: -top), width: layout.width)
             }
             dockButton(layout.dockPlusFrame, top: top, symbol: "plus", glyphSize: SidebarLocalTokens.dockPlusGlyphSize,
                        glyphWeight: SidebarLocalTokens.dockPlusGlyphWeight, tint: tint,
@@ -896,21 +908,35 @@ struct SidebarDockView: View, Equatable {
         // The placeholder is the current item while a Space is being created. inferred.
         let isCurrent = space.id == state.selectedSpaceID && !isCreatingSpace
         let radius = CGFloat(Metrics.Sidebar.addressFieldCornerRadius)
+        // Hovered: the icon in the hovered Space's own theme tone, full strength. [07 §4.1] observed
+        // (the tone used is inferred). Not while a drag hovers the dock (its own fill shows).
+        let isHovered = hoveredSpaceID == space.id && state.dropSpaceID == nil && !isCreatingSpace
+        let ink = isHovered ? viewModel.palette(forSpace: space.id).seamIndicator.swiftUI : palette.primaryText.swiftUI
+        let hover = SidebarDockHoverTokens.self
         return Button {
+            spaceTooltip.dismiss()
             viewModel.selectSpace(space.id)
         } label: {
             Group {
                 if let icon = space.icon {
                     SidebarSpaceIconView(icon: icon, size: SidebarLocalTokens.dockSpaceGlyphSize,
-                                         glyphSize: SidebarLocalTokens.dockSpaceGlyphSize, tint: palette.primaryText.swiftUI)
+                                         glyphSize: SidebarLocalTokens.dockSpaceGlyphSize, tint: ink)
                 } else {
                     // A Space without an icon shows a dot. [07 §4] unknown: every Space in the
                     // captures had an icon, so the reference's no-icon look is not documented.
-                    Circle().fill(palette.primaryText.swiftUI).frame(width: 6, height: 6)
+                    Circle().fill(ink).frame(width: 6, height: 6)
                 }
             }
-            .opacity(isCurrent ? palette.inkOpacity.dockCurrentSpace : palette.inkOpacity.dockOtherSpace)
+            .opacity(isHovered ? 1 : isCurrent ? palette.inkOpacity.dockCurrentSpace : palette.inkOpacity.dockOtherSpace)
             .frame(width: frame.width, height: frame.height)
+            .background {
+                RoundedRectangle(cornerRadius: hover.fillCornerRadius, style: .continuous)
+                    .fill(palette.usesLightInk || palette.isDark ? Color.white.opacity(hover.lightInkFillOpacity)
+                                                                 : Color.black.opacity(hover.fillOpacity))
+                    .frame(width: hover.fillSize, height: hover.fillSize)
+                    .opacity(isHovered ? 1 : 0)
+            }
+            .animation(ShellMotion.dockSpaceHover, value: isHovered)
             .overlay {
                 // Hovering a dot only switches the Space after a moment ([06 §15.6] observed); the
                 // hover look is unknown, so the dot gets the light "drop into" fill of folders.
@@ -925,13 +951,121 @@ struct SidebarDockView: View, Equatable {
         .buttonStyle(.plain)
         .frame(width: frame.width, height: frame.height)
         .offset(x: frame.minX, y: frame.minY - top)
-        .help(space.name)
+        .onHover { inside in
+            if inside {
+                hoveredSpaceID = space.id
+            } else if hoveredSpaceID == space.id {
+                hoveredSpaceID = nil
+            }
+            spaceTooltip.hover(inside)
+        }
         .accessibilityLabel(space.name)
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
         .accessibilityIdentifier("openarc.sidebar.dock.\(space.name)")
     }
 }
 
+
+// MARK: - Dock Space hover (B201)
+
+/// The dock Space icon's hover. [07 §4.1] observed (Arc 1.170, 2026-11-09, 57 fps recording):
+/// a rounded square ≈ 31 pt behind the icon, black ≈ 5 % over the window, fading in ≈ 150 ms and
+/// out ≈ 170 ms; after ≈ 0.45 s a capsule above the icon with the Space name and its ⌃ number as
+/// key caps.
+enum SidebarDockHoverTokens {
+    static let fillSize: CGFloat = 31
+    static let fillOpacity: Double = 0.05
+    /// On a dark sidebar. inferred.
+    static let lightInkFillOpacity: Double = 0.08
+    /// inferred.
+    static let fillCornerRadius: CGFloat = 7
+    static let tooltipDelay: Double = 0.45
+    static let tooltipHeight: CGFloat = 28
+    /// Gap between the tag and the top of the icon's fill.
+    static let tooltipGap: CGFloat = 4
+    /// The tag stays this far inside the sidebar's edges (x 7 observed for a tag that would
+    /// otherwise start left of the sidebar).
+    static let tooltipEdgeInset: CGFloat = 7
+    static let tooltipHorizontalPadding: CGFloat = 12
+    static let tooltipTextStyle = TextStyle(size: 13, weight: .medium)
+    static let keyCapStyle = TextStyle(size: 11, weight: .semibold)
+    static let keyCapSize = CGSize(width: 18, height: 18)
+    static let keyCapRadius: CGFloat = 4.5
+    static let textToKeys: CGFloat = 8
+    static let keyCapSpacing: CGFloat = 4
+    static let shadow = Metrics.PanelShadow(opacity: 0.12, radius: 4, offsetY: 1)
+}
+
+/// Pure placement of the tag: centered over the icon, `tooltipGap` above its fill, kept inside the
+/// sidebar.
+enum SidebarDockSpaceTooltipLayout {
+    static func frame(size: CGSize, icon: CGRect, sidebarWidth: CGFloat) -> CGRect {
+        let t = SidebarDockHoverTokens.self
+        let inset = t.tooltipEdgeInset
+        var x = icon.midX - size.width / 2
+        x = max(inset, min(x, sidebarWidth - inset - size.width))
+        let fillTop = icon.midY - t.fillSize / 2
+        return CGRect(x: x, y: fillTop - t.tooltipGap - size.height, width: size.width, height: size.height)
+    }
+
+    /// The ⌃ number of the Space at `spaceNumber` (1-based, dock order): Go to Space 1–9 ([02 §Space]
+    /// observed); none past 9.
+    static func keys(spaceNumber: Int) -> [String] {
+        (1...9).contains(spaceNumber) ? ["⌃", "\(spaceNumber)"] : []
+    }
+
+    /// The tag's width for `name` and `keys` (text measured with the tag's font).
+    static func width(name: String, keys: [String]) -> CGFloat {
+        let t = SidebarDockHoverTokens.self
+        let font = NSFont.systemFont(ofSize: t.tooltipTextStyle.size, weight: .medium)
+        let text = ceil((name as NSString).size(withAttributes: [.font: font]).width)
+        let caps = keys.isEmpty ? 0 : t.textToKeys + CGFloat(keys.count) * t.keyCapSize.width + CGFloat(keys.count - 1) * t.keyCapSpacing
+        return text + caps + 2 * t.tooltipHorizontalPadding
+    }
+}
+
+/// The tag above a hovered dock Space: name and ⌃ number on a light capsule tinted by the theme.
+/// [07 §4.1] observed (#F6F1E9 capsule, dark text, caps with a darker outline on the peach theme);
+/// the colors for other themes come from the theme's floating panel and ink (inferred).
+struct SidebarDockSpaceTooltip: View {
+    let name: String
+    let keys: [String]
+    let palette: ThemePalette
+    /// The icon's frame in the dock's coordinates.
+    let icon: CGRect
+    let width: CGFloat
+
+    var body: some View {
+        let t = SidebarDockHoverTokens.self
+        let size = CGSize(width: SidebarDockSpaceTooltipLayout.width(name: name, keys: keys), height: t.tooltipHeight)
+        let frame = SidebarDockSpaceTooltipLayout.frame(size: size, icon: icon, sidebarWidth: width)
+        let ink = palette.floatingPanelInk
+        HStack(spacing: t.textToKeys) {
+            Text(name).textStyle(t.tooltipTextStyle, ink: RGBAColor(red: ink.red, green: ink.green, blue: ink.blue, alpha: 0.85)).lineLimit(1).fixedSize()
+            if !keys.isEmpty {
+                HStack(spacing: t.keyCapSpacing) {
+                    ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
+                        Text(key)
+                            .textStyle(t.keyCapStyle, ink: RGBAColor(red: ink.red, green: ink.green, blue: ink.blue, alpha: 0.7))
+                            .frame(width: t.keyCapSize.width, height: t.keyCapSize.height)
+                            .background(RoundedRectangle(cornerRadius: t.keyCapRadius, style: .continuous)
+                                .fill(ink.swiftUI.opacity(0.05)))
+                            .overlay(RoundedRectangle(cornerRadius: t.keyCapRadius, style: .continuous)
+                                .strokeBorder(ink.swiftUI.opacity(0.3), lineWidth: 1))
+                    }
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .background(Capsule().fill(palette.floatingPanelBackground.swiftUI))
+        .compositingGroup()
+        .panelShadow(t.shadow)
+        .offset(x: frame.minX, y: frame.minY)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .transition(.opacity)
+    }
+}
 
 // MARK: - Update pill (B111)
 

@@ -99,3 +99,9 @@ extension Motion {
     /// The shelf leaving: ≈ 3 frames. [06 §42] observed duration; curve inferred.
     public static let downloadsShelfClose = MotionToken(.easeOut(duration: 0.06), .inferred)
 }
+
+extension Motion {
+    /// The dock Space icon's hover fill (B201): ≈ 150 ms in, ≈ 170 ms out. [07 §4.1] observed
+    /// durations; one ease-out of 0.16 s for both, the curve inferred.
+    public static let dockSpaceHover = MotionToken(.easeOut(duration: 0.16), .inferred)
+}
