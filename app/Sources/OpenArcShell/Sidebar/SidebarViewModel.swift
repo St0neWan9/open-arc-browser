@@ -83,6 +83,8 @@ public final class SidebarViewModel: ObservableObject {
     let spacePager = SpacePagerState()
     /// A two-finger swipe the Space pages follow (B184, issue #1).
     let spaceSwipe = SpaceSwipeState()
+    /// Recent downloads over the list while the pointer rests on the dock's Library button (B200).
+    let downloadsShelf = SidebarDownloadsShelf()
     /// A page that moved to another window (Arc: the page follows the window you clicked in and
     /// the other window dims it). [06 §36] observed. Bumped when this window takes a page back, so
     /// its surface host is rebuilt and the engine re-attaches the page here.

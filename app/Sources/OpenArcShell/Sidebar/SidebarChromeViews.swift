@@ -812,7 +812,9 @@ struct SidebarDockView: View, Equatable {
         ZStack(alignment: .topLeading) {
             dockButton(layout.dockHomeFrame, top: top, symbol: SidebarLocalTokens.dockHomeSymbol,
                        glyphSize: SidebarLocalTokens.dockHomeGlyphSize, tint: tint,
-                       label: SidebarLocalTokens.dockHomeAccessibilityLabel, id: "openarc.sidebar.dock.home") {
+                       label: SidebarLocalTokens.dockHomeAccessibilityLabel, id: "openarc.sidebar.dock.home",
+                       onHover: { viewModel.downloadsShelf.iconHovered($0) }) {
+                viewModel.downloadsShelf.dismiss()
                 viewModel.requestFromMenu(.openLibrary)
             }
             ForEach(Array(zip(entries, layout.dockItemFrames(count: entries.count))), id: \.0.id) { entry, frame in
@@ -855,6 +857,7 @@ struct SidebarDockView: View, Equatable {
     private func dockButton(_ frame: CGRect, top: CGFloat, symbol: String, glyphSize: CGFloat,
                             glyphWeight: Font.Weight = .regular, tint: Color,
                             label: String, id: String, presenter: AnyView? = nil,
+                            onHover: ((Bool) -> Void)? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -866,6 +869,7 @@ struct SidebarDockView: View, Equatable {
         .buttonStyle(.plain)
         .frame(width: frame.width, height: frame.height)
         .background { if let presenter { presenter } }
+        .onHover { onHover?($0) }
         .offset(x: frame.minX, y: frame.minY - top)
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)

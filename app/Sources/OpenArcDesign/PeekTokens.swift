@@ -91,3 +91,11 @@ extension Motion {
     /// Start offset of the button column (x 1635.5 → 1768.5). [06 §22.4] observed.
     public static let peekButtonsStartOffsetX: Double = -133
 }
+
+extension Motion {
+    /// The recent-files shelf over the dock (B200) rising in: ≈ 130 ms. [06 §42] observed
+    /// duration; the ease-out curve is inferred.
+    public static let downloadsShelfOpen = MotionToken(.easeOut(duration: 0.13), .inferred)
+    /// The shelf leaving: ≈ 3 frames. [06 §42] observed duration; curve inferred.
+    public static let downloadsShelfClose = MotionToken(.easeOut(duration: 0.06), .inferred)
+}

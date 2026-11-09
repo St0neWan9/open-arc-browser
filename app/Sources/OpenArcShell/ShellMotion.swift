@@ -62,6 +62,10 @@ enum ShellMotion {
     static var littleArcExpandToMain: Animation? { Motion.littleArcExpandToMain.curve.swiftUI }
     /// Peek opening (B49). `Motion.peekOpen` (curve unknown).
     static var peekOpen: Animation? { Motion.peekOpen.curve.swiftUI }
+    /// The recent-files shelf rising in or leaving (B200). `Motion.downloadsShelfOpen` / `downloadsShelfClose`.
+    static func downloadsShelf(isShown: Bool) -> Animation? {
+        (isShown ? Motion.downloadsShelfOpen : Motion.downloadsShelfClose).curve.swiftUI
+    }
     /// The window command bar fading out on close; opening is not animated. `Motion.commandBarClose`.
     static var commandBarClose: Animation? { Motion.commandBarClose.curve.swiftUI }
     /// The animation for a change of "the command bar is shown": the close fade when it goes

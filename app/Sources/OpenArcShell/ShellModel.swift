@@ -157,6 +157,22 @@ public final class ShellModel: ObservableObject {
         self.spaceFlow = SpaceFlowModel(sidebar: sidebar, now: controller.now, makeID: controller.makeID)
         self.profileFlow = ProfileFlowModel(sidebar: sidebar)
         self.library = LibraryModel(sidebar: sidebar, now: controller.now)
+        // The recent-files shelf over the dock (B200): its own download list and media scan, so it
+        // never changes what the Library page shows.
+        let library = self.library
+        let shelfMedia = LibraryMediaModel(folders: controller.dependencies.mediaFolders, scanLimit: 50)
+        sidebar.downloadsShelf.attach(
+            downloads: LibraryDownloads(engine: controller.dependencies.engine.downloads),
+            media: shelfMedia,
+            profileID: { [weak sidebar] in sidebar?.currentProfileID },
+            isMediaEnabled: { [weak library] in library.map { !$0.isMediaIntroVisible } ?? false },
+            canShow: { [weak sidebar] in
+                guard let sidebar else { return false }
+                return sidebar.draggingItem == nil && !sidebar.spaceSwipe.isActive
+            },
+            openLibraryDownloads: { [weak library] in library?.open(.downloads) },
+            now: controller.now
+        )
         // The engine's ad blocker (C16) over fake site settings until the bridge provides the
         // rest (plan C12 / C14).
         // The engine's ad blocker (C16) and extensions (C14) over fake site settings until the

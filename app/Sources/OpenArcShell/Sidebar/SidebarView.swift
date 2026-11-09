@@ -120,6 +120,9 @@ private struct SidebarContent: View, Equatable {
                     IncognitoClearButton(viewModel: viewModel, layout: layout)
                 }
 
+                // Recent downloads while the pointer rests on the Library button. [06 §42] observed (B200).
+                SidebarDownloadsShelfHost(viewModel: viewModel, layout: layout)
+
                 // An incognito window's dock has Home and "+" but no Space icons. [06 §20.2] observed (B48).
                 SidebarDockHost(viewModel: viewModel, layout: layout)
                     .frame(width: layout.width, height: layout.dockFrame.height)
@@ -240,6 +243,16 @@ private struct SidebarFavoritesHost: View {
     var body: some View {
         SidebarFavoritesView(viewModel: viewModel, state: viewModel.favoritesState(viewModel.snapshot.favorites), layout: layout)
             .equatable()
+    }
+}
+
+/// Hands the shelf the window palette; the shelf observes its own model (B200).
+private struct SidebarDownloadsShelfHost: View {
+    @ObservedObject var viewModel: SidebarViewModel
+    let layout: SidebarLayout
+
+    var body: some View {
+        SidebarDownloadsShelfView(shelf: viewModel.downloadsShelf, palette: viewModel.palette, layout: layout)
     }
 }
 
