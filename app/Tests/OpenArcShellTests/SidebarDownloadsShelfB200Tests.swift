@@ -26,10 +26,19 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
     /// Newest 4, oldest first so the newest sits by the dock; a running download is the newest.
     func testRecentKeepsTheNewestFourNewestLast() {
         let items = [download("a", ended: -500), download("b", ended: -400), download("c", ended: -300),
-                     download("d", ended: -200), download("run", state: .inProgress, started: -10),
-                     download("gone", state: .cancelled)]
-        let ids = SidebarShelfEntry.recent(downloads: items, media: [], now: now).map(\.title)
+                     download("d", ended: -200), download("run", state: .inProgress, started: -10)]
+        let ids = SidebarShelfEntry.recent(downloads: items, media: [], now: now, fileExists: { _ in true }).map(\.title)
         XCTAssertEqual(ids, ["b", "c", "d", "run"])
+    }
+
+    /// B204, 06 §42 observed: a cancelled download stays ("Cancelled"); a finished one whose file was
+    /// deleted is left out.
+    func testCancelledStaysDeletedFilesGo() {
+        let items = [download("kept", ended: -300), download("deleted", ended: -200),
+                     download("stopped", state: .cancelled, started: -100)]
+        let entries = SidebarShelfEntry.recent(downloads: items, media: [], now: now, fileExists: { $0.lastPathComponent != "deleted" })
+        XCTAssertEqual(entries.map(\.title), ["kept", "stopped"])
+        XCTAssertEqual(entries.last?.detail(now: now), "Cancelled")
     }
 
     /// Library media join the list by date; a file that is also a download shows once.
@@ -38,7 +47,7 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
                                     date: now.addingTimeInterval(-250))
         let same = LibraryMediaItem(url: URL(fileURLWithPath: "/tmp/b"), name: "b", kind: .image, date: now)
         let entries = SidebarShelfEntry.recent(downloads: [download("a", ended: -300), download("b", ended: -100)],
-                                               media: [shot, same], now: now)
+                                               media: [shot, same], now: now, fileExists: { _ in true })
         XCTAssertEqual(entries.map(\.title), ["a", "shot.png", "b"])
         XCTAssertEqual(entries.map(\.id).filter { $0.hasPrefix("media:") }, ["media:/tmp/shot.png"])
     }
@@ -69,6 +78,7 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
         )
         model.sidebar.downloadsShelf.showDelay = .milliseconds(1)
         model.sidebar.downloadsShelf.hideGrace = .milliseconds(1)
+        model.sidebar.downloadsShelf.fileExists = { _ in true }
         return (model, engine)
     }
 

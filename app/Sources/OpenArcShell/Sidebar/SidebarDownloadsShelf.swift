@@ -146,7 +146,10 @@ struct SidebarShelfEntry: Identifiable, Equatable {
             return item.warningText ?? "This file may be dangerous."
         case .interrupted:
             return "Failed"
-        case .complete, .cancelled:
+        case .cancelled:
+            // [06 §42] observed (B204).
+            return "Cancelled"
+        case .complete:
             return Self.relative(date(now: now), now: now)
         }
     }
@@ -182,11 +185,16 @@ struct SidebarShelfEntry: Identifiable, Equatable {
         return "\(seconds)s"
     }
 
-    /// The newest `limit` entries, oldest first (the newest sits by the dock). Cancelled downloads
-    /// are left out (inferred); a media file that is also a listed download shows once.
+    /// The newest `limit` entries, oldest first (the newest sits by the dock). [06 §42] observed
+    /// (B204): cancelled downloads stay ("Cancelled"), finished ones whose file was deleted are left
+    /// out. A media file that is also a listed download shows once.
     static func recent(downloads: [DownloadItem], media: [LibraryMediaItem], now: Date,
-                       limit: Int = SidebarDownloadsShelfTokens.maxRows) -> [SidebarShelfEntry] {
-        let kept = downloads.filter { $0.state != .cancelled }
+                       limit: Int = SidebarDownloadsShelfTokens.maxRows,
+                       fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }) -> [SidebarShelfEntry] {
+        let kept = downloads.filter { item in
+            guard item.state == .complete else { return true }
+            return item.fileURL.map(fileExists) ?? false
+        }
         let downloadFiles = Set(kept.compactMap { $0.fileURL?.standardizedFileURL.path })
         let entries = kept.map { SidebarShelfEntry(source: .download($0)) }
             + media.filter { !downloadFiles.contains($0.url.standardizedFileURL.path) }
@@ -247,8 +255,12 @@ final class SidebarDownloadsShelf: ObservableObject {
         downloads.observe(profileID: profileID())
     }
 
+    /// Whether a finished download's file is still there. Tests replace it.
+    var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
+
     private func update(downloads: [DownloadItem], media: [LibraryMediaItem]) {
-        let next = SidebarShelfEntry.recent(downloads: downloads, media: isMediaEnabled() ? media : [], now: now())
+        let next = SidebarShelfEntry.recent(downloads: downloads, media: isMediaEnabled() ? media : [], now: now(),
+                                            fileExists: fileExists)
         if next != entries { entries = next }
         if isShown, next.isEmpty { setShown(false) }
         updateBadge(downloads)
@@ -500,7 +512,10 @@ private struct SidebarShelfRow: View {
 
     @ViewBuilder
     private var icon: some View {
-        if entry.isActiveDownload || entry.fileURL == nil {
+        if case .download(let item) = entry.source, item.state == .cancelled || item.state == .interrupted {
+            // No icon. [06 §42] observed for a cancelled download (B204).
+            Color.clear
+        } else if entry.isActiveDownload || entry.fileURL == nil {
             SidebarShelfProgressDisc(progress: entry.progress)
         } else if let url = entry.fileURL {
             SidebarShelfThumbnail(url: url)

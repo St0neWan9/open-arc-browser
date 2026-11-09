@@ -53,6 +53,7 @@ final class DownloadBadgeB203Tests: XCTestCase {
             workspace: .demo(now: now), now: { [now] in now }
         )
         model.sidebar.downloadsShelf.finishedIconDuration = .milliseconds(30)
+        model.sidebar.downloadsShelf.fileExists = { _ in true }
         return (model, engine)
     }
 
