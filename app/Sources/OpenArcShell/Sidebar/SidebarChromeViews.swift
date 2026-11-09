@@ -882,7 +882,7 @@ struct SidebarDockView: View, Equatable {
         .frame(width: frame.width, height: frame.height)
         .background { if let presenter { presenter } }
         .onHover { onHover?($0) }
-        .offset(x: frame.minX, y: frame.minY - top)
+        .position(x: frame.midX, y: frame.midY - top)
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)
     }
@@ -896,7 +896,7 @@ struct SidebarDockView: View, Equatable {
             .frame(width: size, height: size)
             .opacity(palette.inkOpacity.dockCurrentSpace)
             .frame(width: frame.width, height: frame.height)
-            .offset(x: frame.minX, y: frame.minY - top)
+            .position(x: frame.midX, y: frame.midY - top)
             .help("Create Space")
             .accessibilityElement()
             .accessibilityLabel("Create Space")
@@ -908,10 +908,13 @@ struct SidebarDockView: View, Equatable {
         // The placeholder is the current item while a Space is being created. inferred.
         let isCurrent = space.id == state.selectedSpaceID && !isCreatingSpace
         let radius = CGFloat(Metrics.Sidebar.addressFieldCornerRadius)
-        // Hovered: the icon in the hovered Space's own theme tone, full strength. [07 §4.1] observed
-        // (the tone used is inferred). Not while a drag hovers the dock (its own fill shows).
+        // The current and the hovered icon are drawn in their Space's own theme tone, full
+        // strength; the others in the ink at low opacity. [07 §4.1] observed (B201, B202: the current
+        // peach Space's icon #A45500, a hovered purple Space's #8689B5); the tone used is inferred.
+        // No hover look while a drag hovers the dock (its own fill shows).
         let isHovered = hoveredSpaceID == space.id && state.dropSpaceID == nil && !isCreatingSpace
-        let ink = isHovered ? viewModel.palette(forSpace: space.id).seamIndicator.swiftUI : palette.primaryText.swiftUI
+        let isTinted = isHovered || isCurrent
+        let ink = isTinted ? viewModel.palette(forSpace: space.id).seamIndicator.swiftUI : palette.primaryText.swiftUI
         let hover = SidebarDockHoverTokens.self
         return Button {
             spaceTooltip.dismiss()
@@ -927,7 +930,7 @@ struct SidebarDockView: View, Equatable {
                     Circle().fill(ink).frame(width: 6, height: 6)
                 }
             }
-            .opacity(isHovered ? 1 : isCurrent ? palette.inkOpacity.dockCurrentSpace : palette.inkOpacity.dockOtherSpace)
+            .opacity(isTinted ? 1 : palette.inkOpacity.dockOtherSpace)
             .frame(width: frame.width, height: frame.height)
             .background {
                 RoundedRectangle(cornerRadius: hover.fillCornerRadius, style: .continuous)
@@ -950,7 +953,8 @@ struct SidebarDockView: View, Equatable {
         }
         .buttonStyle(.plain)
         .frame(width: frame.width, height: frame.height)
-        .offset(x: frame.minX, y: frame.minY - top)
+        // On the icon's own frame: after the placement modifier the hover area was the whole dock
+        // (or its left edge with `.offset`), so the Library button's hover went to the last Space.
         .onHover { inside in
             if inside {
                 hoveredSpaceID = space.id
@@ -959,6 +963,7 @@ struct SidebarDockView: View, Equatable {
             }
             spaceTooltip.hover(inside)
         }
+        .position(x: frame.midX, y: frame.midY - top)
         .accessibilityLabel(space.name)
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
         .accessibilityIdentifier("openarc.sidebar.dock.\(space.name)")
