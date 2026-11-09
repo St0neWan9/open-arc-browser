@@ -108,6 +108,11 @@ extension WorkspaceController {
             if openLinkClickInLittleArc(request) { return }
             request.disposition = .backgroundTab
         }
+        // A favorite or pinned tab opening another site: Peek over it instead of a tab (B196).
+        if let openerTabID, openNewTabRequestInLinkPeek(request, opener: openerTabID) {
+            decline(request)
+            return
+        }
 
         let window = openerTabID.flatMap(windowShowing) ?? activeWindowSidebar
         let windowSpace = window?.selectedSpaceID ?? activeSpaceID

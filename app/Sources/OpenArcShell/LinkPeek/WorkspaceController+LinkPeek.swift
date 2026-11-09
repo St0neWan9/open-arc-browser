@@ -16,6 +16,12 @@ import OpenArcEngine
 //
 // The engine drops the click before it navigates (`BrowserTab.setLinkPreviewTriggers`) and
 // reports `TabEvent.linkPreviewRequested`; the window that shows the tab opens Peek over it.
+//
+// B196: a page in a favorite or pinned tab that opens another site in a new tab (a
+// `target=_blank` link, `window.open` without window features) opens it in Peek too, instead of a
+// Today tab. inferred: the same "links to other sites, Favorites and Pinned tabs only" switch; the
+// spec has not captured these in Arc ([06 §22.5]). Popups with window features (sign-in windows)
+// and ⌘-clicks keep their own handling.
 
 /// Triggers last sent per engine tab (a model tab may get a new engine tab). One per
 /// `WorkspaceController`.
@@ -78,6 +84,28 @@ extension WorkspaceController {
         guard let live = liveTab(for: id) else { return }
         let url = request.url
         enqueueTabCommand(live) { try? await $0.load(url) }
+    }
+
+    /// Opens a page's new-tab request in Peek when it comes from a favorite or pinned tab and goes
+    /// to another site (B196, see the file header). Returns whether Peek took it; the caller then
+    /// drops the engine's pending tab.
+    func openNewTabRequestInLinkPeek(_ request: NewTabRequest, opener openerTabID: UUID) -> Bool {
+        guard request.disposition == .foregroundTab, request.hasUserGesture,
+              dependencies.preferences.opensPeekForOtherSites,
+              let scheme = request.url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let tab = workspace.tabs[openerTabID], !tab.meta.isTombstone else { return false }
+        switch tab.location {
+        case .favorite, .pinned: break
+        case .today: return false
+        }
+        // The page the tab shows now, not the address it was pinned with.
+        if let current = liveState(for: openerTabID)?.url ?? tab.url,
+           LinkPreviewTriggers.isSameSite(current, request.url) { return false }
+        guard let window = browserWindows.first(where: {
+            $0.sidebar.countsAsVisibleWindow && $0.sidebar.onScreenTabIDs.contains(openerTabID)
+        }) else { return false }
+        window.linkPeek.open(request.url, from: openerTabID)
+        return true
     }
 
     /// A tab request from a Peek page, which has no model tab: handled as if the Peek's source tab

@@ -147,6 +147,63 @@ final class LinkPeekTests: XCTestCase {
         XCTAssertNil(peek.session)
     }
 
+    // MARK: - B196 new-tab requests from favorites and pinned tabs
+
+    private func requestNewTab(from live: FakeTab, to address: String,
+                               disposition: NewTabDisposition = .foregroundTab) throws {
+        engine.simulateNewTabRequest(NewTabRequest(opener: live.id, url: try url(address),
+                                                   disposition: disposition, hasUserGesture: true))
+    }
+
+    /// B196 inferred (06 §22.5 not captured): a favorite's `target=_blank` link or `window.open`
+    /// to another site opens Peek over it, not a Today tab.
+    func testFavoriteNewTabToAnotherSiteOpensPeek() async throws {
+        let (id, live) = try await showTab("https://links.example/", favorite: true)
+        let before = todayIDs
+        try requestNewTab(from: live, to: "https://example.org/")
+        try await waitUntil { self.peek.session?.tab != nil }
+        XCTAssertEqual(peek.session?.sourceTabID, id)
+        XCTAssertEqual(peek.session?.url, try url("https://example.org/"))
+        XCTAssertEqual(todayIDs, before, "no Today tab")
+    }
+
+    /// B196: the same for a pinned tab.
+    func testPinnedNewTabToAnotherSiteOpensPeek() async throws {
+        let (id, live) = try await showTab("https://links.example/", favorite: false)
+        try controller.mutate(origin: nil) {
+            try TreeOps.moveTab($0, id: id, to: .pinned(spaceID: self.spaceID, folderID: nil), position: .last, now: self.now)
+        }
+        model.sidebar.selectTab(id)
+        await controller.settleEngineWork()
+        try requestNewTab(from: live, to: "https://example.org/")
+        try await waitUntil { self.peek.session?.tab != nil }
+        XCTAssertEqual(peek.session?.sourceTabID, id)
+    }
+
+    /// B196: same-site new tabs, popups with window features, Today tabs and the switch turned
+    /// off keep opening tabs.
+    func testOtherNewTabRequestsStayTabs() async throws {
+        let (_, live) = try await showTab("https://links.example/", favorite: true)
+        var count = todayIDs.count
+        try requestNewTab(from: live, to: "https://links.example/two")
+        try await waitUntil { self.todayIDs.count == count + 1 }
+        count += 1
+        try requestNewTab(from: live, to: "https://example.org/", disposition: .popup)
+        try await waitUntil { self.todayIDs.count == count + 1 }
+        count += 1
+        preferences.opensPeekForOtherSites = false
+        try requestNewTab(from: live, to: "https://example.net/")
+        try await waitUntil { self.todayIDs.count == count + 1 }
+        XCTAssertNil(peek.session)
+
+        preferences.opensPeekForOtherSites = true
+        let (_, today) = try await showTab("https://other.example/", favorite: false)
+        count = todayIDs.count
+        try requestNewTab(from: today, to: "https://example.org/")
+        try await waitUntil { self.todayIDs.count == count + 1 }
+        XCTAssertNil(peek.session, "a Today tab opens a tab as before")
+    }
+
     // MARK: - 06 §22.3 close, expand, split
 
     private func openPeek() async throws -> (UUID, FakeTab) {
