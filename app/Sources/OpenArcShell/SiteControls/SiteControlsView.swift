@@ -278,7 +278,7 @@ struct SiteControlsView: View {
             }
             .frame(height: T.headerHeight)
             ZStack(alignment: .topLeading) {
-                ForEach(Array(model.settings.extensions.enumerated()), id: \.element.id) { index, ext in
+                ForEach(Array(model.orderedExtensions.enumerated()), id: \.element.id) { index, ext in
                     ExtensionCell(model: model, action: ext, pinnedBadgeFill: pinnedBadgeFill)
                         .contextMenu { extensionMenu(ext) }
                         .offset(cellOffset(layout, index: index))

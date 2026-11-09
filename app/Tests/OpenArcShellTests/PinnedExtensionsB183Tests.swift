@@ -78,6 +78,33 @@ final class PinnedExtensionsB183Tests: XCTestCase {
         XCTAssertEqual(preferences.pinnedExtensionIDs(for: profileID), [])
     }
 
+    /// B199 (user, 2026-11-09): the bubble's Extensions grid lists pinned extensions first, in pin
+    /// order, then the others in the engine's order; pinning reorders it while the bubble is open.
+    func testPinnedExtensionsComeFirstInTheBubble() async throws {
+        try await openPage("https://site.example")
+        install("a", name: "A")
+        install("b", name: "B")
+        install("c", name: "C")
+        let sc = model.siteControls
+        sc.present()
+        try await waitUntil { sc.settings.extensions.count == 3 }
+        let engineOrder = sc.settings.extensions.map(\.id)
+        XCTAssertEqual(sc.orderedExtensions.map(\.id), engineOrder)
+
+        let last = try XCTUnwrap(engineOrder.last), middle = engineOrder[1]
+        sc.togglePin(last)
+        sc.togglePin(middle)
+        XCTAssertEqual(sc.orderedExtensions.map(\.id), [last, middle, engineOrder[0]])
+        sc.togglePin(last)
+        XCTAssertEqual(sc.orderedExtensions.map(\.id), [middle, engineOrder[0], last])
+    }
+
+    /// B199: pins of extensions without an action here are skipped.
+    func testOrderingIgnoresMissingPins() {
+        let actions = ["x", "y"].map { SiteExtensionAction(id: $0, name: $0, symbol: "puzzlepiece") }
+        XCTAssertEqual(SiteControlsModel.ordered(actions, pinned: ["gone", "y"]).map(\.id), ["y", "x"])
+    }
+
     /// `06 §31` observed position in the toolbar: pinned extensions left of the site controls, in
     /// pin order (order inferred).
     func testToolbarShowsPinnedLeftOfSiteControls() async throws {

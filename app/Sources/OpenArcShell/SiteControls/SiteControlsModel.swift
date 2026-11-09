@@ -478,6 +478,18 @@ public final class SiteControlsModel: ObservableObject {
 
     public func isPinned(_ extensionID: String) -> Bool { pinnedExtensionIDs.contains(extensionID) }
 
+    /// The Extensions grid of the bubble: pinned extensions first, in pin order, then the others
+    /// in the engine's order (B199, user 2026-11-09; inferred, Arc's order was not captured).
+    public var orderedExtensions: [SiteExtensionAction] {
+        Self.ordered(settings.extensions, pinned: pinnedExtensionIDs)
+    }
+
+    nonisolated static func ordered(_ extensions: [SiteExtensionAction], pinned: [String]) -> [SiteExtensionAction] {
+        let rank = Dictionary(pinned.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let pinnedFirst = extensions.filter { rank[$0.id] != nil }.sorted { rank[$0.id]! < rank[$1.id]! }
+        return pinnedFirst + extensions.filter { rank[$0.id] == nil }
+    }
+
     /// Pins or unpins an extension for the current profile. A new pin goes last (next to the
     /// site controls). The bubble stays open. [06 §31] observed toggle; order inferred.
     public func togglePin(_ extensionID: String) {
