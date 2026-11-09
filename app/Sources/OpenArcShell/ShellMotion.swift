@@ -156,9 +156,11 @@ final class SpacePagerState {
 /// The incoming (`insertion`) or outgoing (`removal`) page of a Space switch.
 enum SpacePageRole: Sendable { case insertion, removal }
 
-/// A two-finger swipe between Spaces that the pages follow (B184, issue #1). The view model feeds
-/// it; `SidebarSpacePagerView` moves the pages from `events` without SwiftUI work per frame, and
-/// the list's scroll knob hides while `isActive`.
+/// A two-finger swipe between Spaces that the pages follow (B184, issue #1), and the window color
+/// that moves with the pages of any Space switch (issue #15, B195). The view model feeds it;
+/// `SidebarSpacePagerView` moves the pages from `events` and `SpaceBlendPaintView` repaints the
+/// background from `blendChanges`, both without SwiftUI work per frame; the list's scroll knob
+/// hides while `isActive`.
 @MainActor
 final class SpaceSwipeState: ObservableObject {
     enum Event: Equatable {
@@ -178,32 +180,45 @@ final class SpaceSwipeState: ObservableObject {
     let events = PassthroughSubject<Event, Never>()
     /// What was sent, for tests.
     private(set) var lastEvent: Event?
-    /// How far the swipe has moved toward `targetSpaceID`, 0 (none) to 1 (a page). The window
-    /// background blends toward the target Space's color by this (issue #15).
-    @Published private(set) var progress: Double = 0
-    /// The Space the swipe reveals, nil at the ends; its color the background blends to.
-    @Published private(set) var targetSpaceID: UUID?
 
-    /// The Space shown when the swipe began. The background keeps its color under the blend until
-    /// the blend has settled, so letting go finishes the blend instead of jumping (the selection
-    /// changes at once when the swipe commits).
-    @Published private(set) var fromSpaceID: UUID?
-    /// Bumped by every swipe and every let-go, so a settle that was overtaken does not clear the
-    /// blend of a newer swipe.
-    private var settleGeneration = 0
-    /// Runs the blend's settle: `change` animated, then `completion`. The pages finish on the
-    /// Space-switch spring ([07 §11] observed curve), so the color does too. Tests replace it.
-    var animateSettle: (_ change: () -> Void, _ completion: @escaping () -> Void) -> Void = { change, completion in
-        withAnimation(ShellMotion.spaceSwitch, change, completion: completion)
+    // MARK: Window color blend (issue #15, B195)
+    //
+    // None of this is published: SwiftUI views that observed the per-frame blend made the swipe
+    // stutter (B195). Only the background's layer follows it, through `blendChanges`.
+
+    /// The Space whose colors the window background moves to while the pages slide; nil when the
+    /// background shows the selected Space as it is.
+    private(set) var blendTargetSpaceID: UUID?
+    /// How far the pages have moved toward `blendTargetSpaceID`, in points (0 to `pageWidth`).
+    private(set) var blendTravel: CGFloat = 0
+    /// `blendTravel` when the blend began: a slide that started part of the way across blends over
+    /// the rest of the way.
+    private var blendStartTravel: CGFloat = 0
+    /// Bumped whenever a blend starts from the colors on screen; the background takes the colors it
+    /// shows at that moment as the blend's start.
+    private(set) var blendGeneration = 0
+    /// Where the running settle takes `blendTravel`, nil when none runs.
+    private(set) var settleTravel: CGFloat?
+    /// Bumped by every settle and every swipe, so the frames of an overtaken settle stop.
+    private var settleToken = 0
+    /// Sent whenever the blend changes: per move, per display frame while it settles.
+    let blendChanges = PassthroughSubject<Void, Never>()
+    /// Calls `tick` once per display frame with the seconds since the settle began, until it
+    /// returns false. Tests replace it.
+    var frameDriver: (_ tick: @escaping @MainActor (Double) -> Bool) -> Void = { DisplayFrames.run($0) }
+
+    /// How far the background is from the start colors (0) to the target's (1).
+    var blendProgress: Double {
+        SpaceBlend.progress(travel: blendTravel, start: blendStartTravel, width: pageWidth)
     }
 
-    func begin(from current: UUID? = nil, previous: UUID?, next: UUID?) {
-        settleGeneration &+= 1
+    func begin(previous: UUID?, next: UUID?) {
         self.previous = previous
         self.next = next
-        fromSpaceID = current
-        progress = 0
-        targetSpaceID = nil
+        stopSettle()
+        // A blend still settling lands at once, like the pages (`SidebarSpacePagerView`).
+        blendGeneration &+= 1
+        setBlend(target: nil, travel: 0, start: 0)
         isActive = true
         send(.began(previous: previous, next: next))
     }
@@ -212,38 +227,69 @@ final class SpaceSwipeState: ObservableObject {
         guard isActive else { return }
         let direction = offset < 0 ? next : previous
         // No Space that way: nothing to blend to.
-        let p = direction == nil || pageWidth <= 0 ? 0 : min(1, max(0, abs(offset) / pageWidth))
-        if targetSpaceID != direction { targetSpaceID = direction }
-        if abs(progress - Double(p)) > 0.001 { progress = Double(p) }
+        setBlend(target: direction, travel: direction == nil ? 0 : min(abs(offset), pageWidth), start: 0)
         send(.moved(offset))
     }
 
-    /// The fingers lifted. The blend settles on the pages' spring: to the target Space's color when
-    /// the swipe commits (`target`), back to the current Space's when it springs back (nil).
+    /// The fingers lifted. The blend settles with the pages, on their spring: on to the target
+    /// Space's colors when the swipe commits (`target`), back to the current Space's when it springs
+    /// back (nil).
     func end(target: UUID?) {
         guard isActive else { return }
         isActive = false
         send(.ended(target: target))
-        settleGeneration &+= 1
-        let generation = settleGeneration
-        guard let blended = target ?? targetSpaceID else {
-            clearBlend()
+        guard blendTargetSpaceID != nil else { return }
+        settle(to: target == nil ? 0 : pageWidth)
+    }
+
+    /// The selection is about to move to `spaceID` and its page slides in (a Dock click, a
+    /// shortcut, a committed swipe): the background blends from the colors on screen to
+    /// `spaceID`'s with the page, on its spring. `travel` is how far the page already is across
+    /// (a switch that overtakes a running slide). A committed swipe is already settling there.
+    func slide(to spaceID: UUID?, travel: CGFloat) {
+        guard !isActive else { return }
+        if spaceID != nil, blendTargetSpaceID == spaceID, settleTravel == pageWidth { return }
+        stopSettle()
+        blendGeneration &+= 1
+        guard let spaceID else {
+            setBlend(target: nil, travel: 0, start: 0)
             return
         }
-        if targetSpaceID != blended { targetSpaceID = blended }
-        let settled: Double = target == nil ? 0 : 1
-        animateSettle({ self.progress = settled }) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.settleGeneration == generation else { return }
-                self.clearBlend()
+        let start = min(max(travel, 0), pageWidth)
+        setBlend(target: spaceID, travel: start, start: start)
+        settle(to: pageWidth)
+    }
+
+    private func settle(to end: CGFloat) {
+        settleToken &+= 1
+        let token = settleToken, from = blendTravel
+        settleTravel = end
+        frameDriver { [weak self] elapsed in
+            guard let self, self.settleToken == token else { return false }
+            let fraction = SpaceBlend.springFraction(elapsed: elapsed)
+            guard fraction < 1 else {
+                // Settled: the background shows the selected Space as it is again.
+                self.settleTravel = nil
+                self.setBlend(target: nil, travel: 0, start: 0)
+                return false
             }
+            self.setBlend(target: self.blendTargetSpaceID, travel: from + (end - from) * fraction,
+                          start: self.blendStartTravel)
+            return true
         }
     }
 
-    private func clearBlend() {
-        progress = 0
-        targetSpaceID = nil
-        fromSpaceID = nil
+    private func stopSettle() {
+        settleToken &+= 1
+        settleTravel = nil
+    }
+
+    private func setBlend(target: UUID?, travel: CGFloat, start: CGFloat) {
+        guard target != blendTargetSpaceID || travel != blendTravel || start != blendStartTravel else { return }
+        blendTargetSpaceID = target
+        blendTravel = target == nil ? 0 : travel
+        blendStartTravel = target == nil ? 0 : start
+        blendChanges.send()
     }
 
     private func send(_ event: Event) {

@@ -354,6 +354,14 @@ final class SidebarSpacePagerView: NSView {
     /// `next`'s kept page catches up on what it missed while hidden, if that was not done already
     /// while the sidebar was quiet.
     private func spaceWillChange(to next: UUID?) {
+        // The window colors move to `next`'s with its page (issue #15, B195), from where that page
+        // is now (part of the way across when this switch overtakes a slide).
+        if shownSpaceID != nil, let inputs {
+            let width = inputs.layout.width
+            let offset = pages[next].flatMap { presentedOffset($0.host) ?? heldOffset($0.host) }
+            inputs.viewModel.spaceSwipe.pageWidth = width
+            inputs.viewModel.spaceSwipe.slide(to: next, travel: offset.map { width - min(abs($0), width) } ?? 0)
+        }
         for (id, page) in pages where id != next { page.setShown(false) }
         // The switch's own changes that follow (the selected Space, its remembered tab selected
         // again) do not change what the incoming page draws (`pageSelectedTabID`): they mark it

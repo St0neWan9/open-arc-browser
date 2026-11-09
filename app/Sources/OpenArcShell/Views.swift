@@ -65,8 +65,8 @@ struct MainWindowContent: View {
             let layout = showsLinkPeek ? baseLayout.withPeekInset() : baseLayout
             ZStack(alignment: .topLeading) {
                 // The window background is the space theme color, with no separate title bar.
-                // [04 §window structure] A Space swipe blends it toward the target Space's color
-                // by how far the swipe has gone (issue #15).
+                // [04 §window structure] While the pages slide between Spaces it blends from the
+                // current Space's colors to the target's (issue #15, B195).
                 SwipeBackground(sidebar: sidebar, palette: palette, surface: surface)
 
                 if model.library.isActive {
@@ -418,33 +418,26 @@ struct CommandBarOverlay: View {
     }
 }
 
-/// The window background, blended toward the target Space's color while a two-finger swipe runs
-/// and while its pages finish sliding after the fingers lift (issue #15: the color should move
-/// with the swipe, not jump after the switch).
+/// The window background: the blur, the Space's colors and the grain. While the sidebar pages
+/// slide (a two-finger swipe, the settle after it, a Dock click or a shortcut) the colors blend
+/// from the current Space's to the target's with the pages (issue #15, B195), on a layer that
+/// follows the slide without SwiftUI updates (`SpaceBlendBackground`).
 struct SwipeBackground: View {
     let sidebar: SidebarViewModel
     let palette: ThemePalette
     let surface: WindowSurface
-    @ObservedObject private var swipe: SpaceSwipeState
-
-    init(sidebar: SidebarViewModel, palette: ThemePalette, surface: WindowSurface) {
-        self.sidebar = sidebar
-        self.palette = palette
-        self.surface = surface
-        _swipe = ObservedObject(wrappedValue: sidebar.spaceSwipe)
-    }
 
     var body: some View {
-        // Under the blend, the Space the swipe started from: a committed swipe selects the target at
-        // once, and the color finishes on the pages' spring instead of jumping to it.
-        let base = swipe.fromSpaceID.map { sidebar.palette(forSpace: $0) } ?? palette
         ZStack {
-            WindowBackgroundView(palette: base, surface: surface)
-            if let target = swipe.targetSpaceID {
-                WindowBackgroundView(palette: sidebar.palette(forSpace: target), surface: surface)
-                    .opacity(swipe.progress)
+            if surface.isTranslucent {
+                BehindWindowBlur()
+            }
+            SpaceBlendBackground(sidebar: sidebar, paint: WindowPaint(palette: palette, surface: surface), surface: surface)
+            if let opacity = GrainNoise.overlayOpacity(for: palette.grain) {
+                GrainOverlay(opacity: opacity)
             }
         }
+        .allowsHitTesting(false)
     }
 }
 
