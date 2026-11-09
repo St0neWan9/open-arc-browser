@@ -54,10 +54,21 @@ public enum PeekColors {
     /// color and opacity is inferred; light appearance unknown, uses the same.
     public static let dim = RGBAColor(hex: 0x060014)
     public static let dimOpacity = 0.55
-    /// Round button fill: "dark circle". [06 §22.2] observed; exact color unknown (inferred).
+    /// Round button fill in a dark Space: "dark circle". [06 §22.2] observed; exact color unknown
+    /// (inferred).
     public static let buttonFill = RGBAColor(hex: 0x1C1C1E, alpha: 0.85)
-    /// Button icon: "light icon". [06 §22.2] observed; exact color unknown (inferred).
+    /// Button icon in a dark Space: "light icon". [06 §22.2] observed; exact color unknown (inferred).
     public static let buttonInk = RGBAColor(hex: 0xFFFFFF, alpha: 0.92)
+    /// Round button fill in a light Space: near white. B198, [06 §22.2] observed (user's Arc
+    /// screenshot, purple light Space: #FDFDFF).
+    public static let lightButtonFill = RGBAColor(hex: 0xFDFDFF)
+
+    /// The buttons' fill and icon for `palette`'s Space: a white disc with an icon in the theme's
+    /// strongest tone in a light Space (observed #4233FF on a purple theme; using
+    /// `ThemePalette.seamIndicator` for it is inferred), a dark disc with a light icon in a dark one.
+    public static func button(for palette: ThemePalette) -> (fill: RGBAColor, ink: RGBAColor) {
+        palette.isDark ? (buttonFill, buttonInk) : (lightButtonFill, palette.seamIndicator)
+    }
     /// Corner badge on the source favorite while its Peek is open: a small dark rounded square.
     /// [06 §22.2] observed; color inferred.
     public static let sourceBadge = RGBAColor(hex: 0x1C1C1E, alpha: 0.9)

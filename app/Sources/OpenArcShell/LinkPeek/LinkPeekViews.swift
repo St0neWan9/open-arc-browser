@@ -49,7 +49,7 @@ struct LinkPeekOverlay: View {
             // The column slides in from 133 pt to the left over ≈ 0.3 s. [06 §22.4] observed;
             // curve unknown (`Motion.peekOpen`).
             ForEach(Array(zip(LinkPeekButtonKind.allCases, layout.buttonFrames)), id: \.0) { kind, frame in
-                LinkPeekButton(kind: kind, peek: peek)
+                LinkPeekButton(kind: kind, peek: peek, palette: palette)
                     .frame(width: frame.width, height: frame.height)
                     .offset(x: frame.minX + (isSettled ? 0 : Motion.peekButtonsStartOffsetX), y: frame.minY)
             }
@@ -81,19 +81,24 @@ private struct LinkPeekPanel: View {
     }
 }
 
-/// One of the round buttons right of the panel: 34 × 33 dark circle with a light icon. [06 §22.2] observed.
+/// One of the round buttons right of the panel: a 34 × 33 circle, white with a theme-colored icon
+/// in a light Space, dark with a light icon in a dark one (`PeekColors.button(for:)`). [06 §22.2]
+/// observed.
 private struct LinkPeekButton: View {
     let kind: LinkPeekButtonKind
     @ObservedObject var peek: LinkPeekModel
+    let palette: ThemePalette
     @State private var isHovering = false
+
+    private var colors: (fill: RGBAColor, ink: RGBAColor) { PeekColors.button(for: palette) }
 
     var body: some View {
         Button(action: perform) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(PeekColors.buttonInk.swiftUI)
+                .foregroundStyle(colors.ink.swiftUI)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Circle().fill(PeekColors.buttonFill.swiftUI.opacity(isHovering ? 1 : 0.9)))
+                .background(Circle().fill(colors.fill.swiftUI.opacity(isHovering ? 1 : 0.9)))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)

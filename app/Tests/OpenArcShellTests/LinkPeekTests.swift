@@ -314,6 +314,17 @@ final class LinkPeekTests: XCTestCase {
     }
 
     /// 06 §22.2 observed: a white page under the veil reads ≈ #76727E (dark appearance).
+    /// B198, 06 §22.2: the side buttons follow the Space: white with a theme-colored icon in a
+    /// light Space (user's Arc screenshot), dark with a light icon in a dark one.
+    func testButtonColorsFollowTheSpace() {
+        let light = ThemeDerivation.palette(for: nil, appearance: .light)
+        XCTAssertEqual(PeekColors.button(for: light).fill, RGBAColor(hex: 0xFDFDFF))
+        XCTAssertEqual(PeekColors.button(for: light).ink, light.seamIndicator)
+        let dark = ThemeDerivation.palette(for: nil, appearance: .dark)
+        XCTAssertEqual(PeekColors.button(for: dark).fill, PeekColors.buttonFill)
+        XCTAssertEqual(PeekColors.button(for: dark).ink, PeekColors.buttonInk)
+    }
+
     func testDimColorOverWhite() {
         let c = PeekColors.dim, a = PeekColors.dimOpacity
         let mixed = (c.red * a + (1 - a), c.green * a + (1 - a), c.blue * a + (1 - a))
