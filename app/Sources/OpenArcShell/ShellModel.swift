@@ -171,7 +171,11 @@ public final class ShellModel: ObservableObject {
                 return sidebar.draggingItem == nil && !sidebar.spaceSwipe.isActive
             },
             openLibraryDownloads: { [weak library] in library?.open(.downloads) },
-            now: controller.now
+            now: controller.now,
+            isActiveWindow: { [weak controller, weak sidebar] in
+                guard let sidebar else { return false }
+                return controller?.activeWindow.map { $0.sidebar === sidebar } ?? true
+            }
         )
         // The engine's ad blocker (C16) over fake site settings until the bridge provides the
         // rest (plan C12 / C14).

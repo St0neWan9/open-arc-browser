@@ -800,6 +800,8 @@ struct SidebarDockView: View, Equatable {
     /// The Space icon under the pointer: a fill behind it, its own theme color, and after a moment
     /// a tag with its name and ⌃ number above it. [07 §4.1] observed (B201).
     @SwiftUI.State private var hoveredSpaceID: UUID?
+    /// The Library button gets the same hover fill. [06 §43] observed (B203).
+    @SwiftUI.State private var isHomeHovered = false
     @SwiftUI.StateObject private var spaceTooltip = WebToolbarTooltipTimer(delay: SidebarDockHoverTokens.tooltipDelay)
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
@@ -817,7 +819,8 @@ struct SidebarDockView: View, Equatable {
             dockButton(layout.dockHomeFrame, top: top, symbol: SidebarLocalTokens.dockHomeSymbol,
                        glyphSize: SidebarLocalTokens.dockHomeGlyphSize, tint: tint,
                        label: SidebarLocalTokens.dockHomeAccessibilityLabel, id: "openarc.sidebar.dock.home",
-                       onHover: { viewModel.downloadsShelf.iconHovered($0) }) {
+                       showsHoverFill: isHomeHovered, palette: palette,
+                       onHover: { isHomeHovered = $0; viewModel.downloadsShelf.iconHovered($0) }) {
                 viewModel.downloadsShelf.dismiss()
                 viewModel.requestFromMenu(.openLibrary)
             }
@@ -869,6 +872,7 @@ struct SidebarDockView: View, Equatable {
     private func dockButton(_ frame: CGRect, top: CGFloat, symbol: String, glyphSize: CGFloat,
                             glyphWeight: Font.Weight = .regular, tint: Color,
                             label: String, id: String, presenter: AnyView? = nil,
+                            showsHoverFill: Bool = false, palette: ThemePalette? = nil,
                             onHover: ((Bool) -> Void)? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -880,6 +884,16 @@ struct SidebarDockView: View, Equatable {
         }
         .buttonStyle(.plain)
         .frame(width: frame.width, height: frame.height)
+        .background {
+            if let palette {
+                RoundedRectangle(cornerRadius: SidebarDockHoverTokens.fillCornerRadius, style: .continuous)
+                    .fill(palette.usesLightInk || palette.isDark ? Color.white.opacity(SidebarDockHoverTokens.lightInkFillOpacity)
+                                                                 : Color.black.opacity(SidebarDockHoverTokens.fillOpacity))
+                    .frame(width: SidebarDockHoverTokens.fillSize, height: SidebarDockHoverTokens.fillSize)
+                    .opacity(showsHoverFill ? 1 : 0)
+                    .animation(ShellMotion.dockSpaceHover, value: showsHoverFill)
+            }
+        }
         .background { if let presenter { presenter } }
         .onHover { onHover?($0) }
         .position(x: frame.midX, y: frame.midY - top)

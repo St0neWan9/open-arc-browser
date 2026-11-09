@@ -124,6 +124,19 @@ struct MainWindowContent: View {
                     )
                 }
 
+                // A download that starts here: its icon flies to the Library button's badge. [06 §43]
+                // observed (B203). Only while the sidebar shows the dock.
+                DownloadFlightOverlay(
+                    flights: sidebar.downloadsShelf.flights,
+                    target: baseLayout.isSidebarVisible && !model.library.isActive && !model.spaceFlow.isCreating
+                        ? DownloadFlightOverlay.badgeCenter(sidebarFrame: baseLayout.sidebarFrame, windowHeight: proxy.size.height)
+                        : nil,
+                    tint: palette.seamIndicator
+                )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
                 // The window bar, also for a split pane (B165: same size and place as ⌘T). Opening
                 // is a one-frame jump; closing fades out over ≈ 50 ms ([07 §11], `Motion.commandBarClose`).
                 ZStack(alignment: .topLeading) {

@@ -19,6 +19,10 @@ import OpenArcDesign
 // - the rows stay while the pointer is on them and leave within ≈ 3 frames when it leaves;
 // - Arc mixes in recent Library media (screenshots): ours does too once Library ▸ Media is on.
 // Opening on click and the right-click menu are inferred.
+//
+// [06 §43] observed (B203, same recordings, Arc's window active): a download that starts puts a
+// 20 pt progress badge on the Library button (it drops in and bounces), an icon flies from the
+// click to it, and when the file is done the badge turns into the file's icon for ≈ 33 s.
 
 /// Values of the shelf. [06 §42] observed unless marked.
 enum SidebarDownloadsShelfTokens {
@@ -39,8 +43,11 @@ enum SidebarDownloadsShelfTokens {
     /// Distance from the right edge to the centre of the cancel ×.
     static let cancelCenterTrailing: CGFloat = 27
     static let progressDiscSize: CGFloat = 24
-    /// Progress ring and arrow: the same purple in every theme.
-    static let progressTint = RGBAColor(hex: 0x8B88F5)
+    /// Progress ring and arrow: the same blue in every theme. [06 §43] observed with Arc's window
+    /// active (the purple first read in §42 was an inactive window's).
+    static let progressTint = RGBAColor(hex: 0x2849FF)
+    static let progressTrack = RGBAColor(hex: 0xD1D6FF)
+    static let progressFill = RGBAColor(hex: 0xF1F2FF)
     /// The veil fades in over this height above the first row (≈ 70 pt observed).
     static let veilFadeHeight: CGFloat = 70
     /// Hover time on the Library button before the shelf shows (≈ 0.2 s observed).
@@ -50,6 +57,18 @@ enum SidebarDownloadsShelfTokens {
     /// Hidden rows sit closer together toward the dock: row k from the bottom starts this share of
     /// a pitch per step lower (≈ 16 / 56 observed mid-way). inferred.
     static let collapsedSpreadShare: CGFloat = 0.3
+
+    // Badge and flight (B203). [06 §43] observed unless marked.
+    /// The badge on the Library button, centered this far from the button's center.
+    static let badgeSize: CGFloat = 20
+    static let badgeOffset = CGSize(width: 9.5, height: -12.5)
+    /// The finished file's icon in place of the badge, and how long it stays (32–35 s observed).
+    static let finishedIconSize: CGFloat = 28
+    static let finishedIconDuration: Duration = .seconds(33)
+    /// The badge drops in from this far above. ≈ 12 pt observed.
+    static let badgeDropDistance: CGFloat = 12
+    /// A download that started this recently is new (the flight runs for it). inferred.
+    static let newDownloadWindow: TimeInterval = 5
 }
 
 /// One row of the shelf: a download or a Library media file.
@@ -182,6 +201,16 @@ struct SidebarShelfEntry: Identifiable, Equatable {
 final class SidebarDownloadsShelf: ObservableObject {
     @Published private(set) var isShown = false
     @Published private(set) var entries: [SidebarShelfEntry] = []
+    /// The Library button's badge: a running download's progress, or a finished file's icon.
+    @Published private(set) var badge: SidebarDownloadBadge?
+    /// A download started in this window: the icon flies from the pointer to the badge.
+    let flights = PassthroughSubject<String, Never>()
+    private var activeDownloadIDs: Set<String> = []
+    private var knownDownloadIDs: Set<String> = []
+    private var badgeClear: Task<Void, Never>?
+    var finishedIconDuration = SidebarDownloadsShelfTokens.finishedIconDuration
+    /// Whether this window is the one in use (a flight runs in that window only).
+    private var isActiveWindow: () -> Bool = { true }
 
     private var downloads: LibraryDownloads?
     private var media: LibraryMediaModel?
@@ -201,7 +230,9 @@ final class SidebarDownloadsShelf: ObservableObject {
     /// Hooks the shelf to its sources. Set by the window (`ShellModel`); unattached it never shows.
     func attach(downloads: LibraryDownloads, media: LibraryMediaModel?, profileID: @escaping () -> UUID?,
                 isMediaEnabled: @escaping () -> Bool, canShow: @escaping () -> Bool,
-                openLibraryDownloads: @escaping () -> Void, now: @escaping () -> Date) {
+                openLibraryDownloads: @escaping () -> Void, now: @escaping () -> Date,
+                isActiveWindow: @escaping () -> Bool = { true }) {
+        self.isActiveWindow = isActiveWindow
         self.downloads = downloads
         self.media = media
         self.profileID = profileID
@@ -220,6 +251,42 @@ final class SidebarDownloadsShelf: ObservableObject {
         let next = SidebarShelfEntry.recent(downloads: downloads, media: isMediaEnabled() ? media : [], now: now())
         if next != entries { entries = next }
         if isShown, next.isEmpty { setShown(false) }
+        updateBadge(downloads)
+    }
+
+    /// Follows the downloads for the badge and the flights. [06 §43] observed: the badge shows
+    /// the newest running download; when a running download finishes its file's icon takes the
+    /// badge's place for ≈ 33 s. Several running downloads: the newest (inferred).
+    private func updateBadge(_ downloads: [DownloadItem]) {
+        let date = now()
+        for item in downloads where !knownDownloadIDs.contains(item.id) {
+            knownDownloadIDs.insert(item.id)
+            if item.state == .inProgress, date.timeIntervalSince(item.startDate) < SidebarDownloadsShelfTokens.newDownloadWindow,
+               isActiveWindow() {
+                flights.send(item.id)
+            }
+        }
+        let active = downloads.filter { $0.state == .inProgress || $0.state == .paused }
+        let finished = downloads.filter { activeDownloadIDs.contains($0.id) && $0.state == .complete && $0.fileURL != nil }
+        activeDownloadIDs = Set(active.map(\.id))
+        if let newest = active.max(by: { $0.startDate < $1.startDate }) {
+            badgeClear?.cancel()
+            let progress = SidebarShelfEntry(source: .download(newest)).progress
+            let next = SidebarDownloadBadge.progress(id: newest.id, progress: progress)
+            if badge != next { badge = next }
+        } else if let done = finished.last, let url = done.fileURL {
+            badge = .finished(id: done.id, file: url)
+            badgeClear?.cancel()
+            let duration = finishedIconDuration
+            badgeClear = Task { [weak self] in
+                try? await Task.sleep(for: duration)
+                guard let self, !Task.isCancelled else { return }
+                if case .finished = self.badge { self.badge = nil }
+            }
+        } else if case .progress = badge {
+            // Cancelled or failed: nothing to show. inferred.
+            badge = nil
+        }
     }
 
     /// The pointer entered or left the dock's Library button.
@@ -284,6 +351,12 @@ final class SidebarDownloadsShelf: ObservableObject {
         isShown = shown
         if !shown, let media, media.isActive { media.deactivate() }
     }
+}
+
+/// What the Library button carries. [06 §43] observed.
+enum SidebarDownloadBadge: Equatable {
+    case progress(id: String, progress: Double?)
+    case finished(id: String, file: URL)
 }
 
 // MARK: - View
@@ -435,27 +508,76 @@ private struct SidebarShelfRow: View {
     }
 }
 
-/// A running download's icon: a near-white disc, a purple ring that fills with the progress and a
-/// down arrow. [06 §42] observed.
-private struct SidebarShelfProgressDisc: View {
+/// A running download's icon: a pale blue disc, a blue ring that fills with the progress over a
+/// light track, and a blue down arrow. [06 §42, §43] observed.
+struct SidebarShelfProgressDisc: View {
     let progress: Double?
+    var size: CGFloat = SidebarDownloadsShelfTokens.progressDiscSize
 
     private typealias T = SidebarDownloadsShelfTokens
 
     var body: some View {
         let tint = T.progressTint.swiftUI
+        let line = max(1.5, size / 12)
         ZStack {
-            Circle().fill(Color.white.opacity(0.9))
-            Circle().stroke(tint.opacity(0.3), lineWidth: 1)
+            Circle().fill(T.progressFill.swiftUI)
+            Circle().inset(by: line / 2).stroke(T.progressTrack.swiftUI, lineWidth: line)
             Circle()
+                .inset(by: line / 2)
                 .trim(from: 0, to: progress ?? 0)
-                .stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .stroke(tint, style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             Image(systemName: "arrow.down")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: size * 0.45, weight: .semibold))
                 .foregroundStyle(tint)
         }
-        .frame(width: T.progressDiscSize, height: T.progressDiscSize)
+        .frame(width: size, height: size)
+    }
+}
+
+/// The badge on the dock's Library button. [06 §43] observed: it drops in from above and bounces
+/// when a download starts; it hides while the shelf is open (the row shows the download).
+struct SidebarDownloadBadgeView: View {
+    @ObservedObject var shelf: SidebarDownloadsShelf
+    let layout: SidebarLayout
+
+    private typealias T = SidebarDownloadsShelfTokens
+
+    var body: some View {
+        let button = layout.dockHomeFrame
+        let center = CGPoint(x: button.midX + T.badgeOffset.width, y: button.midY + T.badgeOffset.height)
+        ZStack {
+            switch shelf.isShown ? nil : shelf.badge {
+            case .progress(let id, let progress):
+                SidebarShelfProgressDisc(progress: progress, size: T.badgeSize)
+                    .id(id)
+                    .transition(.asymmetric(insertion: .offset(y: -T.badgeDropDistance).combined(with: .opacity),
+                                            removal: .opacity))
+            case .finished(let id, let file):
+                Image(nsImage: NSWorkspace.shared.icon(forFile: file.path))
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: T.finishedIconSize, height: T.finishedIconSize)
+                    .shadow(color: .black.opacity(0.12), radius: 1.5, y: 0.5)
+                    .id("finished:" + id)
+                    .transition(.opacity)
+            case nil:
+                EmptyView()
+            }
+        }
+        .animation(ShellMotion.downloadBadgeDrop, value: shelf.isShown ? nil : shelf.badge.map(Self.identity))
+        .position(center)
+        .frame(width: layout.width, height: layout.windowSize.height)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Changes that animate (the progress itself does not).
+    private static func identity(_ badge: SidebarDownloadBadge) -> String {
+        switch badge {
+        case .progress(let id, _): return "progress:" + id
+        case .finished(let id, _): return "finished:" + id
+        }
     }
 }
 

@@ -105,3 +105,9 @@ extension Motion {
     /// durations; one ease-out of 0.16 s for both, the curve inferred.
     public static let dockSpaceHover = MotionToken(.easeOut(duration: 0.16), .inferred)
 }
+
+extension Motion {
+    /// The download badge dropping onto the Library button (B203): ≈ 20 frames with one bounce.
+    /// [06 §43] observed; the spring values are inferred.
+    public static let downloadBadgeDrop = MotionToken(.spring(response: 0.35, dampingFraction: 0.55), .inferred)
+}

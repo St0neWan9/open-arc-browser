@@ -128,6 +128,9 @@ private struct SidebarContent: View, Equatable {
                     .frame(width: layout.width, height: layout.dockFrame.height)
                     .offset(y: layout.dockFrame.minY)
 
+                // A running download's progress, then the finished file, on the Library button. [06 §43] B203.
+                SidebarDownloadBadgeView(shelf: viewModel.downloadsShelf, layout: layout)
+
                 // A downloaded update waits: the pill right above the dock. [07 §8.6] observed (B111).
                 if let pill = layout.updatePillFrame {
                     SidebarUpdatePill(lightInk: viewModel.palette.usesLightInk) { viewModel.controller.updates.installReadyUpdate() }
