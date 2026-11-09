@@ -48,8 +48,11 @@ enum SidebarDownloadsShelfTokens {
     static let progressTint = RGBAColor(hex: 0x2849FF)
     static let progressTrack = RGBAColor(hex: 0xD1D6FF)
     static let progressFill = RGBAColor(hex: 0xF1F2FF)
-    /// The veil fades in over this height above the first row (≈ 70 pt observed).
+    /// The list fades out over this height above the first row (≈ 70 pt observed).
     static let veilFadeHeight: CGFloat = 70
+    /// The list's fade follows the rows: ≈ 130 ms in, ≈ 50 ms out observed (B205).
+    static let fadeInDuration: CFTimeInterval = 0.13
+    static let fadeOutDuration: CFTimeInterval = 0.06
     /// Hover time on the Library button before the shelf shows (≈ 0.2 s observed).
     static let showDelay: Duration = .milliseconds(200)
     /// Room to move from the button up onto the rows without the shelf closing. inferred.
@@ -190,7 +193,8 @@ struct SidebarShelfEntry: Identifiable, Equatable {
     /// out. A media file that is also a listed download shows once.
     static func recent(downloads: [DownloadItem], media: [LibraryMediaItem], now: Date,
                        limit: Int = SidebarDownloadsShelfTokens.maxRows,
-                       fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }) -> [SidebarShelfEntry] {
+                       fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
+                       hidden: Set<String> = []) -> [SidebarShelfEntry] {
         let kept = downloads.filter { item in
             guard item.state == .complete else { return true }
             return item.fileURL.map(fileExists) ?? false
@@ -199,7 +203,8 @@ struct SidebarShelfEntry: Identifiable, Equatable {
         let entries = kept.map { SidebarShelfEntry(source: .download($0)) }
             + media.filter { !downloadFiles.contains($0.url.standardizedFileURL.path) }
                 .map { SidebarShelfEntry(source: .media($0)) }
-        return Array(entries.sorted { $0.date(now: now) < $1.date(now: now) }.suffix(limit))
+        return Array(entries.filter { !hidden.contains($0.id) }
+            .sorted { $0.date(now: now) < $1.date(now: now) }.suffix(limit))
     }
 }
 
@@ -258,9 +263,20 @@ final class SidebarDownloadsShelf: ObservableObject {
     /// Whether a finished download's file is still there. Tests replace it.
     var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
 
+    /// Rows hidden with "Hide from Open Arc" (media files; downloads leave the download list).
+    /// For this run of the app. inferred.
+    private(set) var hiddenIDs: Set<String> = []
+    private var lastDownloads: [DownloadItem] = []
+    private var lastMedia: [LibraryMediaItem] = []
+    /// A row's menu is open: the shelf stays while it tracks. [06 §42] observed (B206).
+    private var isMenuTracking = false
+    private var menuObservers: [NSObjectProtocol] = []
+
     private func update(downloads: [DownloadItem], media: [LibraryMediaItem]) {
+        lastDownloads = downloads
+        lastMedia = media
         let next = SidebarShelfEntry.recent(downloads: downloads, media: isMediaEnabled() ? media : [], now: now(),
-                                            fileExists: fileExists)
+                                            fileExists: fileExists, hidden: hiddenIDs)
         if next != entries { entries = next }
         if isShown, next.isEmpty { setShown(false) }
         updateBadge(downloads)
@@ -338,6 +354,88 @@ final class SidebarDownloadsShelf: ObservableObject {
         downloads?.cancel(id)
     }
 
+    // MARK: Row menu (B206)
+
+    /// The items of a row's right-click menu. [06 §42] observed (Arc 1.170, a finished download):
+    /// Copy File ‖ Send via iMessage · AirDrop ‖ Open in <app> · Show in Finder ‖ Hide from Arc ·
+    /// Move to Trash. A cancelled row has no menu; running rows: none (inferred).
+    enum MenuItem: Equatable {
+        case copyFile, sendViaMessages, airDrop, openIn(app: String), showInFinder, hide, moveToTrash
+    }
+
+    /// Groups of `entry`'s menu, separated by lines; empty without a file on disk.
+    static func menu(for entry: SidebarShelfEntry, appName: String?) -> [[MenuItem]] {
+        guard entry.fileURL != nil, !entry.isActiveDownload else { return [] }
+        if case .download(let item) = entry.source, item.state != .complete { return [] }
+        let open: [MenuItem] = (appName.map { [.openIn(app: $0)] } ?? []) + [.showInFinder]
+        return [[.copyFile], [.sendViaMessages, .airDrop], open, [.hide, .moveToTrash]]
+    }
+
+    /// The default app for `url`, as Finder names it ("Preview"), nil when there is none.
+    static func defaultAppName(for url: URL) -> String? {
+        guard let app = NSWorkspace.shared.urlForApplication(toOpen: url) else { return nil }
+        return FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    func perform(_ item: MenuItem, on entry: SidebarShelfEntry) {
+        guard let url = entry.fileURL else { return }
+        switch item {
+        case .copyFile:
+            let board = NSPasteboard.general
+            board.clearContents()
+            board.writeObjects([url as NSURL])
+        case .sendViaMessages:
+            NSSharingService(named: .composeMessage)?.perform(withItems: [url])
+        case .airDrop:
+            NSSharingService(named: .sendViaAirDrop)?.perform(withItems: [url])
+        case .openIn:
+            open(entry)
+        case .showInFinder:
+            dismiss()
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .hide:
+            hide(entry)
+        case .moveToTrash:
+            NSWorkspace.shared.recycle([url]) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+        }
+    }
+
+    /// "Hide from Arc": the row leaves the shelf, the file stays. A download also leaves the
+    /// download list (Library ▸ Downloads). inferred: Arc's wording only.
+    func hide(_ entry: SidebarShelfEntry) {
+        hiddenIDs.insert(entry.id)
+        if let id = entry.downloadID { downloads?.remove(id) }
+        refresh()
+    }
+
+    /// Recomputes the rows (a file went to the Trash, a row was hidden).
+    private func refresh() {
+        update(downloads: lastDownloads, media: lastMedia)
+    }
+
+    /// Follows the app's menus while the shelf shows: a row's menu keeps it open.
+    private func followMenus(_ follow: Bool) {
+        menuObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        menuObservers = []
+        isMenuTracking = false
+        guard follow else { return }
+        let center = NotificationCenter.default
+        menuObservers = [
+            center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.isMenuTracking = true }
+            },
+            center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isMenuTracking = false
+                    self.schedule()
+                }
+            },
+        ]
+    }
+
     /// Follows the current profile's downloads and, with Library ▸ Media on, rescans media.
     private func prepareSources() {
         downloads?.observe(profileID: profileID())
@@ -346,13 +444,13 @@ final class SidebarDownloadsShelf: ObservableObject {
 
     private func schedule() {
         pending?.cancel()
-        let wantsShown = (isIconHovered || isListHovered) && canShow()
+        let wantsShown = (isIconHovered || isListHovered || (isShown && isMenuTracking)) && canShow()
         guard wantsShown != isShown else { return }
         let delay = wantsShown ? showDelay : hideGrace
         pending = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
-            let stillWanted = (self.isIconHovered || self.isListHovered) && self.canShow()
+            let stillWanted = (self.isIconHovered || self.isListHovered || (self.isShown && self.isMenuTracking)) && self.canShow()
             guard stillWanted == wantsShown else { return }
             self.setShown(wantsShown && !self.entries.isEmpty)
         }
@@ -361,6 +459,7 @@ final class SidebarDownloadsShelf: ObservableObject {
     private func setShown(_ shown: Bool) {
         guard shown != isShown else { return }
         isShown = shown
+        followMenus(shown)
         if !shown, let media, media.isActive { media.deactivate() }
     }
 }
@@ -378,9 +477,6 @@ struct SidebarDownloadsShelfView: View {
     @ObservedObject var shelf: SidebarDownloadsShelf
     let palette: ThemePalette
     let layout: SidebarLayout
-    /// The floating panel's deeper fill instead of the window color. [06 §14] B34.
-    @Environment(\.sidebarFillOverride) private var fillOverride
-    @Environment(\.windowSurface) private var surface
     @State private var hoveredID: String?
 
     private typealias T = SidebarDownloadsShelfTokens
@@ -394,29 +490,8 @@ struct SidebarDownloadsShelfView: View {
 
     private func shelfBody(entries: [SidebarShelfEntry], rowsHeight: CGFloat, bottom: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
-            // The veil is the window's own background (blur and theme layer on a see-through
-            // window), so it matches the sidebar it covers; the sidebar starts at the window's left
-            // edge. The floating panel paints its own fill.
-            Group {
-                if let fillOverride {
-                    fillOverride.swiftUI
-                } else {
-                    WindowBackgroundView(palette: palette, surface: surface)
-                }
-            }
-            .frame(width: layout.width, height: layout.windowSize.height)
-            .mask(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: T.veilFadeHeight)
-                    Color.black.frame(height: rowsHeight)
-                }
-                .frame(width: layout.width)
-                .offset(y: bottom - rowsHeight - T.veilFadeHeight)
-            }
-            .opacity(shelf.isShown ? 1 : 0)
-            .allowsHitTesting(false)
-
+            // No fill of its own: the list under it fades out instead (`SidebarSpacePagerView`), so
+            // the rows sit on the sidebar. [06 §42] observed (B205).
             ZStack(alignment: .topLeading) {
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                     let fromBottom = CGFloat(entries.count - 1 - index)
@@ -501,13 +576,29 @@ private struct SidebarShelfRow: View {
         .contentShape(Rectangle())
         .onTapGesture { shelf.open(entry) }
         .contextMenu {
-            if let url = entry.fileURL {
-                Button("Open") { shelf.open(entry) }
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            let groups = SidebarDownloadsShelf.menu(for: entry, appName: entry.fileURL.flatMap(SidebarDownloadsShelf.defaultAppName))
+            ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
+                if index > 0 { Divider() }
+                ForEach(Array(group.enumerated()), id: \.offset) { _, item in
+                    Button(Self.title(item)) { shelf.perform(item, on: entry) }
+                }
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// [06 §42] observed titles; "Arc" is our app's name, "Messages" the system's.
+    static func title(_ item: SidebarDownloadsShelf.MenuItem) -> String {
+        switch item {
+        case .copyFile: return "Copy File"
+        case .sendViaMessages: return "Send via iMessage"
+        case .airDrop: return "AirDrop"
+        case .openIn(let app): return "Open in \(app)"
+        case .showInFinder: return "Show in Finder"
+        case .hide: return "Hide from Open Arc"
+        case .moveToTrash: return "Move to Trash"
+        }
     }
 
     @ViewBuilder

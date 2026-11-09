@@ -52,6 +52,34 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
         XCTAssertEqual(entries.map(\.id).filter { $0.hasPrefix("media:") }, ["media:/tmp/shot.png"])
     }
 
+    /// B206, 06 §42 observed: a finished file's menu; none for cancelled or running downloads.
+    func testRowMenu() {
+        let done = SidebarShelfEntry(source: .download(download("a", ended: -60)))
+        XCTAssertEqual(SidebarDownloadsShelf.menu(for: done, appName: "DiskImageMounter"),
+                       [[.copyFile], [.sendViaMessages, .airDrop], [.openIn(app: "DiskImageMounter"), .showInFinder], [.hide, .moveToTrash]])
+        XCTAssertEqual(SidebarDownloadsShelf.menu(for: done, appName: nil)[2], [.showInFinder])
+        XCTAssertTrue(SidebarDownloadsShelf.menu(for: SidebarShelfEntry(source: .download(download("c", state: .cancelled))), appName: nil).isEmpty)
+        XCTAssertTrue(SidebarDownloadsShelf.menu(for: SidebarShelfEntry(source: .download(download("r", state: .inProgress))), appName: nil).isEmpty)
+        let shot = LibraryMediaItem(url: URL(fileURLWithPath: "/tmp/s.png"), name: "s.png", kind: .screenshot, date: now)
+        XCTAssertEqual(SidebarDownloadsShelf.menu(for: SidebarShelfEntry(source: .media(shot)), appName: "Preview").count, 4)
+    }
+
+    /// B206: "Hide" takes the row out of the shelf and the download out of the list.
+    func testHideRemovesTheRow() async throws {
+        let (model, engine) = makeModel()
+        defer { model.stop() }
+        let shelf = model.sidebar.downloadsShelf
+        let profileID = try XCTUnwrap(model.sidebar.currentProfileID)
+        engine.fakeDownloadService.simulateDownload(DownloadItem(
+            id: "h", profileID: profileID, sourceURL: URL(string: "https://example.org/h")!,
+            fileURL: URL(fileURLWithPath: "/tmp/h"), suggestedFilename: "h", state: .complete,
+            receivedBytes: 1, totalBytes: 1, startDate: now, endDate: now))
+        try await waitUntil { shelf.entries.count == 1 }
+        shelf.hide(try XCTUnwrap(shelf.entries.first))
+        XCTAssertTrue(shelf.entries.isEmpty)
+        try await waitUntil { engine.fakeDownloadService.commands.contains("remove:h") }
+    }
+
     // MARK: Lines
 
     func testDetailLines() {

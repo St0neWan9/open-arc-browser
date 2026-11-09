@@ -248,6 +248,11 @@ final class SidebarSpacePagerView: NSView {
     private var spaceWillChange: AnyCancellable?
     private var scrollStateChanges: AnyCancellable?
     private var swipeEvents: AnyCancellable?
+    /// The downloads shelf over the list's bottom (B200, B205): the list fades out above its rows.
+    private var shelfChanges: AnyCancellable?
+    private let shelfFade = CAGradientLayer()
+    private var shelfRowsHeight: CGFloat = 0
+    private var isShelfShown = false
     /// The running interactive swipe (B184): the Space it reveals, nil at an end (rubber band).
     private var swipe: (previous: UUID?, next: UUID?, neighbor: UUID??)?
     private weak var observedModel: SidebarViewModel?
@@ -266,7 +271,43 @@ final class SidebarSpacePagerView: NSView {
         wantsLayer = true
         // The outgoing page must not draw over the web panel or the blocks above and below.
         layer?.masksToBounds = true
+        shelfFade.colors = Self.shelfFadeColors(shown: false)
+        shelfFade.startPoint = CGPoint(x: 0.5, y: 0)
+        shelfFade.endPoint = CGPoint(x: 0.5, y: 1)
+        layer?.mask = shelfFade
     }
+
+    /// Opaque, or opaque above the shelf, fading over `veilFadeHeight` to clear at its first row.
+    private static func shelfFadeColors(shown: Bool) -> [CGColor] {
+        let opaque = CGColor(gray: 0, alpha: 1), clear = CGColor(gray: 0, alpha: 0)
+        return shown ? [opaque, opaque, clear, clear] : [opaque, opaque, opaque, opaque]
+    }
+
+    /// Follows the shelf: while it is open the list fades out over its rows, so the rows sit on the
+    /// sidebar itself with no fill of their own. [06 §42] observed (B205).
+    private func updateShelfFade(animated: Bool) {
+        let height = bounds.height
+        guard height > 0 else { return }
+        let fade = SidebarDownloadsShelfTokens.veilFadeHeight
+        let rowsTop = max(0, height - shelfRowsHeight)
+        // The layer is flipped (top-left origin): location 0 is the band's top.
+        let locations = [0, max(0, rowsTop - fade) / height, rowsTop / height, 1].map { NSNumber(value: Double($0)) }
+        CATransaction.begin()
+        if animated {
+            CATransaction.setAnimationDuration(isShelfShown ? SidebarDownloadsShelfTokens.fadeInDuration
+                                                            : SidebarDownloadsShelfTokens.fadeOutDuration)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+        if shelfFade.frame != bounds { shelfFade.frame = bounds }
+        shelfFade.locations = locations
+        shelfFade.colors = Self.shelfFadeColors(shown: isShelfShown)
+        CATransaction.commit()
+    }
+
+    /// For tests: whether the list is faded for the shelf.
+    var isShelfFadeShownForTesting: Bool { isShelfShown }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -293,6 +334,7 @@ final class SidebarSpacePagerView: NSView {
 
     override func layout() {
         super.layout()
+        updateShelfFade(animated: false)
         guard let inputs else { return }
         let frame = pageFrame(inputs.layout)
         for page in pages.values where page.host.frame != frame { page.host.frame = frame }
@@ -325,6 +367,17 @@ final class SidebarSpacePagerView: NSView {
             // page coming back is brought up to date at the same moment (B106).
             spaceWillChange = viewModel.selectedSpaceWillChange.sink { [weak self] next in
                 MainActor.assumeIsolated { self?.spaceWillChange(to: next) }
+            }
+            let shelf = viewModel.downloadsShelf
+            shelfChanges = shelf.$isShown.combineLatest(shelf.$entries).sink { [weak self] shown, entries in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let rows = CGFloat(entries.count) * SidebarDownloadsShelfTokens.rowPitch
+                    guard shown != self.isShelfShown || rows != self.shelfRowsHeight else { return }
+                    self.isShelfShown = shown
+                    self.shelfRowsHeight = rows
+                    self.updateShelfFade(animated: true)
+                }
             }
             swipeEvents = viewModel.spaceSwipe.events.sink { [weak self] event in
                 MainActor.assumeIsolated { self?.handleSwipe(event) }
