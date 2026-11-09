@@ -20,6 +20,12 @@ import OpenArcDesign
 // Engine-backed values go through `SiteSettingsProvider` (ad blocking C16 and extensions C14 are
 // the engine's; the rest is fake until C12 settles it).
 
+/// What the extension removal card asks about. `06 §31` observed.
+public struct ExtensionRemovalQuestion: Identifiable, Equatable, Sendable {
+    public let id = UUID()
+    public let extensionName: String
+}
+
 /// The 4 square buttons at the top of the bubble. [06 §12] observed.
 public enum SiteControlsTool: String, CaseIterable, Sendable {
     case share, newBoost, captureArea, captureFullPage
@@ -190,9 +196,13 @@ public final class SiteControlsModel: ObservableObject {
     public var manageExtensionsHandler: (() -> Void)?
     /// The action's right-click menu (B116): opens one extension's details page; nil disables it.
     public var manageExtensionHandler: ((String) -> Void)?
-    /// The action's right-click menu (B116): asks before removing the named extension (an app-modal
-    /// alert in the app). Answers true to remove. nil disables "Remove" (incognito windows).
-    public var confirmExtensionRemoval: ((String) -> Bool)?
+    /// The action's right-click menu (B116): asks before removing the named extension (the
+    /// window's removal card in the app, `askToRemoveExtension`). Answers true to remove. nil
+    /// disables "Remove" (incognito windows).
+    public var confirmExtensionRemoval: (@MainActor (String) async -> Bool)?
+    /// The question the window's removal card shows now (`06 §31` observed), nil when none.
+    @Published public private(set) var extensionRemovalQuestion: ExtensionRemovalQuestion?
+    private var extensionRemovalAnswer: CheckedContinuation<Bool, Never>?
 
     /// Seconds the "Copied" state stays. inferred.
     var copiedFeedbackDuration: Double = SiteControlsLocalTokens.copiedFeedbackDuration
@@ -610,13 +620,35 @@ public final class SiteControlsModel: ObservableObject {
             close(.action)
             manageExtensionHandler?(extensionID)
         case .remove:
+            // The bubble closes first: the question is a card in the window (`06 §31` observed).
             guard let engineExtensions, let profile = sidebar.currentProfileID,
-                  confirmExtensionRemoval?(action.name) == true else { return }
+                  let confirm = confirmExtensionRemoval else { return }
             close(.action)
-            if openPopup?.extensionID == extensionID { closeExtensionPopup() }
-            if isPinned(extensionID) { togglePin(extensionID) }
-            work.append(Task { await engineExtensions.uninstall(extensionID, profileID: profile) })
+            let name = action.name
+            work.append(Task { [weak self] in
+                guard await confirm(name), let self else { return }
+                if self.openPopup?.extensionID == extensionID { self.closeExtensionPopup() }
+                if self.isPinned(extensionID) { self.togglePin(extensionID) }
+                await engineExtensions.uninstall(extensionID, profileID: profile)
+            })
         }
+    }
+
+    /// Shows the window's removal card for `name` and waits for the answer (true: remove). A newer
+    /// question answers an unanswered one with "keep".
+    public func askToRemoveExtension(_ name: String) async -> Bool {
+        answerExtensionRemoval(false)
+        return await withCheckedContinuation { continuation in
+            extensionRemovalAnswer = continuation
+            extensionRemovalQuestion = ExtensionRemovalQuestion(extensionName: name)
+        }
+    }
+
+    /// The removal card's answer.
+    public func answerExtensionRemoval(_ remove: Bool) {
+        extensionRemovalQuestion = nil
+        extensionRemovalAnswer?.resume(returning: remove)
+        extensionRemovalAnswer = nil
     }
 
     // MARK: Extension popup
@@ -788,6 +820,7 @@ public final class SiteControlsModel: ObservableObject {
     }
 
     func stop() {
+        answerExtensionRemoval(false)
         closeExtensionPopup()
         extensionEvents?.cancel()
         pinnedEvents?.cancel()

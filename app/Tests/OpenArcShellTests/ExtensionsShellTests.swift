@@ -149,7 +149,8 @@ final class ExtensionsShellTests: XCTestCase {
         XCTAssertFalse(model.siteControls.isPresented)
     }
 
-    /// The install confirmation is a tab-modal sheet; its last button adds (inferred wording).
+    /// `06 §41` observed: the install confirmation is a prompt card, "Add the “<name>” extension
+    /// to <app>?", "It can:" and the permissions as bullets, Cancel ESC / Add Extension ↵.
     func testInstallConfirmationSheet() async throws {
         let tab = try await openPage("https://chromewebstore.google.com/detail/x")
         let center = model.controller.dialogs
@@ -159,9 +160,12 @@ final class ExtensionsShellTests: XCTestCase {
         let request = try XCTUnwrap(center.current(for: tab.id))
         let presentation = DialogPresentation(request)
         XCTAssertEqual(presentation.style, .sheet)
-        XCTAssertEqual(presentation.title, "Add “uBlock Origin Lite”?")
-        XCTAssertTrue(presentation.message.contains("Read and change all your data on all websites"))
+        XCTAssertEqual(presentation.title, "Add the “uBlock Origin Lite” extension to Open Arc?")
+        XCTAssertEqual(presentation.message, "It can:")
+        XCTAssertEqual(presentation.bullets, ["Read and change all your data on all websites"])
         XCTAssertEqual(presentation.buttons, ["Cancel", "Add Extension"])
+        XCTAssertEqual(presentation.cancelButtonIndex, 0, "Cancel shows ESC")
+        XCTAssertEqual(PromptCardRoles.roles(count: 2, cancelIndex: presentation.cancelButtonIndex), [.cancel, .primary])
         center.answer(id, with: DialogPresentation.answer(for: request, button: 1, fieldValues: [], checkbox: false))
         XCTAssertEqual(tab.dialogAnswers[id], .extensionInstall(.add))
     }

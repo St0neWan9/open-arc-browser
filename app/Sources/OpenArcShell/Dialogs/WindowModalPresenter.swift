@@ -18,7 +18,10 @@ struct WindowModalItem {
     /// Stable per kind of card ("newFolder", "deleteSpace", …). Two declarations with the same id
     /// (the sidebar is also drawn by the hidden-sidebar peek) show one card.
     let id: String
+    /// The card's size; for a card that fits its content (`fitsContent`), the height is 0.
     let size: Size2D
+    /// The card is as tall as its content (the prompt cards, B197) and SwiftUI centers it.
+    var fitsContent = false
     let content: AnyView
 }
 
@@ -68,7 +71,20 @@ extension View {
     /// `.keyboardShortcut(.defaultAction)`).
     func windowModal<Card: View>(id: String, isPresented: Bool, size: Size2D, @ViewBuilder card: () -> Card) -> some View {
         let item = isPresented ? WindowModalItem(id: id, size: size, content: AnyView(card())) : nil
-        return self
+        return declaringWindowModal(item)
+    }
+
+    /// Like `windowModal(id:isPresented:size:card:)` for a card `width` wide whose height follows
+    /// its content (the prompt cards, B197): centered in the window the same way.
+    func windowModal<Card: View>(id: String, isPresented: Bool, width: Double, @ViewBuilder card: () -> Card) -> some View {
+        let item = isPresented
+            ? WindowModalItem(id: id, size: Size2D(width: width, height: 0), fitsContent: true, content: AnyView(card()))
+            : nil
+        return declaringWindowModal(item)
+    }
+
+    private func declaringWindowModal(_ item: WindowModalItem?) -> some View {
+        self
             .transformPreference(WindowModalPreferenceKey.self) { value in
                 if let item, !value.contains(where: { $0.id == item.id }) { value.append(item) }
             }
@@ -145,21 +161,32 @@ struct WindowModalLayer: View {
                         .contentShape(Rectangle())
                         .onTapGesture {}
                         .accessibilityHidden(true)
-                    item.content
-                        .frame(width: size.width, height: size.height)
-                        // Sized to the card: keeps the keyboard on it and marks where it is.
-                        .background(WindowModalKeyboard(cardID: item.id))
-                        .offset(x: frame.minX, y: frame.minY)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityAddTraits(.isModal)
-                        .accessibilityIdentifier("openarc.windowModal.\(item.id)")
-                        // A new card starts fresh (its text field state).
-                        .id(item.id)
+                    if item.fitsContent {
+                        card(item)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                    } else {
+                        card(item)
+                            .frame(width: size.width, height: size.height)
+                            .offset(x: frame.minX, y: frame.minY)
+                    }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             }
             .ignoresSafeArea()
         }
+    }
+
+    private func card(_ item: WindowModalItem) -> some View {
+        item.content
+            .frame(width: item.size.width)
+            // Sized to the card: keeps the keyboard on it and marks where it is.
+            .background(WindowModalKeyboard(cardID: item.id))
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.isModal)
+            .accessibilityIdentifier("openarc.windowModal.\(item.id)")
+            // A new card starts fresh (its text field state).
+            .id(item.id)
     }
 }
 

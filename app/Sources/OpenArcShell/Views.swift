@@ -21,9 +21,9 @@ public struct MainWindowView: View {
 
     public var body: some View {
         MainWindowContent(model: model, sidebar: model.sidebar, webToolbar: model.webToolbar)
+            .modifier(LaunchNoticeAlert(model: model))
             // Draws the cards the window content declares (B91).
             .windowModalHost()
-            .modifier(LaunchNoticeAlert(model: model))
     }
 }
 
@@ -222,6 +222,7 @@ struct MainWindowContent: View {
                                    palette: model.windowPalette))
         .modifier(ProfileFlowSheets(flow: model.profileFlow, palette: model.windowPalette))
         .modifier(SidebarWindowModals(sidebar: sidebar))
+        .modifier(ExtensionRemovalCardModal(siteControls: model.siteControls, palette: model.windowPalette))
         .overlay(alignment: .topLeading) { themeEditorAnchor }
         .overlay(alignment: .topLeading) { spaceIconPickerAnchor(palette: palette).ignoresSafeArea() }
         // System-drawn floating panels (popovers, menus) follow the Space's light or dark. B21.

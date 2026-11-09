@@ -185,20 +185,28 @@ public struct LaunchNotice: Hashable, Sendable {
     }
 }
 
-/// Shows `ShellModel.launchNotice` once; dismissing it clears the notice.
+/// Shows `ShellModel.launchNotice` once as a prompt card with the app icon and OK (B197; the
+/// notice is ours, its look follows the card family of [06 §41]: inferred). OK, Return or Esc
+/// clears the notice.
 struct LaunchNoticeAlert: ViewModifier {
     @ObservedObject var model: ShellModel
 
     func body(content: Content) -> some View {
-        let isPresented = Binding(
-            get: { model.launchNotice != nil },
-            set: { if !$0 { model.dismissLaunchNotice() } }
-        )
-        content.alert(model.launchNotice?.title ?? "", isPresented: isPresented) {
-            Button("OK", role: .cancel) { model.dismissLaunchNotice() }
-        } message: {
-            Text(model.launchNotice?.message ?? "")
-        }
+        let notice = model.launchNotice
+        content
+            .windowModal(id: "launchNotice", isPresented: notice != nil, width: Double(PromptCardTokens.width)) {
+                if let notice {
+                    PromptCard(palette: model.windowPalette, header: .appIcon, title: notice.title,
+                               buttons: [PromptCardButtonItem(title: "OK", role: .primary) { model.dismissLaunchNotice() }],
+                               onEscape: { model.dismissLaunchNotice() }) {
+                        if !notice.message.isEmpty {
+                            PromptCardBodyText(text: notice.message, palette: model.windowPalette)
+                                .padding(.top, PromptCardTokens.bodyGap)
+                        }
+                    }
+                    .accessibilityIdentifier("openarc.launchNotice")
+                }
+            }
     }
 }
 
