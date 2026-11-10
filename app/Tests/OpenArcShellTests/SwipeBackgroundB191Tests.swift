@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import QuartzCore
 import Combine
 import OpenArcModel
 import OpenArcDesign
@@ -180,6 +181,45 @@ final class SwipeBackgroundB191Tests: XCTestCase {
         swipe.slide(to: target, travel: 200)
         XCTAssertEqual(swipe.blendTravel, 200)
         XCTAssertEqual(swipe.blendProgress, 0, "starts from the colors on screen")
+    }
+
+    /// B208, 06 §39 observed in Arc: a Dock or shortcut switch moves the color with the page,
+    /// linearly (half way at half the travel); a swipe keeps the midline rule.
+    func testDockSwitchFollowsThePageLinearly() {
+        let frames = Frames()
+        let swipe = makeSwipe(frames)
+        swipe.slide(to: UUID(), travel: 0)
+        XCTAssertTrue(swipe.blendFollowsPage)
+        XCTAssertEqual(swipe.blendProgress(atTravel: 138), 0.5, accuracy: 0.001)
+        XCTAssertEqual(swipe.blendProgress(atTravel: 276), 1, accuracy: 0.001)
+        XCTAssertEqual(swipe.settleRun?.to, 276)
+        frames.run(1)
+        XCTAssertNil(swipe.settleRun)
+        swipe.begin(previous: nil, next: UUID())
+        XCTAssertFalse(swipe.blendFollowsPage)
+        swipe.move(-138)
+        XCTAssertEqual(swipe.blendProgress, 1, accuracy: 0.001, "a swipe reaches the target by the midline")
+    }
+
+    /// B208: the settle runs as a layer animation, so a busy main thread cannot hold the color back.
+    func testSettleRunsOnTheLayer() throws {
+        var f = SidebarFixture()
+        let theme = SidebarFixture.id(900)
+        f.ws = TreeOps.createTheme(f.ws, id: theme, style: ThemeStyle(colors: [RGBAColor(hex: 0x2E6BE6)]), now: f.now)
+        f.ws = try TreeOps.setSpaceTheme(f.ws, id: f.work, themeID: theme, now: f.now)
+        let (vm, _) = makeSidebarViewModel(f)
+        defer { vm.stop() }
+        let frames = Frames()
+        vm.spaceSwipe.frameDriver = { frames.ticks.append($0) }
+        vm.spaceSwipe.pageWidth = 276
+        let view = SpaceBlendPaintView()
+        view.update(sidebar: vm, idle: WindowPaint(palette: vm.palette(forSpace: f.home), surface: .opaque), surface: .opaque)
+        vm.spaceSwipe.slide(to: f.work, travel: 0)
+        let group = try XCTUnwrap(view.settleAnimationForTesting as? CAAnimationGroup)
+        XCTAssertEqual(group.duration, SpaceBlend.springSettleTime, accuracy: 0.001)
+        XCTAssertEqual(group.animations?.count, 4)
+        frames.run(1)
+        XCTAssertNil(view.settleAnimationForTesting, "removed once settled")
     }
 
     // MARK: Paint

@@ -33,6 +33,7 @@ enum SpaceBlend {
     /// The share of a settle the pages have covered after `elapsed` seconds on the Space-switch
     /// spring ([07 §11] observed: critically damped, response 0.2 s, unit mass, starting at rest),
     /// 1 once they are at rest (within a thousandth of the way).
+
     static func springFraction(elapsed: Double) -> Double {
         guard elapsed > 0 else { return 0 }
         guard elapsed.isFinite else { return 1 }
@@ -49,6 +50,13 @@ enum SpaceBlend {
             remaining = (1 + omega * elapsed) * exp(-omega * elapsed)
         }
         return abs(remaining) < 0.001 ? 1 : 1 - remaining
+    }
+
+    /// Seconds until `springFraction` reaches 1.
+    static var springSettleTime: Double {
+        var t = 0.0
+        while springFraction(elapsed: t) < 1, t < 2 { t += 1.0 / 240 }
+        return t
     }
 }
 
@@ -189,6 +197,9 @@ final class SpaceBlendPaintView: NSView {
     /// The running blend's target and its paint, computed once per blend.
     private var target: (id: UUID, generation: Int, paint: WindowPaint)?
     private var blendChanges: AnyCancellable?
+    /// The settle whose colors run as a layer animation (`SpaceSwipeState.settleRun`).
+    private var animatedSettleID: Int?
+    static let animationKey = "openarc.spaceBlend.settle"
     private let gradient = CAGradientLayer()
 
     override init(frame frameRect: NSRect) {
@@ -224,6 +235,7 @@ final class SpaceBlendPaintView: NSView {
         guard let sidebar, let targetID = sidebar.spaceSwipe.blendTargetSpaceID else {
             from = nil
             target = nil
+            stopSettleAnimation()
             apply(idle)
             return
         }
@@ -237,17 +249,76 @@ final class SpaceBlendPaintView: NSView {
                       WindowPaint(palette: sidebar.palette(forSpace: targetID), surface: surface))
         }
         guard let target else { return }
-        apply(.blend(from ?? idle, target.paint, swipe.blendProgress))
+        let start = from ?? idle
+        apply(.blend(start, target.paint, swipe.blendProgress))
+        if let run = swipe.settleRun {
+            if animatedSettleID != run.id {
+                animatedSettleID = run.id
+                animateSettle(run, swipe: swipe, from: start, to: target.paint)
+            }
+        } else {
+            stopSettleAnimation()
+        }
     }
+
+    /// The settle's colors as keyframes on the Space-switch spring, added in the same transaction as
+    /// the pages' spring so both start on the same frame (B208). The per-frame model updates still
+    /// run underneath; the animation is what shows.
+    private func animateSettle(_ run: (id: Int, from: CGFloat, to: CGFloat), swipe: SpaceSwipeState,
+                               from start: WindowPaint, to end: WindowPaint) {
+        let duration = SpaceBlend.springSettleTime
+        let steps = max(2, Int((duration * 60).rounded()))
+        // Kept off the exact ends so every keyframe has the same stops and they interpolate.
+        let paints = (0...steps).map { step -> WindowPaint in
+            let t = duration * Double(step) / Double(steps)
+            let travel = run.from + (run.to - run.from) * CGFloat(SpaceBlend.springFraction(elapsed: t))
+            let p = min(max(swipe.blendProgress(atTravel: travel), 0.0001), 0.9999)
+            return .blend(start, end, p)
+        }
+        func keyframes(_ keyPath: String, _ values: [Any]) -> CAKeyframeAnimation {
+            let animation = CAKeyframeAnimation(keyPath: keyPath)
+            animation.values = values
+            animation.calculationMode = .linear
+            return animation
+        }
+        let group = CAAnimationGroup()
+        group.animations = [
+            keyframes("colors", paints.map { Self.layerColors($0) }),
+            keyframes("locations", paints.map { Self.layerLocations($0) }),
+            keyframes("startPoint", paints.map { NSValue(point: Self.layerPoint(x: $0.axis.startX, y: $0.axis.startY)) }),
+            keyframes("endPoint", paints.map { NSValue(point: Self.layerPoint(x: $0.axis.endX, y: $0.axis.endY)) }),
+        ]
+        group.duration = duration
+        group.fillMode = .forwards
+        group.isRemovedOnCompletion = false
+        gradient.add(group, forKey: Self.animationKey)
+    }
+
+    private func stopSettleAnimation() {
+        guard animatedSettleID != nil else { return }
+        animatedSettleID = nil
+        gradient.removeAnimation(forKey: Self.animationKey)
+    }
+
+    static func layerColors(_ paint: WindowPaint) -> [CGColor] {
+        let colors = paint.colors.count == 1 ? [paint.colors[0], paint.colors[0]] : paint.colors
+        return colors.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
+    }
+
+    static func layerLocations(_ paint: WindowPaint) -> [NSNumber] {
+        (paint.colors.count == 1 ? [0, 1] : paint.locations).map { NSNumber(value: $0) }
+    }
+
+    /// For tests: the running settle animation, if any.
+    var settleAnimationForTesting: CAAnimation? { gradient.animation(forKey: Self.animationKey) }
 
     private func apply(_ paint: WindowPaint) {
         guard paint != shown else { return }
         shown = paint
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let colors = paint.colors.count == 1 ? [paint.colors[0], paint.colors[0]] : paint.colors
-        gradient.colors = colors.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
-        gradient.locations = (paint.colors.count == 1 ? [0, 1] : paint.locations).map { NSNumber(value: $0) }
+        gradient.colors = Self.layerColors(paint)
+        gradient.locations = Self.layerLocations(paint)
         gradient.startPoint = Self.layerPoint(x: paint.axis.startX, y: paint.axis.startY)
         gradient.endPoint = Self.layerPoint(x: paint.axis.endX, y: paint.axis.endY)
         CATransaction.commit()
