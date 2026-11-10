@@ -928,11 +928,12 @@ public final class SidebarViewModel: ObservableObject {
 
     // MARK: - Tab intents
 
-    /// A tab was just created by a page and the window may have no visible feedback for it: the
-    /// window shows "New Tab Created". [06 §34] observed (issue #7): only with the sidebar hidden;
-    /// a new tab the user starts (⌘T, the New Tab row) shows none. Bumped, not a tab id, so two in
-    /// a row both count.
-    @Published public private(set) var newTabNotice = 0
+    /// A tab was just created by a page in the background and the window may have no visible
+    /// feedback for it: the window shows "New Tab Created". [06 §34] observed (issue #7): only
+    /// with the sidebar hidden; a new tab the user starts (⌘T, the New Tab row) shows none. Only
+    /// for a background tab (user, 2026-11-10, B213). A new serial each time, so two in a row
+    /// both count.
+    @Published public private(set) var newTabNotice: NewTabNotice?
 
     /// Opens a tab at the top of Today in the current space and selects it. [06 §13] observed.
     @discardableResult
@@ -944,9 +945,20 @@ public final class SidebarViewModel: ObservableObject {
         return id
     }
 
-    /// A tab the page asked for (`window.open`, a link opened in a new tab) was created here.
-    /// [06 §34] observed: the window shows "New Tab Created" when it kept the tab out of sight.
-    public func noteNewTab() { newTabNotice &+= 1 }
+    /// A tab the page asked for (a link opened in a background tab) was created here, in
+    /// `spaceID`. [06 §34] observed: the window shows "New Tab Created" when it kept the tab out
+    /// of sight.
+    public func noteNewTab(_ id: UUID, spaceID: UUID) {
+        newTabNotice = NewTabNotice(serial: (newTabNotice?.serial ?? 0) &+ 1, tabID: id, spaceID: spaceID)
+    }
+
+    /// Selects a tab a page opened in the background, in its Space: a click on the "New Tab
+    /// Created" notice (user, 2026-11-10, B213).
+    public func revealNewTab(_ notice: NewTabNotice) {
+        guard let tab = workspace.tabs[notice.tabID], !tab.meta.isTombstone else { return }
+        if selectedSpaceID != notice.spaceID { selectSpace(notice.spaceID) }
+        selectTab(notice.tabID)
+    }
 
     /// Click on the "+ New Tab" row: opens the command bar when a shell is attached, otherwise
     /// creates a blank tab directly (previews, tests). inferred.
@@ -2181,4 +2193,12 @@ extension SidebarViewModel {
             self.dismissQuickList()
         }
     }
+}
+
+/// A tab a page opened in the background, for the "New Tab Created" notice ([06 §34], B213).
+public struct NewTabNotice: Equatable, Sendable {
+    /// Distinguishes two notices for the same tab.
+    public var serial: Int
+    public var tabID: UUID
+    public var spaceID: UUID
 }

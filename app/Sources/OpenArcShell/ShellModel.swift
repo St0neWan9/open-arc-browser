@@ -229,11 +229,13 @@ public final class ShellModel: ObservableObject {
         // Menu enablement (split items, back/forward) reads sidebar state through this model.
         sidebarChanges = sidebar.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         pinnedExtensionChanges = siteControls.$pinnedActions.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
-        newTabNoticeChanges = sidebar.$newTabNotice.dropFirst().sink { [weak self] _ in
+        newTabNoticeChanges = sidebar.$newTabNotice.compactMap { $0 }.sink { [weak self] notice in
             guard let self else { return }
             // [06 §34] observed: only with the sidebar hidden (the new row cannot be seen). A tab
-            // the user starts shows no notice.
-            if !self.isSidebarVisible { self.windowToast.show("New Tab Created") }
+            // the user starts shows no notice. A click on it shows the tab (B213).
+            if !self.isSidebarVisible {
+                self.windowToast.show("New Tab Created") { [weak self] in self?.sidebar.revealNewTab(notice) }
+            }
         }
         spaceFlowChanges = spaceFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         profileFlowChanges = profileFlow.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

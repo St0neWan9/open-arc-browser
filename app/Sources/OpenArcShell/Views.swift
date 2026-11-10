@@ -181,7 +181,6 @@ struct MainWindowContent: View {
                     .padding(.top, WindowToastLocalTokens.inset)
                     .padding(.trailing, WindowToastLocalTokens.inset)
                     .frame(width: layout.windowSize.width, height: layout.windowSize.height, alignment: .topTrailing)
-                    .allowsHitTesting(false)
 
                 // Copy link notice at the panel's top right, under the toolbar. [06 §17.3] observed. B43.
                 if layout.isWebToolbarShown {

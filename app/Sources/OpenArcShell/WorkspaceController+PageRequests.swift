@@ -123,9 +123,6 @@ extension WorkspaceController {
             return
         }
         let id = makeID()
-        // [06 §34] observed (issue #7): the window shows "New Tab Created" for a tab a page opened
-        // while its sidebar is hidden (the new row is out of sight); it decides.
-        (window ?? activeWindowSidebar)?.noteNewTab()
         let title = request.url.host ?? request.url.absoluteString
         let position = openerTabID.map { childPosition(opener: $0, spaceID: spaceID) } ?? .first
         let stamp = now()
@@ -163,6 +160,10 @@ extension WorkspaceController {
             }
         case .backgroundTab, .littleArc:
             loadInBackground(id)
+            // [06 §34] observed (issue #7): the window shows "New Tab Created" for a tab a page
+            // opened while its sidebar is hidden (the new row is out of sight); it decides. A tab
+            // that comes to the front needs none (user, 2026-11-10, B213).
+            window?.noteNewTab(id, spaceID: spaceID)
         case .newWindow:
             loadInBackground(id)
             if let open = openBrowserWindow {

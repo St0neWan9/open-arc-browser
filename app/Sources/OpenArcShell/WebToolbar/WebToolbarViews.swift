@@ -338,11 +338,14 @@ final class WebToolbarCopyToast: ObservableObject {
 @MainActor
 final class WindowToastModel: ObservableObject {
     @Published private(set) var text: String?
+    /// What a click on the notice does; nil when it takes no click.
+    private(set) var action: (@MainActor () -> Void)?
     /// Seconds a notice stays; tests shorten it.
     var duration: Double = 2
     private var hideTask: Task<Void, Never>?
 
-    func show(_ text: String) {
+    func show(_ text: String, action: (@MainActor () -> Void)? = nil) {
+        self.action = action
         self.text = text
         hideTask?.cancel()
         let duration = self.duration
@@ -350,11 +353,19 @@ final class WindowToastModel: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.text = nil
+            self?.action = nil
         }
     }
 
     /// Hides the notice now (tests, and a window closing).
-    func dismiss() { hideTask?.cancel(); text = nil }
+    func dismiss() { hideTask?.cancel(); text = nil; action = nil }
+
+    /// A click on the notice: it goes away and runs its action (B213).
+    func activate() {
+        let action = self.action
+        dismiss()
+        action?()
+    }
 
     deinit { hideTask?.cancel() }
 }
@@ -381,8 +392,13 @@ struct WindowToastView: View {
                 .frame(height: 39)
                 .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(RGBAColor(hex: 0xA9A0F7).swiftUI))
                 .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                // A click shows the new tab (user, 2026-11-10, B213).
+                .onTapGesture { toast.activate() }
                 .transition(.opacity)
                 .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(toast.action == nil ? [] : .isButton)
+                .accessibilityAction { toast.activate() }
                 .accessibilityIdentifier("openarc.windowToast")
         }
     }

@@ -48,8 +48,30 @@ final class NewTabToastB186Tests: XCTestCase {
         XCTAssertNil(model.windowToast.text)
     }
 
-    /// [06 §34] observed: a tab a page opens while the sidebar is hidden shows the notice.
-    func testPageOpenedTabWithSidebarHiddenShowsTheNotice() async throws {
+    /// [06 §34] observed: a tab a page opens in the background while the sidebar is hidden shows
+    /// the notice; a click on it shows that tab (B213).
+    func testBackgroundTabWithSidebarHiddenShowsTheNoticeThatShowsTheTab() async throws {
+        let opened = try await model.openNewTab(url: try XCTUnwrap(URL(string: "https://site.example")))
+        let opener = try XCTUnwrap(opened)
+        if model.isSidebarVisible { model.toggleSidebar() }
+        model.windowToast.dismiss()
+        engine.simulateNewTabRequest(NewTabRequest(
+            opener: try XCTUnwrap(model.sidebar.liveTab(for: opener)?.id),
+            url: try XCTUnwrap(URL(string: "https://next.example")),
+            disposition: .backgroundTab, hasUserGesture: true
+        ))
+        try await waitUntil { self.model.windowToast.text == "New Tab Created" }
+        XCTAssertEqual(model.sidebar.selectedTabID, opener, "the opener stays in front")
+        let notice = try XCTUnwrap(model.sidebar.newTabNotice)
+        XCTAssertNotNil(model.windowToast.action)
+        model.windowToast.activate()
+        XCTAssertNil(model.windowToast.text)
+        XCTAssertEqual(model.sidebar.selectedTabID, notice.tabID)
+        XCTAssertNotEqual(notice.tabID, opener)
+    }
+
+    /// B213 (user, 2026-11-10): a tab that comes to the front shows no notice.
+    func testForegroundTabShowsNoNotice() async throws {
         let opened = try await model.openNewTab(url: try XCTUnwrap(URL(string: "https://site.example")))
         let opener = try XCTUnwrap(opened)
         if model.isSidebarVisible { model.toggleSidebar() }
@@ -59,7 +81,9 @@ final class NewTabToastB186Tests: XCTestCase {
             url: try XCTUnwrap(URL(string: "https://next.example")),
             disposition: .foregroundTab, hasUserGesture: true
         ))
-        try await waitUntil { self.model.windowToast.text == "New Tab Created" }
+        try await waitUntil { self.model.sidebar.selectedTabID != opener }
+        await model.controller.settleEngineWork()
+        XCTAssertNil(model.windowToast.text)
     }
 
     /// [06 §34] observed: with the sidebar shown the new row is visible, so no notice.
@@ -71,7 +95,7 @@ final class NewTabToastB186Tests: XCTestCase {
         engine.simulateNewTabRequest(NewTabRequest(
             opener: try XCTUnwrap(model.sidebar.liveTab(for: opener)?.id),
             url: try XCTUnwrap(URL(string: "https://next.example")),
-            disposition: .foregroundTab, hasUserGesture: true
+            disposition: .backgroundTab, hasUserGesture: true
         ))
         try await Task.sleep(nanoseconds: 300_000_000)
         await model.controller.settleEngineWork()
