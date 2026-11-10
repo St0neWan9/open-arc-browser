@@ -95,6 +95,43 @@ final class DownloadBadgeB203Tests: XCTestCase {
         XCTAssertEqual(flights, ["a"], "no second flight")
     }
 
+    /// B207: a file held for Keep / Discard (a .dmg from a new site) flies and badges too.
+    func testHeldDownloadFliesAndBadges() async throws {
+        let (model, engine) = makeModel()
+        defer { model.stop() }
+        let shelf = model.sidebar.downloadsShelf
+        let profile = try XCTUnwrap(model.sidebar.currentProfileID)
+        var flights: [String] = []
+        let subscription = shelf.flights.sink { flights.append($0) }
+        defer { subscription.cancel() }
+        engine.fakeDownloadService.simulateDownload(item("dmg", profile: profile, state: .needsConfirmation, started: now))
+        try await waitUntil { shelf.badge != nil }
+        XCTAssertEqual(flights, ["dmg"])
+        XCTAssertEqual(shelf.badge, .progress(id: "dmg", progress: 0.5))
+    }
+
+    /// B207: switching to a Space of another profile follows that profile's downloads without a
+    /// hover on the Library button.
+    func testFollowsTheSpacesProfile() async throws {
+        let (model, engine) = makeModel()
+        defer { model.stop() }
+        let shelf = model.sidebar.downloadsShelf
+        let other = UUID(), space = try XCTUnwrap(model.selectedSpaceID)
+        let stamp = now
+        try model.controller.mutate(origin: nil) { ws in
+            var s = TreeOps.createProfile(ws, id: other, name: "Work", now: stamp)
+            s = try TreeOps.setSpaceProfile(s, id: space, profileID: other, now: stamp)
+            return s
+        }
+        model.sidebar.selectSpace(space)
+        shelf.profileMayHaveChanged()
+        let current = try XCTUnwrap(model.sidebar.currentProfileID)
+        XCTAssertEqual(current, other)
+        engine.fakeDownloadService.simulateDownload(item("w", profile: other, state: .inProgress, started: now))
+        try await waitUntil { shelf.badge != nil }
+        XCTAssertEqual(shelf.badge, .progress(id: "w", progress: 0.5))
+    }
+
     /// Downloads that were already there (an old one, or one that started long ago) do not fly.
     func testNoFlightForOldDownloads() async throws {
         let (model, engine) = makeModel()

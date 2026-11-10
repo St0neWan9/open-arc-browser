@@ -121,6 +121,8 @@ public final class ShellModel: ObservableObject {
     private var isStopped = false
     private var sidebarChanges: AnyCancellable?
     private var spaceFlowChanges: AnyCancellable?
+    /// Keeps the downloads shelf on the profile of the window's Space (B207).
+    private var shelfProfileFollow: AnyCancellable?
     private var profileFlowChanges: AnyCancellable?
     private var libraryChanges: AnyCancellable?
     private var libraryFlagChanges: AnyCancellable?
@@ -177,6 +179,9 @@ public final class ShellModel: ObservableObject {
                 return controller?.activeWindow.map { $0.sidebar === sidebar } ?? true
             }
         )
+        // `$selectedSpaceID` sends before the value changes: read the profile on the next turn.
+        shelfProfileFollow = sidebar.$selectedSpaceID.removeDuplicates().receive(on: DispatchQueue.main)
+            .sink { [weak sidebar] _ in MainActor.assumeIsolated { sidebar?.downloadsShelf.profileMayHaveChanged() } }
         // The engine's ad blocker (C16) over fake site settings until the bridge provides the
         // rest (plan C12 / C14).
         // The engine's ad blocker (C16) and extensions (C14) over fake site settings until the

@@ -260,6 +260,13 @@ final class SidebarDownloadsShelf: ObservableObject {
         downloads.observe(profileID: profileID())
     }
 
+    /// Follows the profile of the window's Space: the badge and the flight belong to the downloads
+    /// of the Space on screen, also before the Library button was ever hovered (B207). Called after
+    /// every Space change.
+    func profileMayHaveChanged() {
+        downloads?.observe(profileID: profileID())
+    }
+
     /// Whether a finished download's file is still there. Tests replace it.
     var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
 
@@ -289,12 +296,15 @@ final class SidebarDownloadsShelf: ObservableObject {
         let date = now()
         for item in downloads where !knownDownloadIDs.contains(item.id) {
             knownDownloadIDs.insert(item.id)
-            if item.state == .inProgress, date.timeIntervalSince(item.startDate) < SidebarDownloadsShelfTokens.newDownloadWindow,
+            // A file Chromium holds for Keep / Discard (a .dmg from a site seen for the first time)
+            // started all the same: it flies too (B207).
+            if item.state == .inProgress || item.state == .needsConfirmation,
+               date.timeIntervalSince(item.startDate) < SidebarDownloadsShelfTokens.newDownloadWindow,
                isActiveWindow() {
                 flights.send(item.id)
             }
         }
-        let active = downloads.filter { $0.state == .inProgress || $0.state == .paused }
+        let active = downloads.filter { $0.state == .inProgress || $0.state == .paused || $0.state == .needsConfirmation }
         let finished = downloads.filter { activeDownloadIDs.contains($0.id) && $0.state == .complete && $0.fileURL != nil }
         activeDownloadIDs = Set(active.map(\.id))
         if let newest = active.max(by: { $0.startDate < $1.startDate }) {
