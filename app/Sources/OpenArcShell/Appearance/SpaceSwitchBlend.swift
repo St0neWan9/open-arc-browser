@@ -164,13 +164,45 @@ struct WindowPaint: Equatable {
     }
 }
 
-/// The window background's colors (`WindowBackgroundView` minus the blur and the grain), which
-/// blend between Spaces while the sidebar pages slide.
+/// Which colors of a Space a `SpaceBlendPaintView` paints.
+enum SpaceBlendFill: Equatable {
+    /// The window background on `surface`.
+    case window(WindowSurface)
+    /// The hidden sidebar's floating panel (`SidebarPeekTokens.panelFill`), B211.
+    case peekPanel
+
+    @MainActor func paint(for palette: ThemePalette) -> WindowPaint {
+        switch self {
+        case .window(let surface):
+            return WindowPaint(palette: palette, surface: surface)
+        case .peekPanel:
+            return WindowPaint(colors: [SidebarPeekTokens.panelFill(for: palette)], locations: [0], axis: .vertical)
+        }
+    }
+}
+
+/// The window background's colors (`WindowBackgroundView` minus the blur and the grain), or the
+/// peek panel's fill, which blend between Spaces while the sidebar pages slide.
 struct SpaceBlendBackground: NSViewRepresentable {
     let sidebar: SidebarViewModel
+    let fill: SpaceBlendFill
     /// What the selected Space paints when no blend runs.
-    let paint: WindowPaint
-    let surface: WindowSurface
+    var paint: WindowPaint
+    /// Rounds the layer's corners (continuous), for the peek panel.
+    var cornerRadius: CGFloat = 0
+
+    init(sidebar: SidebarViewModel, paint: WindowPaint, surface: WindowSurface) {
+        self.sidebar = sidebar
+        self.paint = paint
+        fill = .window(surface)
+    }
+
+    init(sidebar: SidebarViewModel, fill: SpaceBlendFill, cornerRadius: CGFloat = 0) {
+        self.sidebar = sidebar
+        self.fill = fill
+        paint = fill.paint(for: sidebar.palette)
+        self.cornerRadius = cornerRadius
+    }
 
     func makeNSView(context: Context) -> SpaceBlendPaintView {
         let view = SpaceBlendPaintView()
@@ -179,7 +211,8 @@ struct SpaceBlendBackground: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: SpaceBlendPaintView, context: Context) {
-        nsView.update(sidebar: sidebar, idle: paint, surface: surface)
+        nsView.cornerRadius = cornerRadius
+        nsView.update(sidebar: sidebar, idle: paint, fill: fill)
     }
 }
 
@@ -188,7 +221,7 @@ struct SpaceBlendBackground: NSViewRepresentable {
 final class SpaceBlendPaintView: NSView {
     private weak var sidebar: SidebarViewModel?
     private var idle: WindowPaint?
-    private var surface: WindowSurface = .opaque
+    private var fill: SpaceBlendFill = .window(.opaque)
     /// What the layer paints now.
     private(set) var shown: WindowPaint?
     /// The colors on screen when the running blend began, and that blend's `blendGeneration`.
@@ -213,7 +246,21 @@ final class SpaceBlendPaintView: NSView {
     override func makeBackingLayer() -> CALayer { gradient }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    /// Rounds the layer (continuous corners) and clips the paint to it.
+    var cornerRadius: CGFloat = 0 {
+        didSet {
+            guard cornerRadius != oldValue else { return }
+            gradient.cornerRadius = cornerRadius
+            gradient.cornerCurve = .continuous
+            gradient.masksToBounds = cornerRadius > 0
+        }
+    }
+
     func update(sidebar: SidebarViewModel, idle: WindowPaint, surface: WindowSurface) {
+        update(sidebar: sidebar, idle: idle, fill: .window(surface))
+    }
+
+    func update(sidebar: SidebarViewModel, idle: WindowPaint, fill: SpaceBlendFill) {
         if self.sidebar !== sidebar {
             self.sidebar = sidebar
             blendChanges = sidebar.spaceSwipe.blendChanges.sink { [weak self] in
@@ -221,8 +268,8 @@ final class SpaceBlendPaintView: NSView {
                 MainActor.assumeIsolated { self?.refresh() }
             }
         }
-        if self.surface != surface {
-            self.surface = surface
+        if self.fill != fill {
+            self.fill = fill
             target = nil
         }
         self.idle = idle
@@ -246,7 +293,7 @@ final class SpaceBlendPaintView: NSView {
         }
         if target?.id != targetID || target?.generation != swipe.blendGeneration {
             target = (targetID, swipe.blendGeneration,
-                      WindowPaint(palette: sidebar.palette(forSpace: targetID), surface: surface))
+                      fill.paint(for: sidebar.palette(forSpace: targetID)))
         }
         guard let target else { return }
         let start = from ?? idle

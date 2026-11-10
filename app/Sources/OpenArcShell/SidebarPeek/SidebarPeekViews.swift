@@ -24,12 +24,17 @@ struct SidebarPeekOverlay: View {
         let fill = SidebarPeekTokens.panelFill(for: palette)
         let shape = RoundedRectangle(cornerRadius: SidebarPeekTokens.panelCornerRadius, style: .continuous)
         ZStack(alignment: .topLeading) {
+            // The panel's fill blends between Spaces with the sidebar pages, like the window
+            // background behind a pinned sidebar (B211); the sidebar paints none of its own.
+            SpaceBlendBackground(sidebar: sidebar, fill: .peekPanel, cornerRadius: SidebarPeekTokens.panelCornerRadius)
+                .frame(width: panel.width, height: panel.height)
+                .allowsHitTesting(false)
             // The sidebar moves with the panel by (5, 5), like the traffic lights the window
             // chrome puts at `WindowButtonPlacement.peek`. [06 §26.2] observed. B54.
             SidebarView(viewModel: sidebar, width: layout.sidebarSize.width)
                 .environment(\.siteControlsModel, siteControls)
                 .environment(\.sidebarPresentation, .peeking)
-                .environment(\.sidebarFillOverride, fill)
+                .environment(\.sidebarOnWindowBackground, true)
                 // The panel's fill is deeper than the window color, so the window's opaque control
                 // colors nearly vanish on it: its controls are layers over the panel, with the
                 // pinned sidebar's contrast. B169.
