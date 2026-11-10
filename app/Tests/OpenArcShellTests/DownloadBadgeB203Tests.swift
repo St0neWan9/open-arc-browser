@@ -54,6 +54,7 @@ final class DownloadBadgeB203Tests: XCTestCase {
         )
         model.sidebar.downloadsShelf.finishedIconDuration = .milliseconds(30)
         model.sidebar.downloadsShelf.fileExists = { _ in true }
+        model.sidebar.downloadsShelf.scanFolder = { [] }
         return (model, engine)
     }
 

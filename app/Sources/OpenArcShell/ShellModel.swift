@@ -162,12 +162,14 @@ public final class ShellModel: ObservableObject {
         // The recent-files shelf over the dock (B200): its own download list and media scan, so it
         // never changes what the Library page shows.
         let library = self.library
-        let shelfMedia = LibraryMediaModel(folders: controller.dependencies.mediaFolders, scanLimit: 50)
         sidebar.downloadsShelf.attach(
             downloads: LibraryDownloads(engine: controller.dependencies.engine.downloads),
-            media: shelfMedia,
+            // The profile's download folder (Settings), else the user's Downloads folder. B210.
+            folder: { [weak sidebar, engine = controller.dependencies.engine] in
+                guard let profile = sidebar?.currentProfileID else { return DownloadsFolder.userFolder }
+                return await engine.downloads.defaultDirectory(profileID: profile) ?? DownloadsFolder.userFolder
+            },
             profileID: { [weak sidebar] in sidebar?.currentProfileID },
-            isMediaEnabled: { [weak library] in library.map { !$0.isMediaIntroVisible } ?? false },
             canShow: { [weak sidebar] in
                 guard let sidebar else { return false }
                 return sidebar.draggingItem == nil && !sidebar.spaceSwipe.isActive

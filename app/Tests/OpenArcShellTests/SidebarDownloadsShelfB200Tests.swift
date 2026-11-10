@@ -7,7 +7,7 @@ import OpenArcSyncAPI
 /// Plan B200: resting the pointer on the dock's Library button shows the newest downloads, running
 /// and finished, over the bottom of the list. Spec: docs/arc-spec/06-flows.md §42 (observed): up
 /// to 4 rows, newest at the bottom, ≈ 0.2 s after the pointer arrives; "6 days ago" under a
-/// finished file, "2.1/31.5 MB · 1m 38s" and an × under a running one; Library media mixed in.
+/// finished file, "2.1/31.5 MB · 1m 38s" and an × under a running one; B210: the Downloads folder's files.
 @MainActor
 final class SidebarDownloadsShelfB200Tests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_000_000)
@@ -27,7 +27,7 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
     func testRecentKeepsTheNewestFourNewestLast() {
         let items = [download("a", ended: -500), download("b", ended: -400), download("c", ended: -300),
                      download("d", ended: -200), download("run", state: .inProgress, started: -10)]
-        let ids = SidebarShelfEntry.recent(downloads: items, media: [], now: now, fileExists: { _ in true }).map(\.title)
+        let ids = SidebarShelfEntry.recent(downloads: items, files: [], now: now, fileExists: { _ in true }).map(\.title)
         XCTAssertEqual(ids, ["b", "c", "d", "run"])
     }
 
@@ -36,20 +36,37 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
     func testCancelledStaysDeletedFilesGo() {
         let items = [download("kept", ended: -300), download("deleted", ended: -200),
                      download("stopped", state: .cancelled, started: -100)]
-        let entries = SidebarShelfEntry.recent(downloads: items, media: [], now: now, fileExists: { $0.lastPathComponent != "deleted" })
+        let entries = SidebarShelfEntry.recent(downloads: items, files: [], now: now, fileExists: { $0.lastPathComponent != "deleted" })
         XCTAssertEqual(entries.map(\.title), ["kept", "stopped"])
         XCTAssertEqual(entries.last?.detail(now: now), "Cancelled")
     }
 
-    /// Library media join the list by date; a file that is also a download shows once.
-    func testMediaMixInWithoutDuplicates() {
-        let shot = LibraryMediaItem(url: URL(fileURLWithPath: "/tmp/shot.png"), name: "shot.png", kind: .screenshot,
-                                    date: now.addingTimeInterval(-250))
-        let same = LibraryMediaItem(url: URL(fileURLWithPath: "/tmp/b"), name: "b", kind: .image, date: now)
+    /// B210: the newest files of the Downloads folder join the list by date; a file that is also
+    /// a listed download shows once.
+    func testFolderFilesMixInWithoutDuplicates() {
+        let dmg = DownloadsFolderFile(url: URL(fileURLWithPath: "/tmp/app.dmg"), date: now.addingTimeInterval(-250))
+        let same = DownloadsFolderFile(url: URL(fileURLWithPath: "/tmp/b"), date: now)
         let entries = SidebarShelfEntry.recent(downloads: [download("a", ended: -300), download("b", ended: -100)],
-                                               media: [shot, same], now: now, fileExists: { _ in true })
-        XCTAssertEqual(entries.map(\.title), ["a", "shot.png", "b"])
-        XCTAssertEqual(entries.map(\.id).filter { $0.hasPrefix("media:") }, ["media:/tmp/shot.png"])
+                                               files: [dmg, same], now: now, fileExists: { _ in true })
+        XCTAssertEqual(entries.map(\.title), ["a", "app.dmg", "b"])
+        XCTAssertEqual(entries.map(\.id).filter { $0.hasPrefix("file:") }, ["file:/tmp/app.dmg"])
+    }
+
+    /// B210: the folder listing: newest first by date added, no hidden or partial files, packages
+    /// but not plain folders.
+    func testDownloadsFolderListing() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("b210-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for name in ["old.zip", "new.dmg", ".hidden", "half.dmg.crdownload"] {
+            FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data())
+        }
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("Folder"), withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.creationDate: now.addingTimeInterval(-100), .modificationDate: now.addingTimeInterval(-100)],
+                                              ofItemAtPath: dir.appendingPathComponent("old.zip").path)
+        let names = DownloadsFolder.newest(in: dir).map(\.name)
+        XCTAssertEqual(Set(names), ["old.zip", "new.dmg"])
+        XCTAssertEqual(DownloadsFolder.newest(in: dir, limit: 1).count, 1)
     }
 
     /// B206, 06 §42 observed: a finished file's menu; none for cancelled or running downloads.
@@ -60,8 +77,8 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
         XCTAssertEqual(SidebarDownloadsShelf.menu(for: done, appName: nil)[2], [.showInFinder])
         XCTAssertTrue(SidebarDownloadsShelf.menu(for: SidebarShelfEntry(source: .download(download("c", state: .cancelled))), appName: nil).isEmpty)
         XCTAssertTrue(SidebarDownloadsShelf.menu(for: SidebarShelfEntry(source: .download(download("r", state: .inProgress))), appName: nil).isEmpty)
-        let shot = LibraryMediaItem(url: URL(fileURLWithPath: "/tmp/s.png"), name: "s.png", kind: .screenshot, date: now)
-        XCTAssertEqual(SidebarDownloadsShelf.menu(for: SidebarShelfEntry(source: .media(shot)), appName: "Preview").count, 4)
+        let shot = DownloadsFolderFile(url: URL(fileURLWithPath: "/tmp/s.png"), date: now)
+        XCTAssertEqual(SidebarDownloadsShelf.menu(for: SidebarShelfEntry(source: .file(shot)), appName: "Preview").count, 4)
     }
 
     /// B206: "Hide" takes the row out of the shelf and the download out of the list.
@@ -107,6 +124,7 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
         model.sidebar.downloadsShelf.showDelay = .milliseconds(1)
         model.sidebar.downloadsShelf.hideGrace = .milliseconds(1)
         model.sidebar.downloadsShelf.fileExists = { _ in true }
+        model.sidebar.downloadsShelf.scanFolder = { [] }
         return (model, engine)
     }
 
@@ -139,6 +157,19 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
         XCTAssertTrue(shelf.isShown, "the rows keep it open")
         shelf.listHovered(false)
         try await waitUntil { !shelf.isShown }
+    }
+
+    /// B210: with no downloads at all the Downloads folder's files still fill the shelf.
+    func testFolderFilesShowWithoutDownloads() async throws {
+        let (model, _) = makeModel()
+        defer { model.stop() }
+        let shelf = model.sidebar.downloadsShelf
+        let file = DownloadsFolderFile(url: URL(fileURLWithPath: "/tmp/setup.dmg"), date: now)
+        shelf.scanFolder = { [file] }
+        shelf.iconHovered(true)
+        await shelf.settleFolderScan()
+        try await waitUntil { shelf.isShown }
+        XCTAssertEqual(shelf.entries.map(\.title), ["setup.dmg"])
     }
 
     /// Nothing downloaded: nothing shows. A drag or a Space swipe keeps it closed.

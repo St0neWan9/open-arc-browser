@@ -17,7 +17,9 @@ import OpenArcDesign
 // - a running download: a 24 pt near-white disc with a purple progress ring and down arrow,
 //   "2.1/31.5 MB · 1m 38s" (received / total · time left) and an × at the right that cancels;
 // - the rows stay while the pointer is on them and leave within ≈ 3 frames when it leaves;
-// - Arc mixes in recent Library media (screenshots): ours does too once Library ▸ Media is on.
+// - B210 (user, 2026-11-10): the rows are the newest files in the Downloads folder, with the
+//   running downloads; a download that finished there shows as its file. Reading the folder
+//   asks for macOS's Downloads folder permission the first time.
 // Opening on click and the right-click menu are inferred.
 //
 // [06 §43] observed (B203, same recordings, Arc's window active): a download that starts puts a
@@ -74,11 +76,47 @@ enum SidebarDownloadsShelfTokens {
     static let newDownloadWindow: TimeInterval = 5
 }
 
-/// One row of the shelf: a download or a Library media file.
+/// A file at the top of the Downloads folder (B210).
+struct DownloadsFolderFile: Hashable, Sendable {
+    let url: URL
+    /// When it arrived in the folder (date added), else created, else modified.
+    let date: Date
+    var name: String { url.lastPathComponent }
+}
+
+/// Lists the newest files of a downloads folder: top level, no hidden files, no partial
+/// downloads, folders only when they are packages (an `.app`). B210, Arc's logic per the user.
+enum DownloadsFolder {
+    static let scanLimit = 8
+    static let partialExtensions: Set<String> = ["crdownload", "download", "part", "partial"]
+
+    nonisolated static func newest(in folder: URL, limit: Int = scanLimit) -> [DownloadsFolderFile] {
+        let keys: [URLResourceKey] = [.addedToDirectoryDateKey, .creationDateKey, .contentModificationDateKey,
+                                      .isDirectoryKey, .isPackageKey]
+        guard let urls = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys,
+                                                                      options: [.skipsHiddenFiles]) else { return [] }
+        let files = urls.compactMap { url -> DownloadsFolderFile? in
+            guard !partialExtensions.contains(url.pathExtension.lowercased()),
+                  let values = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
+            if values.isDirectory == true, values.isPackage != true { return nil }
+            guard let date = values.addedToDirectoryDate ?? values.creationDate ?? values.contentModificationDate else { return nil }
+            return DownloadsFolderFile(url: url, date: date)
+        }
+        return Array(files.sorted { $0.date > $1.date }.prefix(limit))
+    }
+
+    /// The user's Downloads folder.
+    nonisolated static var userFolder: URL {
+        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+    }
+}
+
+/// One row of the shelf: a download, or a file in the Downloads folder.
 struct SidebarShelfEntry: Identifiable, Equatable {
     enum Source: Equatable {
         case download(DownloadItem)
-        case media(LibraryMediaItem)
+        case file(DownloadsFolderFile)
     }
 
     let source: Source
@@ -86,14 +124,14 @@ struct SidebarShelfEntry: Identifiable, Equatable {
     var id: String {
         switch source {
         case .download(let item): return "download:" + item.id
-        case .media(let item): return "media:" + item.id
+        case .file(let file): return "file:" + file.url.standardizedFileURL.path
         }
     }
 
     var title: String {
         switch source {
         case .download(let item): return DownloadRowPresentation(item).title
-        case .media(let item): return item.name
+        case .file(let file): return file.name
         }
     }
 
@@ -101,7 +139,7 @@ struct SidebarShelfEntry: Identifiable, Equatable {
     var fileURL: URL? {
         switch source {
         case .download(let item): return item.state == .complete ? item.fileURL : nil
-        case .media(let item): return item.url
+        case .file(let file): return file.url
         }
     }
 
@@ -113,7 +151,7 @@ struct SidebarShelfEntry: Identifiable, Equatable {
             case .inProgress, .paused, .needsConfirmation: return now
             default: return item.endDate ?? item.startDate
             }
-        case .media(let item): return item.date
+        case .file(let file): return file.date
         }
     }
 
@@ -190,8 +228,8 @@ struct SidebarShelfEntry: Identifiable, Equatable {
 
     /// The newest `limit` entries, oldest first (the newest sits by the dock). [06 §42] observed
     /// (B204): cancelled downloads stay ("Cancelled"), finished ones whose file was deleted are left
-    /// out. A media file that is also a listed download shows once.
-    static func recent(downloads: [DownloadItem], media: [LibraryMediaItem], now: Date,
+    /// out. A folder file that is also a listed download shows once, as the download.
+    static func recent(downloads: [DownloadItem], files: [DownloadsFolderFile], now: Date,
                        limit: Int = SidebarDownloadsShelfTokens.maxRows,
                        fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
                        hidden: Set<String> = []) -> [SidebarShelfEntry] {
@@ -201,8 +239,8 @@ struct SidebarShelfEntry: Identifiable, Equatable {
         }
         let downloadFiles = Set(kept.compactMap { $0.fileURL?.standardizedFileURL.path })
         let entries = kept.map { SidebarShelfEntry(source: .download($0)) }
-            + media.filter { !downloadFiles.contains($0.url.standardizedFileURL.path) }
-                .map { SidebarShelfEntry(source: .media($0)) }
+            + files.filter { !downloadFiles.contains($0.url.standardizedFileURL.path) }
+                .map { SidebarShelfEntry(source: .file($0)) }
         return Array(entries.filter { !hidden.contains($0.id) }
             .sorted { $0.date(now: now) < $1.date(now: now) }.suffix(limit))
     }
@@ -226,9 +264,13 @@ final class SidebarDownloadsShelf: ObservableObject {
     private var isActiveWindow: () -> Bool = { true }
 
     private var downloads: LibraryDownloads?
-    private var media: LibraryMediaModel?
+    /// The newest files of the Downloads folder, from the last scan.
+    private(set) var folderFiles: [DownloadsFolderFile] = []
+    /// Lists the folder. `attach` sets the real one; tests replace it.
+    var scanFolder: @MainActor () async -> [DownloadsFolderFile] = { [] }
+    private var scanTask: Task<Void, Never>?
+    private var completedIDs: Set<String> = []
     private var profileID: () -> UUID? = { nil }
-    private var isMediaEnabled: () -> Bool = { false }
     /// Whether the shelf may show now (no drag or swipe running).
     private var canShow: () -> Bool = { true }
     private var openLibraryDownloads: () -> Void = {}
@@ -241,23 +283,25 @@ final class SidebarDownloadsShelf: ObservableObject {
     var hideGrace = SidebarDownloadsShelfTokens.hideGrace
 
     /// Hooks the shelf to its sources. Set by the window (`ShellModel`); unattached it never shows.
-    func attach(downloads: LibraryDownloads, media: LibraryMediaModel?, profileID: @escaping () -> UUID?,
-                isMediaEnabled: @escaping () -> Bool, canShow: @escaping () -> Bool,
+    func attach(downloads: LibraryDownloads, folder: @escaping @MainActor () async -> URL, profileID: @escaping () -> UUID?,
+                canShow: @escaping () -> Bool,
                 openLibraryDownloads: @escaping () -> Void, now: @escaping () -> Date,
                 isActiveWindow: @escaping () -> Bool = { true }) {
         self.isActiveWindow = isActiveWindow
         self.downloads = downloads
-        self.media = media
+        scanFolder = {
+            let url = await folder()
+            return await Task.detached { DownloadsFolder.newest(in: url) }.value
+        }
         self.profileID = profileID
-        self.isMediaEnabled = isMediaEnabled
         self.canShow = canShow
         self.openLibraryDownloads = openLibraryDownloads
         self.now = now
-        let mediaItems = media?.$items.eraseToAnyPublisher() ?? Just([]).eraseToAnyPublisher()
-        sources = downloads.$items.combineLatest(mediaItems).sink { [weak self] downloads, media in
-            MainActor.assumeIsolated { self?.update(downloads: downloads, media: media) }
+        sources = downloads.$items.sink { [weak self] downloads in
+            MainActor.assumeIsolated { self?.update(downloads: downloads) }
         }
         downloads.observe(profileID: profileID())
+        rescanFolder()
     }
 
     /// Follows the profile of the window's Space: the badge and the flight belong to the downloads
@@ -270,22 +314,27 @@ final class SidebarDownloadsShelf: ObservableObject {
     /// Whether a finished download's file is still there. Tests replace it.
     var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
 
-    /// Rows hidden with "Hide from Open Arc" (media files; downloads leave the download list).
+    /// Rows hidden with "Hide from Open Arc" (folder files; downloads leave the download list).
     /// For this run of the app. inferred.
     private(set) var hiddenIDs: Set<String> = []
     private var lastDownloads: [DownloadItem] = []
-    private var lastMedia: [LibraryMediaItem] = []
     /// A row's menu is open: the shelf stays while it tracks. [06 §42] observed (B206).
     private var isMenuTracking = false
     private var menuObservers: [NSObjectProtocol] = []
 
-    private func update(downloads: [DownloadItem], media: [LibraryMediaItem]) {
+    private func update(downloads: [DownloadItem]) {
         lastDownloads = downloads
-        lastMedia = media
-        let next = SidebarShelfEntry.recent(downloads: downloads, media: isMediaEnabled() ? media : [], now: now(),
+        // A download that just finished landed in the folder: list it again.
+        let done = Set(downloads.filter { $0.state == .complete }.map(\.id))
+        if !done.subtracting(completedIDs).isEmpty { rescanFolder() }
+        completedIDs = done
+        let next = SidebarShelfEntry.recent(downloads: downloads, files: folderFiles, now: now(),
                                             fileExists: fileExists, hidden: hiddenIDs)
         if next != entries { entries = next }
         if isShown, next.isEmpty { setShown(false) }
+        // Rows that arrive while the pointer waits on the button (the folder read finished after the
+        // show delay, or after the permission prompt) still open the shelf.
+        if !isShown, !next.isEmpty, isIconHovered || isListHovered { schedule() }
         updateBadge(downloads)
     }
 
@@ -407,7 +456,7 @@ final class SidebarDownloadsShelf: ObservableObject {
             hide(entry)
         case .moveToTrash:
             NSWorkspace.shared.recycle([url]) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.refresh() }
+                MainActor.assumeIsolated { self?.rescanFolder() }
             }
         }
     }
@@ -422,7 +471,7 @@ final class SidebarDownloadsShelf: ObservableObject {
 
     /// Recomputes the rows (a file went to the Trash, a row was hidden).
     private func refresh() {
-        update(downloads: lastDownloads, media: lastMedia)
+        update(downloads: lastDownloads)
     }
 
     /// Follows the app's menus while the shelf shows: a row's menu keeps it open.
@@ -446,10 +495,25 @@ final class SidebarDownloadsShelf: ObservableObject {
         ]
     }
 
-    /// Follows the current profile's downloads and, with Library ▸ Media on, rescans media.
+    /// Lists the Downloads folder again, then recomputes the rows.
+    func rescanFolder() {
+        scanTask?.cancel()
+        let scan = scanFolder
+        scanTask = Task { [weak self] in
+            let files = await scan()
+            guard let self, !Task.isCancelled else { return }
+            self.folderFiles = files
+            self.refresh()
+        }
+    }
+
+    /// For tests: waits for the running folder scan.
+    func settleFolderScan() async { await scanTask?.value }
+
+    /// Follows the current profile's downloads and lists the Downloads folder again.
     private func prepareSources() {
         downloads?.observe(profileID: profileID())
-        if let media, isMediaEnabled(), !media.isActive { media.activate() }
+        rescanFolder()
     }
 
     private func schedule() {
@@ -470,7 +534,6 @@ final class SidebarDownloadsShelf: ObservableObject {
         guard shown != isShown else { return }
         isShown = shown
         followMenus(shown)
-        if !shown, let media, media.isActive { media.deactivate() }
     }
 }
 
