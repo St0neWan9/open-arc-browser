@@ -43,6 +43,9 @@ public enum WebToolbarRole: Hashable, Sendable {
     case page
     /// A split pane; `isActive` = it holds the selected tab.
     case pane(isActive: Bool)
+    /// The Peek panel's page (toolbar on): back, forward and reload only, no right group.
+    /// [06 §22.2] observed (B215).
+    case peek
 }
 
 /// The buttons left and right of the center group, in display order.
@@ -73,6 +76,8 @@ public struct WebToolbarItems: Equatable, Sendable {
             switch role {
             case .page: return WebToolbarItems(leading: [], trailing: [])
             case .pane: return WebToolbarItems(leading: [.back, .forward], trailing: [.closePane])
+            // Peek shows no bar with the toolbar off. [06 §22.2] observed.
+            case .peek: return WebToolbarItems(leading: [], trailing: [])
             }
         }
         let sidebar: [WebToolbarItem] = showsSidebarButton ? [.showSidebar] : []
@@ -84,6 +89,8 @@ public struct WebToolbarItems: Equatable, Sendable {
             return WebToolbarItems(leading: sidebar + [.back, .forward, .reload], trailing: translate + [.siteControls, .splitMenu, .closePane])
         case .pane(isActive: false):
             return WebToolbarItems(leading: sidebar + [.back, .forward], trailing: [.closePane])
+        case .peek:
+            return WebToolbarItems(leading: [.back, .forward, .reload], trailing: [])
         }
     }
 }

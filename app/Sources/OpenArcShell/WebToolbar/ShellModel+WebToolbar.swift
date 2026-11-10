@@ -1,5 +1,6 @@
 import Foundation
 import OpenArcModel
+import OpenArcEngine
 import OpenArcDesign
 
 // The window's side of the web toolbar (plan B43): which bars show, what they show, and what their
@@ -84,8 +85,14 @@ extension ShellModel {
     /// hit a classic scrollbar (observed) or none arrived yet (inferred); transparent when the
     /// panel or pane shows no page (observed: a new empty split pane, an empty panel).
     func webToolbarBackgroundSource(for tabID: UUID?) -> WebToolbarBackgroundSource {
-        guard let tabID, sidebar.linkURL(for: tabID) != nil else { return .transparent }
-        switch sidebar.liveState(for: tabID)?.pageTopColor {
+        guard let tabID else { return .transparent }
+        return webToolbarBackgroundSource(url: sidebar.linkURL(for: tabID), pageTopColor: sidebar.liveState(for: tabID)?.pageTopColor)
+    }
+
+    /// The same for a page that is not a tab of the sidebar (the Peek page, B215).
+    func webToolbarBackgroundSource(url: URL?, pageTopColor: PageTopColor?) -> WebToolbarBackgroundSource {
+        guard url != nil else { return .transparent }
+        switch pageTopColor {
         case .color(let color): return .page(color)
         case .scrollbar: return .neutral
         // Not sampled yet (the page is still loading): the bar takes the blank page's color until
@@ -98,8 +105,17 @@ extension ShellModel {
     /// The bar of `tabID`: background from its own page (each split pane samples its own,
     /// [06 §17.4] observed), ink by the bar's luminance.
     func webToolbarColors(for tabID: UUID?) -> WebToolbarColors {
+        webToolbarColors(source: webToolbarBackgroundSource(for: tabID))
+    }
+
+    /// The Peek page's bar (B215): background from the Peek page, as for a tab.
+    func webToolbarColors(url: URL?, pageTopColor: PageTopColor?) -> WebToolbarColors {
+        webToolbarColors(source: webToolbarBackgroundSource(url: url, pageTopColor: pageTopColor))
+    }
+
+    private func webToolbarColors(source: WebToolbarBackgroundSource) -> WebToolbarColors {
         ThemeDerivation.webToolbarColors(appearance: windowPalette.appearance,
-                                         source: webToolbarBackgroundSource(for: tabID),
+                                         source: source,
                                          panelBackground: windowPalette.webPanelBackground)
     }
 
@@ -138,7 +154,14 @@ extension ShellModel {
     /// was copied, so the view shows "Copied Current URL".
     @discardableResult
     func webToolbarCopyLink(_ tabID: UUID?) -> Bool {
-        guard let tabID, let url = sidebar.linkURL(for: tabID) else { return false }
+        guard let tabID else { return false }
+        return webToolbarCopyLink(url: sidebar.linkURL(for: tabID))
+    }
+
+    /// Copies `url` (the Peek page's, B215).
+    @discardableResult
+    func webToolbarCopyLink(url: URL?) -> Bool {
+        guard let url else { return false }
         siteControls.pasteboard.writeURL(url)
         controller.feedback.play(.copy)
         return true

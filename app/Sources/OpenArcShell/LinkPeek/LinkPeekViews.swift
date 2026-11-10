@@ -11,6 +11,8 @@ import OpenArcDesign
 /// Everything Peek draws over the window. The page behind is shrunk by `MainWindowContent`.
 struct LinkPeekOverlay: View {
     @ObservedObject var peek: LinkPeekModel
+    /// For the panel's toolbar (B215).
+    let model: ShellModel
     let layout: LinkPeekLayout
     let palette: ThemePalette
     /// Set by the window: false while another surface (the command bar) owns Esc.
@@ -34,7 +36,7 @@ struct LinkPeekOverlay: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier("openarc.peek.dim")
 
-            LinkPeekPanel(peek: peek, palette: palette)
+            LinkPeekPanel(peek: peek, model: model, settings: model.webToolbar, palette: palette, size: panel.size)
                 .frame(width: panel.width, height: panel.height)
                 .clipShape(RoundedRectangle(cornerRadius: PeekMetrics.cornerRadius, style: .continuous))
                 .background(
@@ -62,16 +64,35 @@ struct LinkPeekOverlay: View {
     }
 }
 
-/// The panel: the Peek page fills it, with no title bar. [06 §22.2] observed.
+/// The panel: the Peek page fills it, with no title bar. [06 §22.2] observed. With View ▸ Show
+/// Toolbar on, a toolbar strip for the Peek page sits at its top. [06 §22.2] observed (B215).
 private struct LinkPeekPanel: View {
     @ObservedObject var peek: LinkPeekModel
+    let model: ShellModel
+    @ObservedObject var settings: WebToolbarSettings
     let palette: ThemePalette
+    let size: CGSize
     @Environment(\.windowDrawnPermissionTab) private var windowDrawnPermissionTab
 
     var body: some View {
-        WebPanel(tab: peek.liveTab, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient)
+        let page = WebPanel(tab: peek.liveTab, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient)
             .onChange(of: peek.session?.tab) { _, _ in focusPage() }
             .onAppear { focusPage() }
+        if settings.isShown {
+            let height = min(CGFloat(Metrics.WebToolbar.height), size.height)
+            let bar = peek.toolbarPage
+            VStack(spacing: 0) {
+                WebToolbarView(model: model, state: bar.state,
+                               items: WebToolbarItems.make(role: .peek, isToolbarShown: true, showsSidebarButton: false),
+                               colors: model.webToolbarColors(url: bar.url, pageTopColor: bar.pageTopColor),
+                               size: CGSize(width: size.width, height: height),
+                               siteControls: model.siteControls, settings: settings, peek: peek)
+                page.frame(width: size.width, height: max(0, size.height - height))
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+        } else {
+            page
+        }
     }
 
     /// Typing goes to the Peek page (inferred).

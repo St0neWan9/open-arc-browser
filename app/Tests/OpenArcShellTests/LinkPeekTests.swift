@@ -114,6 +114,32 @@ final class LinkPeekTests: XCTestCase {
         XCTAssertEqual(model.selectedTabID, id)
     }
 
+    /// B215, 06 §22.2 observed: with the toolbar on, Peek has a bar of back, forward and reload
+    /// with the link and domain; its buttons act on the Peek page.
+    func testPeekToolbarActsOnThePeekPage() async throws {
+        XCTAssertEqual(WebToolbarItems.make(role: .peek, isToolbarShown: true, showsSidebarButton: true),
+                       WebToolbarItems(leading: [.back, .forward, .reload], trailing: []))
+        XCTAssertEqual(WebToolbarItems.make(role: .peek, isToolbarShown: false, showsSidebarButton: false),
+                       WebToolbarItems(leading: [], trailing: []))
+
+        let (_, live) = try await showTab("https://links.example/", favorite: true)
+        try await live.simulateLinkClick(to: try url("https://example.org/"))
+        try await waitUntil { self.peek.liveTab != nil }
+        let page = try XCTUnwrap(peek.liveTab as? FakeTab)
+        try await waitUntil { self.peek.toolbarPage.url == (try? self.url("https://example.org/")) }
+        XCTAssertFalse(peek.toolbarPage.canGoBack)
+
+        try await page.load(try url("https://example.org/two"))
+        try await waitUntil { self.peek.toolbarPage.canGoBack }
+        XCTAssertEqual(peek.toolbarPage.state.url, try url("https://example.org/two"))
+        peek.goBack()
+        try await waitUntil { self.peek.toolbarPage.url == (try? self.url("https://example.org/")) }
+        peek.reloadOrStop()
+        try await waitUntil { page.commands.contains { if case .reload = $0 { return true } else { return false } } }
+        XCTAssertFalse(live.commands.contains { if case .reload = $0 { return true } else { return false } },
+                       "the source page is not reloaded")
+    }
+
     /// 06 §22.1 observed: a same-site link navigates the favorite; no Peek.
     func testFavoriteSameSiteLinkNavigates() async throws {
         let (_, live) = try await showTab("https://links.example/", favorite: true)

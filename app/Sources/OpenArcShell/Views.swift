@@ -119,6 +119,7 @@ struct MainWindowContent: View {
                 if showsLinkPeek {
                     LinkPeekOverlay(
                         peek: model.linkPeek,
+                        model: model,
                         layout: LinkPeekLayout(windowSize: proxy.size, webPanelFrame: baseLayout.webPanelFrame),
                         palette: palette,
                         handlesEscape: !model.isCommandBarPresented && !isModalPresented

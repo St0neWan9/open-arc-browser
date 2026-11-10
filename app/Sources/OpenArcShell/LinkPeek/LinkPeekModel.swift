@@ -40,6 +40,9 @@ public final class LinkPeekModel: ObservableObject {
     private(set) var page = SidebarTabLiveState()
     /// The Peek page's engine tab, once made.
     @Published private(set) var liveTab: (any BrowserTab)?
+    /// What the Peek panel's toolbar shows (B215); set only when it changes, so load progress
+    /// does not redraw the panel.
+    @Published private(set) var toolbarPage = PeekToolbarPage()
 
     private let sidebar: SidebarViewModel
     private var controller: WorkspaceController { sidebar.controller }
@@ -105,12 +108,14 @@ public final class LinkPeekModel: ObservableObject {
         session?.tab = live.id
         controller.dialogs.observe(live)
         page = SidebarTabLiveState(snapshot: await live.currentState())
+        updateToolbarPage()
         publishToSidebar()
         let stream = live.events()
         eventTask = Task { [weak self] in
             for await event in stream {
                 guard let self else { return }
                 self.page.apply(event)
+                self.updateToolbarPage()
                 switch event {
                 case .urlChanged: self.publishToSidebar()
                 // window.close() in the Peek page closes the preview (inferred).
@@ -139,7 +144,36 @@ public final class LinkPeekModel: ObservableObject {
         }
         liveTab = nil
         page = SidebarTabLiveState()
+        updateToolbarPage()
         publishToSidebar()
+    }
+
+    // MARK: Toolbar (B215)
+
+    private func updateToolbarPage() {
+        let next = PeekToolbarPage(url: displayedURL, canGoBack: page.canGoBack, canGoForward: page.canGoForward,
+                                   isLoading: page.isLoading, pageTopColor: page.pageTopColor)
+        if next != toolbarPage { toolbarPage = next }
+    }
+
+    func goBack() {
+        guard let live = liveTab else { return }
+        Task { try? await live.goBack() }
+    }
+
+    func goForward() {
+        guard let live = liveTab else { return }
+        Task { try? await live.goForward() }
+    }
+
+    /// Reload, or stop while loading. [06 §17.2] observed for the page's bar.
+    func reloadOrStop() {
+        guard let live = liveTab else { return }
+        if page.isLoading {
+            Task { try? await live.stopLoading() }
+        } else {
+            Task { try? await live.reload(bypassingCache: false) }
+        }
     }
 
     /// ⤢: the Peek page becomes a new tab at the top of the current Space's Today, selected.
@@ -260,4 +294,17 @@ public final class LinkPeekModel: ObservableObject {
 
 private extension String {
     var nonEmpty: String? { isEmpty ? nil : self }
+}
+
+/// The Peek page as its toolbar shows it (B215).
+struct PeekToolbarPage: Equatable {
+    var url: URL?
+    var canGoBack = false
+    var canGoForward = false
+    var isLoading = false
+    var pageTopColor: PageTopColor?
+
+    var state: WebToolbarState {
+        WebToolbarState(tabID: nil, url: url, canGoBack: canGoBack, canGoForward: canGoForward, isLoading: isLoading)
+    }
 }

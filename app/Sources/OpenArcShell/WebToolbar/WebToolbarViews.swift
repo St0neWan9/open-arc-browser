@@ -50,6 +50,8 @@ struct WebToolbarView: View {
     let size: CGSize
     @ObservedObject var siteControls: SiteControlsModel
     @ObservedObject var settings: WebToolbarSettings
+    /// The bar of the Peek panel (B215): its buttons act on the Peek page.
+    var peek: LinkPeekModel? = nil
     @Environment(\.webToolbarCopyToast) private var copyToast
     @State private var isDomainHovered = false
 
@@ -76,14 +78,16 @@ struct WebToolbarView: View {
 
             // Center group: copy link · (http) lock · domain. [06 §17.2] observed.
             centerButton("link", label: "Copy Link", tooltip: .copyLink, id: "openarc.webToolbar.copyLink", tint: colors.icon) {
-                if model.webToolbarCopyLink(state.tabID) { copyToast?.show() }
+                let copied = peek == nil ? model.webToolbarCopyLink(state.tabID) : model.webToolbarCopyLink(url: state.url)
+                if copied { copyToast?.show() }
             }
             .frame(width: layout.copyLinkFrame.width, height: layout.copyLinkFrame.height)
             .offset(x: layout.copyLinkFrame.minX, y: layout.copyLinkFrame.minY)
             .disabled(state.url == nil)
             if let lock = layout.lockFrame {
                 centerButton("lock.slash", label: "Not Secure", id: "openarc.webToolbar.insecureLock", tint: colors.insecureLock) {
-                    model.webToolbarShowSiteControls(state.tabID)
+                    // The Site Control Center belongs to the selected tab, not to Peek (inferred).
+                    if peek == nil { model.webToolbarShowSiteControls(state.tabID) }
                 }
                 .frame(width: lock.width, height: lock.height)
                 .offset(x: lock.minX, y: lock.minY)
@@ -94,7 +98,7 @@ struct WebToolbarView: View {
         .clipped()
         // Same menu on the domain and on empty toolbar space. [06 §28] observed.
         .contentShape(Rectangle())
-        .contextMenu { WebToolbarContextMenu(model: model, tabID: state.tabID, settings: settings) }
+        .contextMenu { if peek == nil { WebToolbarContextMenu(model: model, tabID: state.tabID, settings: settings) } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.webToolbar")
     }
@@ -124,11 +128,12 @@ struct WebToolbarView: View {
         .frame(width: pill.width, height: pill.height, alignment: .topLeading)
         .contentShape(Rectangle())
         .onHover { isDomainHovered = $0 }
-        .onTapGesture { model.webToolbarOpenAddress(state.tabID) }
+        // In Peek the address is the preview's own: nothing to edit (inferred).
+        .onTapGesture { if peek == nil { model.webToolbarOpenAddress(state.tabID) } }
         .accessibilityElement()
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(text)
-        .accessibilityAction { model.webToolbarOpenAddress(state.tabID) }
+        .accessibilityAction { if peek == nil { model.webToolbarOpenAddress(state.tabID) } }
         .accessibilityIdentifier("openarc.webToolbar.domain")
         .offset(x: pill.minX, y: pill.minY)
     }
@@ -143,12 +148,12 @@ struct WebToolbarView: View {
         case .back:
             WebToolbarButton(symbol: "arrow.left", glyphSize: t.arrowGlyphSize, label: "Go Back", tooltip: .back,
                              identifier: "openarc.webToolbar.back", colors: colors, isEnabled: state.canGoBack) {
-                model.webToolbarGoBack(state.tabID)
+                if let peek { peek.goBack() } else { model.webToolbarGoBack(state.tabID) }
             }
         case .forward:
             WebToolbarButton(symbol: "arrow.right", glyphSize: t.arrowGlyphSize, label: "Go Forward", tooltip: .forward,
                              identifier: "openarc.webToolbar.forward", colors: colors, isEnabled: state.canGoForward) {
-                model.webToolbarGoForward(state.tabID)
+                if let peek { peek.goForward() } else { model.webToolbarGoForward(state.tabID) }
             }
         case .reload:
             // While loading the button turns into ✕ (stop). [06 §17.2] observed.
@@ -156,8 +161,8 @@ struct WebToolbarView: View {
                              glyphSize: state.isLoading ? t.stopGlyphSize : t.reloadGlyphSize,
                              label: state.isLoading ? "Stop Loading" : "Refresh the Page",
                              tooltip: state.isLoading ? .stop : .reload,
-                             identifier: "openarc.webToolbar.reload", colors: colors, isEnabled: state.tabID != nil) {
-                model.webToolbarReload(state.tabID)
+                             identifier: "openarc.webToolbar.reload", colors: colors, isEnabled: state.tabID != nil || peek != nil) {
+                if let peek { peek.reloadOrStop() } else { model.webToolbarReload(state.tabID) }
             }
         case .siteControls:
             PermissionPromptReader { prompt in
