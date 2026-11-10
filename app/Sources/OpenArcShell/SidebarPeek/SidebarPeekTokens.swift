@@ -173,6 +173,10 @@ private struct SidebarFillOverrideKey: EnvironmentKey {
     static let defaultValue: RGBAColor? = nil
 }
 
+private struct SidebarOnWindowBackgroundKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// How the sidebar in this subtree is shown: the top bar's sidebar button reads it for its
     /// "Hide sidebar" / "Lock sidebar" label. [06 §14] observed.
@@ -185,5 +189,13 @@ extension EnvironmentValues {
     var sidebarFillOverride: RGBAColor? {
         get { self[SidebarFillOverrideKey.self] }
         set { self[SidebarFillOverrideKey.self] = newValue }
+    }
+
+    /// The sidebar sits on the window background (`SwipeBackground`), which already paints the
+    /// Space's colors on an opaque window too: the sidebar paints no fill of its own, so the color
+    /// a Space switch blends shows through it in full screen and with Reduce Transparency (B209).
+    var sidebarOnWindowBackground: Bool {
+        get { self[SidebarOnWindowBackgroundKey.self] }
+        set { self[SidebarOnWindowBackgroundKey.self] = newValue }
     }
 }

@@ -284,6 +284,7 @@ struct MainWindowContent: View {
             // Slides out to the left while the web panel expands. Timing: `ShellMotion.sidebarToggle`.
             SidebarView(viewModel: sidebar, width: sidebarSize.width)
                 .environment(\.siteControlsModel, model.siteControls)
+                .environment(\.sidebarOnWindowBackground, true)
                 .frame(width: sidebarSize.width, height: sidebarSize.height)
                 .overlay(alignment: .topLeading) { newSpaceIllustration(sidebarSize: sidebarSize, layout: layout, palette: palette) }
                 .transition(.move(edge: .leading))

@@ -209,9 +209,16 @@ private struct SidebarBackgroundFill: View {
     /// The floating peek panel's deeper fill instead of the window color. [06 §14] B34.
     @Environment(\.sidebarFillOverride) private var fillOverride
     @Environment(\.windowSurface) private var surface
+    @Environment(\.sidebarOnWindowBackground) private var onWindowBackground
 
     var body: some View {
-        fillOverride.map(\.swiftUI) ?? viewModel.palette.sidebarBackground(on: surface)
+        if let fillOverride {
+            fillOverride.swiftUI
+        } else if onWindowBackground {
+            Color.clear
+        } else {
+            viewModel.palette.sidebarBackground(on: surface)
+        }
     }
 }
 
