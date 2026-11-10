@@ -117,18 +117,23 @@ public struct WindowUIState: Codable, Hashable, Sendable {
     /// width (files written before B144, or never resized). Per window, like Arc's window data
     /// (inferred: Arc keeps the sidebar width with each window's saved state).
     public var sidebarWidth: Double?
+    /// The window's frame when it was last outside full screen, in AppKit screen coordinates
+    /// (origin bottom left); nil in files written before B214. A relaunch (an update included)
+    /// puts the window back there.
+    public var frame: SavedWindowFrame?
 
     public init(selectedSpaceID: UUID? = nil, selectedTabID: UUID? = nil, isSidebarVisible: Bool = true,
-                sidebarWidth: Double? = nil) {
+                sidebarWidth: Double? = nil, frame: SavedWindowFrame? = nil) {
         self.selectedSpaceID = selectedSpaceID
         self.selectedTabID = selectedTabID
         self.isSidebarVisible = isSidebarVisible
         self.sidebarWidth = sidebarWidth
+        self.frame = frame
     }
 
     /// Persisted key names; never rename.
     private enum CodingKeys: String, CodingKey {
-        case selectedSpaceID, selectedTabID, isSidebarVisible, sidebarWidth
+        case selectedSpaceID, selectedTabID, isSidebarVisible, sidebarWidth, frame
     }
 
     /// Missing keys fall back to defaults.
@@ -138,6 +143,22 @@ public struct WindowUIState: Codable, Hashable, Sendable {
         selectedTabID = try c.decodeIfPresent(UUID.self, forKey: .selectedTabID)
         isSidebarVisible = try c.decodeIfPresent(Bool.self, forKey: .isSidebarVisible) ?? true
         sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth)
+        frame = try c.decodeIfPresent(SavedWindowFrame.self, forKey: .frame)
+    }
+}
+
+/// A window frame in `ui-state.json` (B214). Persisted key names; never rename.
+public struct SavedWindowFrame: Codable, Hashable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
     }
 }
 

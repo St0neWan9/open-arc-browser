@@ -106,6 +106,9 @@ public final class ShellModel: ObservableObject {
     /// Frame the AppKit window takes when it appears: an incognito window lies over the window it
     /// was opened from ([06 §20.1] observed, F5-41). Consumed by `takeOpeningFrame()`.
     private(set) var openingFrame: CGRect?
+    /// The window's frame the last time it was outside full screen, saved in `ui-state.json` so a
+    /// relaunch puts the window back (B214).
+    private(set) var restorableFrame: SavedWindowFrame?
     /// Reports the window again when its Space, selection or tabs change (plan B126).
     private var engineWindowChanges: AnyCancellable?
 
@@ -282,7 +285,11 @@ public final class ShellModel: ObservableObject {
             return model
         case .restore:
             let saved = controller.takePendingRestore() ?? controller.reopenState()
-            return ShellModel(controller: controller, window: saved)
+            let model = ShellModel(controller: controller, window: saved)
+            // Where the window was (B214); the window drops it when no screen shows it now.
+            model.openingFrame = saved.frame.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+            model.restorableFrame = saved.frame
+            return model
         case .newWindow:
             let spaceID = request.spaceID ?? controller.activeSpaceID
             let tabID = request.tabID ?? spaceID.flatMap { controller.mostRecentTabNotOnScreen(inSpace: $0) }
@@ -321,7 +328,8 @@ public final class ShellModel: ObservableObject {
     /// This window's entry in `ui-state.json`.
     var windowUIState: WindowUIState {
         WindowUIState(selectedSpaceID: selectedSpaceID, selectedTabID: selectedTabID, isSidebarVisible: isSidebarVisible,
-                      sidebarWidth: sidebarWidth == SidebarWidth.defaultWidth ? nil : sidebarWidth)
+                      sidebarWidth: sidebarWidth == SidebarWidth.defaultWidth ? nil : sidebarWidth,
+                      frame: restorableFrame)
     }
 
     /// Another window asked for a tab this window shows: bring this window to the front.
@@ -348,6 +356,12 @@ public final class ShellModel: ObservableObject {
         guard frame != windowFrame else { return }
         windowFrame = frame
         if isBrowserWindow { controller.engineWindows.setNeedsReport() }
+    }
+
+    /// The window moved or resized outside full screen: the frame a relaunch restores (B214).
+    func windowRestorableFrameDidChange(_ frame: CGRect) {
+        guard frame.width > 0, frame.height > 0 else { return }
+        restorableFrame = SavedWindowFrame(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height)
     }
 
     /// The window closed (close button, Close Window ⇧⌘W). Its state leaves the saved UI state and

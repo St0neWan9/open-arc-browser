@@ -127,7 +127,10 @@ struct BrowserWindowObserver: NSViewRepresentable {
             window.isRestorable = false
             // An incognito window lies exactly over the window it was opened from. [06 §20.1]
             // observed (F5-41).
-            if let frame = model.takeOpeningFrame() { window.setFrame(frame, display: true) }
+            // A restored window goes back where it was (B214), when a screen still shows it.
+            if let frame = WindowFrameRestore.frame(model.takeOpeningFrame(), screens: NSScreen.screens.map(\.visibleFrame)) {
+                window.setFrame(frame, display: true)
+            }
             // An incognito window carries no badge, not even in its title; its appearance comes from
             // its palette like any window (`WindowAppearanceApplier`). [06 §20.1] observed (B48).
             model.focusWindow = { [weak window] in window.map(BrowserWindowObserver.bringToFront) }
@@ -172,6 +175,8 @@ struct BrowserWindowObserver: NSViewRepresentable {
         private func reportFrame(of window: NSWindow) {
             let frame = window.frame
             model.windowFrameDidChange(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height)
+            // Full screen is not a place to come back to (B214).
+            if !window.styleMask.contains(.fullScreen) { model.windowRestorableFrameDidChange(frame) }
         }
 
         /// Applies the model's title `titleCoalescingDelay` after the first change of a burst; the

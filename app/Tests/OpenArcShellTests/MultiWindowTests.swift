@@ -421,6 +421,30 @@ final class MultiWindowTests: XCTestCase {
         XCTAssertEqual(relaunched.takeAdditionalRestoreCount(), 0, "asked once")
     }
 
+    /// B214: a relaunch (an update included) puts each window back where it was outside full
+    /// screen; a Dock click after the last window closed does too.
+    func testRelaunchRestoresTheWindowFrame() async throws {
+        let f = SidebarFixture()
+        let frame = CGRect(x: 200, y: 120, width: 1300, height: 820)
+        do {
+            let controller = makeController(f, store: makeStore())
+            let a = window(controller, space: f.home)
+            a.windowRestorableFrameDidChange(frame)
+            try await controller.flushPersistence()
+            a.windowDidClose()
+            XCTAssertEqual(controller.reopenState().frame, SavedWindowFrame(x: 200, y: 120, width: 1300, height: 820))
+            controller.stop()
+        }
+        let saved = try XCTUnwrap(UIStateFile.load(from: directory))
+        XCTAssertEqual(saved.windows.first?.frame, SavedWindowFrame(x: 200, y: 120, width: 1300, height: 820))
+
+        let relaunched = makeController(store: makeStore())
+        let restored = ShellModel.window(for: BrowserWindowRequest(kind: .restore), on: relaunched)
+        addTeardownBlock { @MainActor in restored.stop() }
+        XCTAssertEqual(restored.takeOpeningFrame(), frame)
+        XCTAssertEqual(restored.windowUIState.frame, saved.windows.first?.frame, "kept until the window moves")
+    }
+
     /// Plan C20, `docs/arc-spec/03-settings.md` §Advanced inferred: with "restore
     /// windows from previous session" on, a restored tab gets its back/forward list back after a
     /// relaunch (saved per device next to the workspace, never in the workspace or sync records).

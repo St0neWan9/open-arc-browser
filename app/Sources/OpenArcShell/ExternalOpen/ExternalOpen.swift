@@ -109,7 +109,20 @@ public final class ExternalOpenInbox {
     /// Called once after launch: opens a window if URLs are still waiting for one. The window
     /// connects the inbox when it appears. inferred.
     public func openWindowIfStillWaiting() {
-        guard isWaiting, !didRequestFallbackWindow, let open = fallbackWindowOpener else { return }
+        guard isWaiting else { return }
+        openFallbackWindow()
+    }
+
+    /// Called once, a while after launch: opens a window of the last session if no browser window
+    /// appeared at all (none connected the inbox). Seen after an update relaunch on a user's
+    /// machine: the app ran with no window until a Dock click (user, 2026-11-10, B214).
+    public func openWindowIfNoneAppeared() {
+        guard handler == nil else { return }
+        openFallbackWindow()
+    }
+
+    private func openFallbackWindow() {
+        guard !didRequestFallbackWindow, let open = fallbackWindowOpener else { return }
         didRequestFallbackWindow = true
         open()
     }
@@ -171,6 +184,9 @@ public final class OpenArcAppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + ExternalOpenTiming.fallbackWindowDelay) {
             MainActor.assumeIsolated { inbox.openWindowIfStillWaiting() }
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + ExternalOpenTiming.noWindowDelay) {
+            MainActor.assumeIsolated { inbox.openWindowIfNoneAppeared() }
+        }
     }
 
     // MARK: Remote notifications (B65)
@@ -200,6 +216,9 @@ enum ExternalOpenTiming {
     /// How long after launch the delegate waits for the first window before opening one for
     /// waiting links. Our own value.
     static let fallbackWindowDelay: TimeInterval = 0.5
+    /// How long after launch the delegate waits for any browser window before opening one (B214).
+    /// Longer than a slow launch takes to show its first window. Our own value.
+    static let noWindowDelay: TimeInterval = 3
 }
 
 /// Gives the inbox a window opener that works without any window (menu commands are built at
