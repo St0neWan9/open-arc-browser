@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Tue, 10 Nov 2026 16:46:18 +0700
+Subject: [PATCH] openarc: embedder: grant HTML fullscreen and leave it on
+ Escape
+
+Plan B212. content's WebContentsDelegate defaults never grant
+element.requestFullscreen(): IsFullscreenForTabOrPending() stays false,
+so a video's full screen button did nothing. The tab's delegate now
+grants it as content shell does (and resyncs the visual properties), and
+Escape leaves it before the page sees the key, as Chrome's exclusive
+access manager does. The shell takes the window full screen from
+tab:didChangeFullscreen:.
+---
+ openarc/bridge/oac_tab.mm | 38 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/openarc/bridge/oac_tab.mm b/openarc/bridge/oac_tab.mm
+index 4041f6889f49..5a23b629f0dd 100644
+--- a/openarc/bridge/oac_tab.mm
++++ b/openarc/bridge/oac_tab.mm
+@@ -48,6 +48,7 @@
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/base/page_transition_types.h"
+ #include "ui/base/window_open_disposition.h"
++#include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/gfx/codec/png_codec.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/size.h"
+@@ -298,6 +299,23 @@ void ExitPictureInPicture() override {
+   bool IsDocumentPictureInPictureBlockedBySystem() const override {
+     return true;
+   }
++  // HTML fullscreen (element.requestFullscreen): granted here, as content
++  // shell does; the renderer sees it on the next visual properties. The tab
++  // reports the change through tab:didChangeFullscreen: and the shell makes
++  // the window full screen with the page filling it. Without these overrides
++  // content's defaults never grant it and the request fails.
++  void EnterFullscreenModeForTab(
++      content::RenderFrameHost* requesting_frame,
++      const blink::mojom::FullscreenOptions& options) override {
++    SetTabFullscreen(true);
++  }
++  void ExitFullscreenModeForTab(content::WebContents* source) override {
++    SetTabFullscreen(false);
++  }
++  bool IsFullscreenForTabOrPending(
++      const content::WebContents* source) override {
++    return tab_fullscreen_;
++  }
+   bool HandleKeyboardEvent(
+       content::WebContents* source,
+       const input::NativeWebKeyboardEvent& event) override {
+@@ -311,6 +329,14 @@ bool HandleKeyboardEvent(
+   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+       content::WebContents* source,
+       const input::NativeWebKeyboardEvent& event) override {
++    // Escape leaves HTML fullscreen before the page sees it, as Chrome's
++    // exclusive access manager does.
++    if (tab_fullscreen_ &&
++        event.GetType() == blink::WebInputEvent::Type::kRawKeyDown &&
++        event.windows_key_code == ui::VKEY_ESCAPE) {
++      source->ExitFullscreen(/*will_cause_resize=*/true);
++      return content::KeyboardEventProcessingResult::HANDLED;
++    }
+     if (openarc::HandleExtensionCommandKeyEvent(source, event)) {
+       return content::KeyboardEventProcessingResult::HANDLED;
+     }
+@@ -558,6 +584,18 @@ void WithdrawUnresponsivePrompt() {
+   // The open unresponsive-page prompt; the shell's reference keeps it alive.
+   __weak OACUnresponsivePageRequest* unresponsive_request_ = nil;
+   bool go_back_after_process_gone_ = false;
++
++  void SetTabFullscreen(bool on) {
++    if (tab_fullscreen_ == on) {
++      return;
++    }
++    tab_fullscreen_ = on;
++    if (content::RenderWidgetHostView* view =
++            web_contents()->GetRenderWidgetHostView()) {
++      view->GetRenderWidgetHost()->SynchronizeVisualProperties();
++    }
++  }
++  bool tab_fullscreen_ = false;
+   base::WeakPtrFactory<TabWebContentsBridge> weak_factory_{this};
+ };
+ 

@@ -15,6 +15,10 @@ public struct MainWindowLayout: Equatable, Sendable {
     /// (B49, `PeekMetrics.backgroundInset`); 0 otherwise.
     public var peekBackgroundInset: Double = 0
 
+    /// The page is in HTML fullscreen (a video's full screen button, B212): the web panel fills
+    /// the window with no border, sidebar or toolbar. inferred (Chromium-based browsers do this).
+    public var isPageFullscreen = false
+
     /// The window's sidebar width (B144): resizable by dragging the seam (`SidebarWidth`).
     /// Defaults to the 276 of the reference captures, so the measured frames below hold there.
     public var sidebarWidth: Double
@@ -111,6 +115,7 @@ public struct MainWindowLayout: Equatable, Sendable {
 
     /// The web panel without the Peek inset.
     public var baseWebPanelFrame: CGRect {
+        if isPageFullscreen { return CGRect(origin: .zero, size: windowSize) }
         guard isSidebarVisible else {
             let inset = SidebarPeekTokens.hiddenWebPanelInset
             return CGRect(x: inset, y: inset, width: max(0, windowSize.width - 2 * inset), height: max(0, windowSize.height - 2 * inset))

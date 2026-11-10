@@ -78,12 +78,12 @@ struct MainWindowContent: View {
                     // of the page area. [06 §13], [03 §Advanced] observed. B84. The single page only:
                     // split panes have their own bars, and the toolbar strip is already chrome.
                     if model.activeSplitLayout == nil && !layout.isWebToolbarShown && !model.spaceFlow.isCreating
-                        && sidebar.selectedEaselID == nil {
+                        && sidebar.selectedEaselID == nil && !layout.isPageFullscreen {
                         WindowDragStripLayer(settings: model.controller.feedback.settings, layout: layout,
                                              isBlankPage: isBlankPage, palette: palette)
                     }
                     // The seam between the sidebar and the web panel: resize cursor and drag. B144.
-                    if (model.isSidebarVisible || model.isResizingSidebar) && !model.spaceFlow.isCreating {
+                    if (model.isSidebarVisible || model.isResizingSidebar) && !model.spaceFlow.isCreating && !layout.isPageFullscreen {
                         // While a drag has collapsed the sidebar the handle waits at the left edge.
                         let handle = model.isSidebarVisible ? layout.sidebarResizeHandleFrame
                             : CGRect(x: 0, y: 0, width: Metrics.Sidebar.resizeHandleWidth, height: proxy.size.height)
@@ -100,7 +100,8 @@ struct MainWindowContent: View {
 
                 // The top background strip over the sidebar is a title bar (issue #14): drag to
                 // move, double-click to zoom or minimize per the system setting.
-                if model.isSidebarVisible && !model.spaceFlow.isCreating && sidebar.selectedEaselID == nil && !model.library.isActive {
+                if model.isSidebarVisible && !model.spaceFlow.isCreating && sidebar.selectedEaselID == nil && !model.library.isActive
+                    && !layout.isPageFullscreen {
                     WindowTopStrip()
                         .frame(width: max(0, layout.sidebarFrame.width - 96), height: 40)
                         .offset(x: 96, y: 0)
@@ -242,6 +243,11 @@ struct MainWindowContent: View {
         .background(WindowAppearanceApplier(appearance: palette.appearance))
         // A clear, non-opaque window so the blur and the tint show the desktop. [07 §8.4] B64.
         .background(TranslucentWindowConfigurator { isFullScreen = $0 })
+        // HTML fullscreen takes the window full screen and back (B212).
+        .background(PageFullscreenWindowDriver(
+            tabID: model.isPageFullscreen ? sidebar.selectedTabID : nil,
+            exitPage: { [weak model] in model?.exitPageFullscreen(tabID: $0) }
+        ))
     }
 
     /// The page area shows no page: no tab, no address yet, or about:blank. [06 §13] E27 observed:
@@ -280,7 +286,7 @@ struct MainWindowContent: View {
                     .offset(y: dockLayout.dockFrame.minY)
             }
             .frame(width: sidebarSize.width, height: sidebarSize.height, alignment: .topLeading)
-        } else if model.isSidebarVisible {
+        } else if model.isSidebarVisible && !layout.isPageFullscreen {
             // Slides out to the left while the web panel expands. Timing: `ShellMotion.sidebarToggle`.
             SidebarView(viewModel: sidebar, width: sidebarSize.width)
                 .environment(\.siteControlsModel, model.siteControls)
@@ -310,7 +316,9 @@ struct MainWindowContent: View {
                     }
                 }
                 .frame(width: layout.webPanelFrame.width, height: layout.webPanelFrame.height)
-                .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))
+                // Square while the page is in HTML fullscreen and fills the screen (B212).
+                .clipShape(RoundedRectangle(cornerRadius: layout.isPageFullscreen ? 0 : Metrics.WebPanel.cornerRadius,
+                                            style: .continuous))
                 .webPanelEdgeShadow(palette.appearance)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("openarc.webPanel")

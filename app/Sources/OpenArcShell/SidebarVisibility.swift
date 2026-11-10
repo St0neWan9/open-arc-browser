@@ -24,23 +24,38 @@ extension ShellModel {
     /// forces the column open even while the sidebar is hidden. inferred.
     var showsSidebarColumn: Bool { isSidebarVisible || spaceFlow.isCreating }
 
+    /// The selected page is in HTML fullscreen (B212): the window goes full screen and the page
+    /// fills it. Not in a split view, the Library or the Create Space view (inferred).
+    var isPageFullscreen: Bool {
+        !library.isActive && !spaceFlow.isCreating && activeSplitLayout == nil
+            && sidebar.selectedLiveState?.isFullscreen == true
+    }
+
+    /// Leaves the HTML fullscreen of the tab `id` (the window left full screen, or another tab
+    /// was selected). B212.
+    func exitPageFullscreen(tabID id: UUID) {
+        guard let tab = sidebar.liveTab(for: id) else { return }
+        Task { await tab.exitFullscreen() }
+    }
+
     /// pinned / hidden / floating (peek). [06 §14] observed. B34.
     var sidebarPresentation: SidebarPresentation { sidebarPeek.presentation }
 
     /// Whether the floating sidebar is drawn over the web panel. Not while the Create Space view
     /// holds the column or the Library fills the window. inferred.
     var showsSidebarPeek: Bool {
-        sidebarPresentation == .peeking && !spaceFlow.isCreating && !library.isActive
+        sidebarPresentation == .peeking && !spaceFlow.isCreating && !library.isActive && !isPageFullscreen
     }
 
     /// Whether the window tracks the pointer for the left-edge peek: only while hidden. B34.
-    var tracksSidebarPeek: Bool { !isSidebarVisible && !spaceFlow.isCreating && !library.isActive }
+    var tracksSidebarPeek: Bool { !isSidebarVisible && !spaceFlow.isCreating && !library.isActive && !isPageFullscreen }
 
     /// Whether the traffic lights show. [06 §14] observed: they go away with the hidden sidebar
     /// and come back inside the floating panel. The Library and the Create Space column draw
     /// their own top bar, so they keep them (inferred).
     var showsWindowButtons: Bool {
-        sidebarPresentation.showsWindowButtons || spaceFlow.isCreating || library.isActive
+        if isPageFullscreen { return false }
+        return sidebarPresentation.showsWindowButtons || spaceFlow.isCreating || library.isActive
     }
 
     /// Where the traffic lights go. [06 §26] observed: out of the window to the left with the
@@ -61,8 +76,13 @@ extension ShellModel {
     /// hidden-state frame while it is out. [06 §14] observed.
     /// The web toolbar takes part while View ▸ Show Toolbar is on ([06 §17], B43); the Library
     /// keeps its own layout (inferred).
+    /// HTML fullscreen leaves the page alone in the window (B212).
     func windowLayout(size: CGSize) -> MainWindowLayout {
-        MainWindowLayout(windowSize: size, isSidebarVisible: showsSidebarColumn,
-                         isWebToolbarShown: isWebToolbarShown && !library.isActive, sidebarWidth: sidebarWidth)
+        let pageFullscreen = isPageFullscreen
+        var layout = MainWindowLayout(windowSize: size, isSidebarVisible: showsSidebarColumn && !pageFullscreen,
+                                      isWebToolbarShown: isWebToolbarShown && !library.isActive && !pageFullscreen,
+                                      sidebarWidth: sidebarWidth)
+        layout.isPageFullscreen = pageFullscreen
+        return layout
     }
 }
