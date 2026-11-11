@@ -579,7 +579,7 @@ public final class ShellModel: ObservableObject {
         case .previousSpace: sidebar.stepSpace(by: -1)
         case .manageSpaces: openLibrary(.spaces)
         // Tabs
-        case .archiveTab: if let id = selectedTabID { sidebar.closeOrUnloadTab(id) }
+        case .archiveTab: archiveTabOrClosePeek()
         case .togglePin: if let id = selectedTabID { sidebar.togglePin(id) }
         case .favoriteTab: if let id = selectedTabID { sidebar.addFavorite(id) }
         case .newFolder: sidebar.requestNewFolder()
@@ -635,6 +635,16 @@ public final class ShellModel: ObservableObject {
     func windowRequest(_ kind: BrowserWindowRequest.Kind) -> BrowserWindowRequest {
         BrowserWindowRequest(kind: kind, spaceID: kind == .incognito || isIncognito ? nil : selectedSpaceID,
                              frame: kind == .incognito ? knownWindowFrame : nil)
+    }
+
+    /// ⌘W (Archive Tab): closes an open Peek and keeps the page under it; otherwise closes or
+    /// unloads the selected tab (user, 2026-11-10, B216).
+    func archiveTabOrClosePeek() {
+        if linkPeek.isOpen {
+            linkPeek.close()
+        } else if let id = selectedTabID {
+            sidebar.closeOrUnloadTab(id)
+        }
     }
 
     /// This window's frame once its AppKit window reported one; nil before.

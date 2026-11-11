@@ -470,7 +470,7 @@ struct KeyOnlyMenuItems: View {
 
     var body: some View {
         Group {
-            Button("Archive Tab") { if let id = model.selectedTabID { model.sidebar.closeOrUnloadTab(id) } }
+            Button("Archive Tab") { model.archiveTabOrClosePeek() }
                 .appShortcut(.archiveTab)
                 .disabled(model.selectedTabID == nil)
             ForEach(1...8, id: \.self) { number in

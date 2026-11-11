@@ -114,6 +114,18 @@ final class LinkPeekTests: XCTestCase {
         XCTAssertEqual(model.selectedTabID, id)
     }
 
+    /// B216 (user, 2026-11-10): ⌘W with Peek open closes only Peek; the page under it stays.
+    func testArchiveTabShortcutClosesOnlyPeek() async throws {
+        let (id, live) = try await showTab("https://links.example/", favorite: true)
+        try await live.simulateLinkClick(to: try url("https://example.org/"))
+        try await waitUntil { self.peek.session?.tab != nil }
+        model.run(.archiveTab)
+        XCTAssertFalse(peek.isOpen)
+        XCTAssertEqual(model.selectedTabID, id)
+        XCTAssertNotNil(model.sidebar.liveTab(for: id), "the source page is still loaded")
+        XCTAssertFalse(model.workspace.tabs[id]?.meta.isTombstone ?? true)
+    }
+
     /// B215, 06 §22.2 observed: with the toolbar on, Peek has a bar of back, forward and reload
     /// with the link and domain; its buttons act on the Peek page.
     func testPeekToolbarActsOnThePeekPage() async throws {
