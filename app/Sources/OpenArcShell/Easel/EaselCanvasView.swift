@@ -435,7 +435,7 @@ struct EaselOrWebPanel: View {
             EaselCanvasView(model: model.easelCanvas, size: size)
         } else {
             WebPanel(tab: model.selectedLiveTab, findBar: model.findBarHost, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient,
-                     crashed: model.crashedPageState(for: sidebar.selectedTabID))
+                     crashed: model.crashedPageState(for: sidebar.selectedTabID), palette: palette)
         }
     }
 }

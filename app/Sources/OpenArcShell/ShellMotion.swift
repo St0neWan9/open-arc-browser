@@ -62,6 +62,8 @@ enum ShellMotion {
     static var littleArcExpandToMain: Animation? { Motion.littleArcExpandToMain.curve.swiftUI }
     /// Peek opening (B49). `Motion.peekOpen` (curve unknown).
     static var peekOpen: Animation? { Motion.peekOpen.curve.swiftUI }
+    /// The hovered link's pill appearing (B218). `Motion.linkStatusFadeIn`.
+    static var linkStatusFadeIn: Animation? { Motion.linkStatusFadeIn.curve.swiftUI }
     /// The download badge dropping onto the Library button (B203). `Motion.downloadBadgeDrop`.
     static var downloadBadgeDrop: Animation? { Motion.downloadBadgeDrop.curve.swiftUI }
     /// The dock Space icon's hover fill (B201). `Motion.dockSpaceHover`.

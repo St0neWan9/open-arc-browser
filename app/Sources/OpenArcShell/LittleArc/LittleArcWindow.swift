@@ -100,7 +100,7 @@ struct LittleArcBrowsingView: View {
             LittleArcTopBar(model: model, palette: palette, onCopy: { if model.copyLink() { copyToast.show() } })
                 .frame(height: LittleArcTokens.topBarHeight)
             WebPanel(tab: model.liveTab, background: palette.webPanelBackground, backgroundGradient: palette.webPanelBackgroundGradient,
-                     crashed: model.page.isCrashed ? CrashedPageState(reload: { model.reloadOrStop() }) : nil)
+                     crashed: model.page.isCrashed ? CrashedPageState(reload: { model.reloadOrStop() }) : nil, palette: palette)
                 .environment(\.dialogCenter, model.dialogs)
                 .environment(\.dialogPalette, palette)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous))

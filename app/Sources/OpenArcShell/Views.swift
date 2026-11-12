@@ -503,6 +503,8 @@ struct WebPanel: View {
     var backgroundGradient: [RGBAColor] = []
     /// Set while the tab's renderer is gone: the crash page covers the surface (C9).
     var crashed: CrashedPageState? = nil
+    /// The Space's colors, for the hovered link's pill (B218); nil uses the light neutral.
+    var palette: ThemePalette? = nil
     @Environment(\.dialogCenter) private var dialogCenter
     @Environment(\.windowDrawnPermissionTab) private var windowDrawnPermissionTab
 
@@ -522,6 +524,8 @@ struct WebPanel: View {
                         SurfaceHostRepresentable(surface: tab.surface, panelColor: background)
                             .id(tab.id)
                         if let crashed { CrashedPageView(state: crashed, panelColor: background) }
+                        // The link under the pointer, at the bottom left. [06 §44] observed (B218).
+                        if crashed == nil { LinkStatusBubble(tab: tab, palette: palette) }
                         if let findBar { FindBarOverlay(host: findBar) }
                         if let dialogCenter {
                             TabDialogOverlay(center: dialogCenter, tabID: tab.id, windowDrawnPermissionTab: windowDrawnPermissionTab)
