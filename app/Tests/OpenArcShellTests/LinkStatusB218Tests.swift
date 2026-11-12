@@ -73,4 +73,39 @@ final class LinkStatusB218Tests: XCTestCase {
         tab.simulateHoveredLink(nil)
         try await waitFor { (pillPixel()?.redComponent ?? 0) > 0.995 }
     }
+
+    /// B219, [06 §44] observed: a long address is cut at ≈ 400 pt, then after 1 s on the same link
+    /// the pill widens to the whole address.
+    @MainActor
+    func testLongAddressWidensAfterOneSecond() async throws {
+        let engine = FakeEngine()
+        let made = try await engine.makeTab(TabConfiguration(profileID: UUID()))
+        let tab = try XCTUnwrap(made as? FakeTab)
+        let host = NSHostingView(rootView: LinkStatusBubble(tab: tab, palette: nil).frame(width: 1200, height: 200).background(Color.white))
+        host.frame = CGRect(x: 0, y: 0, width: 1200, height: 200)
+        let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 1200, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFrontRegardless()
+        defer { window.close() }
+        // On the pill's middle row, 450 pt in: past the 400 pt limit.
+        func isPillAt450() -> Bool { isPillAt(450) }
+        func isPillAt(_ x: CGFloat) -> Bool {
+            host.layoutSubtreeIfNeeded()
+            let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / 1200
+            let c = rep.colorAt(x: Int(x * scale), y: Int((200 - 22) * scale))?.usingColorSpace(.sRGB)
+            return (c?.redComponent ?? 1) < 0.995
+        }
+        let path = String(repeating: "segment/", count: 12)
+        try await Task.sleep(nanoseconds: 50_000_000)  // the view subscribes to the tab first
+        tab.simulateHoveredLink(URL(string: "https://example.com/\(path)end"))
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertTrue(isPillAt(390), "the pill shows")
+        XCTAssertFalse(isPillAt450(), "cut at 400 pt first")
+        for _ in 0..<200 where !isPillAt450() { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(isPillAt450(), "the whole address after 1 s")
+    }
 }

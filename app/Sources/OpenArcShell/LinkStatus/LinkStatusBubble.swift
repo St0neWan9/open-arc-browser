@@ -6,7 +6,8 @@ import OpenArcDesign
 
 // The hovered link's address at the web panel's bottom left (plan B218). [06 §44] observed:
 // a pill 10 pt from the panel's left and bottom edges, the address without its scheme, cut in the
-// middle past ≈ 400 pt, a quick fade in and no fade out. Each page view shows its own tab's link,
+// middle past ≈ 400 pt, a quick fade in and no fade out; after 1 s on one link the whole address
+// shows (B219). Each page view shows its own tab's link,
 // so split panes, Peek and Little Arc get theirs too (inferred).
 
 /// What the pill reads for a link. Pure, for tests.
@@ -30,6 +31,8 @@ struct LinkStatusBubble: View {
     let tab: any BrowserTab
     let palette: ThemePalette?
     @State private var url: URL?
+    /// The pill has shown `url` for `LinkStatusTokens.expandDelay`: no 400 pt limit (B219).
+    @State private var isExpanded = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -43,6 +46,12 @@ struct LinkStatusBubble: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .task(id: url) {
+            isExpanded = false
+            guard url != nil else { return }
+            try? await Task.sleep(nanoseconds: UInt64(LinkStatusTokens.expandDelay * 1_000_000_000))
+            if !Task.isCancelled { isExpanded = true }
+        }
         .task(id: tab.id) {
             url = nil
             for await event in tab.events() {
@@ -56,7 +65,8 @@ struct LinkStatusBubble: View {
         let colors = t.colors(windowBackground: palette?.windowBackground ?? RGBAColor(hex: 0xFFFFFF),
                               isDark: palette?.isDark ?? false)
         let padding = CGFloat(t.horizontalPadding), inset = CGFloat(t.inset)
-        let widest = max(0, min(CGFloat(t.maxWidth), panelWidth - 2 * inset) - 2 * padding)
+        let limit = isExpanded ? panelWidth - 2 * inset : min(CGFloat(t.maxWidth), panelWidth - 2 * inset)
+        let widest = max(0, limit - 2 * padding)
         let shape = Capsule(style: .continuous)
         return Text(text)
             .font(.system(size: CGFloat(t.fontSize), weight: .medium))

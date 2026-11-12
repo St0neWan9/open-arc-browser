@@ -15,6 +15,10 @@ public enum LinkStatusTokens {
     /// Widest pill; longer addresses are cut in the middle. [06 §44] observed in a ≈ 1550 pt
     /// panel; a fixed width at other panel sizes is inferred.
     public static let maxWidth: Double = 400
+    /// After the pill has shown one link this long, it widens at once to the whole address (up to
+    /// the panel's width less the insets). [06 §44] observed (1.0 s, one frame, no animation);
+    /// the panel-wide limit is inferred.
+    public static let expandDelay: Double = 1.0
     /// Text size, medium weight. [06 §44] observed (≈ 13).
     public static let fontSize: Double = 13
     /// Border width. [06 §44] observed (≈ 0.5).
