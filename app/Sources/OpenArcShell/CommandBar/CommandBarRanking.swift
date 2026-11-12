@@ -54,6 +54,10 @@ public enum CommandBarRanker {
         static let historyFloor: Double = 305
         static let archivePenalty: Double = 100
         static let currentSpaceBonus: Double = 10
+        /// A tab (or archived item) of another Space never outranks opening what was typed here: below a typed URL
+        /// and a completing site, above the plain search row (user, 2026-11-12, B217: "open it in
+        /// the current Space, don't jump").
+        static let otherSpaceTabCap: Double = 760
         /// App commands and space rows never outrank an exact tab match (exact title or URL):
         /// open tabs come first [05 §command bar] observed; the cap itself is inferred.
         static let commandCap: Double = 940
@@ -83,7 +87,7 @@ public enum CommandBarRanker {
             if lhs.score != rhs.score { return lhs.score > rhs.score }
             return tieBreak(lhs.result, rhs.result)
         }
-        let deduped = deduplicate(scored.map(\.result), query: query)
+        let deduped = deduplicate(scored.map(\.result), query: query, currentSpaceID: context.currentSpaceID)
         return Array(deduped.prefix(max(0, limit)))
     }
 
@@ -136,9 +140,12 @@ public enum CommandBarRanker {
         case .todayTab, .pinnedTab, .favoriteTab:
             guard var value = textScore(query: query, title: result.title, url: result.url) else { return nil }
             if let space = context.currentSpaceID, result.spaceID == space { value += Score.currentSpaceBonus }
+            if isInOtherSpace(result, context: context) { value = min(value, Score.otherSpaceTabCap) }
             return value
         case .archivedItem:
             guard let value = textScore(query: query, title: result.title, url: result.url) else { return nil }
+            // Restoring returns the item to its own Space (B217).
+            if isInOtherSpace(result, context: context) { return min(value - Score.archivePenalty, Score.otherSpaceTabCap) }
             return value - Score.archivePenalty
         case .historyItem, .topSite:
             // A most visited page of a short query scores like a history page (plan B121, inferred).
@@ -206,6 +213,13 @@ public enum CommandBarRanker {
         return nil
     }
 
+    /// A Today or pinned tab, or an archived item, of a Space other than the window's (favorites
+    /// belong to every Space).
+    static func isInOtherSpace(_ result: CommandBarResult, context: CommandBarQueryContext) -> Bool {
+        guard result.kind.isTab || result.kind == .archivedItem, let space = context.currentSpaceID, let tabSpace = result.spaceID else { return false }
+        return tabSpace != space
+    }
+
     /// Deterministic ordering for equal scores: recency, then shorter title, then source order, then id.
     private static func tieBreak(_ lhs: CommandBarResult, _ rhs: CommandBarResult) -> Bool {
         let l = lhs.lastActiveAt ?? .distantPast
@@ -224,20 +238,34 @@ public enum CommandBarRanker {
     /// - a site row whose host has an open tab (any page of the site), or whose page is archived;
     /// - a typed-URL row when a tab or archived item has the same URL (switch to it instead);
     /// - a suggestion equal to the typed text (the search row covers it).
-    static func deduplicate(_ sorted: [CommandBarResult], query: String) -> [CommandBarResult] {
+    /// With `currentSpaceID`, a tab or archived item of another Space keeps its own row but does
+    /// not drop the typed-URL and site rows, which open the page in this Space; switching to the
+    /// tab or restoring the item would leave it (B217).
+    static func deduplicate(_ sorted: [CommandBarResult], query: String, currentSpaceID: UUID? = nil) -> [CommandBarResult] {
         var tabKeys = Set<String>()
         var archivedKeys = Set<String>()
         var typedKeys = Set<String>()
         var historyKeys = Set<String>()
-        var tabHosts = Set<String>()
         var siteKeys = Set<String>()
+        // Tabs and archived items of this Space, and favorites (all without a current Space), B217.
+        var hereTabKeys = Set<String>()
+        var hereTabHosts = Set<String>()
+        var hereArchivedKeys = Set<String>()
         for result in sorted {
             guard let url = result.url else { continue }
             if result.kind.isTab {
-                tabKeys.insert(CommandBarTextNormalizer.urlKey(url))
-                if let host = CommandBarTextNormalizer.host(url) { tabHosts.insert(host) }
+                let key = CommandBarTextNormalizer.urlKey(url), host = CommandBarTextNormalizer.host(url)
+                tabKeys.insert(key)
+                if currentSpaceID == nil || result.spaceID == nil || result.spaceID == currentSpaceID {
+                    hereTabKeys.insert(key)
+                    if let host { hereTabHosts.insert(host) }
+                }
             }
-            if result.kind == .archivedItem { archivedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
+            if result.kind == .archivedItem {
+                let key = CommandBarTextNormalizer.urlKey(url)
+                archivedKeys.insert(key)
+                if currentSpaceID == nil || result.spaceID == nil || result.spaceID == currentSpaceID { hereArchivedKeys.insert(key) }
+            }
             if result.kind == .typedURL { typedKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .historyItem { historyKeys.insert(CommandBarTextNormalizer.urlKey(url)) }
             if result.kind == .siteCompletion || result.kind == .siteSuggestion {
@@ -262,13 +290,13 @@ public enum CommandBarRanker {
                 // An open tab on any page of the site keeps its "Switch to Tab" row and the site
                 // gets no row of its own (B128 rule "已打开的同站标签", [05 §命令栏] inferred,
                 // F5-35); an archived page has its row; one site row per page (B128).
-                if let host = result.url.flatMap(CommandBarTextNormalizer.host), tabHosts.contains(host) { continue }
-                if let key, tabKeys.contains(key) || archivedKeys.contains(key) || !seenSiteKeys.insert(key).inserted { continue }
+                if let host = result.url.flatMap(CommandBarTextNormalizer.host), hereTabHosts.contains(host) { continue }
+                if let key, hereTabKeys.contains(key) || hereArchivedKeys.contains(key) || !seenSiteKeys.insert(key).inserted { continue }
             case .topSite:
                 if let key, tabKeys.contains(key) || archivedKeys.contains(key) || typedKeys.contains(key) || historyKeys.contains(key) || siteKeys.contains(key) { continue }
                 if let key, !seenTopSites.insert(key).inserted { continue }
             case .typedURL:
-                if let key, tabKeys.contains(key) || archivedKeys.contains(key) { continue }
+                if let key, hereTabKeys.contains(key) || hereArchivedKeys.contains(key) { continue }
             case .searchSuggestion:
                 let folded = CommandBarTextNormalizer.fold(result.title)
                 if folded == foldedQuery || !seenSuggestions.insert(folded).inserted { continue }

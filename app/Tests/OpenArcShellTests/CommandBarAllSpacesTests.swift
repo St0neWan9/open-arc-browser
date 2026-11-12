@@ -59,6 +59,17 @@ final class CommandBarAllSpacesTests: XCTestCase {
         return CommandBarRanker.rank(all, context: context, limit: 8)  // CommandBarViewModel.defaultMaxResults
     }
 
+    /// B217 (user, 2026-11-12): typing the address of a tab of another Space opens it here first;
+    /// the other Space's tab stays below.
+    func testTypedAddressOfAnotherSpacesTabOpensHere() async throws {
+        let world = try World()
+        let rows = await rank(world, text: "work.example", space: world.home)
+        XCTAssertEqual(rows.first?.kind, .typedURL, "\(rows.map { "\($0.kind) \($0.title)" })")
+        XCTAssertTrue(rows.contains { $0.title == "Work Tab" })
+        let fromWork = await rank(world, text: "work.example", space: world.work)
+        XCTAssertEqual(fromWork.first?.title, "Work Tab", "a tab of this Space is still the one to switch to")
+    }
+
     // MARK: B109: tabs of every Space of the profile
 
     /// F4 live E2 observed: tabs of every Space; the other profile's Space (and favorite) is left
