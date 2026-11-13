@@ -309,7 +309,9 @@ public enum CommandBarRanker {
     }
 
     /// Empty query: the most recently used open tabs of every Space of the window's profile (the
-    /// sources leave other profiles out), never the tab being viewed;
+    /// sources leave other profiles out), never the tab being viewed, except in ⌘L's bar, which
+    /// lists the viewed tab first so Return keeps the page (B220, [05 §命令栏] observed in Arc
+    /// 1.170: ⌘L's first, selected row is the current page);
     /// then the profile's most visited pages that are not open, in the tab slots left free (B121);
     /// then the closing app command. [04 §command bar] observed shape (five rows: open tabs, then
     /// an app command); F4 live E2 (2026-10-29) observed tabs of other Spaces in this list (plan
@@ -344,6 +346,12 @@ public enum CommandBarRanker {
                 return tieBreak(lhs, rhs)
             }
         var list = Array(tabs.prefix(emptyQueryTabLimit))
+        // ⌘L: the viewed tab leads and takes one of the tab slots (B220). Without it Return took
+        // the most recent other tab, which could be the page of another window.
+        if context.mode == .currentTab, let current = context.currentTabID,
+           let row = candidates.first(where: { $0.kind.isTab && $0.action == .switchToTab(tabID: current) }) {
+            list = [row] + list.prefix(max(0, emptyQueryTabLimit - 1))
+        }
         // Most visited pages that are not open tabs, in the engine's order (B121).
         let openKeys = Set(candidates.filter(\.kind.isTab).compactMap { $0.url.map(CommandBarTextNormalizer.urlKey) })
         var seen = Set<String>()

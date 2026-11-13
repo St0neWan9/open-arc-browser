@@ -49,6 +49,17 @@ final class CommandBarRankingTests: XCTestCase {
         XCTAssertEqual(titles(ranked), ["Jira Board", "Example News", "GitHub", "Apple Developer Documentation", "Contact the Team"])
     }
 
+    /// B220, [05 §命令栏] observed in Arc 1.170: ⌘L's empty list starts with the viewed tab, so
+    /// Return keeps the page; the other tabs follow in the remaining slots.
+    func testCurrentTabBarListsTheViewedTabFirst() async throws {
+        let world = try CommandBarFixtures.world()
+        let all = await candidates(world, text: "")
+        let current = try XCTUnwrap(world.tabIDs["Another Tab"])
+        let ranked = CommandBarRanker.rank(all, context: context("", mode: .currentTab, current: current, space: world.homeSpace))
+        XCTAssertEqual(titles(ranked), ["Another Tab", "Jira Board", "Example News", "GitHub", "Contact the Team"])
+        XCTAssertEqual(ranked.first?.action, .switchToTab(tabID: current))
+    }
+
     // MARK: Text matching tiers (inferred)
 
     /// [05 §command bar] ranking tiers, inferred.

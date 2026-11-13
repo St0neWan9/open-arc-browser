@@ -26,9 +26,11 @@ final class CommandBarViewModelTests: XCTestCase {
         XCTAssertEqual(model.mode, .currentTab)
         XCTAssertEqual(model.queryText, "https://github.com/")
         XCTAssertGreaterThan(model.selectAllRequestID, before)
-        // Unedited prefill: the list is the empty-query list, without the viewed tab itself.
+        // Unedited prefill: the empty-query list, led by the viewed tab itself so Return keeps the
+        // page (B220, [05 §命令栏] observed in Arc).
         XCTAssertTrue(model.isPrefillUnedited)
-        XCTAssertFalse(model.results.contains { $0.action == .switchToTab(tabID: world.tabIDs["GitHub"]!) })
+        XCTAssertEqual(model.results.first?.action, .switchToTab(tabID: world.tabIDs["GitHub"]!))
+        XCTAssertEqual(model.selectedIndex, 0)
         XCTAssertEqual(model.results.last?.action, .runCommand(.contactTheTeam))
     }
 

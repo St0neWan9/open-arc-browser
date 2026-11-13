@@ -383,6 +383,24 @@ final class MultiWindowTests: XCTestCase {
         XCTAssertNil(incognito.windowRequest(.newWindow).spaceID)
     }
 
+    /// B220 (user, 2026-11-13): two windows on one Space; ⌘L then Return in one window keeps its
+    /// own page instead of taking the page the other window shows.
+    func testCommandLReturnKeepsThisWindowsPage() async throws {
+        let f = SidebarFixture()
+        let controller = makeController(f)
+        let a = window(controller, space: f.home)
+        let b = window(controller, space: f.home)
+        try await a.activate(tabID: f.today1)
+        try await b.activate(tabID: f.today2)   // used last: first among the other tabs
+        a.presentCommandBar(.currentTab)
+        for _ in 0..<200 where a.commandBar.results.isEmpty { try await Task.sleep(nanoseconds: 5_000_000) }
+        let action = try XCTUnwrap(a.commandBar.activate())
+        XCTAssertEqual(action, .switchToTab(tabID: f.today1))
+        a.perform(action)
+        XCTAssertEqual(a.selectedTabID, f.today1)
+        XCTAssertEqual(b.selectedTabID, f.today2, "the other window keeps its page")
+    }
+
     // MARK: UI state
 
     /// Two windows round-trip through `ui-state.json` and are restored at launch when the
