@@ -490,6 +490,8 @@ public final class ShellModel: ObservableObject {
     func perform(_ action: CommandBarAction) {
         // A pane bar loads into its own pane's tab, so make that pane the selected tab first.
         let pane = commandBarPaneTabID
+        // The page ⌘L (or a pane's bar) was opened on; choosing it again reloads it (B221).
+        let barPage = pane ?? (commandBarIsForNewTab ? nil : selectedTabID)
         dismissCommandBar()
         controller.recordUsage(.featureUsed(.commandBar))
         switch action {
@@ -500,6 +502,12 @@ public final class ShellModel: ObservableObject {
         }
         switch action {
         case .switchToTab(let id):
+            // ⌘L then Return on the page itself reloads it, as in Arc ([05 §命令栏] observed
+            // 2026-11-13, B221), whether or not the address was edited.
+            if id == barPage {
+                if let live = sidebar.liveTab(for: id) { Task { try? await live.reload() } }
+                return
+            }
             // A tab another window shows brings that window to the front instead. inferred (B14).
             if controller.sidebar(showing: id, except: sidebar) != nil {
                 sidebar.selectTab(id)

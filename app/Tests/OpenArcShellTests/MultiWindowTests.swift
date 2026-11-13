@@ -396,9 +396,15 @@ final class MultiWindowTests: XCTestCase {
         for _ in 0..<200 where a.commandBar.results.isEmpty { try await Task.sleep(nanoseconds: 5_000_000) }
         let action = try XCTUnwrap(a.commandBar.activate())
         XCTAssertEqual(action, .switchToTab(tabID: f.today1))
+        let live = try XCTUnwrap(controller.liveTab(for: f.today1) as? FakeTab)
         a.perform(action)
         XCTAssertEqual(a.selectedTabID, f.today1)
         XCTAssertEqual(b.selectedTabID, f.today2, "the other window keeps its page")
+        // B221: and the page reloads, as in Arc.
+        for _ in 0..<200 where !live.commands.contains(where: { if case .reload = $0 { return true } else { return false } }) {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(live.commands.contains { if case .reload = $0 { return true } else { return false } })
     }
 
     // MARK: UI state
