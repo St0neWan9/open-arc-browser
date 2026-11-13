@@ -3,6 +3,18 @@
     <channel>
         <title>Open Arc</title>
         <item>
+            <title>0.2.15</title>
+            <pubDate>Fri, 13 Nov 2026 15:26:05 +0700</pubDate>
+            <sparkle:version>33</sparkle:version>
+            <sparkle:shortVersionString>0.2.15</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.15/OpenArc-0.2.15.zip" length="206979391" type="application/octet-stream" sparkle:edSignature="TVyKpU4cd07ZVvITx4uHKB4Lm6nlYpfTt/QUV738ipzf9+9565JCdInoTnxeWf4oGw/sBDCU0mIJdOwHKGaxAg=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/St0neWan9/open-arc-browser/releases/download/v0.2.15/OpenArc-33-32.delta" sparkle:deltaFrom="32" length="667298" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="976432" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="oz6nS6PcB9H+aU42ELbIi97v1X6PrDcyHqIXR2fO/cPdAT+/2sPUsIY+do2/ezBplaPL5ZoQCJcF5XcZ/WpeBg=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>0.2.14</title>
             <pubDate>Fri, 13 Nov 2026 14:45:42 +0700</pubDate>
             <sparkle:version>32</sparkle:version>
