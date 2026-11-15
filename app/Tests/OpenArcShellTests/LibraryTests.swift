@@ -257,6 +257,8 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(model.library.boardColumns.map(\.space.name), ["Work", "Home"])
         XCTAssertEqual(model.sidebar.dockSpaces.map(\.name), ["Work", "Home"])
         XCTAssertNil(model.library.draggingSpaceID)
+        // Reordering leaves the window on its Space.
+        XCTAssertEqual(model.sidebar.selectedSpaceID, fixture.home)
         XCTAssertEqual(LibraryBoard.dropPosition(dragged: fixture.work, target: fixture.home, locationX: 200, columnWidth: 266), .after(fixture.home))
         XCTAssertNil(LibraryBoard.dropPosition(dragged: fixture.home, target: fixture.home, locationX: 10, columnWidth: 266))
         // Dropping without a drag does nothing.
@@ -393,6 +395,25 @@ final class LibraryTests: XCTestCase {
             XCTAssertLessThan(edge.blueComponent + edge.redComponent, far.blueComponent + far.redComponent, "\(section): edge shadow")
         }
         model.exitLibrary()
+        model.stop()
+    }
+
+    /// B227 (user's Arc screenshot, 2026-11-15): in Spaces the page panel stays 56 pt in from the
+    /// right edge, with the window's 10 pt top / bottom insets; clicking it goes back to the page.
+    func testPagePeekB227() {
+        let layout = LibraryLayout(windowSize: CGSize(width: 1279, height: 1047))
+        XCTAssertEqual(layout.pagePeekFrame.minX, 1279 - 56)
+        XCTAssertEqual(layout.pagePeekFrame.minY, 10)
+        XCTAssertEqual(layout.pagePeekFrame.maxY, 1047 - 10)
+        XCTAssertGreaterThan(layout.pagePeekFrame.maxX, 1279)
+
+        let model = makeModel()
+        model.openLibrary(.spaces)
+        XCTAssertTrue(model.library.isActive)
+        var tapped = false
+        let peek = LibraryPagePeek(palette: model.sidebar.palette) { tapped = true }
+        peek.onTap()
+        XCTAssertTrue(tapped)
         model.stop()
     }
 

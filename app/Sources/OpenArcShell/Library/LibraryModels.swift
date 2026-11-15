@@ -221,6 +221,20 @@ enum LibraryLocalTokens {
     static let boardEdgeShadowWidth: CGFloat = 20
     static let boardEdgeShadowBlack: Double = 0.03
 
+    /// Spaces section: the page panel slides out to the right and ≈ 56 pt of it stays at the
+    /// window's right edge, over the board, with the window's top / bottom insets (10 pt), the
+    /// content-area color, its top bar (Show Sidebar button centered at (20.5, 16), the back arrow
+    /// after it, a hairline ≈ 4 % black 32 pt down, icons ≈ 21 % black) and no page content.
+    /// B227 observed (user's Arc screenshot, 2026-11-15: #CCCDFE panel, #A1A3CA icons, #C3C5F3
+    /// line). Clicking it goes back to the page (inferred).
+    static let pagePeekVisibleWidth: CGFloat = 56
+    static let pagePeekBarHeight: CGFloat = 32
+    static let pagePeekSidebarIconCenter = CGPoint(x: 20.5, y: 16)
+    static let pagePeekBackIconCenterX: CGFloat = 52
+    static let pagePeekIconBlack: Double = 0.21
+    static let pagePeekLineBlack: Double = 0.04
+    static let pagePeekLineWidth: CGFloat = 0.5
+
     /// The rail's buttons sit in the middle of the window, ≈ 5 pt above center (B224, the
     /// screenshot: the Spaces button at y 529–609 in a 1047 pt window). observed.
     static let railItemsCenterLift: CGFloat = 5
@@ -280,6 +294,15 @@ struct LibraryLayout: Equatable {
     /// color reaches the window's top, right and bottom edges).
     var boardFrame: CGRect {
         CGRect(x: railFrame.maxX, y: 0, width: max(0, windowSize.width - railFrame.maxX), height: windowSize.height)
+    }
+
+    /// The page panel left at the right edge in the Spaces section (B227): its visible part is
+    /// `pagePeekVisibleWidth`; the rest is past the window's edge.
+    var pagePeekFrame: CGRect {
+        let top = CGFloat(Metrics.WebPanel.insetTop)
+        let height = max(0, windowSize.height - top - CGFloat(Metrics.WebPanel.insetBottom))
+        return CGRect(x: windowSize.width - LibraryLocalTokens.pagePeekVisibleWidth, y: top,
+                      width: max(webPanelFrame.width, LibraryLocalTokens.pagePeekVisibleWidth * 4), height: height)
     }
 
     /// Top of the first rail button: the six buttons centered in the window, `railItemsCenterLift`

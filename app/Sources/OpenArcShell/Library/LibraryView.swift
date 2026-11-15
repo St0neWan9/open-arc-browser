@@ -32,6 +32,11 @@ struct LibraryView: View {
             }
             LibraryRail(model: model, library: library, palette: palette, itemsTop: layout.railItemsTop)
                 .frame(width: layout.railFrame.width, height: layout.railFrame.height)
+            if section == .spaces {
+                LibraryPagePeek(palette: palette) { model.exitLibrary() }
+                    .frame(width: layout.pagePeekFrame.width, height: layout.pagePeekFrame.height)
+                    .offset(x: layout.pagePeekFrame.minX, y: layout.pagePeekFrame.minY)
+            }
 
             if section != .spaces {
                 LibraryListColumn(library: library, section: section, palette: palette)
@@ -84,6 +89,45 @@ struct LibraryContentArea: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Page panel at the right edge (Spaces)
+
+/// The page panel slid out to the right in the Spaces section, ≈ 56 pt still on screen: the
+/// content-area color, its top bar with the Show Sidebar button and the back arrow, no page.
+/// B227 observed (user's Arc screenshot); the click back to the page is inferred.
+struct LibraryPagePeek: View {
+    let palette: ThemePalette
+    let onTap: () -> Void
+
+    var body: some View {
+        let t = LibraryLocalTokens.self
+        let ink = Color.black.opacity(t.pagePeekIconBlack)
+        let shape = RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous)
+        ZStack(alignment: .topLeading) {
+            palette.webPanelBackground.swiftUI
+            Rectangle().fill(Color.black.opacity(t.pagePeekLineBlack))
+                .frame(height: t.pagePeekLineWidth)
+                .offset(y: t.pagePeekBarHeight)
+            Image(systemName: "sidebar.left")
+                .font(.system(size: WebToolbarLocalTokens.sidebarGlyphSize, weight: WebToolbarLocalTokens.glyphWeight))
+                .foregroundStyle(ink)
+                .position(t.pagePeekSidebarIconCenter)
+            Image(systemName: "arrow.left")
+                .font(.system(size: WebToolbarLocalTokens.arrowGlyphSize, weight: WebToolbarLocalTokens.glyphWeight))
+                .foregroundStyle(ink)
+                .position(x: t.pagePeekBackIconCenterX, y: t.pagePeekSidebarIconCenter.y)
+        }
+        .clipShape(shape)
+        .webPanelEdgeShadow(palette.appearance)
+        .contentShape(shape)
+        .onTapGesture(perform: onTap)
+        .accessibilityElement()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Back to Page")
+        .accessibilityAction { onTap() }
+        .accessibilityIdentifier("openarc.library.pagePeek")
     }
 }
 

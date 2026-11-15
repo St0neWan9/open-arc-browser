@@ -40,7 +40,9 @@ struct LibrarySpacesBoard: View {
                         .frame(width: t.boardColumnWidth)
                 }
             }
-            .padding(.horizontal, t.boardLeading)
+            .padding(.leading, t.boardLeading)
+            // The last column can scroll clear of the page panel at the right edge (B227).
+            .padding(.trailing, t.boardLeading + t.pagePeekVisibleWidth)
             .padding(.top, t.boardTop)
             .padding(.bottom, t.boardBottom)
             .frame(maxHeight: .infinity, alignment: .top)
