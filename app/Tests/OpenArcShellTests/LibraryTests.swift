@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import OpenArcModel
 import OpenArcEngine
+import OpenArcDesign
 @testable import OpenArcShell
 
 /// The Library mode of the main window. Acceptance: `06 §8` (Library), `02` (⇧⌘L View Library),
@@ -335,6 +336,16 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(board.green * 255, 0x5E, accuracy: 1.5)
         XCTAssertEqual(board.blue * 255, 0xF6, accuracy: 1.5)
         XCTAssertEqual(board.alpha, 1)
+
+        // Columns are see-through theme layers on a see-through window, the window color otherwise.
+        let translucent = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .light, colors: [RGBAColor(hex: 0x628467)]),
+                                                  appearance: .light)
+        XCTAssertTrue(translucent.isWindowTranslucent)
+        XCTAssertLessThan(LibraryLocalTokens.boardColumnFill(for: translucent).alpha, 1)
+        XCTAssertEqual(LibraryLocalTokens.boardColumnFill(for: translucent), translucent.windowThemeLayer)
+        var opaque = translucent
+        opaque.windowOpacity = 1
+        XCTAssertEqual(LibraryLocalTokens.boardColumnFill(for: opaque), opaque.windowBackground)
     }
 
     /// Every section builds and lays out inside the full window.

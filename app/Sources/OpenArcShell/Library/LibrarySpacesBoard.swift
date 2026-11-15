@@ -98,10 +98,10 @@ struct LibraryBoardColumnView: View {
             footer(text: text)
         }
         .background(
-            // Each column in its own Space's window color, also on a see-through window, so every
-            // Space shows its own theme (B224, user 2026-11-15; Arc observed).
+            // Each column in its own Space's theme, laid over the board like a window of that
+            // Space (B224, user 2026-11-15; Arc observed).
             RoundedRectangle(cornerRadius: LibraryLocalTokens.boardColumnCornerRadius, style: .continuous)
-                .fill(palette.windowBackground.swiftUI)
+                .fill(LibraryLocalTokens.boardColumnFill(for: palette).swiftUI)
                 .shadow(color: .black.opacity(LibraryLocalTokens.boardColumnShadowOpacity),
                         radius: LibraryLocalTokens.boardColumnShadowRadius)
         )

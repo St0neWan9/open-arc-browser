@@ -198,6 +198,14 @@ enum LibraryLocalTokens {
     /// screenshot: the Spaces button at y 529–609 in a 1047 pt window). observed.
     static let railItemsCenterLift: CGFloat = 5
 
+    /// A column's fill: its Space's see-through theme layer (the layer a window of that Space
+    /// paints over its blur), so the board's tone shows through as in Arc, where every column is
+    /// tinted by the current Space (gray Space → #7A86BE, green → #628467 on a blue board); an
+    /// opaque palette paints its window color. B224 observed colors, inferred rule.
+    static func boardColumnFill(for palette: ThemePalette) -> RGBAColor {
+        palette.isWindowTranslucent ? palette.windowThemeLayer : palette.windowBackground
+    }
+
     /// The board area's color for a window color (`boardAreaShade`, `boardAreaSaturationBoost`).
     static func boardAreaFill(for windowBackground: RGBAColor) -> RGBAColor {
         let c = ThemeDerivation.shade(windowBackground, by: boardAreaShade)
