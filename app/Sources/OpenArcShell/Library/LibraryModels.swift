@@ -168,11 +168,43 @@ enum LibraryLocalTokens {
     static let archiveRowIconSize: CGFloat = 16
     static let emptyStateIconSize: CGFloat = 28
 
-    /// Spaces board columns. [06 §8] observed that columns look like the sidebar; their width
-    /// and spacing are unknown (the sidebar content width is a placeholder).
-    static let boardColumnWidth: CGFloat = 266
-    static let boardColumnSpacing: CGFloat = 10
+    /// Spaces board columns. [06 §8] observed that columns look like the sidebar. B224 (user's Arc
+    /// screenshot, 2026-11-15, observed): 240 wide, 24 apart, the first 24 from the rail's edge,
+    /// tops 48 and bottoms 46 from the window's edges; each column in its own Space's color with a
+    /// faint shadow (≈ 4 pt, inferred from the pixels).
+    static let boardColumnWidth: CGFloat = 240
+    static let boardColumnSpacing: CGFloat = 24
+    static let boardLeading: CGFloat = 24
+    static let boardTop: CGFloat = 48
+    static let boardBottom: CGFloat = 46
+    static let boardColumnShadowOpacity: Double = 0.08
+    static let boardColumnShadowRadius: CGFloat = 4
     static let boardColumnCornerRadius: CGFloat = 10
+
+    /// The board's area right of the rail is deeper than the rail: the window color × 0.90 with
+    /// its saturation × 1.155 (fit to the screenshot, within 1/255: rail #5E69FB, board #525EF6).
+    /// B224 inferred rule, observed colors.
+    static let boardAreaShade: Double = 0.90
+    static let boardAreaSaturationBoost: Double = 1.155
+    /// The rail's right edge: a 1 pt light line (≈ 5 % white, #666FFB on #5E69FB), and a faint
+    /// shadow on the board side fading out over ≈ 13 pt (≈ 3 % black at the edge). B224 observed
+    /// pixels; the layer values are inferred.
+    static let railEdgeHighlightWidth: CGFloat = 1
+    static let railEdgeHighlightWhite: Double = 0.05
+    static let boardEdgeShadowWidth: CGFloat = 13
+    static let boardEdgeShadowBlack: Double = 0.03
+
+    /// The rail's buttons sit in the middle of the window, ≈ 5 pt above center (B224, the
+    /// screenshot: the Spaces button at y 529–609 in a 1047 pt window). observed.
+    static let railItemsCenterLift: CGFloat = 5
+
+    /// The board area's color for a window color (`boardAreaShade`, `boardAreaSaturationBoost`).
+    static func boardAreaFill(for windowBackground: RGBAColor) -> RGBAColor {
+        let c = ThemeDerivation.shade(windowBackground, by: boardAreaShade)
+        let gray = 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue
+        func boost(_ v: Double) -> Double { min(max(gray + (v - gray) * boardAreaSaturationBoost, 0), 1) }
+        return RGBAColor(red: boost(c.red), green: boost(c.green), blue: boost(c.blue), alpha: 1)
+    }
     static let boardHeaderHeight: CGFloat = 40
     static let boardFooterHeight: CGFloat = 36
     static let boardIconSize: CGFloat = 14
@@ -209,7 +241,28 @@ struct LibraryLayout: Equatable {
 
     var webPanelFrame: CGRect { contentFrame(from: listFrame.maxX + CGFloat(Metrics.WebPanel.insetLeading)) }
 
-    var boardFrame: CGRect { contentFrame(from: railFrame.maxX) }
+    /// The Spaces board: everything right of the rail, edge to edge (B224 observed: its deeper
+    /// color reaches the window's top, right and bottom edges).
+    var boardFrame: CGRect {
+        CGRect(x: railFrame.maxX, y: 0, width: max(0, windowSize.width - railFrame.maxX), height: windowSize.height)
+    }
+
+    /// Top of the first rail button: the six buttons centered in the window, `railItemsCenterLift`
+    /// higher, never under the traffic lights' strip (`LibraryLocalTokens.topInset`).
+    var railItemsTop: CGFloat {
+        let count = CGFloat(LibrarySection.allCases.count)
+        let stack = count * LibraryLocalTokens.railItemSize.height + (count - 1) * LibraryLocalTokens.railItemSpacing
+        return max(LibraryLocalTokens.topInset, (windowSize.height - stack) / 2 - LibraryLocalTokens.railItemsCenterLift)
+    }
+
+    /// A rail button's frame.
+    func railItemFrame(_ section: LibrarySection) -> CGRect {
+        let index = CGFloat(LibrarySection.allCases.firstIndex(of: section) ?? 0)
+        let size = LibraryLocalTokens.railItemSize
+        return CGRect(x: CGFloat(Metrics.Library.railButtonLeading),
+                      y: railItemsTop + index * (size.height + LibraryLocalTokens.railItemSpacing),
+                      width: size.width, height: size.height)
+    }
 
     private func contentFrame(from minX: CGFloat) -> CGRect {
         let top = CGFloat(Metrics.WebPanel.insetTop)

@@ -317,6 +317,26 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(layout.boardFrame.minX, 113)
     }
 
+    /// B224 (user's Arc screenshot, 2026-11-15): the board reaches the window's edges right of the
+    /// rail, in a deeper shade of the window color (rail #5E69FB → board #525EF6); the rail's buttons
+    /// sit in the middle of the window, ≈ 5 pt high (Spaces at y 529–609 in a 1047 pt window).
+    func testSpacesBoardAndRailB224() {
+        let layout = LibraryLayout(windowSize: CGSize(width: 1279, height: 1047))
+        XCTAssertEqual(layout.boardFrame, CGRect(x: 113, y: 0, width: 1166, height: 1047))
+        let spaces = layout.railItemFrame(.spaces)
+        XCTAssertEqual(spaces.minY, 528.5, accuracy: 1)
+        XCTAssertEqual(spaces.height, 80)
+        XCTAssertEqual(layout.railItemFrame(.media).minX, 8)
+        // A short window keeps the buttons below the traffic lights.
+        XCTAssertEqual(LibraryLayout(windowSize: CGSize(width: 900, height: 500)).railItemsTop, LibraryLocalTokens.topInset)
+
+        let board = LibraryLocalTokens.boardAreaFill(for: RGBAColor(hex: 0x5E69FB))
+        XCTAssertEqual(board.red * 255, 0x52, accuracy: 1.5)
+        XCTAssertEqual(board.green * 255, 0x5E, accuracy: 1.5)
+        XCTAssertEqual(board.blue * 255, 0xF6, accuracy: 1.5)
+        XCTAssertEqual(board.alpha, 1)
+    }
+
     /// Every section builds and lays out inside the full window.
     func testEverySectionRenders() {
         let model = makeModel()

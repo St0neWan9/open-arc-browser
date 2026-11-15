@@ -19,14 +19,15 @@ struct LibraryView: View {
         let layout = LibraryLayout(windowSize: windowSize)
         let section = library.section ?? .media
         ZStack(alignment: .topLeading) {
-            LibraryRail(model: model, library: library, palette: palette)
-                .frame(width: layout.railFrame.width, height: layout.railFrame.height)
-
             if section == .spaces {
-                LibrarySpacesBoard(model: model, sidebar: sidebar, library: library)
+                LibrarySpacesBoard(model: model, sidebar: sidebar, library: library, palette: palette)
                     .frame(width: layout.boardFrame.width, height: layout.boardFrame.height)
                     .offset(x: layout.boardFrame.minX, y: layout.boardFrame.minY)
-            } else {
+            }
+            LibraryRail(model: model, library: library, palette: palette, itemsTop: layout.railItemsTop)
+                .frame(width: layout.railFrame.width, height: layout.railFrame.height)
+
+            if section != .spaces {
                 LibraryListColumn(library: library, section: section, palette: palette)
                     .frame(width: layout.listFrame.width, height: layout.listFrame.height)
                     .offset(x: layout.listFrame.minX, y: layout.listFrame.minY)
@@ -63,6 +64,8 @@ struct LibraryRail: View {
     @ObservedObject var model: ShellModel
     @ObservedObject var library: LibraryModel
     let palette: ThemePalette
+    /// Top of the first button (`LibraryLayout.railItemsTop`).
+    var itemsTop: CGFloat = LibraryLocalTokens.topInset
     @Environment(\.windowSurface) private var surface
 
     /// Selected section block: window × 0.90; on a see-through window the same as a 10 % black
@@ -99,7 +102,7 @@ struct LibraryRail: View {
             .padding(.horizontal, LibraryLocalTokens.railFooterPadding)
             .padding(.bottom, LibraryLocalTokens.railFooterPadding)
         }
-        .padding(.top, LibraryLocalTokens.topInset)
+        .padding(.top, itemsTop)
         .padding(.leading, CGFloat(Metrics.Library.railButtonLeading))
         .frame(width: LibraryLocalTokens.railWidth, alignment: .leading)
         .accessibilityElement(children: .contain)

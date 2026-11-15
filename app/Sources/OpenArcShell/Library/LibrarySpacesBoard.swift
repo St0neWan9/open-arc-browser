@@ -30,16 +30,34 @@ struct LibrarySpacesBoard: View {
     @ObservedObject var model: ShellModel
     @ObservedObject var sidebar: SidebarViewModel
     @ObservedObject var library: LibraryModel
+    /// The current Space's colors: the board area is a deeper shade of its window color (B224).
+    let palette: ThemePalette
 
     var body: some View {
+        let t = LibraryLocalTokens.self
         ScrollView(.horizontal, showsIndicators: true) {
-            HStack(alignment: .top, spacing: LibraryLocalTokens.boardColumnSpacing) {
+            HStack(alignment: .top, spacing: t.boardColumnSpacing) {
                 ForEach(library.boardColumns) { column in
                     LibraryBoardColumnView(model: model, sidebar: sidebar, library: library, column: column)
-                        .frame(width: LibraryLocalTokens.boardColumnWidth)
+                        .frame(width: t.boardColumnWidth)
                 }
             }
+            .padding(.horizontal, t.boardLeading)
+            .padding(.top, t.boardTop)
+            .padding(.bottom, t.boardBottom)
             .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .background(alignment: .leading) {
+            // B224 observed: deeper than the rail, a faint shadow along the rail's edge and a 1 pt
+            // light line on the edge itself.
+            ZStack(alignment: .leading) {
+                t.boardAreaFill(for: palette.windowBackground).swiftUI
+                LinearGradient(colors: [Color.black.opacity(t.boardEdgeShadowBlack), Color.black.opacity(0)],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: t.boardEdgeShadowWidth)
+                Color.white.opacity(t.railEdgeHighlightWhite).frame(width: t.railEdgeHighlightWidth)
+            }
+            .allowsHitTesting(false)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.spacesBoard")
@@ -51,7 +69,6 @@ struct LibraryBoardColumnView: View {
     @ObservedObject var sidebar: SidebarViewModel
     @ObservedObject var library: LibraryModel
     let column: LibraryBoardColumn
-    @Environment(\.windowSurface) private var surface
 
     /// A tab row's favicon; split groups show their first member's. C9.
     private func iconData(_ item: SidebarItemModel) -> Data? {
@@ -81,9 +98,12 @@ struct LibraryBoardColumnView: View {
             footer(text: text)
         }
         .background(
+            // Each column in its own Space's window color, also on a see-through window, so every
+            // Space shows its own theme (B224, user 2026-11-15; Arc observed).
             RoundedRectangle(cornerRadius: LibraryLocalTokens.boardColumnCornerRadius, style: .continuous)
-                // On a see-through window the window under it already shows this color (B64).
-                .fill(palette.sidebarBackground(on: surface))
+                .fill(palette.windowBackground.swiftUI)
+                .shadow(color: .black.opacity(LibraryLocalTokens.boardColumnShadowOpacity),
+                        radius: LibraryLocalTokens.boardColumnShadowRadius)
         )
         .opacity(library.draggingSpaceID == column.id ? SidebarLocalTokens.draggedRowOpacity : 1)
         .onDrop(of: [LibraryBoardDragPayload.columnType], delegate: LibraryBoardDropDelegate(library: library, target: column.id))
