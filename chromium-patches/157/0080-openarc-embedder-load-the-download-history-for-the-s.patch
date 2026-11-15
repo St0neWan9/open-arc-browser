@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Sun, 15 Nov 2026 18:12:40 +0700
+Subject: [PATCH] openarc: embedder: load the download history for the shell's
+ lists
+
+With kDeferredDownloadHistoryLoading (enabled for Mac in the field trial
+testing config, which this unofficial build applies) creating the download
+manager delegate no longer loads the history. Chrome's downloads page and
+download bubble trigger the load; the embedder has neither, so after a
+relaunch the shell's downloads list stayed empty until a new download
+started (plan B230).
+
+OACDownloads now asks DownloadCoreService::InitializeHistory() when it is
+created. The history items then arrive through OnDownloadCreated like any
+other. A no-op when the history is loaded already or off the record.
+---
+ openarc/bridge/oac_downloads.mm | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/openarc/bridge/oac_downloads.mm b/openarc/bridge/oac_downloads.mm
+index 064fddaa9f25..a2db078756a9 100644
+--- a/openarc/bridge/oac_downloads.mm
++++ b/openarc/bridge/oac_downloads.mm
+@@ -224,12 +224,21 @@ - (instancetype)initWithProfile:(OACProfile*)profile {
+     _pendingFlush = [NSMutableSet set];
+     Profile* chrome_profile = profile.chromeProfile;
+     if (chrome_profile) {
+-      // Creates //chrome's download manager delegate (and loads the history
+-      // of an on-disk profile) if no download happened yet.
+-      DownloadCoreServiceFactory::GetForBrowserContext(chrome_profile)
+-          ->GetDownloadManagerDelegate();
++      // Creates //chrome's download manager delegate if no download happened
++      // yet.
++      DownloadCoreService* service =
++          DownloadCoreServiceFactory::GetForBrowserContext(chrome_profile);
++      service->GetDownloadManagerDelegate();
+       _bridge = std::make_unique<DownloadsObserverBridge>(
+           self, chrome_profile->GetDownloadManager());
++      // With kDeferredDownloadHistoryLoading (on for Mac in the field trial
++      // testing config) the delegate no longer loads the history: Chrome's
++      // downloads page and download bubble ask for it. These downloads are
++      // the shell's downloads list and shelf, so ask here. The history items
++      // arrive later through OnDownloadCreated. A no-op when the history is
++      // loaded already or the profile is off the record.
++      service->InitializeHistory(
++          DownloadCoreService::DownloadHistoryLoadTrigger::kDownloadsPage);
+       // Items that exist already (history) are known: their updates are
+       // updates, not additions.
+       download::SimpleDownloadManager::DownloadVector existing;

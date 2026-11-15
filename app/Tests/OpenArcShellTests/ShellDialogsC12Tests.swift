@@ -124,6 +124,18 @@ final class ShellDialogsC12Tests: XCTestCase {
         XCTAssertEqual(downloads.commands, ["pause:a", "remove:b"])
     }
 
+    /// B230: a download stream may replay the items already listed (history loads late, the
+    /// engine sends what it lists when a stream starts); the list applies them idempotently.
+    func testReplayedAdditionsDoNotDuplicateB230() throws {
+        let profileID = try XCTUnwrap(model.sidebar.currentProfileID)
+        let list = model.library.downloads
+        let done = DownloadItem(id: "h", profileID: profileID, sourceURL: try url("https://files.example/old.dmg"),
+                                suggestedFilename: "old.dmg", state: .complete, startDate: Date(timeIntervalSince1970: 5))
+        list.apply(.added(done))
+        list.apply(.added(done))
+        XCTAssertEqual(list.items.map(\.id), ["h"])
+    }
+
     func testDownloadRowPresentation() throws {
         let profile = UUID()
         var item = DownloadItem(id: "a", profileID: profile, sourceURL: try url("https://files.example/r.pdf"),

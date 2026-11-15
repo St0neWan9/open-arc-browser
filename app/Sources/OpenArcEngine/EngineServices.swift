@@ -70,7 +70,9 @@ public enum DownloadEvent: Hashable, Sendable {
 public protocol EngineDownloads: AnyObject, Sendable {
     /// Every download of the profile, newest first.
     func items(profileID: Profile.ID) async -> [DownloadItem]
-    /// Changes for one profile. Every call returns a new stream.
+    /// Changes for one profile. Every call returns a new stream. It may begin with `.added` for
+    /// items `items(profileID:)` already returned, so consumers apply additions of known items
+    /// idempotently (B230).
     func events(profileID: Profile.ID) -> AsyncStream<DownloadEvent>
     func pause(_ id: String) async
     func resume(_ id: String) async

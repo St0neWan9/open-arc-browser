@@ -36,6 +36,10 @@ final class ChromiumDownloads: EngineDownloads, @unchecked Sendable {
                 return
             }
             self.observer(for: profileID, downloads: downloads).add(continuation)
+            // What the profile lists now, so an item that arrived between the caller's
+            // `items(profileID:)` and this registration is not lost (history loads late, B230).
+            // Consumers apply additions of known items idempotently.
+            for item in downloads.items { continuation.yield(.added(DownloadItem(item, profileID: profileID))) }
         }
         continuation.onTermination = { _ in task.cancel() }
         return stream
@@ -176,3 +180,4 @@ extension DownloadState {
         }
     }
 }
+
