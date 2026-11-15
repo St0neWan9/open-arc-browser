@@ -127,11 +127,10 @@ struct MainWindowContent: View {
                 }
 
                 // A download that starts here: its icon flies to the Library button's badge. [06 §43]
-                // observed (B203). Also with the sidebar hidden (B222).
+                // observed (B203). In every window state (B222, B223).
                 DownloadFlightOverlay(
                     flights: sidebar.downloadsShelf.flights,
-                    target: DownloadFlightOverlay.target(layout: baseLayout, isLibraryActive: model.library.isActive,
-                                                         isCreatingSpace: model.spaceFlow.isCreating),
+                    target: DownloadFlightOverlay.target(layout: baseLayout, isLibraryActive: model.library.isActive),
                     tint: palette.seamIndicator
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)

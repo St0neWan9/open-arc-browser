@@ -52,7 +52,7 @@ enum DownloadFlightPath {
 /// Runs the flights of one window over everything else. Transparent to the mouse.
 struct DownloadFlightOverlay: NSViewRepresentable {
     let flights: PassthroughSubject<String, Never>
-    /// The badge's center, top-left based in this view; nil while the sidebar is not shown.
+    /// The landing point, top-left based in this view (`target(layout:isLibraryActive:)`); nil: no flight.
     let target: CGPoint?
     /// The theme tone of the current Space.
     let tint: RGBAColor
@@ -66,19 +66,27 @@ struct DownloadFlightOverlay: NSViewRepresentable {
                        y: windowHeight - CGFloat(Metrics.Sidebar.dockCenterFromBottom) + offset.height)
     }
 
-    /// Where a flight lands in a window laid out as `layout`; nil when no flight runs. The pinned
-    /// sidebar: its Library button's badge. A hidden sidebar: the badge's place in the floating
-    /// panel (`SidebarPeekLayout`, the sidebar moved by the panel inset), whether or not the panel
-    /// is out (B222, user 2026-11-15: Arc flies with the sidebar hidden too; the landing point is
-    /// inferred). None over the Library, the Create Space view or a page in HTML fullscreen (inferred).
-    static func target(layout: MainWindowLayout, isLibraryActive: Bool, isCreatingSpace: Bool) -> CGPoint? {
-        guard !isLibraryActive, !isCreatingSpace, !layout.isPageFullscreen else { return nil }
+    /// Where a flight lands in a window laid out as `layout`. Every window state has a flight
+    /// (B223, user 2026-11-15). The pinned sidebar (also while the Create Space view holds its
+    /// column): its Library button's badge. A hidden sidebar, also a page in HTML fullscreen: the
+    /// badge's place in the floating panel (`SidebarPeekLayout`, the sidebar moved by the panel
+    /// inset), whether or not the panel is out (B222, user: Arc flies there too). The Library:
+    /// the icon of its Downloads button. The landing points are inferred.
+    static func target(layout: MainWindowLayout, isLibraryActive: Bool) -> CGPoint {
         let height = layout.windowSize.height
+        if isLibraryActive {
+            let button = LibraryLayout(windowSize: layout.windowSize).railItemFrame(.downloads)
+            return CGPoint(x: button.midX, y: button.minY + libraryIconCenterFromTop)
+        }
         if layout.isSidebarVisible { return badgeCenter(sidebarFrame: layout.sidebarFrame, windowHeight: height) }
         let inset = SidebarPeekTokens.panelInset
         let pinned = badgeCenter(sidebarFrame: .zero, windowHeight: height)
         return CGPoint(x: pinned.x + inset, y: pinned.y - inset)
     }
+
+    /// The Library rail icon's center below its button's top: icon (20), 6 pt gap and a label of
+    /// ≈ 13 pt, centered in the 80 pt button. inferred.
+    static let libraryIconCenterFromTop: CGFloat = 30
 
     func makeNSView(context: Context) -> DownloadFlightView {
         let view = DownloadFlightView()
