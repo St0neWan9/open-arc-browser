@@ -30,8 +30,6 @@ struct LibrarySpacesBoard: View {
     @ObservedObject var model: ShellModel
     @ObservedObject var sidebar: SidebarViewModel
     @ObservedObject var library: LibraryModel
-    /// The current Space's colors: the board area is a deeper shade of its window color (B224).
-    let palette: ThemePalette
 
     var body: some View {
         let t = LibraryLocalTokens.self
@@ -46,18 +44,6 @@ struct LibrarySpacesBoard: View {
             .padding(.top, t.boardTop)
             .padding(.bottom, t.boardBottom)
             .frame(maxHeight: .infinity, alignment: .top)
-        }
-        .background(alignment: .leading) {
-            // B224 observed: deeper than the rail, a faint shadow along the rail's edge and a 1 pt
-            // light line on the edge itself.
-            ZStack(alignment: .leading) {
-                t.boardAreaFill(for: palette.windowBackground).swiftUI
-                LinearGradient(colors: [Color.black.opacity(t.boardEdgeShadowBlack), Color.black.opacity(0)],
-                               startPoint: .leading, endPoint: .trailing)
-                    .frame(width: t.boardEdgeShadowWidth)
-                Color.white.opacity(t.railEdgeHighlightWhite).frame(width: t.railEdgeHighlightWidth)
-            }
-            .allowsHitTesting(false)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.spacesBoard")

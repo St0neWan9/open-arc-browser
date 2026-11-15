@@ -213,12 +213,12 @@ enum LibraryLocalTokens {
     /// B224 inferred rule, observed colors.
     static let boardAreaShade: Double = 0.90
     static let boardAreaSaturationBoost: Double = 1.155
-    /// The rail's right edge: a 1 pt light line (≈ 5 % white, #666FFB on #5E69FB), and a faint
-    /// shadow on the board side fading out over ≈ 13 pt (≈ 3 % black at the edge). B224 observed
-    /// pixels; the layer values are inferred.
+    /// The rail's right edge: its last 1 pt is a light line (≈ 5 % white, #666FFB on #5E69FB), and
+    /// the area beside it carries a faint shadow fading out over ≈ 20 pt (≈ 3 % black at the edge:
+    /// #515DF0 → #535FF7). B224 / B226 observed pixels; the layer values are inferred.
     static let railEdgeHighlightWidth: CGFloat = 1
     static let railEdgeHighlightWhite: Double = 0.05
-    static let boardEdgeShadowWidth: CGFloat = 13
+    static let boardEdgeShadowWidth: CGFloat = 20
     static let boardEdgeShadowBlack: Double = 0.03
 
     /// The rail's buttons sit in the middle of the window, ≈ 5 pt above center (B224, the

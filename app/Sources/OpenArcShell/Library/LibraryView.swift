@@ -19,8 +19,14 @@ struct LibraryView: View {
         let layout = LibraryLayout(windowSize: windowSize)
         let section = library.section ?? .media
         ZStack(alignment: .topLeading) {
+            // Everything right of the rail sits on a deeper shade of the window color, in every
+            // section (B224 observed on Spaces; B226 user 2026-11-15: the other sections too,
+            // inferred for them).
+            LibraryContentArea(palette: palette)
+                .frame(width: layout.boardFrame.width, height: layout.boardFrame.height)
+                .offset(x: layout.boardFrame.minX, y: layout.boardFrame.minY)
             if section == .spaces {
-                LibrarySpacesBoard(model: model, sidebar: sidebar, library: library, palette: palette)
+                LibrarySpacesBoard(model: model, sidebar: sidebar, library: library)
                     .frame(width: layout.boardFrame.width, height: layout.boardFrame.height)
                     .offset(x: layout.boardFrame.minX, y: layout.boardFrame.minY)
             }
@@ -54,6 +60,31 @@ struct LibraryView: View {
         }
     }
 
+}
+
+// MARK: - Content area
+
+/// The area right of the rail: a deeper shade of the window color, a faint shadow cast by the rail
+/// along its edge, and a 1 pt light line on the rail's own edge (drawn just left of the area).
+/// B224 / B226 observed (user's Arc screenshot): rail #5E69FB, line #666FFB, area #515DF0 at the
+/// edge fading to #535FF7 over ≈ 20 pt.
+struct LibraryContentArea: View {
+    let palette: ThemePalette
+
+    var body: some View {
+        let t = LibraryLocalTokens.self
+        ZStack(alignment: .leading) {
+            t.boardAreaFill(for: palette.windowBackground).swiftUI
+            LinearGradient(colors: [Color.black.opacity(t.boardEdgeShadowBlack), Color.black.opacity(0)],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(width: t.boardEdgeShadowWidth)
+            Color.white.opacity(t.railEdgeHighlightWhite)
+                .frame(width: t.railEdgeHighlightWidth)
+                .offset(x: -t.railEdgeHighlightWidth)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
 }
 
 // MARK: - Rail

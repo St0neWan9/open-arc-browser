@@ -370,6 +370,32 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(LibraryLocalTokens.railSelectedFill(palette: dark, translucent: true), RGBAColor(hex: 0x000000, alpha: 1 - 0.90))
     }
 
+    /// B226 (user, 2026-11-15): every section, not only Spaces, has the deeper area right of the
+    /// rail with the rail's edge shadow.
+    func testContentAreaInEverySectionB226() {
+        let model = makeModel()
+        let palette = model.sidebar.palette
+        let expected = LibraryLocalTokens.boardAreaFill(for: palette.windowBackground)
+        let size = CGSize(width: 1200, height: 800)
+        for section in LibrarySection.allCases {
+            model.openLibrary(section)
+            let host = NSHostingView(rootView: LibraryView(model: model, sidebar: model.sidebar, library: model.library,
+                                                          palette: palette, windowSize: size))
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / size.width
+            func pixel(_ x: CGFloat, _ y: CGFloat) -> NSColor { rep.colorAt(x: Int(x * scale), y: Int(y * scale))!.usingColorSpace(.sRGB)! }
+            // Bottom row, below the list and the board's columns, inside the window's bottom inset.
+            let far = pixel(1100, 796), edge = pixel(114, 796)
+            XCTAssertEqual(far.blueComponent, expected.blue, accuracy: 0.02, "\(section): deeper area")
+            XCTAssertLessThan(edge.blueComponent + edge.redComponent, far.blueComponent + far.redComponent, "\(section): edge shadow")
+        }
+        model.exitLibrary()
+        model.stop()
+    }
+
     /// Every section builds and lays out inside the full window.
     func testEverySectionRenders() {
         let model = makeModel()
