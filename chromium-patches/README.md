@@ -51,6 +51,7 @@ proprietary_codecs = true                          # MP4 / MSE demuxing of H.264
 ffmpeg_branding = "Chromium"                       # FFmpeg without H.264 / AAC decoders
 media_proprietary_decoders_platform_only = true    # decode only via VideoToolbox / AudioToolbox (patch 0009)
 dcheck_always_on = false                           # no DCHECKs in release (B114; not is_official_build: that also turns on LTO/PGO and needs the official toolchain setup)
+disable_fieldtrial_testing_config = true           # B231: no experiments from testing/variations/fieldtrial_testing_config.json (an unofficial build applies it by default; it turned on DeferredDownloadHistoryLoading, B230)
 root_extra_deps = [
   "//openarc:openarc_framework",
   "//openarc:openarc_shell_test",
