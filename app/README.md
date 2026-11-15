@@ -107,7 +107,7 @@ scripts/make-app.sh --scratch-path app/.build/mine   # private SwiftPM scratch d
 The script (run from anywhere) does a release build of the `OpenArcApp` product, assembles `build/Open Arc.app` at the repo root (`Contents/MacOS/OpenArcApp`, `Info.plist`, `Resources/AppIcon.icns`, `PkgInfo`), signs it ad hoc with the hardened runtime, and checks it with `codesign --verify --deep --strict` and `plutil -lint`. It rebuilds the bundle from scratch each time and prints the bundle path on its last line. `build/` is git-ignored.
 
 Bundle inputs live in `app/Bundle/`:
-- `Info.plist`: the template. The script fills in the two version keys. `UTExportedTypeDeclarations` must list every `UTType(exportedAs:)` in the sources, as `<release bundle id>.<name>` (today `org.openarc.browser.sidebar-item` and `org.openarc.browser.library-space`); the sources build the identifier from the running bundle id, and `--dev` rewrites the prefix.
+- `Info.plist`: the template. The script fills in the two version keys. `UTExportedTypeDeclarations` must list every `UTType(exportedAs:)` in the sources, as `<release bundle id>.<name>` (today `org.openarc.browser.sidebar-item`); the sources build the identifier from the running bundle id, and `--dev` rewrites the prefix.
 - `OpenArc.entitlements`: the app's entitlements. No App Sandbox (C10 settled it: like Chrome, the app is unsandboxed and Chromium's helpers run under their own Seatbelt sandbox); library validation off until D6; the file notes the iCloud keys D4 will add.
 - `Helpers/*.entitlements`: one file per OpenArcCore helper app (C10), each commented: `helper` (utility processes; no JIT), `renderer` and `gpu` (`allow-jit` for V8 and SwiftShader), `plugin` (`disable-library-validation` for foreign-team CDMs, C18), `alerts` (notifications). All but `plugin` also carry `disable-library-validation` only because ad-hoc signatures have no Team ID; D6 removes it.
 - `AppIcon.icns`: the lavender folded-ribbon icon, regenerated with `swift scripts/make-app-icon.swift` (CoreGraphics and `iconutil`). This also exports six material variants and web assets from the shared native artwork. See [`branding/README.md`](../branding/README.md).
@@ -134,7 +134,7 @@ The bundle is ad hoc signed, so it only runs on the machine that built it. Build
 | Bundle id | `org.openarc.browser` | `org.openarc.browser.dev` |
 | Default data dir | `~/Library/Application Support/org.openarc.browser/` | `~/Library/Application Support/org.openarc.browser.dev/` |
 | Defaults domain | `org.openarc.browser` | `org.openarc.browser.dev` |
-| Exported drag types | `org.openarc.browser.sidebar-item`, `.library-space` | `org.openarc.browser.dev.sidebar-item`, `.library-space` (make-app.sh rewrites them) |
+| Exported drag types | `org.openarc.browser.sidebar-item` | `org.openarc.browser.dev.sidebar-item` (make-app.sh rewrites it) |
 | Chromium Mach rendezvous / sandbox bundle id | `org.openarc.browser.*` | `org.openarc.browser.dev.*` (read from the embedding app, patch 0011) |
 | Chromium helper apps | `org.openarc.browser.helper…` | `org.openarc.browser.dev.helper…` (make-app.sh) |
 | Keychain item (cookie encryption key) | "Open Arc Safe Storage" | "Open Arc Dev Safe Storage" (patch 0014) |

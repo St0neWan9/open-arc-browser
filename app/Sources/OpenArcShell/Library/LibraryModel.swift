@@ -22,8 +22,6 @@ public final class LibraryModel: ObservableObject {
     @Published public private(set) var filterPanelSection: LibrarySection?
     /// Chips switched on in the open Filter panel. Empty when the panel is closed.
     @Published public private(set) var filterSelection = LibraryFilterSelection()
-    /// Space column being dragged by its handle on the Spaces board.
-    @Published var draggingSpaceID: UUID?
     @Published public private(set) var lastError: Error?
     /// Library ▸ Downloads (C12): the current profile's downloads from the engine.
     public let downloads: LibraryDownloads
@@ -84,7 +82,6 @@ public final class LibraryModel: ObservableObject {
     /// "←" at the bottom of the rail. [06 §8] observed.
     public func exit() {
         section = nil
-        draggingSpaceID = nil
         resetFilter()
         updateMediaActivity()
     }
@@ -226,13 +223,10 @@ public final class LibraryModel: ObservableObject {
         }
     }
 
-    /// Drop of the dragged column on `target` at `locationX` inside it.
+    /// The column at `from` was dragged by its handle to the slot `to` (B228).
     @discardableResult
-    func dropDraggedSpace(on target: UUID, locationX: CGFloat, columnWidth: CGFloat) -> Bool {
-        defer { draggingSpaceID = nil }
-        guard let dragged = draggingSpaceID,
-              let position = LibraryBoard.dropPosition(dragged: dragged, target: target, locationX: locationX, columnWidth: columnWidth)
-        else { return false }
-        return moveSpace(dragged, to: position)
+    func moveColumn(from: Int, to: Int) -> Bool {
+        guard let position = LibraryBoard.movePosition(ids: boardColumns.map(\.id), from: from, to: to) else { return false }
+        return moveSpace(boardColumns[from].id, to: position)
     }
 }

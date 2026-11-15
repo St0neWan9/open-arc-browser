@@ -110,7 +110,6 @@ final class ShellModelTests: XCTestCase {
     /// Drag types are `<bundle id>.<name>`, so the development build exports its own (plan B37).
     func testDragTypesDeriveFromTheBundleIdentifier() {
         XCTAssertEqual(SidebarDragPayload.itemType.identifier, "\(AppIdentity.bundleIdentifier).sidebar-item")
-        XCTAssertEqual(LibraryBoardDragPayload.columnType.identifier, "\(AppIdentity.bundleIdentifier).library-space")
     }
 }
 

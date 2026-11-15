@@ -250,6 +250,6 @@ final class UpdatesTests: XCTestCase {
         XCTAssertEqual(plist["CFBundleIdentifier"] as? String, AppIdentity.releaseBundleIdentifier)
         let exported = try XCTUnwrap(plist["UTExportedTypeDeclarations"] as? [[String: Any]])
         let ids = Set(exported.compactMap { $0["UTTypeIdentifier"] as? String })
-        XCTAssertEqual(ids, ["\(AppIdentity.releaseBundleIdentifier).sidebar-item", "\(AppIdentity.releaseBundleIdentifier).library-space"])
+        XCTAssertEqual(ids, ["\(AppIdentity.releaseBundleIdentifier).sidebar-item"])
     }
 }

@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 import OpenArcModel
 import OpenArcDesign
 
@@ -9,21 +8,10 @@ import OpenArcDesign
 // brush at the top right to edit the theme), the space's folders and tabs in the sidebar style,
 // and at the bottom a drag handle (left) and a "…" menu (right). The row scrolls horizontally.
 
-/// Drag payload of a board column. The type is ours and only readable in this process; the id
-/// itself travels in `LibraryModel.draggingSpaceID`.
-enum LibraryBoardDragPayload {
-    /// `<bundle id>.library-space`, exported per build like `SidebarDragPayload.itemType`.
-    static let columnType = UTType(exportedAs: "\(AppIdentity.bundleIdentifier).library-space", conformingTo: .data)
-
-    static func makeProvider(spaceID: UUID) -> NSItemProvider {
-        let provider = NSItemProvider()
-        let data = Data(spaceID.uuidString.utf8)
-        provider.registerDataRepresentation(for: columnType, visibility: .ownProcess) { completion in
-            completion(data, nil)
-            return nil
-        }
-        return provider
-    }
+/// A column being moved by its drag handle: which one, and how far the pointer went (B228).
+struct LibraryBoardDrag: Equatable {
+    var id: UUID
+    var translation: CGFloat
 }
 
 struct LibrarySpacesBoard: View {
@@ -31,13 +19,27 @@ struct LibrarySpacesBoard: View {
     @ObservedObject var sidebar: SidebarViewModel
     @ObservedObject var library: LibraryModel
 
+    /// The column following the pointer while its handle is dragged; nil otherwise.
+    @State private var drag: LibraryBoardDrag?
+
     var body: some View {
         let t = LibraryLocalTokens.self
+        let columns = library.boardColumns
+        let pitch = t.boardColumnWidth + t.boardColumnSpacing
+        let from = drag.flatMap { d in columns.firstIndex { $0.id == d.id } }
+        let to = from.map { LibraryBoard.reorderIndex(from: $0, translation: drag?.translation ?? 0, pitch: pitch, count: columns.count) }
         ScrollView(.horizontal, showsIndicators: true) {
             HStack(alignment: .top, spacing: t.boardColumnSpacing) {
-                ForEach(library.boardColumns) { column in
-                    LibraryBoardColumnView(model: model, sidebar: sidebar, library: library, column: column)
+                ForEach(Array(columns.enumerated()), id: \.element.id) { index, column in
+                    let isLifted = drag?.id == column.id
+                    LibraryBoardColumnView(model: model, sidebar: sidebar, library: library, column: column, isLifted: isLifted,
+                                           onHandleDrag: { drag = LibraryBoardDrag(id: column.id, translation: $0) },
+                                           onHandleDrop: { drop(column.id, translation: $0, columns: columns, pitch: pitch) })
                         .frame(width: t.boardColumnWidth)
+                        // The dragged column follows the pointer; the ones it passes make room.
+                        .offset(x: from.flatMap { f in to.map { LibraryBoard.dragOffset(index: index, from: f, to: $0, translation: drag?.translation ?? 0, pitch: pitch) } } ?? 0)
+                        .animation(isLifted ? nil : ShellMotion.favoriteMakeRoom, value: to)
+                        .zIndex(isLifted ? 1 : 0)
                 }
             }
             .padding(.leading, t.boardLeading)
@@ -50,6 +52,16 @@ struct LibrarySpacesBoard: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.spacesBoard")
     }
+
+    /// The handle was let go: the column takes the slot nearest the pointer and settles there.
+    private func drop(_ id: UUID, translation: CGFloat, columns: [LibraryBoardColumn], pitch: CGFloat) {
+        guard let from = columns.firstIndex(where: { $0.id == id }) else { drag = nil; return }
+        let to = LibraryBoard.reorderIndex(from: from, translation: translation, pitch: pitch, count: columns.count)
+        withAnimation(ShellMotion.favoriteMakeRoom) {
+            library.moveColumn(from: from, to: to)
+            drag = nil
+        }
+    }
 }
 
 struct LibraryBoardColumnView: View {
@@ -57,6 +69,12 @@ struct LibraryBoardColumnView: View {
     @ObservedObject var sidebar: SidebarViewModel
     @ObservedObject var library: LibraryModel
     let column: LibraryBoardColumn
+    /// Being dragged by its handle: lifted above the others with a deeper shadow (inferred).
+    var isLifted = false
+    /// The handle moved by this much (pointer travel along the board).
+    var onHandleDrag: (CGFloat) -> Void = { _ in }
+    /// The handle was let go after moving this much.
+    var onHandleDrop: (CGFloat) -> Void = { _ in }
 
     /// A tab row's favicon; split groups show their first member's. C9.
     private func iconData(_ item: SidebarItemModel) -> Data? {
@@ -90,11 +108,11 @@ struct LibraryBoardColumnView: View {
             // Space (B224, user 2026-11-15; Arc observed).
             RoundedRectangle(cornerRadius: LibraryLocalTokens.boardColumnCornerRadius, style: .continuous)
                 .fill(LibraryLocalTokens.boardColumnFill(for: palette).swiftUI)
-                .shadow(color: .black.opacity(LibraryLocalTokens.boardColumnShadowOpacity),
-                        radius: LibraryLocalTokens.boardColumnShadowRadius)
+                .shadow(color: .black.opacity(isLifted ? LibraryLocalTokens.boardColumnLiftedShadowOpacity
+                                                       : LibraryLocalTokens.boardColumnShadowOpacity),
+                        radius: isLifted ? LibraryLocalTokens.boardColumnLiftedShadowRadius : LibraryLocalTokens.boardColumnShadowRadius,
+                        y: isLifted ? LibraryLocalTokens.boardColumnLiftedShadowRadius / 2 : 0)
         )
-        .opacity(library.draggingSpaceID == column.id ? SidebarLocalTokens.draggedRowOpacity : 1)
-        .onDrop(of: [LibraryBoardDragPayload.columnType], delegate: LibraryBoardDropDelegate(library: library, target: column.id))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.space.\(column.id.uuidString)")
     }
@@ -122,11 +140,17 @@ struct LibraryBoardColumnView: View {
         HStack {
             Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
                 .foregroundStyle(text.opacity(0.7))
-                .frame(width: 24, height: 24)
+                .frame(width: LibraryLocalTokens.boardHandleSize, height: LibraryLocalTokens.boardHandleSize)
                 .contentShape(Rectangle())
-                .onDrag {
-                    library.draggingSpaceID = column.id
-                    return LibraryBoardDragPayload.makeProvider(spaceID: column.id)
+                // Press and drag: the column follows the pointer, a plain mouse drag (B228; the
+                // system drag and drop only moved a small icon and needed a drop on a column).
+                .gesture(
+                    DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                        .onChanged { onHandleDrag($0.translation.width) }
+                        .onEnded { onHandleDrop($0.translation.width) }
+                )
+                .onHover { inside in
+                    if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
                 }
                 .accessibilityLabel("Reorder Space")
                 .accessibilityIdentifier("openarc.library.space.dragHandle")
@@ -149,25 +173,6 @@ struct LibraryBoardColumnView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: LibraryLocalTokens.boardFooterHeight)
-    }
-}
-
-/// Drop of a dragged column on another column: left half = before, right half = after. inferred.
-struct LibraryBoardDropDelegate: DropDelegate {
-    let library: LibraryModel
-    let target: UUID
-
-    func validateDrop(info: DropInfo) -> Bool {
-        MainActor.assumeIsolated { library.draggingSpaceID != nil }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-
-    func performDrop(info: DropInfo) -> Bool {
-        let x = info.location.x
-        return MainActor.assumeIsolated {
-            library.dropDraggedSpace(on: target, locationX: x, columnWidth: LibraryLocalTokens.boardColumnWidth)
-        }
     }
 }
 

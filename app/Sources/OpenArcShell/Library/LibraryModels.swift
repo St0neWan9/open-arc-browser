@@ -206,6 +206,11 @@ enum LibraryLocalTokens {
     static let boardBottom: CGFloat = 46
     static let boardColumnShadowOpacity: Double = 0.08
     static let boardColumnShadowRadius: CGFloat = 4
+    /// A column dragged by its handle rides above the others with a deeper shadow. B228 inferred.
+    static let boardColumnLiftedShadowOpacity: Double = 0.2
+    static let boardColumnLiftedShadowRadius: CGFloat = 14
+    /// The drag handle's hit area. inferred.
+    static let boardHandleSize: CGFloat = 28
     static let boardColumnCornerRadius: CGFloat = 10
 
     /// The board's area right of the rail is deeper than the rail: the window color × 0.90 with
@@ -437,11 +442,25 @@ enum LibraryBoard {
         }
     }
 
-    /// Where a column dragged by its handle lands when dropped on `target` at `locationX`
-    /// (in the target column's coordinates): its left half means before, its right half after.
-    /// inferred. nil when dropped on itself.
-    static func dropPosition(dragged: UUID, target: UUID, locationX: CGFloat, columnWidth: CGFloat) -> InsertPosition? {
-        guard dragged != target else { return nil }
-        return locationX < columnWidth / 2 ? .before(target) : .after(target)
+    /// The slot a column dragged from `from` by `translation` points at: the nearest one, within
+    /// the board. B228 (inferred).
+    static func reorderIndex(from: Int, translation: CGFloat, pitch: CGFloat, count: Int) -> Int {
+        guard pitch > 0, count > 0 else { return from }
+        return min(max(from + Int((translation / pitch).rounded()), 0), count - 1)
+    }
+
+    /// How far a column is drawn from its slot while another one is dragged: the dragged column by
+    /// the pointer's travel, the ones between its slot and the target by one pitch the other way.
+    static func dragOffset(index: Int, from: Int, to: Int, translation: CGFloat, pitch: CGFloat) -> CGFloat {
+        if index == from { return translation }
+        if from < to, index > from, index <= to { return -pitch }
+        if to < from, index >= to, index < from { return pitch }
+        return 0
+    }
+
+    /// The move that puts the column at `from` into slot `to` of `ids`; nil when it stays.
+    static func movePosition(ids: [UUID], from: Int, to: Int) -> InsertPosition? {
+        guard from != to, ids.indices.contains(from), ids.indices.contains(to) else { return nil }
+        return to < from ? .before(ids[to]) : .after(ids[to])
     }
 }

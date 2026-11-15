@@ -288,7 +288,7 @@ if [[ $dev -eq 1 ]]; then
     plutil -replace CFBundleName -string "$app_name" "$info"
     plutil -replace CFBundleDisplayName -string "$app_name" "$info"
     # Exported types must be unique per app: <bundle id>.<name>, matching the identifiers the
-    # app builds from its own bundle id (SidebarDragPayload.itemType, LibraryBoardDragPayload).
+    # app builds from its own bundle id (SidebarDragPayload.itemType).
     type_count="$(plutil -extract UTExportedTypeDeclarations raw "$info")"
     for ((i = 0; i < type_count; i++)); do
         type_id="$(plutil -extract "UTExportedTypeDeclarations.$i.UTTypeIdentifier" raw "$info")"

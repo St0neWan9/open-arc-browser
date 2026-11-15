@@ -75,18 +75,6 @@
 			<key>UTTypeTagSpecification</key>
 			<dict/>
 		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>org.openarc.browser.library-space</string>
-			<key>UTTypeDescription</key>
-			<string>Open Arc Library Space</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict/>
-		</dict>
 	</array>
 
 	<!-- Web URLs the app can open. Declaring them does not make it the default browser. -->

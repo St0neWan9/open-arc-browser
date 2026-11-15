@@ -251,19 +251,40 @@ final class LibraryTests: XCTestCase {
     func testDragHandleReordersSpaces() {
         let model = makeModel()
         model.openLibrary(.spaces)
-        model.library.draggingSpaceID = fixture.work
-        // Left half of Home's column → before Home.
-        XCTAssertTrue(model.library.dropDraggedSpace(on: fixture.home, locationX: 10, columnWidth: 266))
+        // Work (slot 1) dragged one pitch to the left → slot 0, before Home.
+        let pitch = LibraryLocalTokens.boardColumnWidth + LibraryLocalTokens.boardColumnSpacing
+        let to = LibraryBoard.reorderIndex(from: 1, translation: -pitch * 0.6, pitch: pitch, count: 2)
+        XCTAssertEqual(to, 0)
+        XCTAssertTrue(model.library.moveColumn(from: 1, to: to))
         XCTAssertEqual(model.library.boardColumns.map(\.space.name), ["Work", "Home"])
         XCTAssertEqual(model.sidebar.dockSpaces.map(\.name), ["Work", "Home"])
-        XCTAssertNil(model.library.draggingSpaceID)
         // Reordering leaves the window on its Space.
         XCTAssertEqual(model.sidebar.selectedSpaceID, fixture.home)
-        XCTAssertEqual(LibraryBoard.dropPosition(dragged: fixture.work, target: fixture.home, locationX: 200, columnWidth: 266), .after(fixture.home))
-        XCTAssertNil(LibraryBoard.dropPosition(dragged: fixture.home, target: fixture.home, locationX: 10, columnWidth: 266))
-        // Dropping without a drag does nothing.
-        XCTAssertFalse(model.library.dropDraggedSpace(on: fixture.home, locationX: 10, columnWidth: 266))
+        // Letting go where it started changes nothing.
+        XCTAssertFalse(model.library.moveColumn(from: 0, to: 0))
         model.stop()
+    }
+
+    /// B228 (user, 2026-11-15: the cards could not be dragged): the dragged column follows the
+    /// pointer, the ones it passes make room, and it lands in the nearest slot within the board.
+    func testColumnDragMathB228() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        let pitch: CGFloat = 264
+        XCTAssertEqual(LibraryBoard.reorderIndex(from: 0, translation: 100, pitch: pitch, count: 4), 0, "under half a pitch: stays")
+        XCTAssertEqual(LibraryBoard.reorderIndex(from: 0, translation: 140, pitch: pitch, count: 4), 1)
+        XCTAssertEqual(LibraryBoard.reorderIndex(from: 0, translation: 2000, pitch: pitch, count: 4), 3, "clamped to the last slot")
+        XCTAssertEqual(LibraryBoard.reorderIndex(from: 2, translation: -2000, pitch: pitch, count: 4), 0)
+        // Column 0 dragged to slot 2: it follows the pointer, 1 and 2 shift left, 3 stays.
+        XCTAssertEqual(LibraryBoard.dragOffset(index: 0, from: 0, to: 2, translation: 530, pitch: pitch), 530)
+        XCTAssertEqual(LibraryBoard.dragOffset(index: 1, from: 0, to: 2, translation: 530, pitch: pitch), -pitch)
+        XCTAssertEqual(LibraryBoard.dragOffset(index: 2, from: 0, to: 2, translation: 530, pitch: pitch), -pitch)
+        XCTAssertEqual(LibraryBoard.dragOffset(index: 3, from: 0, to: 2, translation: 530, pitch: pitch), 0)
+        // Column 3 dragged to slot 1: 1 and 2 shift right.
+        XCTAssertEqual(LibraryBoard.dragOffset(index: 1, from: 3, to: 1, translation: -530, pitch: pitch), pitch)
+        XCTAssertEqual(LibraryBoard.dragOffset(index: 0, from: 3, to: 1, translation: -530, pitch: pitch), 0)
+        XCTAssertEqual(LibraryBoard.movePosition(ids: [a, b, c, d], from: 0, to: 2), .after(c))
+        XCTAssertEqual(LibraryBoard.movePosition(ids: [a, b, c, d], from: 3, to: 1), .before(b))
+        XCTAssertNil(LibraryBoard.movePosition(ids: [a, b, c, d], from: 1, to: 1))
     }
 
     /// Brush and "…" menu use the existing flows (theme editor, rename, delete).
