@@ -42,6 +42,23 @@ final class DownloadBadgeB203Tests: XCTestCase {
         XCTAssertEqual(center.y, 960 - 12.5)
     }
 
+    /// B222: the flight also runs with the sidebar hidden, to the badge's place in the floating
+    /// panel (5 pt in from the left and bottom); none over the Library, Create Space or HTML fullscreen.
+    func testFlightTargetB222() {
+        let size = CGSize(width: 1400, height: 985)
+        let pinned = MainWindowLayout(windowSize: size, isSidebarVisible: true)
+        XCTAssertEqual(DownloadFlightOverlay.target(layout: pinned, isLibraryActive: false, isCreatingSpace: false),
+                       CGPoint(x: 24 + 9.5, y: 960 - 12.5))
+        let hidden = MainWindowLayout(windowSize: size, isSidebarVisible: false)
+        XCTAssertEqual(DownloadFlightOverlay.target(layout: hidden, isLibraryActive: false, isCreatingSpace: false),
+                       CGPoint(x: 5 + 24 + 9.5, y: 960 - 5 - 12.5))
+        XCTAssertNil(DownloadFlightOverlay.target(layout: pinned, isLibraryActive: true, isCreatingSpace: false))
+        XCTAssertNil(DownloadFlightOverlay.target(layout: hidden, isLibraryActive: false, isCreatingSpace: true))
+        var fullscreen = hidden
+        fullscreen.isPageFullscreen = true
+        XCTAssertNil(DownloadFlightOverlay.target(layout: fullscreen, isLibraryActive: false, isCreatingSpace: false))
+    }
+
     // MARK: Badge and flights
 
     private let now = Date(timeIntervalSince1970: 2_000_000)

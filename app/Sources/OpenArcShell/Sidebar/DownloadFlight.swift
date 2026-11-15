@@ -66,6 +66,20 @@ struct DownloadFlightOverlay: NSViewRepresentable {
                        y: windowHeight - CGFloat(Metrics.Sidebar.dockCenterFromBottom) + offset.height)
     }
 
+    /// Where a flight lands in a window laid out as `layout`; nil when no flight runs. The pinned
+    /// sidebar: its Library button's badge. A hidden sidebar: the badge's place in the floating
+    /// panel (`SidebarPeekLayout`, the sidebar moved by the panel inset), whether or not the panel
+    /// is out (B222, user 2026-11-15: Arc flies with the sidebar hidden too; the landing point is
+    /// inferred). None over the Library, the Create Space view or a page in HTML fullscreen (inferred).
+    static func target(layout: MainWindowLayout, isLibraryActive: Bool, isCreatingSpace: Bool) -> CGPoint? {
+        guard !isLibraryActive, !isCreatingSpace, !layout.isPageFullscreen else { return nil }
+        let height = layout.windowSize.height
+        if layout.isSidebarVisible { return badgeCenter(sidebarFrame: layout.sidebarFrame, windowHeight: height) }
+        let inset = SidebarPeekTokens.panelInset
+        let pinned = badgeCenter(sidebarFrame: .zero, windowHeight: height)
+        return CGPoint(x: pinned.x + inset, y: pinned.y - inset)
+    }
+
     func makeNSView(context: Context) -> DownloadFlightView {
         let view = DownloadFlightView()
         updateNSView(view, context: context)
