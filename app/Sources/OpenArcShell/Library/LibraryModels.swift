@@ -188,8 +188,32 @@ enum LibraryLocalTokens {
     static let railFooterBottomPadding: CGFloat = 14
 
     /// List column paddings and rows. unknown.
-    static let listHorizontalPadding: CGFloat = 8
+    static let listHorizontalPadding: CGFloat = 10
     static let searchFieldHeight: CGFloat = 36
+    /// The list column's search row: 10 pt from the window's top (level with the page panel), the
+    /// search field 10 pt from the column's left, the Filter button 8 pt right of it; both 36 pt
+    /// tall, in the window color over the deeper area (#5E69FB on #5461FB). The magnifier is
+    /// centered 18.5 pt in, the text starts 41 pt in. B229 observed (user's Arc screenshots of
+    /// Downloads and Archived Tabs, 2026-11-15).
+    static let listTop: CGFloat = 10
+    static let searchFilterGap: CGFloat = 8
+    static let searchIconCenterX: CGFloat = 18.5
+    static let searchTextX: CGFloat = 41
+    static let searchIconSize: CGFloat = 15
+    static let filterButtonPadding: CGFloat = 10
+    /// Downloads and Archived Tabs rows (B229 observed): a 27 pt date header (text 11.5 pt from the
+    /// column's left, its first one 12 pt under the search row), then 56 pt rows: icon centered
+    /// 28.5 pt from the column's left, title and second line from 51.5 pt, their centers 17.75 pt
+    /// apart.
+    static let listHeaderHeight: CGFloat = 27
+    static let listHeaderGapAboveFirst: CGFloat = 12
+    static let listHeaderLeading: CGFloat = 1.5
+    static let listRowHeight: CGFloat = 56
+    static let listIconColumnWidth: CGFloat = 37
+    static let listIconTitleGap: CGFloat = 4.5
+    static let listTitleDetailSpacing: CGFloat = 2
+    /// A download's icon or Quick Look thumbnail (Arc's document icons are ≈ 20 × 21 pt of art).
+    static let downloadIconSize: CGFloat = 26
     static var searchFieldCornerRadius: CGFloat { CGFloat(Metrics.Sidebar.addressFieldCornerRadius) }
     static let archiveRowHeight: CGFloat = 41
     static let archiveRowIconSize: CGFloat = 16
@@ -337,8 +361,9 @@ struct LibraryLayout: Equatable {
 
 // MARK: - Archived Tabs
 
-/// Date groups of the Archived Tabs list. [06 §8] observed the labels Today, Yesterday and
-/// Earlier This Week (Media and Archived Tabs); "Older" and the boundaries are inferred.
+/// Date groups of the Media list. [06 §8] observed the labels Today, Yesterday and Earlier This
+/// Week (Media; Archived Tabs now groups by `LibraryAge`, B229); "Older" and the boundaries are
+/// inferred.
 public enum LibraryDateGroup: Int, CaseIterable, Comparable, Sendable {
     case today
     case yesterday
@@ -370,9 +395,57 @@ public enum LibraryDateGroup: Int, CaseIterable, Comparable, Sendable {
     }
 }
 
-/// One date group of archived tabs, newest first.
+/// How long ago something happened, as the Downloads and Archived Tabs lists group their rows
+/// (B229, user's Arc screenshots 2026-11-15, observed labels: "2 days ago" … "6 days ago",
+/// "2 weeks ago" … "4 weeks ago", "1 month ago"). "Today" and "Yesterday" come from the earlier
+/// observation [06 §8]; "1 week ago", the months past one and the years are inferred. Ordered newest
+/// first.
+public struct LibraryAge: Hashable, Comparable, Sendable {
+    public enum Unit: Int, Sendable { case today, yesterday, days, weeks, months, years }
+    public var unit: Unit
+    public var count: Int
+
+    public init(_ unit: Unit, _ count: Int = 0) {
+        self.unit = unit
+        self.count = count
+    }
+
+    public var title: String {
+        func plural(_ word: String) -> String { count == 1 ? "1 \(word) ago" : "\(count) \(word)s ago" }
+        switch unit {
+        case .today: return "Today"
+        case .yesterday: return "Yesterday"
+        case .days: return plural("day")
+        case .weeks: return plural("week")
+        case .months: return plural("month")
+        case .years: return plural("year")
+        }
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { (lhs.unit.rawValue, lhs.count) < (rhs.unit.rawValue, rhs.count) }
+
+    /// Rule (inferred boundaries): calendar days back from `now` (a later date counts as today);
+    /// under a week: Today, Yesterday, then days; under a calendar month: whole weeks; under a year:
+    /// months; then years.
+    public static func of(_ date: Date, now: Date, calendar: Calendar) -> LibraryAge {
+        let days = max(0, calendar.dateComponents([.day], from: calendar.startOfDay(for: date),
+                                                  to: calendar.startOfDay(for: now)).day ?? 0)
+        switch days {
+        case 0: return LibraryAge(.today)
+        case 1: return LibraryAge(.yesterday)
+        case 2..<7: return LibraryAge(.days, days)
+        default: break
+        }
+        let months = max(0, calendar.dateComponents([.month], from: date, to: now).month ?? 0)
+        if months < 1 { return LibraryAge(.weeks, days / 7) }
+        if months < 12 { return LibraryAge(.months, months) }
+        return LibraryAge(.years, months / 12)
+    }
+}
+
+/// One age group of archived tabs, newest first.
 public struct LibraryArchiveGroup: Equatable, Sendable {
-    public var group: LibraryDateGroup
+    public var group: LibraryAge
     public var items: [ArchiveItem]
 }
 
@@ -387,19 +460,17 @@ public enum LibraryArchive {
         return item.url?.absoluteString.range(of: q, options: options) != nil
     }
 
-    /// Live archive items filtered by `query`, grouped by date (group order Today → Older),
+    /// Live archive items filtered by `query`, grouped by age (`LibraryAge`, newest group first),
     /// newest first inside each group. Empty groups are left out. `filter`: the Filter panel's
     /// chips (B94); an empty selection keeps everything.
     public static func groups(in workspace: WorkspaceState, query: String, filter: LibraryFilterSelection = LibraryFilterSelection(),
                               now: Date, calendar: Calendar) -> [LibraryArchiveGroup] {
-        var buckets: [LibraryDateGroup: [ArchiveItem]] = [:]
+        var buckets: [LibraryAge: [ArchiveItem]] = [:]
         for item in workspace.archiveNewestFirst
         where matches(item, query: query) && filter.allows(LibraryFilter.traits(of: item)) {
-            buckets[LibraryDateGroup.group(of: item.archivedAt, now: now, calendar: calendar), default: []].append(item)
+            buckets[LibraryAge.of(item.archivedAt, now: now, calendar: calendar), default: []].append(item)
         }
-        return LibraryDateGroup.allCases.compactMap { group in
-            buckets[group].map { LibraryArchiveGroup(group: group, items: $0) }
-        }
+        return buckets.keys.sorted().map { LibraryArchiveGroup(group: $0, items: buckets[$0] ?? []) }
     }
 
     /// The gray second line of a row: the URL without its scheme. inferred.

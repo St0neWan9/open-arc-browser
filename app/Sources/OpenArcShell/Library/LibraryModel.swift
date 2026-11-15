@@ -150,6 +150,11 @@ public final class LibraryModel: ObservableObject {
     }
 
     /// The Downloads list: search text, then the Filter panel's chips.
+    /// The visible downloads grouped by age (B229).
+    public var downloadGroups: [LibraryDownloadGroup] {
+        LibraryDownloadList.groups(visibleDownloads, now: now(), calendar: calendar)
+    }
+
     public var visibleDownloads: [DownloadItem] {
         downloads.filtered(by: activeQuery(for: .downloads)).filter {
             filterSelection.allows(LibraryFilter.traits(of: $0))

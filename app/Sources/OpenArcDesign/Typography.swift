@@ -120,6 +120,12 @@ public enum Typography {
     public static let libraryGroupHeader = TextStyle(size: 11, weight: .semibold, opacity: 0.55)
     public static let libraryRowTitle = TextStyle(size: 13, weight: .regular)
     public static let libraryRowDetail = TextStyle(size: 11, weight: .regular, opacity: 0.55)
+    /// Downloads and Archived Tabs lists (B229, user's Arc screenshots 2026-11-15, observed glyph
+    /// heights and colors on a blue Space with white ink): date headers ≈ 12 Semibold at ≈ 63 %
+    /// (#C0C3FE on #5461FB), row titles 14 at ≈ 75 % (#D5D6FE), second lines 12 at ≈ 58 % (#B9BCFD).
+    public static let libraryListHeader = TextStyle(size: 12, weight: .semibold, opacity: 0.63)
+    public static let libraryListTitle = TextStyle(size: 14, weight: .regular, opacity: 0.75)
+    public static let libraryListDetail = TextStyle(size: 12, weight: .regular, opacity: 0.58)
 
     // MARK: Small floating panels (own look where Arc's was not measured)
 

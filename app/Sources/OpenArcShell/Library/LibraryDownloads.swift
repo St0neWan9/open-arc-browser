@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UniformTypeIdentifiers
 import OpenArcModel
 import OpenArcEngine
 
@@ -96,6 +97,61 @@ public final class LibraryDownloads: ObservableObject {
     public func confirm(_ id: String, keep: Bool) { Task { await engine.confirm(id, keep: keep) } }
     /// Removes the entry from the list (the file stays on disk).
     public func remove(_ id: String) { Task { await engine.remove(id) } }
+}
+
+/// One age group of the Library's Downloads list (B229).
+public struct LibraryDownloadGroup: Equatable, Sendable {
+    public var age: LibraryAge
+    public var items: [DownloadItem]
+}
+
+/// The Library's Downloads list: rows grouped by age, a second line naming the file's kind and
+/// where it came from. B229 observed (user's Arc screenshot, 2026-11-15): "2 weeks ago" groups,
+/// "Disk Image from deepseek.com", "PDF from coursera.org", "Image from twimg.com", "PDF" without a
+/// source, "Download from …" for other files.
+public enum LibraryDownloadList {
+    /// When a download counts: when it finished (else when it started); a running, paused or held
+    /// one is now. inferred.
+    static func date(of item: DownloadItem, now: Date) -> Date {
+        switch item.state {
+        case .inProgress, .paused, .needsConfirmation: return now
+        default: return item.endDate ?? item.startDate
+        }
+    }
+
+    /// `items` grouped by age, newest group first and newest first inside a group.
+    public static func groups(_ items: [DownloadItem], now: Date, calendar: Calendar) -> [LibraryDownloadGroup] {
+        let sorted = items.sorted { date(of: $0, now: now) > date(of: $1, now: now) }
+        var buckets: [LibraryAge: [DownloadItem]] = [:]
+        for item in sorted { buckets[LibraryAge.of(date(of: item, now: now), now: now, calendar: calendar), default: []].append(item) }
+        return buckets.keys.sorted().map { LibraryDownloadGroup(age: $0, items: buckets[$0] ?? []) }
+    }
+
+    /// The kind a finished file is shown as. Disk Image, PDF and Image and the "Download" fallback
+    /// are observed; Video, Audio and Archive are inferred.
+    public static func kind(ofFileNamed name: String) -> String {
+        let ext = (name as NSString).pathExtension
+        guard !ext.isEmpty, let type = UTType(filenameExtension: ext) else { return "Download" }
+        if type.conforms(to: .diskImage) { return "Disk Image" }
+        if type.conforms(to: .pdf) { return "PDF" }
+        if type.conforms(to: .image) { return "Image" }
+        if type.conforms(to: .audiovisualContent) && !type.conforms(to: .audio) { return "Video" }
+        if type.conforms(to: .audio) { return "Audio" }
+        if type.conforms(to: .archive) { return "Archive" }
+        return "Download"
+    }
+
+    /// The row's second line: "<kind> from <host>" for a finished file ("www." dropped; the kind
+    /// alone without a web source); progress, size and state for the others as before.
+    public static func detail(for item: DownloadItem) -> String {
+        guard item.state == .complete else { return DownloadRowPresentation(item).detail }
+        let title = DownloadRowPresentation(item).title
+        let kind = kind(ofFileNamed: item.fileURL?.lastPathComponent ?? title)
+        guard let scheme = item.sourceURL.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              var host = item.sourceURL.host, !host.isEmpty else { return kind }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return "\(kind) from \(host)"
+    }
 }
 
 /// What a download row shows. No UI types, so it is unit-testable. inferred (see the file header).

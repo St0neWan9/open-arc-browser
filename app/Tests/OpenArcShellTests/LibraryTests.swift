@@ -105,34 +105,72 @@ final class LibraryTests: XCTestCase {
                                      spaceID: fixture.home, folderPath: [], reason: .closed, archivedAt: date)
     }
 
-    /// Date groups with an injected clock. Today / Yesterday / Earlier This Week observed;
-    /// Older and the boundaries inferred. Newest first inside a group; empty groups left out.
-    func testArchiveGroupingByDate() {
+    /// B229 (user's Arc screenshots, 2026-11-15): Archived Tabs groups by age ("2 days ago",
+    /// "6 days ago"), newest group first, newest first inside; empty groups left out.
+    func testArchiveGroupingByAge() {
         var ws = fixture.ws
         let now = at("2026-10-21T15:00:00Z") // Wednesday
         archive(SidebarFixture.id(901), title: "Morning", url: "https://a.example/1", at: at("2026-10-21T08:00:00Z"), in: &ws)
         archive(SidebarFixture.id(902), title: "Midnight", url: "https://a.example/2", at: at("2026-10-21T00:00:00Z"), in: &ws)
         archive(SidebarFixture.id(903), title: "Yesterday late", url: "https://b.example", at: at("2026-10-20T23:59:00Z"), in: &ws)
         archive(SidebarFixture.id(904), title: "Monday", url: "https://c.example", at: at("2026-10-19T10:00:00Z"), in: &ws)
-        archive(SidebarFixture.id(905), title: "Sunday", url: "https://d.example", at: at("2026-10-18T00:30:00Z"), in: &ws)
-        archive(SidebarFixture.id(906), title: "Saturday", url: "https://e.example", at: at("2026-10-17T12:00:00Z"), in: &ws)
+        archive(SidebarFixture.id(905), title: "Saturday", url: "https://d.example", at: at("2026-10-17T00:30:00Z"), in: &ws)
+        archive(SidebarFixture.id(906), title: "Two weeks", url: "https://e.example", at: at("2026-10-05T12:00:00Z"), in: &ws)
         var gone = ArchiveItem(id: SidebarFixture.id(907), url: nil, title: "Restored", faviconURL: nil, spaceID: nil,
                                folderPath: [], reason: .closed, archivedAt: at("2026-10-21T09:00:00Z"))
         gone.meta.markDeleted(at: now)
         ws.archive[gone.id] = gone
 
         let groups = LibraryArchive.groups(in: ws, query: "", now: now, calendar: utc)
-        XCTAssertEqual(groups.map(\.group.title), ["Today", "Yesterday", "Earlier This Week", "Older"])
+        XCTAssertEqual(groups.map(\.group.title), ["Today", "Yesterday", "2 days ago", "4 days ago", "2 weeks ago"])
         XCTAssertEqual(groups.map { $0.items.map(\.title) }, [
-            ["Morning", "Midnight"], ["Yesterday late"], ["Monday", "Sunday"], ["Saturday"],
+            ["Morning", "Midnight"], ["Yesterday late"], ["Monday"], ["Saturday"], ["Two weeks"],
         ])
+    }
 
-        // On Sunday the week has just begun: Friday is Older, not Earlier This Week.
-        let sunday = at("2026-10-18T12:00:00Z")
-        XCTAssertEqual(LibraryDateGroup.group(of: at("2026-10-17T12:00:00Z"), now: sunday, calendar: utc), .yesterday)
-        XCTAssertEqual(LibraryDateGroup.group(of: at("2026-10-16T12:00:00Z"), now: sunday, calendar: utc), .older)
-        // A date after `now` (clock skew) counts as Today.
-        XCTAssertEqual(LibraryDateGroup.group(of: at("2026-10-22T12:00:00Z"), now: now, calendar: utc), .today)
+    /// B229: the age labels and their boundaries; Arc showed "4 weeks ago" next to "1 month ago".
+    func testLibraryAgeLabels() {
+        let now = at("2026-11-15T12:00:00Z")
+        func title(_ iso: String) -> String { LibraryAge.of(at(iso), now: now, calendar: utc).title }
+        XCTAssertEqual(title("2026-11-16T09:00:00Z"), "Today", "clock skew counts as today")
+        XCTAssertEqual(title("2026-11-15T00:10:00Z"), "Today")
+        XCTAssertEqual(title("2026-11-14T23:50:00Z"), "Yesterday")
+        XCTAssertEqual(title("2026-11-13T12:00:00Z"), "2 days ago")
+        XCTAssertEqual(title("2026-11-09T12:00:00Z"), "6 days ago")
+        XCTAssertEqual(title("2026-11-08T12:00:00Z"), "1 week ago")
+        XCTAssertEqual(title("2026-11-01T12:00:00Z"), "2 weeks ago")
+        XCTAssertEqual(title("2026-10-17T12:00:00Z"), "4 weeks ago")
+        XCTAssertEqual(title("2026-10-14T12:00:00Z"), "1 month ago")
+        XCTAssertEqual(title("2026-08-01T12:00:00Z"), "3 months ago")
+        XCTAssertEqual(title("2025-10-01T12:00:00Z"), "1 year ago")
+        XCTAssertLessThan(LibraryAge(.weeks, 4), LibraryAge(.months, 1))
+        XCTAssertLessThan(LibraryAge(.days, 6), LibraryAge(.weeks, 1))
+    }
+
+    /// B229: Downloads rows grouped by when they finished (running ones are now), and the second
+    /// line "<kind> from <host>" ("Disk Image from deepseek.com", "PDF", "Download from …").
+    func testDownloadGroupsAndDetailB229() {
+        let now = at("2026-11-15T12:00:00Z")
+        func item(_ id: String, _ name: String, source: String, state: DownloadState, ended: String?) -> DownloadItem {
+            DownloadItem(id: id, profileID: fixture.profile, sourceURL: URL(string: source)!,
+                         fileURL: URL(fileURLWithPath: "/tmp/\(name)"), suggestedFilename: name, state: state,
+                         startDate: at(ended ?? "2026-11-15T11:00:00Z"), endDate: ended.map(at))
+        }
+        let dmg = item("a", "dsh-latest-macos-arm64.dmg", source: "https://www.deepseek.com/d.dmg", state: .complete, ended: "2026-11-01T10:00:00Z")
+        let pdf = item("b", "cb_orderreceipt.pdf", source: "data:application/pdf;base64,AA", state: .complete, ended: "2026-10-25T10:00:00Z")
+        let apk = item("c", "cmfa-2.11.36.apk", source: "https://release-assets.githubusercontent.com/x", state: .complete, ended: "2026-11-02T10:00:00Z")
+        let png = item("d", "hue.png", source: "https://pbs.twimg.com/hue.png", state: .complete, ended: "2026-10-25T09:00:00Z")
+        let running = item("e", "big.zip", source: "https://example.com/big.zip", state: .inProgress, ended: nil)
+
+        XCTAssertEqual(LibraryDownloadList.detail(for: dmg), "Disk Image from deepseek.com")
+        XCTAssertEqual(LibraryDownloadList.detail(for: pdf), "PDF")
+        XCTAssertEqual(LibraryDownloadList.detail(for: apk), "Download from release-assets.githubusercontent.com")
+        XCTAssertEqual(LibraryDownloadList.detail(for: png), "Image from pbs.twimg.com")
+        XCTAssertEqual(LibraryDownloadList.detail(for: running), DownloadRowPresentation(running).detail)
+
+        let groups = LibraryDownloadList.groups([pdf, dmg, running, png, apk], now: now, calendar: utc)
+        XCTAssertEqual(groups.map(\.age.title), ["Today", "1 week ago", "2 weeks ago", "3 weeks ago"])
+        XCTAssertEqual(groups.map { $0.items.map(\.id) }, [["e"], ["c"], ["a"], ["b", "d"]])
     }
 
     /// [06 §8] observed "Search Archive…": filters by title or URL, case-insensitively. inferred matching.

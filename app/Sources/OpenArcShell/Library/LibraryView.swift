@@ -223,7 +223,7 @@ struct LibraryListColumn: View {
 
     var body: some View {
         let text = palette.primaryText.swiftUI
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: LibraryLocalTokens.listHeaderGapAboveFirst) {
             if section.hasFilterButton, library.isFilterPanelOpen, let title = LibraryFilter.title(for: section) {
                 LibraryFilterPanel(library: library, title: title, palette: palette)
             } else if let placeholder = section.searchPlaceholder {
@@ -232,34 +232,58 @@ struct LibraryListColumn: View {
             content(text: text)
             Spacer(minLength: 0)
         }
-        .padding(.top, LibraryLocalTokens.topInset)
+        // Level with the page panel's top, as in Arc (B229 observed); the traffic lights stay in
+        // the rail.
+        .padding(.top, LibraryLocalTokens.listTop)
         .padding(.horizontal, LibraryLocalTokens.listHorizontalPadding)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.list.\(section.rawValue)")
     }
 
+    /// The search field, with the Filter button on its right in Downloads and Archived Tabs (B229,
+    /// Arc observed): both in the window color over the deeper area.
     private func searchRow(_ placeholder: String, text: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            TextField(placeholder, text: Binding(
-                get: { library.searchText[section] ?? "" },
-                set: { library.searchText[section] = $0 }
-            ))
-            .textFieldStyle(.plain)
-            .font(Typography.librarySearch.font)
-            .padding(.horizontal, 12)
-            .frame(height: LibraryLocalTokens.searchFieldHeight)
-            .background(
-                RoundedRectangle(cornerRadius: LibraryLocalTokens.searchFieldCornerRadius)
-                    .fill(palette.windowFills(on: surface).controlFill.swiftUI)
-            )
-            .accessibilityIdentifier("openarc.library.search")
+        let t = LibraryLocalTokens.self
+        let fill = palette.windowBackground.swiftUI
+        let shape = RoundedRectangle(cornerRadius: t.searchFieldCornerRadius, style: .continuous)
+        return HStack(spacing: t.searchFilterGap) {
+            ZStack(alignment: .leading) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: t.searchIconSize, weight: .medium))
+                    .foregroundStyle(text.opacity(Typography.libraryListDetail.opacity))
+                    .position(x: t.searchIconCenterX, y: t.searchFieldHeight / 2)
+                TextField("", text: Binding(
+                    get: { library.searchText[section] ?? "" },
+                    set: { library.searchText[section] = $0 }
+                ), prompt: Text(placeholder).foregroundColor(text.opacity(Typography.libraryListTitle.opacity)))
+                .textFieldStyle(.plain)
+                .font(Typography.librarySearch.font)
+                .foregroundStyle(text)
+                .padding(.leading, t.searchTextX)
+                .padding(.trailing, 8)
+                .accessibilityIdentifier("openarc.library.search")
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: t.searchFieldHeight)
+            .background(shape.fill(fill))
             if section.hasFilterButton {
-                // Opens the Filter panel (B94). [06 §8] Filter, observed.
-                Button(LibraryTexts.filterButton) { library.openFilterPanel() }
-                    .buttonStyle(.plain)
-                    .font(Typography.libraryRowDetail.font)
-                    .foregroundStyle(text.opacity(0.8))
-                    .accessibilityIdentifier("openarc.library.filter")
+                // Opens the Filter panel (B94). [06 §8] Filter, observed; beside the field, B229.
+                Button { library.openFilterPanel() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: t.searchIconSize, weight: .medium))
+                        Text(LibraryTexts.filterButton)
+                            .font(Typography.librarySearch.font)
+                    }
+                    .foregroundStyle(text.opacity(Typography.libraryListTitle.opacity))
+                    .padding(.horizontal, t.filterButtonPadding)
+                    .frame(height: t.searchFieldHeight)
+                    .background(shape.fill(fill))
+                    .contentShape(shape)
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .accessibilityIdentifier("openarc.library.filter")
             }
         }
     }
@@ -296,7 +320,6 @@ struct LibraryArchiveList: View {
     let palette: ThemePalette
 
     var body: some View {
-        let text = palette.primaryText.swiftUI
         let groups = library.archiveGroups
         if groups.isEmpty {
             Text(library.hasArchivedItems ? LibraryTexts.archiveNoMatches : LibraryTexts.archiveEmpty)
@@ -307,13 +330,11 @@ struct LibraryArchiveList: View {
                 .accessibilityIdentifier("openarc.library.archive.empty")
         } else {
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(groups, id: \.group) { group in
-                        Text(group.group.title)
-                            .textStyle(Typography.libraryGroupHeader, ink: palette.chromeInk)
-                            .padding(.top, 6)
+                        LibraryListHeader(title: group.group.title, palette: palette)
                         ForEach(group.items, id: \.id) { item in
-                            LibraryArchiveRow(item: item, iconData: library.faviconImage(for: item), textColor: text, secondary: palette.secondaryText.swiftUI) {
+                            LibraryArchiveRow(item: item, iconData: library.faviconImage(for: item), palette: palette) {
                                 library.restore(item.id)
                             }
                             // Row menu: ours (inferred), the spec records only the click.
@@ -337,33 +358,79 @@ struct LibraryArchiveList: View {
     }
 }
 
+/// A date header of the Downloads and Archived Tabs lists: "2 days ago", 27 pt tall. B229 observed.
+struct LibraryListHeader: View {
+    let title: String
+    let palette: ThemePalette
+
+    var body: some View {
+        Text(title)
+            .font(Typography.libraryListHeader.font)
+            .foregroundStyle(palette.primaryText.swiftUI.opacity(Typography.libraryListHeader.opacity))
+            .lineLimit(1)
+            .padding(.leading, LibraryLocalTokens.listHeaderLeading)
+            .frame(maxWidth: .infinity, minHeight: LibraryLocalTokens.listHeaderHeight, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// A Downloads or Archived Tabs row: icon centered 28.5 pt from the column's left, title and a
+/// gray second line from 51.5 pt, 56 pt tall. B229 observed (user's Arc screenshots).
+struct LibraryListRowLayout<Icon: View, Accessory: View>: View {
+    let title: String
+    let detail: String
+    let palette: ThemePalette
+    @ViewBuilder let icon: () -> Icon
+    /// Controls at the row's end (a running download's buttons); the text gives them room.
+    @ViewBuilder var accessory: () -> Accessory
+
+    var body: some View {
+        let t = LibraryLocalTokens.self
+        let ink = palette.primaryText.swiftUI
+        HStack(spacing: t.listIconTitleGap) {
+            icon().frame(width: t.listIconColumnWidth)
+            VStack(alignment: .leading, spacing: t.listTitleDetailSpacing) {
+                Text(title)
+                    .font(Typography.libraryListTitle.font)
+                    .foregroundStyle(ink.opacity(Typography.libraryListTitle.opacity))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(Typography.libraryListDetail.font)
+                        .foregroundStyle(ink.opacity(Typography.libraryListDetail.opacity))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            Spacer(minLength: 0)
+            accessory()
+        }
+        .frame(height: t.listRowHeight)
+    }
+}
+
+extension LibraryListRowLayout where Accessory == EmptyView {
+    init(title: String, detail: String, palette: ThemePalette, @ViewBuilder icon: @escaping () -> Icon) {
+        self.init(title: title, detail: detail, palette: palette, icon: icon, accessory: { EmptyView() })
+    }
+}
+
 struct LibraryArchiveRow: View {
     let item: ArchiveItem
     /// Cached favicon of the archived page (C9); nil draws the globe.
     var iconData: Data?
-    let textColor: Color
-    let secondary: Color
+    let palette: ThemePalette
     let onRestore: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            SidebarFaviconView(pngData: iconData, size: LibraryLocalTokens.archiveRowIconSize, tint: textColor.opacity(0.7))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.title.isEmpty ? "Untitled" : item.title)
-                    .font(Typography.libraryRowTitle.font)
-                    .foregroundStyle(textColor)
-                    .lineLimit(1)
-                Text(LibraryArchive.displayURL(item.url))
-                    .font(Typography.libraryRowDetail.font)
-                    .foregroundStyle(secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
+        LibraryListRowLayout(title: item.title.isEmpty ? "Untitled" : item.title,
+                             detail: LibraryArchive.displayURL(item.url), palette: palette) {
+            SidebarFaviconView(pngData: iconData, size: LibraryLocalTokens.archiveRowIconSize,
+                               tint: palette.primaryText.swiftUI.opacity(0.7))
         }
-        .padding(.horizontal, 4)
-        .frame(height: LibraryLocalTokens.archiveRowHeight)
         .background(
             RoundedRectangle(cornerRadius: CGFloat(Metrics.Sidebar.selectedRowCornerRadius), style: .continuous)
                 .fill(isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear)

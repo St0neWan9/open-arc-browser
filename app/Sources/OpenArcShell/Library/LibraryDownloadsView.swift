@@ -12,14 +12,18 @@ struct LibraryDownloadsList: View {
     let palette: ThemePalette
 
     var body: some View {
-        let items = library.visibleDownloads
+        let groups = library.downloadGroups
         if downloads.items.isEmpty, let empty = LibrarySection.downloads.emptyState {
             LibraryEmptyStateView(state: empty, isBoosts: false, palette: palette)
         } else {
+            // Grouped by age under date headers, as in Arc (B229 observed).
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(items) { item in
-                        LibraryDownloadRow(item: item, downloads: downloads, palette: palette)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(groups, id: \.age) { group in
+                        LibraryListHeader(title: group.age.title, palette: palette)
+                        ForEach(group.items) { item in
+                            LibraryDownloadRow(item: item, downloads: downloads, palette: palette)
+                        }
                     }
                 }
             }
@@ -28,40 +32,78 @@ struct LibraryDownloadsList: View {
     }
 }
 
+/// A download's icon: the file's Quick Look thumbnail once the file is there (Arc shows page and
+/// image previews, B229 observed), else its Finder icon.
+struct LibraryDownloadIcon: View {
+    let item: DownloadItem
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        let size = LibraryLocalTokens.downloadIconSize
+        Group {
+            if let thumbnail {
+                Image(nsImage: thumbnail).resizable().aspectRatio(contentMode: .fit)
+            } else {
+                Image(nsImage: icon).resizable().aspectRatio(contentMode: .fit)
+            }
+        }
+        .frame(width: size, height: size)
+        .task(id: fileURL) {
+            guard let fileURL else { thumbnail = nil; return }
+            thumbnail = await LibraryMediaThumbnails.shared.thumbnail(for: fileURL, size: CGSize(width: size, height: size))
+        }
+    }
+
+    private var fileURL: URL? {
+        guard item.state == .complete, let url = item.fileURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private var icon: NSImage {
+        if let url = fileURL { return NSWorkspace.shared.icon(forFile: url.path) }
+        return NSWorkspace.shared.icon(for: .data)
+    }
+}
+
 struct LibraryDownloadRow: View {
     let item: DownloadItem
     let downloads: LibraryDownloads
     let palette: ThemePalette
 
+    @State private var isHovering = false
+
     var body: some View {
         let presentation = DownloadRowPresentation(item)
         let text = palette.primaryText.swiftUI
-        HStack(spacing: 6) {
-            Image(nsImage: icon)
-                .resizable()
-                .frame(width: LibraryLocalTokens.archiveRowIconSize, height: LibraryLocalTokens.archiveRowIconSize)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(presentation.title)
-                    .font(Typography.libraryRowTitle.font)
-                    .foregroundStyle(text)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let progress = presentation.progress {
-                    ProgressView(value: progress).controlSize(.mini)
+        LibraryListRowLayout(title: presentation.title, detail: LibraryDownloadList.detail(for: item), palette: palette) {
+            LibraryDownloadIcon(item: item)
+        } accessory: {
+            // A finished file has no buttons (B229, Arc observed; its menu keeps Open and Show in
+            // Finder); a running, paused or held one keeps its controls.
+            if item.state != .complete {
+                HStack(spacing: 6) {
+                    ForEach(presentation.actions, id: \.self) { action in
+                        button(action, text: text)
+                    }
                 }
-                Text(presentation.detail)
-                    .font(Typography.libraryRowDetail.font)
-                    .foregroundStyle(palette.secondaryText.swiftUI)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 4)
-            ForEach(presentation.actions, id: \.self) { action in
-                button(action, text: text)
+                .fixedSize()
+                .padding(.trailing, 6)
             }
         }
-        .padding(.horizontal, 8)
-        .frame(minHeight: LibraryLocalTokens.archiveRowHeight)
+        .overlay(alignment: .bottom) {
+            if let progress = presentation.progress {
+                ProgressView(value: progress)
+                    .controlSize(.mini)
+                    .padding(.leading, LibraryLocalTokens.listIconColumnWidth + LibraryLocalTokens.listIconTitleGap)
+                    .padding(.trailing, 8)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: CGFloat(Metrics.Sidebar.selectedRowCornerRadius), style: .continuous)
+                .fill(isHovering ? Color.black.opacity(SidebarLocalTokens.rowHoverBlackOpacity) : .clear)
+        )
         .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
         .onTapGesture(count: 2) { if item.state == .complete, let url = item.fileURL { NSWorkspace.shared.open(url) } }
         .contextMenu {
             if item.state == .complete, let url = item.fileURL {
@@ -76,13 +118,6 @@ struct LibraryDownloadRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.download")
-    }
-
-    private var icon: NSImage {
-        if let url = item.fileURL, FileManager.default.fileExists(atPath: url.path) {
-            return NSWorkspace.shared.icon(forFile: url.path)
-        }
-        return NSWorkspace.shared.icon(for: .data)
     }
 
     @ViewBuilder
