@@ -68,11 +68,9 @@ struct LibraryRail: View {
     var itemsTop: CGFloat = LibraryLocalTokens.topInset
     @Environment(\.windowSurface) private var surface
 
-    /// Selected section block: window × 0.90; on a see-through window the same as a 10 % black
-    /// layer (B64, [07 §8.4]).
+    /// Selected section block (`LibraryLocalTokens.railSelectedFill`).
     private var railSelectedFill: RGBAColor {
-        surface.isTranslucent ? RGBAColor(hex: 0x000000, alpha: 1 - LibraryLocalTokens.railSelectedShade)
-            : ThemeDerivation.shade(palette.windowBackground, by: LibraryLocalTokens.railSelectedShade)
+        LibraryLocalTokens.railSelectedFill(palette: palette, translucent: surface.isTranslucent)
     }
 
     var body: some View {
@@ -86,7 +84,7 @@ struct LibraryRail: View {
                 Button { model.exitLibrary() } label: {
                     Image(systemName: "arrow.left")
                         .font(.system(size: LibraryLocalTokens.railFooterIconSize, weight: .semibold))
-                        .foregroundStyle(text.opacity(0.8))
+                        .foregroundStyle(text.opacity(LibraryLocalTokens.railUnselectedInkOpacity))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -96,30 +94,37 @@ struct LibraryRail: View {
                 // Gift (sharing the app) is out of scope: shown, no action.
                 Image(systemName: "gift")
                     .font(.system(size: LibraryLocalTokens.railFooterIconSize))
-                    .foregroundStyle(text.opacity(0.6))
+                    .foregroundStyle(text.opacity(LibraryLocalTokens.railUnselectedInkOpacity))
                     .accessibilityLabel("Gift")
             }
             .padding(.horizontal, LibraryLocalTokens.railFooterPadding)
-            .padding(.bottom, LibraryLocalTokens.railFooterPadding)
+            .padding(.bottom, LibraryLocalTokens.railFooterBottomPadding)
         }
         .padding(.top, itemsTop)
-        .padding(.leading, CGFloat(Metrics.Library.railButtonLeading))
-        .frame(width: LibraryLocalTokens.railWidth, alignment: .leading)
+        // The buttons sit in the middle of the rail, 8 pt from both edges (B225, Arc observed);
+        // the footer row spans the rail.
+        .frame(width: LibraryLocalTokens.railWidth)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.rail")
     }
 
     private func item(_ section: LibrarySection, text: Color) -> some View {
         let isSelected = library.section == section
-        return VStack(spacing: 6) {
+        let t = LibraryLocalTokens.self
+        // Icon centered 31.5 pt and label 56 pt below the button's top; the selected button in
+        // full ink, the others dimmed. B225 observed (user's Arc screenshot).
+        return VStack(spacing: t.railLabelCenterY - t.railIconCenterY - t.railIconBoxHeight / 2 - t.railLabelBoxHeight / 2) {
             Image(systemName: section.symbolName)
-                .font(.system(size: LibraryLocalTokens.railIconSize))
+                .font(.system(size: t.railIconSize))
+                .frame(height: t.railIconBoxHeight)
             Text(section.title)
                 .font(Typography.libraryRailLabel.font)
                 .lineLimit(1)
+                .frame(height: t.railLabelBoxHeight)
         }
-        .foregroundStyle(text)
-        .frame(width: LibraryLocalTokens.railItemSize.width, height: LibraryLocalTokens.railItemSize.height)
+        .padding(.top, t.railIconCenterY - t.railIconBoxHeight / 2)
+        .foregroundStyle(isSelected ? text : text.opacity(t.railUnselectedInkOpacity))
+        .frame(width: t.railItemSize.width, height: t.railItemSize.height, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: LibraryLocalTokens.railItemCornerRadius, style: .continuous)
                 .fill(isSelected ? railSelectedFill.swiftUI : .clear)

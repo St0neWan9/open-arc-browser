@@ -151,14 +151,41 @@ enum LibraryLocalTokens {
     static var railItemSize: CGSize { CGSize(width: Metrics.Library.railButtonSize.width, height: Metrics.Library.railButtonSize.height) }
     static var railItemCornerRadius: CGFloat { CGFloat(Metrics.Library.railCornerRadius) }
     static var railItemSpacing: CGFloat { CGFloat(Metrics.Library.railButtonPitch - Metrics.Library.railButtonSize.height) }
-    /// Rail icon size. unknown.
-    static let railIconSize: CGFloat = 20
-    /// Darkening of the selected rail block (window × factor). [07 §6] observed "window color
-    /// darkened"; factor inferred (the control fill rule, × 0.96, is too faint: × 0.90).
+    /// Rail icon: ≈ 22 pt symbols (Arc's are 21–26 pt wide), centered 31.5 pt below the button's
+    /// top; the label centered 56 pt below it. B225 observed (user's Arc screenshot, 2026-11-15);
+    /// the box heights are ours.
+    static let railIconSize: CGFloat = 22
+    static let railIconCenterY: CGFloat = 31.5
+    static let railLabelCenterY: CGFloat = 56
+    static let railIconBoxHeight: CGFloat = 27
+    static let railLabelBoxHeight: CGFloat = 16
+    /// Buttons other than the selected one draw their icon and label at this share of the ink
+    /// (#C2C4FE on #5A65FB ≈ 63 % white; the selected one ≈ full white). B225 observed.
+    static let railUnselectedInkOpacity: Double = 0.63
+    /// Darkening of the selected rail block (window × factor) under dark ink. [07 §6] observed
+    /// "window color darkened"; factor inferred (the control fill rule, × 0.96, is too faint: × 0.90).
     static let railSelectedShade: Double = 0.90
-    /// Bottom "←" and gift icons. unknown.
-    static let railFooterIconSize: CGFloat = 14
-    static let railFooterPadding: CGFloat = 12
+    /// Under light ink the selected block is lighter instead: ≈ 9 % white (#6770FB on #5662FB).
+    /// B225 observed (user's Arc screenshot, blue Space with white ink).
+    static let railSelectedLightInkWhite: Double = 0.09
+
+    /// The selected rail block: lighter under light ink, darker under dark ink; a layer on a
+    /// see-through window, an opaque color otherwise (B64, [07 §8.4]).
+    static func railSelectedFill(palette: ThemePalette, translucent: Bool) -> RGBAColor {
+        let ink = palette.primaryText
+        let isLightInk = 0.2126 * ink.red + 0.7152 * ink.green + 0.0722 * ink.blue > 0.5
+        if isLightInk {
+            return translucent ? RGBAColor(hex: 0xFFFFFF, alpha: railSelectedLightInkWhite)
+                : ThemeDerivation.mix(palette.windowBackground, RGBAColor(hex: 0xFFFFFF), amount: railSelectedLightInkWhite)
+        }
+        return translucent ? RGBAColor(hex: 0x000000, alpha: 1 - railSelectedShade)
+            : ThemeDerivation.shade(palette.windowBackground, by: railSelectedShade)
+    }
+    /// Bottom "←" and gift icons: ≈ 16 pt, centered 24 pt from the rail's left and right edges and
+    /// 22 pt above the window's bottom, in the dimmed ink. B225 observed (user's Arc screenshot).
+    static let railFooterIconSize: CGFloat = 16
+    static let railFooterPadding: CGFloat = 16
+    static let railFooterBottomPadding: CGFloat = 14
 
     /// List column paddings and rows. unknown.
     static let listHorizontalPadding: CGFloat = 8

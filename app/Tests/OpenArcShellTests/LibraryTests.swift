@@ -348,6 +348,28 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(LibraryLocalTokens.boardColumnFill(for: opaque), opaque.windowBackground)
     }
 
+    /// B225 (user's Arc screenshot, 2026-11-15): the selected rail block sits 8 pt from both rail
+    /// edges; under light ink it is ≈ 9 % lighter, under dark ink 10 % darker.
+    func testRailSelectedBlockB225() {
+        let layout = LibraryLayout(windowSize: CGSize(width: 1279, height: 1047))
+        let block = layout.railItemFrame(.spaces)
+        XCTAssertEqual(block.minX, 8)
+        XCTAssertEqual(layout.railFrame.maxX - block.maxX, 8)
+
+        var light = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .light, colors: [RGBAColor(hex: 0x5662FB)]),
+                                            appearance: .light)
+        light.windowBackground = RGBAColor(hex: 0x5662FB)
+        light.primaryText = RGBAColor(hex: 0xFFFFFF)
+        let lifted = LibraryLocalTokens.railSelectedFill(palette: light, translucent: false)
+        XCTAssertEqual(lifted.red * 255, 0x67, accuracy: 2)
+        XCTAssertEqual(lifted.green * 255, 0x70, accuracy: 2)
+        XCTAssertEqual(LibraryLocalTokens.railSelectedFill(palette: light, translucent: true), RGBAColor(hex: 0xFFFFFF, alpha: 0.09))
+
+        var dark = light
+        dark.primaryText = RGBAColor(hex: 0x1C1C1E)
+        XCTAssertEqual(LibraryLocalTokens.railSelectedFill(palette: dark, translucent: true), RGBAColor(hex: 0x000000, alpha: 1 - 0.90))
+    }
+
     /// Every section builds and lays out inside the full window.
     func testEverySectionRenders() {
         let model = makeModel()
