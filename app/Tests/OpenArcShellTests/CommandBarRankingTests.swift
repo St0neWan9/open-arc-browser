@@ -83,7 +83,7 @@ final class CommandBarRankingTests: XCTestCase {
         XCTAssertEqual(CommandBarRanker.textScore(query: "swift.org/", title: "Welcome", url: url), 950)
     }
 
-    /// B235 (user 2026-11-20): a tab on the typed host but another page of it ("example.com" typed,
+    /// B236 (user 2026-11-20): a tab on the typed host but another page of it ("example.com" typed,
     /// tab on "example.com/docs") scores below the typed URL, so Return opens the typed address.
     func testHostMatchRanksBelowTypedURL() {
         let tab = CommandBarRanker.textScore(query: "swift.org", title: "Docs", url: URL(string: "https://swift.org/documentation")!)
@@ -126,7 +126,7 @@ final class CommandBarRankingTests: XCTestCase {
         XCTAssertFalse(ranked.contains { $0.kind == .typedURL }, "typed URL collapses into the open tab")
     }
 
-    /// B235 (user 2026-11-20): in ⌘L on ".../documentation", deleting the path and pressing Return
+    /// B236 (user 2026-11-20): in ⌘L on ".../documentation", deleting the path and pressing Return
     /// goes to the root address. The tab on another page of the site keeps its row below it, so
     /// Return on the selected row no longer switches to the tab (and reloads it).
     func testTypedHostGoesToTheRootInsteadOfSwitchingToTheTabOnAnotherPage() async throws {
