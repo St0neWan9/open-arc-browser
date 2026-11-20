@@ -1,0 +1,17 @@
+{
+  "type": "org.openarc.phishing-list",
+  "format": 1,
+  "serial": 20261120055519,
+  "version": "20261120-350e6183e5a5",
+  "published": "2026-11-20T05:55:19Z",
+  "ruleset": {
+    "path": "lists/20261120-350e6183e5a5/list.bin",
+    "size": 3136584,
+    "sha256": "350e6183e5a5fda088e27fcb62b68cb03d84641c366a6fe168836bee131b074e"
+  },
+  "attribution": {
+    "path": "lists/20261120-350e6183e5a5/ATTRIBUTION",
+    "size": 317,
+    "sha256": "e8af2a0a6c4b1f629cedaf457a9708901612346baae2d617f21375c6cb121fd2"
+  }
+}
