@@ -127,6 +127,10 @@ public final class CommandBarViewModel: ObservableObject {
     /// list then behaves as for an empty query (inferred; otherwise the viewed tab would match itself).
     public private(set) var isPrefillUnedited = false
 
+    /// The user's own text while the field previews the row moved to with the arrow keys (B238);
+    /// nil otherwise. Sources, ranking and freshness keep using it.
+    private var typedTextUnderPreview: String?
+
     private var isSettingTextProgrammatically = false
     private var generation = 0
     private var refreshTask: Task<Void, Never>?
@@ -167,6 +171,7 @@ public final class CommandBarViewModel: ObservableObject {
         inlineCompletion = nil
         isInlineCompletionSuppressed = false
         siteSearch = nil
+        typedTextUnderPreview = nil
         setTextProgrammatically("")
         isPrefillUnedited = false
         requestMissingIcons()
@@ -190,6 +195,7 @@ public final class CommandBarViewModel: ObservableObject {
         inlineCompletion = nil
         isInlineCompletionSuppressed = false
         siteSearch = nil
+        typedTextUnderPreview = nil
         setTextProgrammatically("")
         isPrefillUnedited = false
     }
@@ -197,7 +203,7 @@ public final class CommandBarViewModel: ObservableObject {
     // MARK: Results
 
     /// The text sources and ranking see: empty while the prefill is unedited.
-    public var effectiveQuery: String { isPrefillUnedited ? "" : queryText }
+    public var effectiveQuery: String { isPrefillUnedited ? "" : (typedTextUnderPreview ?? queryText) }
 
     public var selectedResult: CommandBarResult? {
         results.indices.contains(selectedIndex) ? results[selectedIndex] : nil
@@ -233,6 +239,7 @@ public final class CommandBarViewModel: ObservableObject {
         let kept = chosenID.flatMap { id in results.firstIndex { $0.id == id } }
         selectedIndex = kept ?? 0
         isSelectionUserChosen = kept != nil
+        if kept == nil { previewSelectedRow() }
         updateInlineCompletion()
     }
 
@@ -307,6 +314,7 @@ public final class CommandBarViewModel: ObservableObject {
 
     private func queryTextDidChange(from oldText: String) {
         guard !isSettingTextProgrammatically else { return }
+        typedTextUnderPreview = nil
         isPrefillUnedited = false
         selectedIndex = 0
         isSelectionUserChosen = false
@@ -340,8 +348,37 @@ public final class CommandBarViewModel: ObservableObject {
         guard !results.isEmpty else { return }
         let count = results.count
         selectedIndex = ((selectedIndex + delta) % count + count) % count
-        isSelectionUserChosen = true
+        // Back on the first row is the untouched state: the typed text, Return opens a typed
+        // address (B237).
+        isSelectionUserChosen = selectedIndex != 0
+        previewSelectedRow()
         updateInlineCompletion()
+    }
+
+    /// The field shows the address of the row the arrow keys moved to; back on the first row it
+    /// shows the typed text again (B238, user 2026-11-20: Arc's rule). A row without an address
+    /// (command, Space) leaves the typed text; a search row shows its query. inferred beyond the
+    /// user's description.
+    private func previewSelectedRow() {
+        let typed = typedTextUnderPreview ?? queryText
+        guard selectedIndex != 0, let row = selectedResult, let text = Self.previewText(of: row) else {
+            if let saved = typedTextUnderPreview {
+                typedTextUnderPreview = nil
+                setTextProgrammatically(saved)
+            }
+            return
+        }
+        typedTextUnderPreview = typed
+        setTextProgrammatically(text)
+    }
+
+    /// What the field shows for a row moved to; nil keeps the typed text.
+    static func previewText(of row: CommandBarResult) -> String? {
+        switch row.kind {
+        case .command, .space, .moveTabToSpace: return nil
+        case .webSearch, .searchSuggestion: return row.completion
+        default: return row.url?.absoluteString ?? row.completion
+        }
     }
 
     /// Selects a row (mouse click / tests).
@@ -413,6 +450,7 @@ public final class CommandBarViewModel: ObservableObject {
         inlineCompletion = nil
         isInlineCompletionSuppressed = false
         isPrefillUnedited = false
+        typedTextUnderPreview = nil
         setTextProgrammatically("")
         results = []
         resultsQuery = nil

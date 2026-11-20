@@ -95,9 +95,46 @@ final class CommandBarViewModelTests: XCTestCase {
         XCTAssertEqual(model.activate(), .switchToTab(tabID: world.tabIDs["GitHub"]!))
 
         await CommandBarFixtures.type(model, "github.com")
+        XCTAssertGreaterThan(model.results.count, 1)
         model.moveSelection(by: 1)
+        XCTAssertEqual(model.activate(), model.results[1].action)
+        // Back on the first row is the untouched state again (B238): the typed address.
         model.moveSelection(by: -1)
-        XCTAssertEqual(model.activate(), .switchToTab(tabID: world.tabIDs["GitHub"]!))
+        XCTAssertEqual(model.activate(), .openURL(URL(string: "https://github.com")!, target: .currentTab))
+    }
+
+    /// B238 (user 2026-11-20, Arc's rule): the arrow keys put the chosen row's address in the field
+    /// and Return opens that row; back on the first row the typed text returns.
+    func testArrowKeysShowTheChosenRowsAddress() async throws {
+        let world = try CommandBarFixtures.world()
+        let model = CommandBarFixtures.viewModel(world, mode: .currentTab, currentTab: "GitHub")
+        await CommandBarFixtures.open(model, world: world, mode: .currentTab, currentTab: "GitHub")
+        await CommandBarFixtures.type(model, "example")
+        let rows = model.results
+        let index = try XCTUnwrap(rows.indices.dropFirst().first { rows[$0].kind.isTab })
+        let row = rows[index]
+        for _ in 0..<index { model.handle(.down) }
+        XCTAssertEqual(model.queryText, row.url?.absoluteString)
+        XCTAssertEqual(model.effectiveQuery, "example", "sources still see the typed text")
+        XCTAssertEqual(model.results, rows, "the preview does not search again")
+        XCTAssertEqual(model.activate(), row.action)
+
+        for _ in 0..<index { model.handle(.up) }
+        XCTAssertEqual(model.queryText, "example")
+        XCTAssertEqual(model.activate(), rows[0].action)
+    }
+
+    /// B238: editing the previewed address makes it the user's text (a new search from it).
+    func testEditingThePreviewedAddressKeepsIt() async throws {
+        let world = try CommandBarFixtures.world()
+        let model = CommandBarFixtures.viewModel(world, mode: .currentTab, currentTab: "GitHub")
+        await CommandBarFixtures.open(model, world: world, mode: .currentTab, currentTab: "GitHub")
+        await CommandBarFixtures.type(model, "example")
+        let index = try XCTUnwrap(model.results.indices.dropFirst().first { model.results[$0].url != nil })
+        for _ in 0..<index { model.handle(.down) }
+        await CommandBarFixtures.type(model, "https://news.example.com/sports")
+        XCTAssertEqual(model.effectiveQuery, "https://news.example.com/sports")
+        XCTAssertEqual(model.activate(), .openURL(URL(string: "https://news.example.com/sports")!, target: .currentTab))
     }
 
     /// [05 §command bar] observed: open tabs are "Switch to Tab" candidates; the same action in both modes.
