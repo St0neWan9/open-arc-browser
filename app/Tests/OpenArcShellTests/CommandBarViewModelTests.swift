@@ -71,6 +71,35 @@ final class CommandBarViewModelTests: XCTestCase {
         XCTAssertEqual(model.activate(), .searchWeb(query: "purple elephants", target: .currentTab))
     }
 
+    /// B237 (user 2026-11-20): Return opens the address in the field, whatever row ranks first:
+    /// the root of the current page's site, and an address an open tab already shows.
+    func testReturnOpensTheTypedAddressNotTheFirstRow() async throws {
+        let world = try CommandBarFixtures.world()
+        let current = "Apple Developer Documentation"
+        let model = CommandBarFixtures.viewModel(world, mode: .currentTab, currentTab: current)
+        await CommandBarFixtures.open(model, world: world, mode: .currentTab, currentTab: current)
+        await CommandBarFixtures.type(model, "https://developer.apple.com")
+        XCTAssertEqual(model.handle(.returnKey), .activate(.openURL(URL(string: "https://developer.apple.com")!, target: .currentTab)))
+
+        await CommandBarFixtures.type(model, "github.com")
+        XCTAssertEqual(model.selectedResult?.action, .switchToTab(tabID: world.tabIDs["GitHub"]!), "the tab still ranks first")
+        XCTAssertEqual(model.activate(), .openURL(URL(string: "https://github.com")!, target: .currentTab))
+    }
+
+    /// B237: a row the user moved to with the arrow keys is what Return opens; the unedited ⌘L
+    /// prefill still reloads the page (B221).
+    func testChosenRowAndUneditedPrefillKeepTheirRow() async throws {
+        let world = try CommandBarFixtures.world()
+        let model = CommandBarFixtures.viewModel(world, mode: .currentTab, currentTab: "GitHub")
+        await CommandBarFixtures.open(model, world: world, mode: .currentTab, currentTab: "GitHub")
+        XCTAssertEqual(model.activate(), .switchToTab(tabID: world.tabIDs["GitHub"]!))
+
+        await CommandBarFixtures.type(model, "github.com")
+        model.moveSelection(by: 1)
+        model.moveSelection(by: -1)
+        XCTAssertEqual(model.activate(), .switchToTab(tabID: world.tabIDs["GitHub"]!))
+    }
+
     /// [05 §command bar] observed: open tabs are "Switch to Tab" candidates; the same action in both modes.
     func testSwitchToTabCarriesTabNodeIDInBothModes() async throws {
         let world = try CommandBarFixtures.world()

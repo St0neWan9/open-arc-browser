@@ -441,6 +441,10 @@ public final class CommandBarViewModel: ObservableObject {
         if let index {
             return results.indices.contains(index) ? results[index].action : nil
         }
+        // An address the user typed is opened as typed, whatever the list ranks first, unless they
+        // picked a row with the arrow keys or a site completion fills the field (B237, user
+        // 2026-11-20: "Return uses the address in the field, never the first result").
+        if let typed = typedAddressAction() { return typed }
         if resultsAreFresh, let selected = selectedResult { return selected.action }
         // Return with a completion up opens the completed site even before the list caught up
         // with the last keystroke. [05 §命令栏] observed (Return opens the site), B128.
@@ -448,6 +452,15 @@ public final class CommandBarViewModel: ObservableObject {
             return row.action
         }
         return fallbackAction()
+    }
+
+    /// "Open what was typed" for an edited field holding an address, when no row was chosen and no
+    /// completion is up; nil otherwise. The unedited ⌘L prefill keeps its first row (the page
+    /// itself, reloaded, B221). B237.
+    private func typedAddressAction() -> CommandBarAction? {
+        guard !isPrefillUnedited, !isSelectionUserChosen, inlineCompletion == nil,
+              case .url(let url) = CommandBarInputClassifier.classify(effectiveQuery) else { return nil }
+        return .openURL(url, target: mode.openTarget)
     }
 
     /// Action derived from the raw text alone.
