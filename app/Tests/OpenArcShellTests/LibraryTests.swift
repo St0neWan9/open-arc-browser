@@ -305,6 +305,20 @@ final class LibraryTests: XCTestCase {
 
     /// B228 (user, 2026-11-15: the cards could not be dragged): the dragged column follows the
     /// pointer, the ones it passes make room, and it lands in the nearest slot within the board.
+    /// B232: a column held near the board's edge scrolls it, faster closer to the edge; the board
+    /// scrolling adds to the column's travel.
+    func testEdgeScrollB232() {
+        let zone = LibraryBoard.edgeScrollZone, top = LibraryBoard.edgeScrollMaxStep
+        XCTAssertEqual(LibraryBoard.edgeScrollStep(pointerX: 600, minX: 100, maxX: 1200), 0, "middle: no scroll")
+        XCTAssertEqual(LibraryBoard.edgeScrollStep(pointerX: 100, minX: 100, maxX: 1200), -top, "left edge: full speed left")
+        XCTAssertEqual(LibraryBoard.edgeScrollStep(pointerX: 1200 - zone / 2, minX: 100, maxX: 1200), top / 2, accuracy: 0.001)
+        XCTAssertEqual(LibraryBoard.edgeScrollStep(pointerX: 1500, minX: 100, maxX: 1200), top, "past the edge: capped")
+        XCTAssertEqual(LibraryBoard.edgeScrollStep(pointerX: 120, minX: 100, maxX: 200), 0, "too narrow to scroll")
+        var drag = LibraryBoardDrag(id: UUID(), translation: 300)
+        drag.scrolled = 264
+        XCTAssertEqual(drag.travel, 564)
+    }
+
     func testColumnDragMathB228() {
         let a = UUID(), b = UUID(), c = UUID(), d = UUID()
         let pitch: CGFloat = 264

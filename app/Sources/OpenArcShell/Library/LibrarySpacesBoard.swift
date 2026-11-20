@@ -11,7 +11,50 @@ import OpenArcDesign
 /// A column being moved by its drag handle: which one, and how far the pointer went (B228).
 struct LibraryBoardDrag: Equatable {
     var id: UUID
+    /// Pointer travel since the press.
     var translation: CGFloat
+    /// Where the pointer is, in window coordinates (for scrolling at the board's edges).
+    var pointerX: CGFloat = 0
+    /// How far the board scrolled since the press (B232): the column moves with the content, so
+    /// this adds to the pointer's travel.
+    var scrolled: CGFloat = 0
+
+    /// The column's travel along the board.
+    var travel: CGFloat { translation + scrolled }
+}
+
+/// Scrolls the board's AppKit scroll view while a column is held near an edge (B232). The board is a
+/// SwiftUI ScrollView; macOS 14 has no offset-based scroll position, so this reaches the
+/// NSScrollView under it.
+@MainActor
+final class LibraryBoardScroller {
+    weak var scrollView: NSScrollView?
+
+    /// Scrolls by `delta` points (clamped to the content); returns how far it actually moved.
+    func scroll(by delta: CGFloat) -> CGFloat {
+        guard let scrollView, let document = scrollView.documentView else { return 0 }
+        let clip = scrollView.contentView
+        let maxX = max(0, document.frame.width - clip.bounds.width)
+        let old = clip.bounds.origin.x
+        let new = min(max(old + delta, 0), maxX)
+        guard new != old else { return 0 }
+        clip.scroll(to: NSPoint(x: new, y: clip.bounds.origin.y))
+        scrollView.reflectScrolledClipView(clip)
+        return new - old
+    }
+}
+
+/// Finds the NSScrollView that hosts it.
+private struct LibraryBoardScrollViewProbe: NSViewRepresentable {
+    let scroller: LibraryBoardScroller
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { [weak nsView] in
+            MainActor.assumeIsolated { if let found = nsView?.enclosingScrollView { scroller.scrollView = found } }
+        }
+    }
 }
 
 struct LibrarySpacesBoard: View {
@@ -21,23 +64,34 @@ struct LibrarySpacesBoard: View {
 
     /// The column following the pointer while its handle is dragged; nil otherwise.
     @State private var drag: LibraryBoardDrag?
+    @State private var scroller = LibraryBoardScroller()
+    /// The board's visible frame in window coordinates.
+    @State private var visibleFrame: CGRect = .zero
+    @State private var edgeScroll: Task<Void, Never>?
 
     var body: some View {
         let t = LibraryLocalTokens.self
         let columns = library.boardColumns
         let pitch = t.boardColumnWidth + t.boardColumnSpacing
         let from = drag.flatMap { d in columns.firstIndex { $0.id == d.id } }
-        let to = from.map { LibraryBoard.reorderIndex(from: $0, translation: drag?.translation ?? 0, pitch: pitch, count: columns.count) }
+        let travel = drag?.travel ?? 0
+        let to = from.map { LibraryBoard.reorderIndex(from: $0, translation: travel, pitch: pitch, count: columns.count) }
         ScrollView(.horizontal, showsIndicators: true) {
             HStack(alignment: .top, spacing: t.boardColumnSpacing) {
                 ForEach(Array(columns.enumerated()), id: \.element.id) { index, column in
                     let isLifted = drag?.id == column.id
                     LibraryBoardColumnView(model: model, sidebar: sidebar, library: library, column: column, isLifted: isLifted,
-                                           onHandleDrag: { drag = LibraryBoardDrag(id: column.id, translation: $0) },
-                                           onHandleDrop: { drop(column.id, translation: $0, columns: columns, pitch: pitch) })
+                                           onHandleDrag: { translation, pointerX in
+                                               var next = drag?.id == column.id ? drag! : LibraryBoardDrag(id: column.id, translation: 0)
+                                               next.translation = translation
+                                               next.pointerX = pointerX
+                                               drag = next
+                                               startEdgeScrollIfNeeded()
+                                           },
+                                           onHandleDrop: { _ in drop(column.id, columns: columns, pitch: pitch) })
                         .frame(width: t.boardColumnWidth)
                         // The dragged column follows the pointer; the ones it passes make room.
-                        .offset(x: from.flatMap { f in to.map { LibraryBoard.dragOffset(index: index, from: f, to: $0, translation: drag?.translation ?? 0, pitch: pitch) } } ?? 0)
+                        .offset(x: from.flatMap { f in to.map { LibraryBoard.dragOffset(index: index, from: f, to: $0, translation: travel, pitch: pitch) } } ?? 0)
                         .animation(isLifted ? nil : ShellMotion.favoriteMakeRoom, value: to)
                         .zIndex(isLifted ? 1 : 0)
                 }
@@ -48,15 +102,43 @@ struct LibrarySpacesBoard: View {
             .padding(.top, t.boardTop)
             .padding(.bottom, t.boardBottom)
             .frame(maxHeight: .infinity, alignment: .top)
+            .background(LibraryBoardScrollViewProbe(scroller: scroller))
         }
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { visibleFrame = proxy.frame(in: .global) }
+                .onChange(of: proxy.frame(in: .global)) { _, frame in visibleFrame = frame }
+        })
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.library.spacesBoard")
     }
 
+    /// While the pointer holds a column near the board's left or right edge, the board scrolls
+    /// that way, faster the closer it gets (B232, user 2026-11-15; speeds inferred). The page
+    /// panel's strip at the right edge counts as outside.
+    private func startEdgeScrollIfNeeded() {
+        guard edgeScroll == nil else { return }
+        edgeScroll = Task { @MainActor in
+            while !Task.isCancelled, let current = drag {
+                let right = visibleFrame.maxX - LibraryLocalTokens.pagePeekVisibleWidth
+                let step = LibraryBoard.edgeScrollStep(pointerX: current.pointerX, minX: visibleFrame.minX, maxX: right)
+                if step == 0 { break }
+                let moved = scroller.scroll(by: step)
+                if moved == 0 { break }
+                drag?.scrolled += moved
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+            edgeScroll = nil
+        }
+    }
+
     /// The handle was let go: the column takes the slot nearest the pointer and settles there.
-    private func drop(_ id: UUID, translation: CGFloat, columns: [LibraryBoardColumn], pitch: CGFloat) {
+    private func drop(_ id: UUID, columns: [LibraryBoardColumn], pitch: CGFloat) {
+        edgeScroll?.cancel()
+        edgeScroll = nil
+        let travel = drag?.travel ?? 0
         guard let from = columns.firstIndex(where: { $0.id == id }) else { drag = nil; return }
-        let to = LibraryBoard.reorderIndex(from: from, translation: translation, pitch: pitch, count: columns.count)
+        let to = LibraryBoard.reorderIndex(from: from, translation: travel, pitch: pitch, count: columns.count)
         withAnimation(ShellMotion.favoriteMakeRoom) {
             library.moveColumn(from: from, to: to)
             drag = nil
@@ -71,8 +153,9 @@ struct LibraryBoardColumnView: View {
     let column: LibraryBoardColumn
     /// Being dragged by its handle: lifted above the others with a deeper shadow (inferred).
     var isLifted = false
-    /// The handle moved by this much (pointer travel along the board).
-    var onHandleDrag: (CGFloat) -> Void = { _ in }
+    /// The handle moved by this much (pointer travel along the board), the pointer at this x in
+    /// window coordinates.
+    var onHandleDrag: (CGFloat, CGFloat) -> Void = { _, _ in }
     /// The handle was let go after moving this much.
     var onHandleDrop: (CGFloat) -> Void = { _ in }
 
@@ -146,7 +229,7 @@ struct LibraryBoardColumnView: View {
                 // system drag and drop only moved a small icon and needed a drop on a column).
                 .gesture(
                     DragGesture(minimumDistance: 2, coordinateSpace: .global)
-                        .onChanged { onHandleDrag($0.translation.width) }
+                        .onChanged { onHandleDrag($0.translation.width, $0.location.x) }
                         .onEnded { onHandleDrop($0.translation.width) }
                 )
                 .onHover { inside in

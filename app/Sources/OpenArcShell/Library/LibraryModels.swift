@@ -520,6 +520,25 @@ enum LibraryBoard {
         return min(max(from + Int((translation / pitch).rounded()), 0), count - 1)
     }
 
+    /// The edge zone of the board where a held column scrolls it, and the fastest step per frame
+    /// (at the very edge). B232 inferred.
+    static let edgeScrollZone: CGFloat = 80
+    static let edgeScrollMaxStep: CGFloat = 18
+
+    /// How far the board scrolls this frame for a pointer at `pointerX` over a board spanning
+    /// `minX`…`maxX`: negative near the left edge, positive near the right one, growing toward the
+    /// edge (and past it); 0 elsewhere.
+    static func edgeScrollStep(pointerX: CGFloat, minX: CGFloat, maxX: CGFloat) -> CGFloat {
+        guard maxX - minX > 2 * edgeScrollZone else { return 0 }
+        if pointerX < minX + edgeScrollZone {
+            return -edgeScrollMaxStep * min(1, (minX + edgeScrollZone - pointerX) / edgeScrollZone)
+        }
+        if pointerX > maxX - edgeScrollZone {
+            return edgeScrollMaxStep * min(1, (pointerX - (maxX - edgeScrollZone)) / edgeScrollZone)
+        }
+        return 0
+    }
+
     /// How far a column is drawn from its slot while another one is dragged: the dragged column by
     /// the pointer's travel, the ones between its slot and the target by one pitch the other way.
     static func dragOffset(index: Int, from: Int, to: Int, translation: CGFloat, pitch: CGFloat) -> CGFloat {
