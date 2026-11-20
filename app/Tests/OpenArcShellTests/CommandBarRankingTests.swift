@@ -83,6 +83,14 @@ final class CommandBarRankingTests: XCTestCase {
         XCTAssertEqual(CommandBarRanker.textScore(query: "swift.org/", title: "Welcome", url: url), 950)
     }
 
+    /// B235 (user 2026-11-20): a tab on the typed host but another page of it ("example.com" typed,
+    /// tab on "example.com/docs") scores below the typed URL, so Return opens the typed address.
+    func testHostMatchRanksBelowTypedURL() {
+        let tab = CommandBarRanker.textScore(query: "swift.org", title: "Docs", url: URL(string: "https://swift.org/documentation")!)
+        XCTAssertEqual(tab, 850)
+        XCTAssertLessThan(tab!, 900)
+    }
+
     /// [05 §command bar] ranking, inferred.
     func testMatchingIsCaseAndDiacriticInsensitive() {
         XCTAssertEqual(CommandBarRanker.textScore(query: "CAFE", title: "Café", url: nil), 1000)
@@ -116,6 +124,23 @@ final class CommandBarRankingTests: XCTestCase {
         ranked = CommandBarRanker.rank(all, context: context("news.example.com", space: world.homeSpace))
         XCTAssertEqual(ranked.first?.title, "Example News")
         XCTAssertFalse(ranked.contains { $0.kind == .typedURL }, "typed URL collapses into the open tab")
+    }
+
+    /// B235 (user 2026-11-20): in ⌘L on ".../documentation", deleting the path and pressing Return
+    /// goes to the root address. The tab on another page of the site keeps its row below it, so
+    /// Return on the selected row no longer switches to the tab (and reloads it).
+    func testTypedHostGoesToTheRootInsteadOfSwitchingToTheTabOnAnotherPage() async throws {
+        let world = try CommandBarFixtures.world()
+        let current = try XCTUnwrap(world.tabIDs["Apple Developer Documentation"])
+        let all = await candidates(world, text: "developer.apple.com", mode: .currentTab)
+        let ranked = CommandBarRanker.rank(
+            all,
+            context: context("developer.apple.com", mode: .currentTab, current: current, space: world.homeSpace)
+        )
+        XCTAssertEqual(ranked.first?.kind, .typedURL)
+        XCTAssertEqual(ranked.first?.action, .openURL(URL(string: "https://developer.apple.com")!, target: .currentTab))
+        let tab = try XCTUnwrap(ranked.first { $0.kind.isTab })
+        XCTAssertEqual(tab.action, .switchToTab(tabID: current))
     }
 
     /// [05 §command bar] archived candidates, inferred.

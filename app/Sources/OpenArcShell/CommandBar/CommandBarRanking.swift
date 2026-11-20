@@ -27,6 +27,11 @@ public enum CommandBarRanker {
     enum Score {
         static let exactTitle: Double = 1000
         static let exactURL: Double = 950
+        /// A tab on the typed host but another page of it (a typed "example.com" and a tab on
+        /// "example.com/docs"). It stays below the typed URL, so Return opens the address the user
+        /// typed instead of switching to the tab and reloading it (B235, user 2026-11-20);
+        /// inferred.
+        static let hostExact: Double = 850
         static let typedURL: Double = 900
         static let titlePrefix: Double = 800
         static let urlPrefix: Double = 750
@@ -197,7 +202,9 @@ public enum CommandBarRanker {
         }
 
         if title == query { return Score.exactTitle }
-        if !urlKey.isEmpty, (urlKey == queryKey || host == queryKey) { return Score.exactURL }
+        if !urlKey.isEmpty, urlKey == queryKey { return Score.exactURL }
+        // The same host on another page is not the typed page: below the typed URL (B235).
+        if !host.isEmpty, host == queryKey { return Score.hostExact }
         if title.hasPrefix(query) { return Score.titlePrefix }
         if !urlKey.isEmpty, (urlKey.hasPrefix(queryKey) || host.hasPrefix(queryKey)) { return Score.urlPrefix }
         if title.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).contains(where: { $0.hasPrefix(query) }) {
