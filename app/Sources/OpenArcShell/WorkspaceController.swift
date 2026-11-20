@@ -188,6 +188,11 @@ public final class WorkspaceController: ObservableObject {
     /// Usage analytics (B194): one per app; an incognito controller shares its parent's and
     /// records nothing (`recordUsage`).
     public let usageAnalytics: UsageAnalytics
+    /// Sites' own search engines found on pages (B233). An off-the-record workspace shares its
+    /// parent's (it offers them but never adds any).
+    public let openSearch: OpenSearchDiscovery
+    /// Phishing warnings (B234). An off-the-record workspace shares its parent's.
+    public let phishing: PhishingProtection
 
     /// Records a usage event of a deliberate action in this controller's windows.
     func recordUsage(_ event: UsageEvent) {
@@ -284,6 +289,8 @@ public final class WorkspaceController: ObservableObject {
         self.autoArchiveTicker = autoArchiveTicker
         self.syncNotificationCenter = notificationCenter
         self.isOffTheRecord = false
+        self.openSearch = OpenSearchDiscovery(preferences: dependencies.preferences)
+        self.phishing = PhishingProtection(preferences: dependencies.preferences, directory: dependencies.phishingListDirectory)
         self.usageAnalytics = UsageAnalytics(
             preferences: dependencies.preferences,
             configuration: dependencies.usageAnalyticsConfiguration,
@@ -370,6 +377,8 @@ public final class WorkspaceController: ObservableObject {
         self.makeID = parent.makeID
         self.autoArchiveTicker = parent.autoArchiveTicker
         self.isOffTheRecord = true
+        self.openSearch = parent.openSearch
+        self.phishing = parent.phishing
         self.usageAnalytics = parent.usageAnalytics
         self.parent = parent
         self.favicons = FaviconCache(directory: nil)
@@ -752,6 +761,24 @@ public final class WorkspaceController: ObservableObject {
         }
     }
 
+    private var safetyChecksStarted = false
+
+    /// With the first window: the phishing list and its updates (B234), and the password breach
+    /// switch for the engine (B235). Off-the-record workspaces leave it to their parent.
+    private func startSafetyChecks() {
+        guard !safetyChecksStarted, !isOffTheRecord else { return }
+        safetyChecksStarted = true
+        phishing.start()
+        applyPasswordBreachCheckSetting()
+    }
+
+    /// Sends Settings' password breach switch to the engine (B235).
+    public func applyPasswordBreachCheckSetting() {
+        let enabled = dependencies.preferences.checksPasswordBreaches
+        let engine = dependencies.engine
+        Task { await engine.setPasswordBreachCheckEnabled(enabled) }
+    }
+
     /// Applies an engine event to the live state and mirrors content changes into the workspace.
     func apply(_ event: TabEvent, to id: UUID) {
         var state = liveStates[id] ?? SidebarTabLiveState()
@@ -763,7 +790,18 @@ public final class WorkspaceController: ObservableObject {
         case .faviconChanged, .snapshot:
             rememberFavicon(of: id)
             scheduleContentSync(id)
-        case .urlChanged, .titleChanged: scheduleContentSync(id)
+        case .urlChanged(let url):
+            scheduleContentSync(id)
+            // B234: a page on the phishing list is stopped and covered by a warning.
+            if let live = liveTabs[id], phishing.addressChanged(url, in: live.id) {
+                enqueueTabCommand(live) { try? await $0.stopLoading() }
+            }
+        case .titleChanged: scheduleContentSync(id)
+        case .loadStateChanged(let load) where !load.isLoading && !isOffTheRecord && dependencies.discoversOpenSearch:
+            // B233: look for the site's own search engine.
+            if let live = liveTabs[id] {
+                openSearch.pageLoaded(state.committedURL) { script in try? await live.evaluateJavaScript(script) }
+            }
         case .closeRequested: pageRequestedClose(id)
         case .activationRequested: pageRequestedActivation(id)
         case .linkPreviewRequested(let request): linkPreviewRequested(request, from: id)
@@ -1012,6 +1050,7 @@ public final class WorkspaceController: ObservableObject {
         if !browserWindows.contains(where: { $0 === window }) { windows.append(WeakRef(object: window)) }
         activeWindow = window
         startAutoArchive()
+        startSafetyChecks()
         // Links from other apps that arrived while no window was open. D2.
         deliverPendingExternalURLs(to: window)
         // A Little Arc page adopted while no window was open. B29.

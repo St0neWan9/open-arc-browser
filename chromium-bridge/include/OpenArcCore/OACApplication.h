@@ -133,6 +133,11 @@ OAC_EXPORT NS_SWIFT_UI_ACTOR
 /// load (the page on screen keeps its filter until reloaded). Sites can opt out one by one with
 /// `-[OACSiteSettings setAdBlockingEnabled:forOrigin:]`. NO before the engine started.
 @property (nonatomic, getter=isAdBlockingEnabled) BOOL adBlockingEnabled;
+/// The password breach check (plan B235): after a sign-in, the password's SHA-1 is checked against
+/// Have I Been Pwned's k-anonymity range API (5 hex digits leave the Mac) and a leak shows an info
+/// bar on the tab. Not stored by the engine: the shell sets it at launch from its own setting.
+/// Default YES.
+@property (nonatomic, getter=isPasswordBreachCheckEnabled) BOOL passwordBreachCheckEnabled;
 /// Content version of the filter ruleset in use (EasyList + EasyPrivacy, built with the
 /// framework), or nil when the framework carries none and nothing was indexed before: the
 /// blocker then matches nothing.

@@ -130,6 +130,9 @@ public enum SettingsCatalog {
         SettingsControl("general.previewsSettings", "Previews Settings…", .button, .live),
         // Observed hint: search engine, auto-archive and download location live in Profile settings.
         SettingsControl("general.profileSettings", "Profile Settings…", .button, .live),
+        // Safety (our own rows): phishing warnings (B234) and the password breach check (B235).
+        SettingsControl("general.phishingWarnings", "Warn about phishing sites", .toggle(defaultValue: true), .live),
+        SettingsControl("general.passwordBreachCheck", "Warn when a saved password was in a data breach", .toggle(defaultValue: true), .live),
         // Usage analytics (B194, our own row): on by default, this Mac only.
         SettingsControl("general.shareUsageData", "Share usage data", .toggle(defaultValue: true), .live),
     ]

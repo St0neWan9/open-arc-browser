@@ -147,6 +147,16 @@ public final class ChromiumEngine: BrowserEngine {
     public func setWindows(_ windows: [EngineWindowInfo]) async {
         await core.setWindows(windows)
     }
+
+    /// Plan B235: `-[OACApplication setPasswordBreachCheckEnabled:]`, a plain switch the bridge
+    /// reads at each sign-in (no running engine needed). Older frameworks lack it.
+    public func setPasswordBreachCheckEnabled(_ enabled: Bool) async {
+        await MainActor.run {
+            let app = OACApplication.shared
+            guard app.responds(to: #selector(setter: OACApplication.isPasswordBreachCheckEnabled)) else { return }
+            app.isPasswordBreachCheckEnabled = enabled
+        }
+    }
 }
 
 // MARK: - Engine core (main actor)

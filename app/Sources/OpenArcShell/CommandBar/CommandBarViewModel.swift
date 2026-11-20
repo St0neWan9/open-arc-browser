@@ -50,6 +50,9 @@ public final class CommandBarViewModel: ObservableObject {
     /// The sites the field can offer for "Tab to Search" (built-in list, inferred; see
     /// `CommandBarSearchSites`).
     public var searchSites: [CommandBarSearchSite] = CommandBarSearchSites.builtIn
+    /// Sites found through their OpenSearch descriptions (B233), offered after `searchSites`.
+    /// Installed by the window.
+    public var discoveredSearchSites: () -> [CommandBarSearchSite] = { [] }
 
     /// The site the field's right-hand hint offers ("Search YouTube Tab"), nil for none: never
     /// during a site search or over the unedited ⌘L prefill. [05 §命令栏] E30 observed hint.
@@ -58,7 +61,8 @@ public final class CommandBarViewModel: ObservableObject {
         let completedHost = inlineCompletion.flatMap { completion in
             results.first { $0.id == completion.resultID }?.url.flatMap(CommandBarTextNormalizer.host)
         }
-        return CommandBarSearchSites.match(typed: queryText, completedHost: completedHost, sites: searchSites)
+        return CommandBarSearchSites.match(typed: queryText, completedHost: completedHost,
+                                           sites: searchSites + discoveredSearchSites())
     }
 
     /// The site of the profile's default search engine, whose icon the field's glyph shows while

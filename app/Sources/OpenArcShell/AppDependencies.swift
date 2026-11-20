@@ -71,6 +71,11 @@ public struct AppDependencies: Sendable {
     public var usageAnalyticsConfiguration: UsageAnalyticsConfiguration?
     /// Sends usage analytics. The default only records; the release app passes the URLSession transport.
     public var usageAnalyticsTransport: any UsageAnalyticsTransport
+    /// Where downloaded phishing lists are kept (B234); nil never downloads one (tests, previews).
+    public var phishingListDirectory: URL?
+    /// Whether pages are read for their OpenSearch description (B233). Off in fakes and tests:
+    /// it runs a script in every page that finishes loading.
+    public var discoversOpenSearch: Bool
 
     public init(
         engine: any BrowserEngine,
@@ -87,8 +92,12 @@ public struct AppDependencies: Sendable {
         desktop: (any DesktopServices)? = nil,
         globalHotKeys: (any GlobalHotKeyService)? = nil,
         usageAnalyticsConfiguration: UsageAnalyticsConfiguration? = nil,
-        usageAnalyticsTransport: (any UsageAnalyticsTransport)? = nil
+        usageAnalyticsTransport: (any UsageAnalyticsTransport)? = nil,
+        phishingListDirectory: URL? = nil,
+        discoversOpenSearch: Bool = false
     ) {
+        self.phishingListDirectory = phishingListDirectory
+        self.discoversOpenSearch = discoversOpenSearch
         self.engine = engine
         self.sync = sync
         self.persistence = persistence

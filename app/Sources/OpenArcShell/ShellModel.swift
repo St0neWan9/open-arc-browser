@@ -159,6 +159,9 @@ public final class ShellModel: ObservableObject {
             mode: .currentTab,
             presentation: .window
         )
+        for bar in [commandBar, paneCommandBar] {
+            bar.discoveredSearchSites = { [weak controller] in controller?.openSearch.sites ?? [] }
+        }
         self.spaceFlow = SpaceFlowModel(sidebar: sidebar, now: controller.now, makeID: controller.makeID)
         self.profileFlow = ProfileFlowModel(sidebar: sidebar)
         self.library = LibraryModel(sidebar: sidebar, now: controller.now)

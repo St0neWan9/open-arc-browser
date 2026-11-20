@@ -173,7 +173,10 @@ public struct AdBlockRulesetTrust: Sendable {
     /// Verifies `signatureFile` (base64 of the 64-byte signature, surrounding whitespace allowed)
     /// over `manifestData`, then decodes and checks the manifest. Nothing in the manifest is read
     /// before the signature holds.
-    public func verifiedManifest(_ manifestData: Data, signatureFile: Data) throws -> AdBlockRulesetManifest {
+    /// `type`: the manifest type this check accepts (the ad-block ruleset's, or another list
+    /// published the same way, such as the phishing list, B234).
+    public func verifiedManifest(_ manifestData: Data, signatureFile: Data,
+                                 type: String = AdBlockRulesetManifest.typeIdentifier) throws -> AdBlockRulesetManifest {
         let text = String(decoding: signatureFile, as: UTF8.self).filter { !$0.isWhitespace }
         guard let signature = Data(base64Encoded: text), signature.count == 64 else {
             throw AdBlockRulesetUpdateError.badSignature
@@ -187,7 +190,7 @@ public struct AdBlockRulesetTrust: Sendable {
         } catch {
             throw AdBlockRulesetUpdateError.malformedManifest(String(describing: error))
         }
-        guard manifest.type == AdBlockRulesetManifest.typeIdentifier,
+        guard manifest.type == type,
               manifest.format == AdBlockRulesetManifest.currentFormat else {
             throw AdBlockRulesetUpdateError.unsupportedManifest
         }
@@ -421,15 +424,23 @@ public struct AdBlockRulesetUpdater: Sendable {
     public let trust: AdBlockRulesetTrust
     public let store: AdBlockRulesetStore
     public let fetcher: any AdBlockRulesetFetching
+    /// The manifest type accepted (B234: the phishing list reuses this updater).
+    public let manifestType: String
+    /// Largest list file accepted.
+    public let maxListBytes: Int
 
     public init(
         manifestURL: URL, trust: AdBlockRulesetTrust = .openArc, store: AdBlockRulesetStore,
-        fetcher: any AdBlockRulesetFetching = URLSessionRulesetFetcher()
+        fetcher: any AdBlockRulesetFetching = URLSessionRulesetFetcher(),
+        manifestType: String = AdBlockRulesetManifest.typeIdentifier,
+        maxListBytes: Int = AdBlockRulesetUpdateConfiguration.maxRulesetBytes
     ) {
         self.manifestURL = manifestURL
         self.trust = trust
         self.store = store
         self.fetcher = fetcher
+        self.manifestType = manifestType
+        self.maxListBytes = maxListBytes
     }
 
     /// `activeVersion`: the ruleset the engine uses now (nil: none).
@@ -440,7 +451,7 @@ public struct AdBlockRulesetUpdater: Sendable {
             let signatureURL = manifestURL.deletingLastPathComponent()
                 .appendingPathComponent(manifestURL.lastPathComponent + ".sig")
             let signature = try await fetcher.fetch(signatureURL, maxBytes: limit)
-            let manifest = try trust.verifiedManifest(manifestData, signatureFile: signature)
+            let manifest = try trust.verifiedManifest(manifestData, signatureFile: signature, type: manifestType)
 
             guard AdBlockRulesetVersion.mayReplace(current: activeVersion, with: manifest.version) else {
                 return .upToDate
@@ -451,7 +462,7 @@ public struct AdBlockRulesetUpdater: Sendable {
                 throw AdBlockRulesetUpdateError.replayedSerial(manifest.serial)
             }
 
-            let ruleset = try await download(manifest.ruleset, maxBytes: AdBlockRulesetUpdateConfiguration.maxRulesetBytes)
+            let ruleset = try await download(manifest.ruleset, maxBytes: maxListBytes)
             let attribution = try await download(manifest.attribution, maxBytes: limit)
             let directory = try store.install(manifest, ruleset: ruleset, attribution: attribution)
             return .installed(version: manifest.version, directory: directory)

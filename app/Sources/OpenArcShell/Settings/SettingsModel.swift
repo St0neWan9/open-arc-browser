@@ -452,6 +452,28 @@ public final class SettingsModel: ObservableObject {
         }
     }
 
+    // MARK: Safety
+
+    /// "Warn about phishing sites" (B234).
+    public var warnsAboutPhishingSites: Bool {
+        get { preferences.warnsAboutPhishingSites }
+        set {
+            objectWillChange.send()
+            preferences.warnsAboutPhishingSites = newValue
+            shell.controller.phishing.switchChanged()
+        }
+    }
+
+    /// "Warn when a saved password was in a data breach" (B235): handed to the engine at once.
+    public var checksPasswordBreaches: Bool {
+        get { preferences.checksPasswordBreaches }
+        set {
+            objectWillChange.send()
+            preferences.checksPasswordBreaches = newValue
+            shell.controller.applyPasswordBreachCheckSetting()
+        }
+    }
+
     // MARK: Advanced
 
     /// "Haptic feedback when reordering tabs". [03 §Advanced] observed, on by default; a

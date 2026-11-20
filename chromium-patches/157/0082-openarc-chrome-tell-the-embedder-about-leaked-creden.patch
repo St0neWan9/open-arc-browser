@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Open Arc Authors <dev@openarc.invalid>
+Date: Mon, 16 Nov 2026 06:25:08 +0700
+Subject: [PATCH] openarc: chrome: tell the embedder about leaked credentials
+
+ManagePasswordsUIController::OnCredentialLeak() returns early for a
+controller owned by an embedder: Chrome's leak dialog and password change
+flow need a tab in a Browser window. The embedder's bubble host now gets
+OnCredentialLeak() there, so it can warn the user its own way (plan
+B235). The default implementation does nothing, as before.
+---
+ .../browser/ui/passwords/manage_passwords_ui_controller.cc  | 5 ++++-
+ .../browser/ui/passwords/manage_passwords_ui_controller.h   | 6 ++++++
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc b/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc
+index 8e8cbf967dc5..d4c04c18a7f7 100644
+--- a/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc
++++ b/chrome/browser/ui/passwords/manage_passwords_ui_controller.cc
+@@ -581,8 +581,11 @@ void ManagePasswordsUIController::OnCredentialLeak(
+     return;
+   }
+   // Open Arc: the leak dialog and the password change flow need a tab
+-  // (tabs::TabInterface) in a Browser window.
++  // (tabs::TabInterface) in a Browser window; the embedder warns instead.
+   if (owned_by_embedder_) {
++    if (g_embedder_bubble_host) {
++      g_embedder_bubble_host->OnCredentialLeak(*this, details);
++    }
+     return;
+   }
+ 
+diff --git a/chrome/browser/ui/passwords/manage_passwords_ui_controller.h b/chrome/browser/ui/passwords/manage_passwords_ui_controller.h
+index 7335d348d1b6..0ccb2fbd0f99 100644
+--- a/chrome/browser/ui/passwords/manage_passwords_ui_controller.h
++++ b/chrome/browser/ui/passwords/manage_passwords_ui_controller.h
+@@ -304,6 +304,12 @@ class ManagePasswordsUIController
+     // Closes the bubble of `controller` if one is open. Must tolerate being
+     // called while that bubble is closing.
+     virtual void HideBubble(ManagePasswordsUIController& controller) = 0;
++    // Open Arc: a credential the user just used was found in a breach. Chrome
++    // shows its leak dialog (which needs a Browser window); the embedder warns
++    // its own way. Default: nothing.
++    virtual void OnCredentialLeak(ManagePasswordsUIController& controller,
++                                  const password_manager::LeakedPasswordDetails&
++                                      details) {}
+   };
+   // Not owned; nullptr clears it. UI thread only.
+   static void SetEmbedderBubbleHost(EmbedderBubbleHost* host);

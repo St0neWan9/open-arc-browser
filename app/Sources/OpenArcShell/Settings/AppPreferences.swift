@@ -200,6 +200,26 @@ public final class AppPreferences: @unchecked Sendable {
         set { setBool(newValue, Self.littleArcExternalKey) }
     }
 
+    // MARK: App-level settings: Safety (B234, B235)
+
+    static let phishingWarningsKey = "\(keyPrefix)safety.phishingWarnings"
+    static let passwordBreachCheckKey = "\(keyPrefix)safety.passwordBreachCheck"
+
+    /// "Warn about phishing sites" (B234, our own row): pages on the downloaded phishing list are
+    /// covered by a warning; off also stops the list's update checks. On by default.
+    public var warnsAboutPhishingSites: Bool {
+        get { boolValue(Self.phishingWarningsKey) ?? true }
+        set { setBool(newValue, Self.phishingWarningsKey) }
+    }
+
+    /// "Warn when a password was in a data breach" (B235, our own row): after a sign-in the engine
+    /// checks the password against Have I Been Pwned's k-anonymity range API (only 5 characters of
+    /// its SHA-1 leave the Mac). On by default, like Chrome's leak warning.
+    public var checksPasswordBreaches: Bool {
+        get { boolValue(Self.passwordBreachCheckKey) ?? true }
+        set { setBool(newValue, Self.passwordBreachCheckKey) }
+    }
+
     // MARK: App-level settings: Advanced
 
     static let pictureInPictureKey = "\(keyPrefix)advanced.pictureInPicture"

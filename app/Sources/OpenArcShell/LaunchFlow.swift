@@ -107,7 +107,9 @@ extension AppDependencies {
             desktop: SystemDesktopServices(),
             globalHotKeys: CarbonGlobalHotKeyService(),
             usageAnalyticsConfiguration: analyticsConfiguration ?? .developmentPreview(),
-            usageAnalyticsTransport: analyticsTransport
+            usageAnalyticsTransport: analyticsTransport,
+            phishingListDirectory: dataDirectory.appendingPathComponent(PhishingList.storeDirectoryName, isDirectory: true),
+            discoversOpenSearch: true
         )
     }
 

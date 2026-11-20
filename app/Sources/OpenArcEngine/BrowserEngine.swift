@@ -494,11 +494,19 @@ public protocol BrowserEngine: AnyObject, Sendable {
     /// changes its tabs or the tab it shows. Extensions see them through `chrome.windows.*`, and
     /// `chrome.action.openPopup()` opens over the active tab of the first one when it is focused.
     func setWindows(_ windows: [EngineWindowInfo]) async
+
+    // MARK: Password breach check (plan B235)
+
+    /// Whether the engine checks a password the user just signed in with against Have I Been
+    /// Pwned's k-anonymity range API and warns when it was in a breach. The shell sends the
+    /// Settings switch at launch and on every change; engines without the check ignore it.
+    func setPasswordBreachCheckEnabled(_ enabled: Bool) async
 }
 
 extension BrowserEngine {
     /// Engines without extension window APIs ignore the list.
     public func setWindows(_ windows: [EngineWindowInfo]) async {}
+    public func setPasswordBreachCheckEnabled(_ enabled: Bool) async {}
     public var adBlocking: any EngineAdBlocking { UnavailableAdBlocking.shared }
     public var translation: any EngineTranslation { UnavailableTranslation.shared }
     public var importer: any EngineImporter { UnavailableImporter.shared }

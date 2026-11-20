@@ -237,6 +237,16 @@ struct GeneralPane: View {
                     CatalogButton(id: "general.profileSettings") { model.openProfileSettings() }
                 }
             }
+            // B234, B235: phishing warnings and the password breach check (our own rows).
+            SettingsCard {
+                SettingsToggleRow(label: SettingsCatalog.control("general.phishingWarnings").label, isOn: Binding(
+                    get: { model.warnsAboutPhishingSites }, set: { model.warnsAboutPhishingSites = $0 }
+                ))
+                SettingsDivider()
+                SettingsToggleRow(label: SettingsCatalog.control("general.passwordBreachCheck").label, isOn: Binding(
+                    get: { model.checksPasswordBreaches }, set: { model.checksPasswordBreaches = $0 }
+                ))
+            }
             // B194: usage analytics, this Mac only.
             UsageDataSettingsCard(model: model, analytics: model.usageAnalytics)
         }

@@ -452,6 +452,8 @@ final class SettingsTests: XCTestCase {
             "shortcuts.basics",
             // B100: General's update switch (03 §General "Info" row) is the D7 automatic checks.
             "general.automaticUpdates",
+            // B234, B235: phishing warnings and the password breach check.
+            "general.phishingWarnings", "general.passwordBreachCheck",
         ]
         for pane in SettingsPane.allCases {
             for control in SettingsCatalog.controls(in: pane) {

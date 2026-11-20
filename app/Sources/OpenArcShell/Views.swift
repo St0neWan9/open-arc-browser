@@ -191,6 +191,7 @@ struct MainWindowContent: View {
             }
             .environment(\.windowSurface, surface)
             .environment(\.dialogCenter, model.controller.dialogs)
+            .environment(\.phishingProtection, model.controller.phishing)
             .environment(\.dialogPalette, palette)
             .environment(\.translationModel, model.translation)
             .environment(\.isWebToolbarShown, layout.isWebToolbarShown)
@@ -504,6 +505,7 @@ struct WebPanel: View {
     /// The Space's colors, for the hovered link's pill (B218); nil uses the light neutral.
     var palette: ThemePalette? = nil
     @Environment(\.dialogCenter) private var dialogCenter
+    @Environment(\.phishingProtection) private var phishingProtection
     @Environment(\.windowDrawnPermissionTab) private var windowDrawnPermissionTab
 
     var body: some View {
@@ -522,6 +524,8 @@ struct WebPanel: View {
                         SurfaceHostRepresentable(surface: tab.surface, panelColor: background)
                             .id(tab.id)
                         if let crashed { CrashedPageView(state: crashed, panelColor: background) }
+                        // A page on the phishing list (B234).
+                        if let phishingProtection { PhishingWarningOverlay(protection: phishingProtection, tab: tab) }
                         // The link under the pointer, at the bottom left. [06 §44] observed (B218).
                         if crashed == nil { LinkStatusBubble(tab: tab, palette: palette) }
                         if let findBar { FindBarOverlay(host: findBar) }
