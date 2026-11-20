@@ -81,7 +81,7 @@ It is a tribute, not a competitor. The goal is for Arc's interaction and look to
 
 Download the latest `.dmg` from [Releases](https://github.com/St0neWan9/open-arc-browser/releases/latest) and drag Open Arc into Applications. It needs macOS 14 or later on Apple silicon.
 
-Release builds are signed with a Developer ID, notarized by Apple, and update themselves through Sparkle (**Open Arc ▸ Check for Updates…**).
+Open Arc updates automatically. You can also check for updates from **Open Arc ▸ Check for Updates…**.
 
 ## Your data
 
