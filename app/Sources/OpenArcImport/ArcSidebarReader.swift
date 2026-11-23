@@ -240,7 +240,8 @@ public enum ArcSidebarReader {
     }
 
     /// The Space's color: the single background color, else the palette's mid tone. Components in
-    /// extended sRGB are clamped to 0…1. The noise strength becomes grain. Gradient backgrounds use
+    /// extended sRGB keep their range (a wide-gamut pick goes past 1, B242), bounded to
+    /// `colorComponentRange` against broken values. The noise strength becomes grain. Gradient backgrounds use
     /// their mid tone only. The appearance stays automatic: the background's light / dark content
     /// marker names the ink that reads on the color (white on a dark color), not the window's mode.
     /// Arc marks its purple, periwinkle and green Spaces "dark" and still draws them in a light
@@ -261,13 +262,20 @@ public enum ArcSidebarReader {
         return style
     }
 
+    /// Bounds of an imported extended-sRGB component. Display P3 reaches about −0.1…1.1 in extended
+    /// sRGB; anything past these bounds is not a color Arc can show. inferred.
+    static let colorComponentRange: ClosedRange<Double> = -0.25...1.25
+
     static func color(_ value: Any?) -> RGBAColor? {
         guard let components = value as? [String: Any] else { return nil }
-        func component(_ key: String) -> Double? {
+        func number(_ key: String) -> Double? {
             guard let number = (components[key] as? NSNumber)?.doubleValue, number.isFinite else { return nil }
-            return min(max(number, 0), 1)
+            return number
+        }
+        func component(_ key: String) -> Double? {
+            number(key).map { min(max($0, colorComponentRange.lowerBound), colorComponentRange.upperBound) }
         }
         guard let red = component("red"), let green = component("green"), let blue = component("blue") else { return nil }
-        return RGBAColor(red: red, green: green, blue: blue, alpha: component("alpha") ?? 1)
+        return RGBAColor(red: red, green: green, blue: blue, alpha: number("alpha").map { min(max($0, 0), 1) } ?? 1)
     }
 }

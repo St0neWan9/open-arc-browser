@@ -614,7 +614,7 @@ public enum ThemeDerivation {
         palette.scrollEdgeLine = lightInk ? overlayWhite(window, amount: lightInkScrollEdgeWhite) : shade(window, by: scrollEdgeScale)
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
         palette.webPanelBackground = picked.isEmpty && !isDark
-            ? defaultLightContent : contentBackground(theme, appearance: appearance)
+            ? defaultLightContent : contentBackground(theme, appearance: appearance, intensity: intensity)
         palette.webPanelBackgroundGradient = picked.isEmpty && !isDark ? defaultLightContentGradient : []
         // The see-through window [07 §8.4]: content, command bar and bubbles stay opaque.
         palette.windowOpacity = WindowTranslucency.opacity(for: appearance)

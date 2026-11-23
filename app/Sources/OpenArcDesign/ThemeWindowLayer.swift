@@ -65,13 +65,15 @@ extension ThemeDerivation {
 
     /// The theme layer as painted: the theme color at `themeLayerAlpha` over the veil, source-over on
     /// sRGB-encoded components. Returns the straight (not premultiplied) color with the combined
-    /// coverage as alpha; it is translucent. [07 §8.2] inferred.
+    /// coverage as alpha; it is translucent. The theme color is not clamped: a wide-gamut pick
+    /// (extended sRGB components beyond 0...1, as Arc stores them) stays extended, like Arc's layer,
+    /// so a P3 display shows it (B242). [07 §8.2] inferred.
     public static func themeLayer(_ color: RGBAColor, appearance: ResolvedAppearance, strength: Double) -> RGBAColor {
         let a = themeLayerAlpha(strength: strength)
         let veil = windowVeil(strength: strength, appearance: appearance)
         let below = veil.alpha * (1 - a)
         let coverage = a + below
-        func channel(_ c: Double, _ v: Double) -> Double { (min(max(c, 0), 1) * a + v * below) / coverage }
+        func channel(_ c: Double, _ v: Double) -> Double { (c * a + v * below) / coverage }
         return RGBAColor(red: channel(color.red, veil.red), green: channel(color.green, veil.green),
                          blue: channel(color.blue, veil.blue), alpha: coverage)
     }

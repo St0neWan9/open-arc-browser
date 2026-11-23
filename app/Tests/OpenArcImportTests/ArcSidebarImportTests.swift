@@ -183,7 +183,7 @@ final class ArcSidebarImportTests: XCTestCase {
         let theme = try XCTUnwrap(work.theme)
         // B241: the "dark" content marker names the ink over a dark color, not the window's mode.
         XCTAssertEqual(theme.appearance, .automatic)
-        XCTAssertEqual(theme.colors, [RGBAColor(red: 0.2, green: 0.4, blue: 1, alpha: 1)], "the background color, clamped to 0…1")
+        XCTAssertEqual(theme.colors, [RGBAColor(red: 0.2, green: 0.4, blue: 1.25, alpha: 1)], "the background color, wide-gamut blue kept (B242)")
         XCTAssertEqual(theme.grain, 0.3)
         XCTAssertEqual(work.pinned, [
             .page(ForeignPage(title: "Docs", url: "https://docs.example.com/")),
@@ -232,6 +232,14 @@ final class ArcSidebarImportTests: XCTestCase {
         XCTAssertEqual(violet.intensity, 1)
         let peach = try XCTUnwrap(theme(marker: "light", red: 1, green: 0.9, blue: 0.83))
         XCTAssertEqual(peach.appearance, .automatic)
+    }
+
+    /// B242: a wide-gamut color keeps its extended components; broken values are bounded.
+    func testThemeKeepsWideGamutComponents() throws {
+        let violet = try XCTUnwrap(ArcSidebarReader.color(["red": 0.115786, "green": -0.02, "blue": 1.041854, "alpha": 1]))
+        XCTAssertEqual(violet, RGBAColor(red: 0.115786, green: -0.02, blue: 1.041854, alpha: 1))
+        let broken = try XCTUnwrap(ArcSidebarReader.color(["red": 9, "green": -4, "blue": 0.5, "alpha": 3]))
+        XCTAssertEqual(broken, RGBAColor(red: 1.25, green: -0.25, blue: 0.5, alpha: 1))
     }
 
     func testReaderRejectsOtherFiles() {
@@ -283,7 +291,7 @@ final class ArcSidebarImportTests: XCTestCase {
         XCTAssertNil(s.spaces[play]?.icon, "an icon name we do not have is dropped")
         XCTAssertEqual(s.spaces[play]?.name, "Play", "trimmed")
         let workTheme = try XCTUnwrap(s.spaces[work]?.themeID.flatMap { s.themes[$0] })
-        XCTAssertEqual(workTheme.colors, [RGBAColor(red: 0.2, green: 0.4, blue: 1, alpha: 1)])
+        XCTAssertEqual(workTheme.colors, [RGBAColor(red: 0.2, green: 0.4, blue: 1.25, alpha: 1)])
         XCTAssertEqual(workTheme.appearance, .automatic, "the content marker does not force a dark Space")
         let playTheme = try XCTUnwrap(s.spaces[play]?.themeID.flatMap { s.themes[$0] })
         XCTAssertEqual(playTheme.colors, fallbackTheme.colors, "no theme in the file: the default color")
