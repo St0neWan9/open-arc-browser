@@ -67,6 +67,7 @@ struct WindowBackgroundView: View {
 /// bottom right) when it has one, else `webPanelBackground` flat. [07 §8.1], [07 §8.5] observed.
 struct WebPanelBackgroundView: View {
     let palette: ThemePalette
+    @Environment(\.windowSurface) private var surface
 
     var body: some View {
         let gradient = palette.webPanelBackgroundGradient
@@ -74,8 +75,17 @@ struct WebPanelBackgroundView: View {
             LinearGradient(stops: WindowBackgroundView.stops(gradient, locations: nil),
                            startPoint: .topLeading, endPoint: .bottomTrailing)
         } else {
-            palette.webPanelBackground.swiftUI
+            palette.webPanelFill(on: surface).swiftUI
         }
+    }
+}
+
+extension ThemePalette {
+    /// The empty panel's fill: on a see-through window the white layer over the window's own
+    /// background (B242, as Arc draws it, so the desktop shows through at a third of the window's
+    /// amount), else the opaque content color. Over the reference desktop both look the same.
+    func webPanelFill(on surface: WindowSurface) -> RGBAColor {
+        surface.isTranslucent ? (webPanelLayer ?? webPanelBackground) : webPanelBackground
     }
 }
 

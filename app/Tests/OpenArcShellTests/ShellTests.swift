@@ -139,6 +139,16 @@ final class ShellRenderingTests: XCTestCase {
         XCTAssertTrue(container.subviews.isEmpty)
     }
 
+    /// B242: on a see-through window the empty panel of a picked color is a white layer over the
+    /// window (2/3 light), opaque elsewhere; the no-color wash keeps its opaque color.
+    func testEmptyPanelIsAWhiteLayerOnASeeThroughWindow() {
+        let picked = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0x5967BE)], intensity: 1), appearance: .light)
+        XCTAssertEqual(picked.webPanelFill(on: .translucent), RGBAColor(red: 1, green: 1, blue: 1, alpha: 2.0 / 3))
+        XCTAssertEqual(picked.webPanelFill(on: .opaque), picked.webPanelBackground)
+        let wash = ThemeDerivation.palette(forStyle: nil, appearance: .light)
+        XCTAssertEqual(wash.webPanelFill(on: .translucent), wash.webPanelBackground)
+    }
+
     /// B239: a web panel's container takes the page only once it is in a window. An extra
     /// container SwiftUI builds and throws away without showing it must not take the page, or
     /// its teardown leaves the window blank.

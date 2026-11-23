@@ -59,6 +59,8 @@ extension ThemeDerivation {
         let window = t.windowBackground
         p.windowBackground = window
         p.backgroundGradientColors = [window]
+        p.pickedThemeLayers = []
+        p.webPanelLayer = nil
         p.controlFill = t.addressFieldFill
         p.selectedTabFill = t.selectedRowFill
         p.webPanelBackground = t.blankPanel

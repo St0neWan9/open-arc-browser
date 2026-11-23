@@ -148,7 +148,7 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(palette.commandBarArrowBoxFill, RGBAColor(hex: 0x000000, alpha: 0.04), "[07 §5] observed")
         XCTAssertEqual(palette.commandBarSelectedText, RGBAColor(hex: 0xFFFFFF))
         XCTAssertEqual(palette.dialogBackground, RGBAColor(hex: 0xFAFBFF), "[07 §6] observed")
-        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(purple, appearance: .light), "[07 §8.1] light: tinted, not white")
+        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentOverWindow(palette.windowBackground, appearance: .light), "[07 §8.1] light: tinted, not white")
         XCTAssertNotEqual(palette.webPanelBackground, RGBAColor(hex: 0xFFFFFF))
         XCTAssertFalse(palette.isDark)
     }
@@ -169,7 +169,7 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(dark.hue, light.hue, accuracy: 0.03, "same hue family")
         XCTAssertGreaterThan(dark.saturation, 0.2, "not desaturated")
         XCTAssertGreaterThan(ThemeDerivation.luminance(palette.windowBackground), 0.12, "not black")
-        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(purple, appearance: .dark), "[07 §8.1] dark: tinted, not black")
+        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentOverWindow(palette.windowBackground, appearance: .dark), "[07 §8.1] dark: tinted, not black")
         XCTAssertGreaterThan(ThemeDerivation.luminance(palette.webPanelBackground), ThemeDerivation.luminance(palette.windowBackground), "a little lighter than the dark window")
         XCTAssertEqual(palette.backgroundGradientColors, [palette.windowBackground])
         // #6B4FD8 (luminance 0.14) is a light-ink theme [07 §8.3]: controls are window + 11 % white.
@@ -252,7 +252,7 @@ final class ThemeAppearanceTests: XCTestCase {
                 XCTAssertEqual(palette.chromeInk, RGBAColor(hex: 0x000000), label)
                 XCTAssertEqual(palette.inkOpacity, .darkInk, label)
                 XCTAssertLessThan(ThemeDerivation.luminance(palette.controlFill), ThemeDerivation.luminance(palette.windowBackground), label)
-                XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(RGBAColor(hex: hex), appearance: palette.appearance), label)
+                XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentOverWindow(palette.windowBackground, appearance: palette.appearance), label)
             }
         }
         // [07 §3] observed AX opacities: address 60 %, Space name 45 %, New Tab 30 %.
@@ -361,7 +361,7 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(palette.controlFill, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkControlWhite))
         XCTAssertEqual(palette.separator, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkSeparatorWhite))
         XCTAssertEqual(palette.scrollEdgeLine, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkScrollEdgeWhite), "lighter than the divider (B171)")
-        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(RGBAColor(hex: 0x0000FF), appearance: .light), "[07 §8.1] the content tint")
+        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentOverWindow(palette.windowBackground, appearance: .light), "[07 §8.1] the content tint")
         // [07 §8.3] observed (B46): the selected row is a muted tone with the same white title.
         XCTAssertEqual(palette.selectedTabText, palette.rowTitleText, "selected rows keep the white title")
         XCTAssertEqual(palette.selectedTabFill, ThemeDerivation.selectedRowFill(window: palette.windowBackground, lightInk: true))
@@ -409,7 +409,7 @@ final class ThemeAppearanceTests: XCTestCase {
     func testSaturatedBlueDarkKeepsLightInk() {
         let palette = ThemeDerivation.palette(for: theme(.dark, colors: [RGBAColor(hex: 0x0000FF)]), systemAppearance: .light)
         XCTAssertTrue(palette.usesLightInk)
-        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(RGBAColor(hex: 0x0000FF), appearance: .dark))
+        XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentOverWindow(palette.windowBackground, appearance: .dark))
         XCTAssertEqual(palette.commandBarBackground, RGBAColor(hex: 0x181818), "[07 §5] the command bar ignores the ink")
     }
 
@@ -470,13 +470,14 @@ final class ThemeAppearanceTests: XCTestCase {
         }
     }
 
-    /// The B36 content tint is untouched by the window refit: [07 §8.1] keeps its own P3 rule.
-    func testContentTintDoesNotDependOnTheWindowRule() {
+    /// B242: the content tint of a picked color is white over the window (2/3 light, 1/10 dark), so
+    /// it follows the window rule and the intensity. [07 §8.5d]
+    func testContentTintIsWhiteOverTheWindow() {
         for (name, themeHex, _, _) in e12Windows {
             let color = RGBAColor(hex: themeHex)
             for appearance in ResolvedAppearance.allCases {
                 let palette = ThemeDerivation.palette(for: theme(appearance == .dark ? .dark : .light, colors: [color]), systemAppearance: .light)
-                XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentBackground(color, appearance: appearance), "\(name) \(appearance.rawValue)")
+                XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentOverWindow(palette.windowBackground, appearance: appearance), "\(name) \(appearance.rawValue)")
             }
         }
     }

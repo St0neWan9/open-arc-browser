@@ -65,7 +65,8 @@ final class ContentBackgroundTests: XCTestCase {
     private let tolerance = 3.0 / 255
 
     private func assertMatches(_ actual: RGBAColor, _ expected: (Double, Double, Double), _ label: String,
-                               file: StaticString = #filePath, line: UInt = #line) {
+                               tolerance: Double? = nil, file: StaticString = #filePath, line: UInt = #line) {
+        let tolerance = tolerance ?? self.tolerance
         XCTAssertEqual(actual.red, expected.0 / 255, accuracy: tolerance, "\(label) red", file: file, line: line)
         XCTAssertEqual(actual.green, expected.1 / 255, accuracy: tolerance, "\(label) green", file: file, line: line)
         XCTAssertEqual(actual.blue, expected.2 / 255, accuracy: tolerance, "\(label) blue", file: file, line: line)
@@ -92,12 +93,16 @@ final class ContentBackgroundTests: XCTestCase {
 
     /// The palette carries the tint in the web panel for light, dark and automatic (B21 semantics:
     /// automatic follows the system; [07 §8.1] observed automatic == light on a light system).
+    /// B242 derives it as white over the window; against these JPEG readings that rule sits up to
+    /// 4.6/255 darker (saturated green p1-7; white over E12's own green window reading misses it by
+    /// 5/255 too), while the lossless B242 captures agree with the rule within 2/255
+    /// (SpaceColorB242Tests), so the JPEG readings set the tolerance here.
     func testPaletteUsesTheContentTintInEveryAppearance() {
         for s in samples {
             let light = ThemeDerivation.palette(for: theme(.light, s.theme), systemAppearance: .dark)
             let dark = ThemeDerivation.palette(for: theme(.dark, s.theme), systemAppearance: .light)
-            assertMatches(light.webPanelBackground, s.light, "\(s.name) light palette")
-            assertMatches(dark.webPanelBackground, s.dark, "\(s.name) dark palette")
+            assertMatches(light.webPanelBackground, s.light, "\(s.name) light palette", tolerance: 5 / 255)
+            assertMatches(dark.webPanelBackground, s.dark, "\(s.name) dark palette", tolerance: 5 / 255)
             XCTAssertEqual(ThemeDerivation.palette(for: theme(.automatic, s.theme), systemAppearance: .light).webPanelBackground,
                            light.webPanelBackground, "\(s.name) automatic on a light system")
             XCTAssertEqual(ThemeDerivation.palette(for: theme(.automatic, s.theme), systemAppearance: .dark).webPanelBackground,

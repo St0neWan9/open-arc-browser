@@ -32,4 +32,19 @@ extension ThemeDerivation {
         case .dark: return mixInDisplayP3(theme, gray: darkContentGray, amount: darkContentAmount)
         }
     }
+
+    /// White over the window in the content area of a picked color: 2/3 in light, 1/10 in dark.
+    /// B242: Arc's content panel is a white layer over the sidebar's own background, not a color of
+    /// its own. Eight Spaces at intensity 0.8 and 1 (one wide gamut) read 0.665–0.669 in light and
+    /// 0.096–0.103 in dark, per channel on the encoded components, and the panel lets the desktop
+    /// through at 1/3 of the window's amount, as such a layer would. [07 §8.5d] observed (values) /
+    /// inferred (layer).
+    public static let lightContentWhite: Double = 2.0 / 3
+    public static let darkContentWhite: Double = 0.10
+
+    /// The content area of a picked color: white over the window color. [07 §8.5d] inferred.
+    public static func contentOverWindow(_ window: RGBAColor, appearance: ResolvedAppearance) -> RGBAColor {
+        let white = RGBAColor(red: 1, green: 1, blue: 1)
+        return mix(window, white, amount: appearance == .dark ? darkContentWhite : lightContentWhite)
+    }
 }

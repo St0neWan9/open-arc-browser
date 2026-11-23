@@ -86,14 +86,20 @@ extension ThemePalette {
     /// translucent layer (the theme color over a white / black veil, alpha = its coverage) that
     /// over the reference backdrop shows `windowBackground`. [07 §8.2] inferred.
     /// Opaque palettes return the window color itself.
+    /// A picked color paints its own layer at the theme's strength (B242: Arc's coverage grows with
+    /// the intensity, so at 1 less desktop shows through, 20.4/255 between black and white desktops
+    /// against 29.5 at 0.8); other window colors use the layer that shows them over the reference
+    /// desktop at the preset coverage.
     public var windowThemeLayer: RGBAColor {
         guard isWindowTranslucent else { return windowBackground }
+        if let picked = pickedThemeLayers.first { return picked }
         return ThemeDerivation.windowLayer(showing: windowBackground, appearance: appearance)
     }
 
     /// The gradient stops of a multi-dot theme or the no-color wash, as layers like `windowThemeLayer`.
     public var backgroundGradientLayers: [RGBAColor] {
         guard isWindowTranslucent else { return backgroundGradientColors }
+        if pickedThemeLayers.count == backgroundGradientColors.count { return pickedThemeLayers }
         return backgroundGradientColors.map { ThemeDerivation.windowLayer(showing: $0, appearance: appearance) }
     }
 

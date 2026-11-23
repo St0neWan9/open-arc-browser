@@ -141,6 +141,16 @@ public struct ThemePalette: Hashable, Sendable {
     /// shows through them like through the window ([07 §8.4]). Over the opaque window color each
     /// gives `controlFill`, `separator`, `selectedTabFill` and `scrollEdgeLine`.
     public var windowLayers: WindowLayers = .derived(lightInk: false)
+    /// The theme layers painted over the blur material for picked colors, one per color dot: each
+    /// picked color at the theme's own strength (its intensity), not clamped (B242). Empty for
+    /// colors that do not come from a pick (the no-color wash, incognito), which derive their layer
+    /// from the window color instead (`windowThemeLayer`).
+    public var pickedThemeLayers: [RGBAColor] = []
+    /// The empty panel as a layer over the window background on a see-through window: white at
+    /// `ThemeDerivation.lightContentWhite` / `darkContentWhite` for a picked color (B242,
+    /// [07 §8.5d]); nil where the panel color is not white over the window (no-color wash,
+    /// incognito), which keeps `webPanelBackground` opaque.
+    public var webPanelLayer: RGBAColor? = nil
 
     // MARK: B16 additions (E11 design system, 07)
 
@@ -486,6 +496,12 @@ public enum ThemeDerivation {
         return RGBAColor(red: color.red * f, green: color.green * f, blue: color.blue * f, alpha: color.alpha)
     }
 
+    /// Strength of the theme layer at an intensity: the intensity itself in light; in dark the
+    /// fitted dark strength (0.74 at the preset 0.8), scaled with it (B159, inferred).
+    public static func windowStrength(_ appearance: ResolvedAppearance, intensity: Double) -> Double {
+        appearance == .dark ? darkThemeStrength * intensity / presetThemeStrength : intensity
+    }
+
     /// Light window color of one theme color: the theme layer (strength = the theme's intensity,
     /// 0.8 for presets; white veil) over the reference backdrop, composited in Display P3. [07 §8.2]
     /// inferred (layer math; fitted: backdrop gray). E12 max 2.7/255, E8 max 1.3/255.
@@ -573,6 +589,9 @@ public enum ThemeDerivation {
         let windowOf: (RGBAColor) -> RGBAColor = {
             isDark ? darkVariant($0, intensity: intensity) : lightWindow($0, intensity: intensity)
         }
+        let layerOf: (RGBAColor) -> RGBAColor = {
+            themeLayer($0, appearance: appearance, strength: windowStrength(appearance, intensity: intensity))
+        }
         let window = windowOf(theme)
         let white = RGBAColor(hex: 0xFFFFFF), black = RGBAColor(hex: 0x000000)
 
@@ -613,8 +632,13 @@ public enum ThemeDerivation {
         palette.separator = separator
         palette.scrollEdgeLine = lightInk ? overlayWhite(window, amount: lightInkScrollEdgeWhite) : shade(window, by: scrollEdgeScale)
         // Content area, light and dark alike: the E12 tint of the theme color [07 §8.1].
-        palette.webPanelBackground = picked.isEmpty && !isDark
-            ? defaultLightContent : contentBackground(theme, appearance: appearance, intensity: intensity)
+        // B242: for a picked color it is a white layer over the window (2/3 light, 1/10 dark).
+        palette.webPanelBackground = picked.isEmpty
+            ? (isDark ? contentBackground(theme, appearance: appearance) : defaultLightContent)
+            : contentOverWindow(window, appearance: appearance)
+        palette.pickedThemeLayers = picked.map(layerOf)
+        palette.webPanelLayer = picked.isEmpty ? nil
+            : RGBAColor(red: 1, green: 1, blue: 1, alpha: isDark ? darkContentWhite : lightContentWhite)
         palette.webPanelBackgroundGradient = picked.isEmpty && !isDark ? defaultLightContentGradient : []
         // The see-through window [07 §8.4]: content, command bar and bubbles stay opaque.
         palette.windowOpacity = WindowTranslucency.opacity(for: appearance)

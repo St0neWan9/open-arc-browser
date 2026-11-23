@@ -48,8 +48,8 @@ final class SpaceColorB242Tests: XCTestCase {
         ThemeDerivation.palette(forStyle: ThemeStyle(colors: [s.color], intensity: s.intensity), appearance: .light)
     }
 
-    /// The content area follows the intensity: the theme's share is 0.25 × intensity (0.20 at 0.8,
-    /// 0.25 at 1). Before B242 it was a fixed 0.20 and the intensity-1 Spaces read 7–11/255 light.
+    /// The content area follows the intensity (it is white over the window). Before B242 it was a
+    /// fixed blend and the intensity-1 Spaces read 7–11/255 light.
     func testLightContentFollowsTheIntensity() {
         for s in samples {
             assertMatches(palette(s).webPanelBackground, s.content, within: 2.5, "\(s.name) content")
@@ -65,13 +65,35 @@ final class SpaceColorB242Tests: XCTestCase {
         }
     }
 
-    /// A wide-gamut pick stays extended in the painted layer (Arc's layer is extended sRGB); the
-    /// clamped blue read 250 where Arc shows 255.
-    func testWideGamutThemeLayerStaysExtended() {
-        let violet = RGBAColor(red: 0.115786, green: 0.020893, blue: 1.041854)
-        let layer = ThemeDerivation.windowLayer(violet, appearance: .light)
-        XCTAssertGreaterThan(layer.blue, 1, "not clamped to sRGB")
-        let clamped = ThemeDerivation.windowLayer(RGBAColor(red: violet.red, green: violet.green, blue: 1), appearance: .light)
-        XCTAssertGreaterThan(layer.blue, clamped.blue)
+    /// The painted layer of a picked color keeps its extended components (Arc's layer is extended
+    /// sRGB; clamped, the violet's blue read 250 where Arc shows 255).
+    func testWideGamutPaintedLayerStaysExtended() {
+        let violet = samples[2]
+        let p = palette(violet)
+        XCTAssertGreaterThan(p.windowThemeLayer.blue, 1, "not clamped to sRGB")
+        assertMatches(p.windowShown(over: WindowTranslucency.referenceDesktop), violet.window, within: 2.5, "violet shown")
+    }
+
+    /// The painted layer's coverage follows the intensity: over black and white desktops Arc's
+    /// window moved 29.4/255 at 0.8 (gray) and 20.4/255 at 1 (violet); a fresh window, flat
+    /// backdrops, lossless captures. observed.
+    func testPaintedLayerCoverageFollowsTheIntensity() {
+        let black = RGBAColor(hex: 0x000000), white = RGBAColor(hex: 0xFFFFFF)
+        let readings: [(Sample, over: RGBAColor, (Double, Double, Double))] = [
+            (samples[6], black, (141.3, 141.4, 141.3)), (samples[6], white, (170.7, 170.7, 170.7)),
+            (samples[2], black, (63.6, 45.5, 240.7)), (samples[2], white, (84.0, 65.8, 255.0)),
+        ]
+        for (sample, desktop, expected) in readings {
+            assertMatches(palette(sample).windowShown(over: desktop), expected, within: 3,
+                          "\(sample.name) over \(desktop == black ? "black" : "white")")
+        }
+    }
+
+    /// The content area is white over the window: 2/3 in light. [07 §8.5d]
+    func testLightContentIsTwoThirdsWhiteOverTheWindow() {
+        for s in samples {
+            let p = palette(s)
+            XCTAssertEqual(p.webPanelBackground, ThemeDerivation.contentOverWindow(p.windowBackground, appearance: .light))
+        }
     }
 }

@@ -507,6 +507,14 @@ struct WebPanel: View {
     @Environment(\.dialogCenter) private var dialogCenter
     @Environment(\.phishingProtection) private var phishingProtection
     @Environment(\.windowDrawnPermissionTab) private var windowDrawnPermissionTab
+    @Environment(\.windowSurface) private var surface
+
+    /// The flat fill: the palette's see-through layer when this panel shows the palette's own
+    /// content color on a see-through window (B242), else `background`.
+    private var fill: RGBAColor {
+        guard let palette, palette.webPanelBackground == background else { return background }
+        return palette.webPanelFill(on: surface)
+    }
 
     var body: some View {
         ZStack {
@@ -514,7 +522,7 @@ struct WebPanel: View {
                 LinearGradient(stops: WindowBackgroundView.stops(backgroundGradient, locations: nil),
                                startPoint: .topLeading, endPoint: .bottomTrailing)
             } else {
-                background.swiftUI
+                fill.swiftUI
             }
             if let tab {
                 VStack(spacing: 0) {

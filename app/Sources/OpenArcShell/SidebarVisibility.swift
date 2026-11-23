@@ -10,8 +10,35 @@ extension View {
     /// content), per appearance. Apply after the surface's rounded clip so the shadow follows the
     /// corner. Values: `Metrics.WebPanel.shadow`, [07 §7.1].
     func webPanelEdgeShadow(_ appearance: ResolvedAppearance) -> some View {
+        modifier(WebPanelEdgeShadow(appearance: appearance))
+    }
+}
+
+/// On a see-through window the empty panel is a translucent layer (B242), so a plain `.shadow`
+/// would show through it and darken the panel; the shadow is then drawn from the panel's shape
+/// and kept outside it. Arc's panel reads exactly white over the window, with no shadow inside
+/// ([07 §8.5d] observed). Opaque surfaces keep the plain shadow (the same look outside).
+private struct WebPanelEdgeShadow: ViewModifier {
+    let appearance: ResolvedAppearance
+    @Environment(\.windowSurface) private var surface
+
+    func body(content: Content) -> some View {
         let s = Metrics.WebPanel.shadow(appearance)
-        return shadow(color: .black.opacity(s.opacity), radius: s.radius, x: s.offsetX, y: s.offsetY)
+        if surface.isTranslucent {
+            let shape = RoundedRectangle(cornerRadius: Metrics.WebPanel.cornerRadius, style: .continuous)
+            content.background {
+                shape.fill(Color.black)
+                    .shadow(color: .black.opacity(s.opacity), radius: s.radius, x: s.offsetX, y: s.offsetY)
+                    .mask {
+                        Rectangle().padding(-4 * s.radius)
+                            .overlay { shape.blendMode(.destinationOut) }
+                            .compositingGroup()
+                    }
+                    .allowsHitTesting(false)
+            }
+        } else {
+            content.shadow(color: .black.opacity(s.opacity), radius: s.radius, x: s.offsetX, y: s.offsetY)
+        }
     }
 }
 
