@@ -201,6 +201,35 @@ final class MultiWindowTests: XCTestCase {
         XCTAssertEqual(aFocused, 0)
     }
 
+    /// B240: with three windows, the window that holds the page dims when a third one takes it,
+    /// not a window that was already dimmed (a dimmed window does not show the page).
+    func testTakeOverWithThreeWindowsDimsTheWindowThatHeldThePage() async throws {
+        let f = SidebarFixture()
+        let controller = makeController(f)
+        let a = window(controller, space: f.home)
+        let b = window(controller, space: f.home)
+        let c = window(controller, space: f.home)
+        try await a.activate(tabID: f.today1)
+        try await b.activate(tabID: f.today2)
+        try await c.activate(tabID: f.today2)
+
+        b.sidebar.selectTab(f.today1)
+        XCTAssertEqual(a.sidebar.pageTakenElsewhere, f.today1)
+        XCTAssertNil(b.sidebar.pageTakenElsewhere, "B holds the page")
+
+        c.sidebar.selectTab(f.today1)
+        XCTAssertNil(c.sidebar.pageTakenElsewhere, "C holds the page")
+        XCTAssertEqual(b.sidebar.pageTakenElsewhere, f.today1, "B, which held it, dims")
+        XCTAssertEqual(a.sidebar.pageTakenElsewhere, f.today1, "A stays dimmed")
+        XCTAssertTrue(controller.sidebar(showing: f.today1, except: a.sidebar) === c.sidebar)
+
+        // A takes it back from C; B stays dimmed.
+        a.sidebar.takePageBack()
+        XCTAssertNil(a.sidebar.pageTakenElsewhere)
+        XCTAssertEqual(c.sidebar.pageTakenElsewhere, f.today1)
+        XCTAssertEqual(b.sidebar.pageTakenElsewhere, f.today1)
+    }
+
     /// Split partners count as on screen too: a pane of A's split is not shown by B.
     func testSplitPaneOfAnotherWindowFocusesIt() async throws {
         let f = SidebarFixture()

@@ -1039,9 +1039,13 @@ public final class WorkspaceController: ObservableObject {
     }
 
     /// The window (other than `except`) that shows `tabID` on screen, if any. A tab's engine
-    /// surface can be hosted in one window only. inferred.
+    /// surface can be hosted in one window only. inferred. A window that dims the tab because
+    /// another window took its page does not show it (B240): with three windows the take-over
+    /// must find the window that holds the page, not one already dimmed.
     func sidebar(showing tabID: UUID, except: SidebarViewModel) -> SidebarViewModel? {
-        liveSidebars.first { $0 !== except && $0.countsAsVisibleWindow && $0.onScreenTabIDs.contains(tabID) }
+        liveSidebars.first {
+            $0 !== except && $0.countsAsVisibleWindow && $0.pageTakenElsewhere != tabID && $0.onScreenTabIDs.contains(tabID)
+        }
     }
 
     /// Adds a browser window to the saved UI state and makes it the active window. The first one
