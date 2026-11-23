@@ -138,4 +138,28 @@ final class ShellRenderingTests: XCTestCase {
         tab.surface.detach()
         XCTAssertTrue(container.subviews.isEmpty)
     }
+
+    /// B239: a web panel's container takes the page only once it is in a window. An extra
+    /// container SwiftUI builds and throws away without showing it must not take the page, or
+    /// its teardown leaves the window blank.
+    func testSurfaceContainerTakesThePageOnlyInAWindow() async throws {
+        let engine = FakeEngine(titleProvider: { _ in "Hosted" })
+        let tab = try await engine.makeTab(TabConfiguration(profileID: UUID(), initialURL: URL(string: "https://h.example")))
+        let surface = try XCTUnwrap(tab.surface as? FakeSurface)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 300), styleMask: [], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+
+        let shown = SurfaceContainerView(surface: surface)
+        XCTAssertFalse(surface.isAttached, "not before it is in a window")
+        window.contentView?.addSubview(shown)
+        XCTAssertTrue(surface.isAttached)
+        XCTAssertEqual(shown.subviews.count, 1)
+
+        // An extra container, built and torn down off screen (dismantle clears it).
+        let extra = SurfaceContainerView(surface: surface)
+        extra.clear()
+        XCTAssertTrue(extra.subviews.isEmpty)
+        XCTAssertEqual(shown.subviews.count, 1, "the page stays in the shown container")
+    }
 }

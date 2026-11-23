@@ -545,6 +545,31 @@ struct WebPanel: View {
 /// placeholder for FakeEngine.
 final class SurfaceContainerView: NSView, SurfaceHost {
     private(set) var lastPlaceholder: SurfacePlaceholder?
+    /// The page this container takes each time it lands in a window; nil for containers that
+    /// are handed their content directly (the extension popup).
+    private let surface: (any TabSurface)?
+
+    /// A container that shows `surface` once it is in a window. SwiftUI can build a web panel's
+    /// container more than once in one update and throw the extra away without ever putting it
+    /// in a window; attaching at build time let that extra take the page, and its teardown
+    /// cleared it, so a page taken over from another window showed in neither (B239).
+    init(surface: any TabSurface) {
+        self.surface = surface
+        super.init(frame: .zero)
+    }
+
+    override init(frame: NSRect) {
+        surface = nil
+        super.init(frame: frame)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { surface?.attach(to: self) }
+    }
     /// The content-area color the placeholder sits on, so its text keeps contrast. Changing it
     /// redraws a shown placeholder.
     var panelColor: RGBAColor = RGBAColor(hex: 0xFFFFFF) {
@@ -555,17 +580,19 @@ final class SurfaceContainerView: NSView, SurfaceHost {
     }
 
     func show(_ content: SurfaceContent) {
-        clear()
         let child: NSView
         switch content {
         case .native(let object):
             guard let view = object as? NSView else { return }
             lastPlaceholder = nil
+            // Already here (the container moved to another window): keep it in place.
+            if view.superview === self { return }
             child = view
         case .placeholder(let placeholder):
             lastPlaceholder = placeholder
             child = NSHostingView(rootView: PlaceholderPage(placeholder: placeholder, panelColor: panelColor))
         }
+        clear()
         child.frame = bounds
         child.autoresizingMask = [.width, .height]
         addSubview(child)
@@ -581,9 +608,9 @@ struct SurfaceHostRepresentable: NSViewRepresentable {
     var panelColor: RGBAColor = RGBAColor(hex: 0xFFFFFF)
 
     func makeNSView(context: Context) -> SurfaceContainerView {
-        let view = SurfaceContainerView()
+        // Takes the page when it lands in a window, not here (see `init(surface:)`).
+        let view = SurfaceContainerView(surface: surface)
         view.panelColor = panelColor
-        surface.attach(to: view)
         return view
     }
 
