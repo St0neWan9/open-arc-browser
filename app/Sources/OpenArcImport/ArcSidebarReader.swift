@@ -240,8 +240,11 @@ public enum ArcSidebarReader {
     }
 
     /// The Space's color: the single background color, else the palette's mid tone. Components in
-    /// extended sRGB are clamped to 0…1. The appearance follows the theme's light / dark content
-    /// marker; the noise strength becomes grain. Gradient backgrounds use their mid tone only.
+    /// extended sRGB are clamped to 0…1. The noise strength becomes grain. Gradient backgrounds use
+    /// their mid tone only. The appearance stays automatic: the background's light / dark content
+    /// marker names the ink that reads on the color (white on a dark color), not the window's mode.
+    /// Arc marks its purple, periwinkle and green Spaces "dark" and still draws them in a light
+    /// window under a light system (B241). [07 §8.2] inferred (Arc's sidebar data, read-only).
     static func theme(_ value: Any?) -> ThemeStyle? {
         guard let theme = value as? [String: Any] else { return nil }
         let single = ((theme["background"] as? [String: Any])?["single"] as? [String: Any])?["_0"] as? [String: Any]
@@ -249,11 +252,6 @@ public enum ArcSidebarReader {
         let midTone = (theme["primaryColorPalette"] as? [String: Any])?["midTone"]
         guard let color = color(blended?["color"]) ?? color(midTone) else { return nil }
         var style = ThemeStyle(colors: [color])
-        switch single?["contentOverBackgroundAppearance"] as? String {
-        case "dark": style.appearance = .dark
-        case "light": style.appearance = .light
-        default: break
-        }
         if let noise = ((blended?["modifiers"] as? [String: Any])?["noiseFactor"] as? NSNumber)?.doubleValue, noise.isFinite {
             style.grain = min(max(noise, 0), 1)
         }

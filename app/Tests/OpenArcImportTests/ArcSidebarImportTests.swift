@@ -181,7 +181,8 @@ final class ArcSidebarImportTests: XCTestCase {
         XCTAssertNil(ForeignSidebarMapper.icon(.symbol("notAnArcIcon"), knownSymbols: symbols))
         XCTAssertFalse(work.isFromOtherProfile)
         let theme = try XCTUnwrap(work.theme)
-        XCTAssertEqual(theme.appearance, .dark)
+        // B241: the "dark" content marker names the ink over a dark color, not the window's mode.
+        XCTAssertEqual(theme.appearance, .automatic)
         XCTAssertEqual(theme.colors, [RGBAColor(red: 0.2, green: 0.4, blue: 1, alpha: 1)], "the background color, clamped to 0…1")
         XCTAssertEqual(theme.grain, 0.3)
         XCTAssertEqual(work.pinned, [
@@ -211,6 +212,26 @@ final class ArcSidebarImportTests: XCTestCase {
         XCTAssertEqual(music.emoji, "🎵")
         // welcome page (1) + dangling id (1) + canvas with its part (2).
         XCTAssertEqual(sidebar.skipped, 4)
+    }
+
+    /// B241: Arc's light / dark content marker names the ink over the color. A saturated violet
+    /// marked "dark" is drawn in a light window under a light system, so neither marker may pin the
+    /// imported theme to one mode; both stay automatic and follow the system.
+    func testThemeContentMarkerDoesNotPinTheAppearance() throws {
+        func theme(marker: String, red: Double, green: Double, blue: Double) -> ThemeStyle? {
+            ArcSidebarReader.theme(["background": ["single": ["_0": [
+                "contentOverBackgroundAppearance": marker,
+                "style": ["color": ["_0": ["blendedSingleColor": ["_0": [
+                    "color": ["red": red, "green": green, "blue": blue, "alpha": 1],
+                    "modifiers": ["intensityFactor": 1, "noiseFactor": 0],
+                ]]]]],
+            ]]]])
+        }
+        let violet = try XCTUnwrap(theme(marker: "dark", red: 0.12, green: 0.02, blue: 1.04))
+        XCTAssertEqual(violet.appearance, .automatic)
+        XCTAssertEqual(violet.intensity, 1)
+        let peach = try XCTUnwrap(theme(marker: "light", red: 1, green: 0.9, blue: 0.83))
+        XCTAssertEqual(peach.appearance, .automatic)
     }
 
     func testReaderRejectsOtherFiles() {
@@ -263,7 +284,7 @@ final class ArcSidebarImportTests: XCTestCase {
         XCTAssertEqual(s.spaces[play]?.name, "Play", "trimmed")
         let workTheme = try XCTUnwrap(s.spaces[work]?.themeID.flatMap { s.themes[$0] })
         XCTAssertEqual(workTheme.colors, [RGBAColor(red: 0.2, green: 0.4, blue: 1, alpha: 1)])
-        XCTAssertEqual(workTheme.appearance, .dark)
+        XCTAssertEqual(workTheme.appearance, .automatic, "the content marker does not force a dark Space")
         let playTheme = try XCTUnwrap(s.spaces[play]?.themeID.flatMap { s.themes[$0] })
         XCTAssertEqual(playTheme.colors, fallbackTheme.colors, "no theme in the file: the default color")
 
