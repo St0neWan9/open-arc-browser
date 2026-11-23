@@ -302,8 +302,14 @@ public enum ThemeDerivation {
     // ThemeWindowLayer.swift (B146; replaces the fitted B38 blends mix(theme, #EBEBEB, 0.37) and
     // mixP3(theme, 180/255, 0.393)).
 
-    /// Control fill = window × 0.96. [07 §8, §10] inferred (≤ 1.4/255).
-    public static let controlFillScale: Double = 0.96
+    /// Control fill = window × 0.954 (dark ink). B243 lossless captures over the reference desktop,
+    /// five dark-ink Spaces at intensity 0.8 and 1: 0.952–0.954 (the earlier 0.96 read 1.5/255
+    /// light). [07 §8, §8.5d] inferred.
+    public static let controlFillScale: Double = 0.954
+    /// Control fill of the no-color wash = window × 0.96: its controls read lighter than the picked
+    /// colors' rule (B98 #D8D8EB on #DEDEF5; Arc's no-color Space again #D8D7EA in B243). [07 §8.5]
+    /// observed / inferred.
+    public static let noColorControlFillScale: Double = 0.96
     /// Separator = window × 0.87. [07 §8] inferred (thin lines on a JPEG: up to ≈ 13/255 off).
     public static let separatorScale: Double = 0.87
     /// Lines at the scrolled list's edges (under the Space name, above the dock): lighter than the
@@ -602,7 +608,8 @@ public enum ThemeDerivation {
         let chromeInk = lightInk ? white : black
         let inkOpacity: ChromeInkOpacities = lightInk ? .lightInk : .darkInk
         // Dark ink: controls are darker than the window [07 §8]; light ink: lighter (B32 round 1).
-        let controlFill = lightInk ? overlayWhite(window, amount: lightInkControlWhite) : shade(window, by: controlFillScale)
+        let controlScale = picked.isEmpty ? noColorControlFillScale : controlFillScale
+        let controlFill = lightInk ? overlayWhite(window, amount: lightInkControlWhite) : shade(window, by: controlScale)
         let separator = lightInk ? overlayWhite(window, amount: lightInkSeparatorWhite) : shade(window, by: separatorScale)
 
         var palette = ThemePalette(
@@ -642,7 +649,7 @@ public enum ThemeDerivation {
         palette.webPanelBackgroundGradient = picked.isEmpty && !isDark ? defaultLightContentGradient : []
         // The see-through window [07 §8.4]: content, command bar and bubbles stay opaque.
         palette.windowOpacity = WindowTranslucency.opacity(for: appearance)
-        palette.windowLayers = .derived(lightInk: lightInk)
+        palette.windowLayers = .derived(lightInk: lightInk, controlScale: controlScale)
         palette.selectedTabText = lightInk ? withAlpha(white, inkOpacity.rowTitle) : rowText
         palette.dropTargetFill = dropTargetFill(window: window, isDark: isDark)
         palette.splitPreviewFill = splitPreviewFill(window: window, isDark: isDark)

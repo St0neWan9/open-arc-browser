@@ -508,12 +508,22 @@ struct WebPanel: View {
     @Environment(\.phishingProtection) private var phishingProtection
     @Environment(\.windowDrawnPermissionTab) private var windowDrawnPermissionTab
     @Environment(\.windowSurface) private var surface
+    @Environment(\.panelFillBehind) private var panelFillBehind
 
-    /// The flat fill: the palette's see-through layer when this panel shows the palette's own
-    /// content color on a see-through window (B242), else `background`.
+    /// The flat fill (`fill(background:palette:surface:panelFillBehind:)`).
     private var fill: RGBAColor {
-        guard let palette, palette.webPanelBackground == background else { return background }
-        return palette.webPanelFill(on: surface)
+        Self.fill(background: background, palette: palette, surface: surface, panelFillBehind: panelFillBehind)
+    }
+
+    /// The panel's own flat fill. A web panel never paints the see-through layer itself: where the
+    /// container paints it behind (`panelFillBehind`, B242) the panel is clear so the layer shows;
+    /// everywhere else (Link Peek, Easel, Little Arc) it stays the opaque `background`, so nothing
+    /// under the panel shows through.
+    static func fill(background: RGBAColor, palette: ThemePalette?, surface: WindowSurface,
+                     panelFillBehind: Bool) -> RGBAColor {
+        guard panelFillBehind, let palette, palette.webPanelBackground == background,
+              palette.webPanelFill(on: surface) != background else { return background }
+        return RGBAColor(red: 0, green: 0, blue: 0, alpha: 0)
     }
 
     var body: some View {

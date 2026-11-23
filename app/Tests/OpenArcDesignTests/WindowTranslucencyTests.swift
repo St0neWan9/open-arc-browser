@@ -95,11 +95,11 @@ final class WindowTranslucencyTests: XCTestCase {
         }
     }
 
-    /// [07 §8.4] observed layer amounts: dark ink control + 4 % black, separator + 13 % black
+    /// [07 §8.4] observed layer amounts: dark ink control + 4.6 % black (B243; E8 read 4 %), separator + 13 % black
     /// (E8 13.5 %, rule × 0.87), selected row + 89 % #F7F7F7; light ink + 11 % / + 16 % white.
     func testLayerAmountsFollowE8() {
         let dark = WindowLayers.derived(lightInk: false)
-        XCTAssertEqual(dark.controlFill, RGBAColor(hex: 0x000000, alpha: 1 - 0.96))
+        XCTAssertEqual(dark.controlFill.alpha, 1 - 0.954, accuracy: 1e-9, "B243 refit of E8's 4 %")
         XCTAssertEqual(dark.separator.alpha, 0.13, accuracy: 1e-9)
         XCTAssertEqual(dark.selectedRowFill, RGBAColor(hex: 0xF7F7F7, alpha: 0.894))
         let light = WindowLayers.derived(lightInk: true)

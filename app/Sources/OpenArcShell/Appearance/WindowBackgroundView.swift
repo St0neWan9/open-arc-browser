@@ -80,6 +80,26 @@ struct WebPanelBackgroundView: View {
     }
 }
 
+private struct PanelFillBehindKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// A `WebPanelBackgroundView` already paints the panel fill behind this view, so a web panel
+    /// inside must not paint the see-through layer again (two 2/3 white layers read 8/9 white).
+    var panelFillBehind: Bool {
+        get { self[PanelFillBehindKey.self] }
+        set { self[PanelFillBehindKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Paints the panel fill behind this view and tells the web panels inside (B242).
+    func webPanelFillBackground(_ palette: ThemePalette) -> some View {
+        environment(\.panelFillBehind, true).background(WebPanelBackgroundView(palette: palette))
+    }
+}
+
 extension ThemePalette {
     /// The empty panel's fill: on a see-through window the white layer over the window's own
     /// background (B242, as Arc draws it, so the desktop shows through at a third of the window's

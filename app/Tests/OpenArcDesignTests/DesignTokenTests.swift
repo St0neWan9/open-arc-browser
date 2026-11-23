@@ -175,7 +175,7 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(window.red, observed.red, accuracy: 1.5 / 255)
         XCTAssertEqual(window.green, observed.green, accuracy: 1.5 / 255)
         XCTAssertEqual(window.blue, observed.blue, accuracy: 1.5 / 255)
-        XCTAssertEqual(palette.controlFill, ThemeDerivation.shade(window, by: 0.96))
+        XCTAssertEqual(palette.controlFill, ThemeDerivation.shade(window, by: 0.954), "B243 refit")
         XCTAssertLessThan(ThemeDerivation.luminance(palette.controlFill), ThemeDerivation.luminance(palette.windowBackground), "darker")
         XCTAssertEqual(palette.selectedTabFill, ThemeDerivation.mix(window, RGBAColor(hex: 0xF7F7F7), amount: 0.894), "[07 §8.4] E8 refit")
         XCTAssertEqual(palette.separator, ThemeDerivation.shade(window, by: 0.87))

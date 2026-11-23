@@ -65,14 +65,14 @@ public struct WindowLayers: Hashable, Sendable {
     /// The layers of the derived palette for an ink: the same rules as the opaque colors in
     /// `ThemeDerivation.palette` (window × 0.96 = 4 % black, …), written as overlays.
     /// [07 §8, §8.3, §8.4] inferred.
-    public static func derived(lightInk: Bool) -> WindowLayers {
+    public static func derived(lightInk: Bool, controlScale: Double = ThemeDerivation.controlFillScale) -> WindowLayers {
         let d = ThemeDerivation.self
         let black = RGBAColor(hex: 0x000000), white = RGBAColor(hex: 0xFFFFFF)
         func layer(_ c: RGBAColor, _ alpha: Double) -> RGBAColor {
             RGBAColor(red: c.red, green: c.green, blue: c.blue, alpha: alpha)
         }
         return WindowLayers(
-            controlFill: lightInk ? layer(white, d.lightInkControlWhite) : layer(black, 1 - d.controlFillScale),
+            controlFill: lightInk ? layer(white, d.lightInkControlWhite) : layer(black, 1 - controlScale),
             separator: lightInk ? layer(white, d.lightInkSeparatorWhite) : layer(black, 1 - d.separatorScale),
             selectedRowFill: lightInk ? layer(d.lightInkSelectedRowMixColor, d.lightInkSelectedRowMixAmount)
                 : layer(d.selectedRowMixColor, d.selectedRowMixAmount),

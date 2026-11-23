@@ -313,7 +313,7 @@ struct WebPanelWithToolbar<Page: View>: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         // A transparent bar (no page) shows the panel fill. [06 §17.4] observed.
-        .background(WebPanelBackgroundView(palette: model.windowPalette))
+        .webPanelFillBackground(model.windowPalette)
     }
 }
 

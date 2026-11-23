@@ -98,7 +98,7 @@ struct SplitPaneView: View {
         }
         .frame(width: layout.paneFrame.width, height: layout.paneFrame.height, alignment: .topLeading)
         // A transparent bar (empty pane) shows the panel fill. [06 §17.4] observed.
-        .background(WebPanelBackgroundView(palette: palette))
+        .webPanelFillBackground(palette)
         .clipShape(shape)
         .webPanelEdgeShadow(palette.appearance)
         .overlay {

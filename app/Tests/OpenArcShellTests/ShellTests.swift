@@ -149,6 +149,16 @@ final class ShellRenderingTests: XCTestCase {
         XCTAssertEqual(wash.webPanelFill(on: .translucent), wash.webPanelBackground)
     }
 
+    /// B242: a web panel never paints the see-through layer itself. Clear over a container that
+    /// paints it; opaque without one (Link Peek, Easel) and on an opaque surface.
+    func testWebPanelFillLeavesTheLayerToItsContainer() {
+        let p = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0x5967BE)], intensity: 1), appearance: .light)
+        let bg = p.webPanelBackground
+        XCTAssertEqual(WebPanel.fill(background: bg, palette: p, surface: .translucent, panelFillBehind: true).alpha, 0)
+        XCTAssertEqual(WebPanel.fill(background: bg, palette: p, surface: .translucent, panelFillBehind: false), bg)
+        XCTAssertEqual(WebPanel.fill(background: bg, palette: p, surface: .opaque, panelFillBehind: true), bg)
+    }
+
     /// B239: a web panel's container takes the page only once it is in a window. An extra
     /// container SwiftUI builds and throws away without showing it must not take the page, or
     /// its teardown leaves the window blank.
