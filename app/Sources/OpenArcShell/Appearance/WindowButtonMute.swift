@@ -34,6 +34,11 @@ enum WindowButtonLook {
         lightInk ? RGBAColor(hex: 0xFFFFFF, alpha: 0.27) : RGBAColor(hex: 0x000000, alpha: restingDarkReading + 0.015)
     }
 
+    /// The real buttons' opacity at rest: invisible (under 0.3/255 on any window), but not 0,
+    /// which AppKit treats as no button at all (`performClose` beeps, accessibility reads the
+    /// buttons as disabled). B246, observed: 0.001 already counts as present.
+    static let restingButtonAlpha: CGFloat = 0.001
+
     /// Disc diameter while the group is hovered. observed (12 pt at rest, `Metrics.WindowButtons`).
     static let hoveredDiameter: CGFloat = 14
 
@@ -208,9 +213,10 @@ extension MainWindowChromeConfigurator.Coordinator {
         }
         mute.discCenters = frames.map { CGPoint(x: $0.midX - union.minX, y: $0.midY - union.minY) }
         mute.isHidden = hidden
-        // AppKit takes a title bar button at alpha 0 for absent: no click, no tiling menu on the
-        // zoom button. While hovered they are opaque under our opaque hovered discs (B175).
-        let alpha: CGFloat = hidden || mute.isHovered ? 1 : 0
+        // At rest nearly transparent, not 0: AppKit takes a title bar button at alpha 0 for absent,
+        // so ⇧⌘W, ⌘M, the title bar double-click and accessibility found no close / minimize /
+        // zoom button (B246). While hovered they are opaque under our opaque hovered discs (B175).
+        let alpha: CGFloat = hidden || mute.isHovered ? 1 : WindowButtonLook.restingButtonAlpha
         for button in buttons where button.alphaValue != alpha { button.alphaValue = alpha }
         mute.onHover = { [weak window] _ in
             guard let window else { return }
