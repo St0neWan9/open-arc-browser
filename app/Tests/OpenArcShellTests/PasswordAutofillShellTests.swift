@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import SwiftUI
 import CoreGraphics
 import OpenArcModel
 import OpenArcEngine
@@ -191,6 +193,34 @@ final class PasswordAutofillShellTests: XCTestCase {
         center.stopObserving(live.id)
         XCTAssertNil(center.autofillPopup(for: live.id))
         XCTAssertEqual(live.dialogAnswers[id], .autofillPopup(.dismiss))
+    }
+
+    /// B252: the card's shadow shows outside it (it is the card's only edge); clipping the card had
+    /// cut it off. Darker below than above (2 pt down).
+    func testDropdownShadowShowsOutsideTheCard() async throws {
+        let live = try await openPage("https://login.example")
+        let center = model.controller.dialogs
+        let state = AutofillPopupState(suggestions: [AutofillSuggestion(kind: .autocomplete, mainText: "13681175090")],
+                                       elementBounds: EngineRect(x: 40, y: 40, width: 200, height: 28))
+        _ = live.simulateAutofillPopup(state)
+        try await waitUntil { center.autofillPopup(for: live.id) != nil }
+        let popup = try XCTUnwrap(center.autofillPopup(for: live.id))
+        let size = CGSize(width: 320, height: 200)
+        let card = AutofillDropdownPlacement.frame(for: state, in: size)
+        let renderer = ImageRenderer(content: ZStack(alignment: .topLeading) {
+            Color.white
+            AutofillDropdownView(center: center, popup: popup)
+        }.frame(width: size.width, height: size.height).environment(\.colorScheme, .light))
+        renderer.scale = 1
+        let rep = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+        func darkening(_ x: CGFloat, _ y: CGFloat) -> Double {
+            1 - rep.colorAt(x: Int(x), y: Int(y))!.usingColorSpace(.sRGB)!.brightnessComponent
+        }
+        let below = darkening(card.midX, card.maxY + 1), above = darkening(card.midX, card.minY - 2)
+        let beside = darkening(card.minX - 1, card.midY)
+        XCTAssertGreaterThan(beside, 0.04, "an edge at the sides")
+        XCTAssertGreaterThan(below, 0.08, "and below")
+        XCTAssertGreaterThan(below, above, "moved down")
     }
 
     /// Under the field; above it when there is no room below; right-aligned for right-to-left

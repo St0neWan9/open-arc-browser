@@ -365,8 +365,11 @@ enum AutofillDropdownTokens {
     /// Hover fill: the label color at this opacity (a subtle neutral wash, not the accent).
     /// inferred.
     static let hoverOpacity: Double = 0.06
-    /// Shadow under the card. inferred, restated as a SwiftUI shadow.
-    static let shadowOpacity: Double = 0.18
+    /// Shadow under the card, which is also its only edge (no stroke): right at the card the page
+    /// reads ≈ 11 % darker at the sides, ≈ 18 % below and ≈ 5.5 % above. observed (B252, user's
+    /// capture of Arc, 2026-11-24); fitted as a Gaussian of σ ≈ 3 pt moved 2 pt down at 22 %,
+    /// inferred as a SwiftUI radius (≈ 2σ).
+    static let shadowOpacity: Double = 0.22
     static let shadowRadius: CGFloat = 6
     static let shadowY: CGFloat = 2
 }
@@ -443,6 +446,9 @@ struct AutofillDropdownView: View {
             }
             .scrollIndicators(.never)
             .frame(width: frame.width, height: frame.height)
+            // Only the rows are clipped to the card: clipping the card too cut its shadow off, and
+            // the shadow is the card's edge (B252).
+            .clipShape(RoundedRectangle(cornerRadius: AutofillDropdownTokens.cornerRadius, style: .continuous))
             .background(
                 RoundedRectangle(cornerRadius: AutofillDropdownTokens.cornerRadius, style: .continuous)
                     .fill(Color(nsColor: .textBackgroundColor))
@@ -451,7 +457,6 @@ struct AutofillDropdownView: View {
                         radius: AutofillDropdownTokens.shadowRadius, y: AutofillDropdownTokens.shadowY
                     )
             )
-            .clipShape(RoundedRectangle(cornerRadius: AutofillDropdownTokens.cornerRadius, style: .continuous))
             .onHover { inside in
                 popup.session.send(.pointerInside(inside))
                 if !inside { popup.session.send(.select(nil)) }
