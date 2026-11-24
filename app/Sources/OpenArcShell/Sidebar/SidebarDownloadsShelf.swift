@@ -269,6 +269,14 @@ final class SidebarDownloadsShelf: ObservableObject {
     /// Lists the folder. `attach` sets the real one; tests replace it.
     var scanFolder: @MainActor () async -> [DownloadsFolderFile] = { [] }
     private var scanTask: Task<Void, Never>?
+    /// The folder was read in this run. Until then nothing reads it and there are no rows (B248:
+    /// not at launch, not for downloads of an earlier run), so a launch never asks for the
+    /// Downloads folder permission.
+    private(set) var hasScannedFolder = false
+    /// A download ran in this run (it writes to the folder, so the permission was asked then).
+    private var sawRunningDownload = false
+    /// The rows are built once the shelf was wanted or a download ran in this run.
+    private var rowsWanted: Bool { hasScannedFolder || sawRunningDownload }
     private var completedIDs: Set<String> = []
     private var profileID: () -> UUID? = { nil }
     /// Whether the shelf may show now (no drag or swipe running).
@@ -301,7 +309,8 @@ final class SidebarDownloadsShelf: ObservableObject {
             MainActor.assumeIsolated { self?.update(downloads: downloads) }
         }
         downloads.observe(profileID: profileID())
-        rescanFolder()
+        // No folder read yet: the first one asks for macOS's Downloads folder permission, so it
+        // waits until the shelf is wanted (the Library button is hovered). B248.
     }
 
     /// Follows the profile of the window's Space: the badge and the flight belong to the downloads
@@ -326,10 +335,18 @@ final class SidebarDownloadsShelf: ObservableObject {
         lastDownloads = downloads
         // A download that just finished landed in the folder: list it again.
         let done = Set(downloads.filter { $0.state == .complete }.map(\.id))
-        if !done.subtracting(completedIDs).isEmpty { rescanFolder() }
+        if rowsWanted, !done.subtracting(completedIDs).isEmpty { rescanFolder() }
         completedIDs = done
-        let next = SidebarShelfEntry.recent(downloads: downloads, files: folderFiles, now: now(),
-                                            fileExists: fileExists, hidden: hiddenIDs)
+        // No rows before the shelf is wanted: building them checks the files and draws their icons,
+        // which reads the Downloads folder and would ask for its permission at launch (B248).
+        if !sawRunningDownload,
+           downloads.contains(where: { $0.state == .inProgress || $0.state == .paused || $0.state == .needsConfirmation }) {
+            sawRunningDownload = true
+        }
+        let next = rowsWanted
+            ? SidebarShelfEntry.recent(downloads: downloads, files: folderFiles, now: now(),
+                                       fileExists: fileExists, hidden: hiddenIDs)
+            : []
         if next != entries { entries = next }
         if isShown, next.isEmpty { setShown(false) }
         // Rows that arrive while the pointer waits on the button (the folder read finished after the
@@ -497,6 +514,7 @@ final class SidebarDownloadsShelf: ObservableObject {
 
     /// Lists the Downloads folder again, then recomputes the rows.
     func rescanFolder() {
+        hasScannedFolder = true
         scanTask?.cancel()
         let scan = scanFolder
         scanTask = Task { [weak self] in

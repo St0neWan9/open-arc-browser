@@ -91,6 +91,7 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
             id: "h", profileID: profileID, sourceURL: URL(string: "https://example.org/h")!,
             fileURL: URL(fileURLWithPath: "/tmp/h"), suggestedFilename: "h", state: .complete,
             receivedBytes: 1, totalBytes: 1, startDate: now, endDate: now))
+        shelf.iconHovered(true)  // a finished download of an earlier run: rows once hovered (B248)
         try await waitUntil { shelf.entries.count == 1 }
         shelf.hide(try XCTUnwrap(shelf.entries.first))
         XCTAssertTrue(shelf.entries.isEmpty)
@@ -147,10 +148,12 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
             id: "x", profileID: profileID, sourceURL: URL(string: "https://example.org/x.zip")!,
             fileURL: URL(fileURLWithPath: "/tmp/x.zip"), suggestedFilename: "x.zip", state: .complete,
             receivedBytes: 10, totalBytes: 10, startDate: now, endDate: now))
-        try await waitUntil { shelf.entries.count == 1 }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertTrue(shelf.entries.isEmpty, "no rows before the first hover (B248)")
 
         shelf.iconHovered(true)
         try await waitUntil { shelf.isShown }
+        XCTAssertEqual(shelf.entries.count, 1)
         shelf.listHovered(true)
         shelf.iconHovered(false)
         try await Task.sleep(nanoseconds: 20_000_000)
@@ -170,6 +173,23 @@ final class SidebarDownloadsShelfB200Tests: XCTestCase {
         await shelf.settleFolderScan()
         try await waitUntil { shelf.isShown }
         XCTAssertEqual(shelf.entries.map(\.title), ["setup.dmg"])
+    }
+
+    /// B248: the Downloads folder is read only once the Library button is hovered, never at launch
+    /// (the first read asks for macOS's folder permission).
+    func testFolderIsNotReadUntilHovered() async throws {
+        let (model, _) = makeModel()
+        defer { model.stop() }
+        let shelf = model.sidebar.downloadsShelf
+        var reads = 0
+        shelf.scanFolder = { reads += 1; return [] }
+        await shelf.settleFolderScan()
+        XCTAssertFalse(shelf.hasScannedFolder)
+        XCTAssertEqual(reads, 0)
+        shelf.iconHovered(true)
+        await shelf.settleFolderScan()
+        XCTAssertTrue(shelf.hasScannedFolder)
+        XCTAssertEqual(reads, 1)
     }
 
     /// Nothing downloaded: nothing shows. A drag or a Space swipe keeps it closed.
