@@ -140,13 +140,38 @@ final class ShellRenderingTests: XCTestCase {
     }
 
     /// B242: on a see-through window the empty panel of a picked color is a white layer over the
-    /// window (2/3 light), opaque elsewhere; the no-color wash keeps its opaque color.
+    /// window (2/3 light), opaque elsewhere; so is the no-color wash's in light (B244).
     func testEmptyPanelIsAWhiteLayerOnASeeThroughWindow() {
         let picked = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0x5967BE)], intensity: 1), appearance: .light)
         XCTAssertEqual(picked.webPanelFill(on: .translucent), RGBAColor(red: 1, green: 1, blue: 1, alpha: 2.0 / 3))
         XCTAssertEqual(picked.webPanelFill(on: .opaque), picked.webPanelBackground)
         let wash = ThemeDerivation.palette(forStyle: nil, appearance: .light)
-        XCTAssertEqual(wash.webPanelFill(on: .translucent), wash.webPanelBackground)
+        XCTAssertEqual(wash.webPanelFill(on: .translucent), RGBAColor(red: 1, green: 1, blue: 1, alpha: 2.0 / 3))
+        XCTAssertEqual(wash.webPanelFill(on: .opaque), wash.webPanelBackground)
+    }
+
+    /// B244: a selected row casts its shadow on dark-ink windows only (Arc's light-ink rows leave
+    /// the window untouched around them).
+    func testSelectedRowShadowOnlyWithDarkInk() {
+        let sky = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0x6CBAD9)]), appearance: .light)
+        let navy = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0x666789)]), appearance: .light)
+        XCTAssertEqual(SidebarRowFrame<EmptyView>.selectedShadow(sky), Metrics.Sidebar.selectedRowShadow)
+        XCTAssertTrue(navy.usesLightInk)
+        XCTAssertNil(SidebarRowFrame<EmptyView>.selectedShadow(navy))
+    }
+
+    /// B244: the no-color wash's panel leaves its content gradient out where the container paints
+    /// the white layer over the window's wash; elsewhere it keeps the opaque gradient.
+    func testWashPanelGradientOnlyWhenOpaque() {
+        let wash = ThemeDerivation.palette(forStyle: nil, appearance: .light)
+        let bg = wash.webPanelBackground, gradient = wash.webPanelBackgroundGradient
+        XCTAssertGreaterThan(gradient.count, 1)
+        let behind = WebPanel.fill(background: bg, palette: wash, surface: .translucent, panelFillBehind: true)
+        XCTAssertFalse(WebPanel.paintsGradient(gradient, fill: behind))
+        let alone = WebPanel.fill(background: bg, palette: wash, surface: .translucent, panelFillBehind: false)
+        XCTAssertTrue(WebPanel.paintsGradient(gradient, fill: alone))
+        let opaque = WebPanel.fill(background: bg, palette: wash, surface: .opaque, panelFillBehind: true)
+        XCTAssertTrue(WebPanel.paintsGradient(gradient, fill: opaque))
     }
 
     /// B242: a web panel never paints the see-through layer itself. Clear over a container that

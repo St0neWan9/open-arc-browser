@@ -141,10 +141,10 @@ public struct ThemePalette: Hashable, Sendable {
     /// shows through them like through the window ([07 §8.4]). Over the opaque window color each
     /// gives `controlFill`, `separator`, `selectedTabFill` and `scrollEdgeLine`.
     public var windowLayers: WindowLayers = .derived(lightInk: false)
-    /// The theme layers painted over the blur material for picked colors, one per color dot: each
-    /// picked color at the theme's own strength (its intensity), not clamped (B242). Empty for
-    /// colors that do not come from a pick (the no-color wash, incognito), which derive their layer
-    /// from the window color instead (`windowThemeLayer`).
+    /// The theme layers painted over the blur material, one per gradient stop: each picked color at
+    /// the theme's own strength (its intensity), not clamped (B242); for the light no-color wash
+    /// its stops' layers (B244, `defaultWindowStopLayers`). Empty where the layer derives from the
+    /// window color instead (`windowThemeLayer`): the dark wash, incognito.
     public var pickedThemeLayers: [RGBAColor] = []
     /// The empty panel as a layer over the window background on a see-through window: white at
     /// `ThemeDerivation.lightContentWhite` / `darkContentWhite` for a picked color (B242,
@@ -297,6 +297,35 @@ public struct ChromeInkOpacities: Hashable, Sendable {
     )
 }
 
+/// The rules of the fills derived from the window color, per appearance. Light was measured
+/// again in B244 (lossless captures over the reference desktop); dark keeps the E8 fits, which
+/// cannot be checked on a display that shows no translucency in dark. [07 §8.4, §8.5e] inferred.
+public struct DerivedFillRules: Sendable, Equatable {
+    public var separatorScale: Double
+    public var selectedRowMixColor: RGBAColor
+    public var selectedRowMixAmount: Double
+    public var lightInkControlWhite: Double
+    public var lightInkSeparatorWhite: Double
+    public var lightInkSelectedRowMixAmount: Double
+
+    public static let light = DerivedFillRules(
+        separatorScale: ThemeDerivation.separatorScale,
+        selectedRowMixColor: ThemeDerivation.selectedRowMixColor,
+        selectedRowMixAmount: ThemeDerivation.selectedRowMixAmount,
+        lightInkControlWhite: ThemeDerivation.lightInkControlWhite,
+        lightInkSeparatorWhite: ThemeDerivation.lightInkSeparatorWhite,
+        lightInkSelectedRowMixAmount: ThemeDerivation.lightInkSelectedRowMixAmount)
+    public static let dark = DerivedFillRules(
+        separatorScale: ThemeDerivation.darkSeparatorScale,
+        selectedRowMixColor: ThemeDerivation.darkSelectedRowMixColor,
+        selectedRowMixAmount: ThemeDerivation.darkSelectedRowMixAmount,
+        lightInkControlWhite: ThemeDerivation.darkLightInkControlWhite,
+        lightInkSeparatorWhite: ThemeDerivation.darkLightInkSeparatorWhite,
+        lightInkSelectedRowMixAmount: ThemeDerivation.darkLightInkSelectedRowMixAmount)
+
+    public static func `for`(isDark: Bool) -> DerivedFillRules { isDark ? .dark : .light }
+}
+
 public enum ThemeDerivation {
     // The window colors themselves (light and dark) follow Arc's layer stack: see
     // ThemeWindowLayer.swift (B146; replaces the fitted B38 blends mix(theme, #EBEBEB, 0.37) and
@@ -304,38 +333,48 @@ public enum ThemeDerivation {
 
     /// Control fill = window × 0.954 (dark ink). B243 lossless captures over the reference desktop,
     /// five dark-ink Spaces at intensity 0.8 and 1: 0.952–0.954 (the earlier 0.96 read 1.5/255
-    /// light). [07 §8, §8.5d] inferred.
+    /// light). The no-color wash follows the same rule (B244: #D2D1E8 on its wash, 0.954–0.956).
+    /// [07 §8, §8.5d, §8.5e] inferred.
     public static let controlFillScale: Double = 0.954
-    /// Control fill of the no-color wash = window × 0.96: its controls read lighter than the picked
-    /// colors' rule (B98 #D8D8EB on #DEDEF5; Arc's no-color Space again #D8D7EA in B243). [07 §8.5]
-    /// observed / inferred.
-    public static let noColorControlFillScale: Double = 0.96
-    /// Separator = window × 0.87. [07 §8] inferred (thin lines on a JPEG: up to ≈ 13/255 off).
-    public static let separatorScale: Double = 0.87
+    /// Separator = window × 0.85 (light). B244 lossless captures over the reference desktop, the
+    /// sky-blue preset at intensity 0.8 and 1: 0.848–0.852 on the 1 px line. [07 §8.5e] inferred.
+    public static let separatorScale: Double = 0.85
+    /// Separator in dark = window × 0.87. [07 §8] inferred (E8 fit; dark is not measured again).
+    public static let darkSeparatorScale: Double = 0.87
     /// Lines at the scrolled list's edges (under the Space name, above the dock): lighter than the
     /// divider. inferred from the light-ink reading below (B171).
     public static let scrollEdgeScale: Double = 0.95
-    /// Control fill on a light-ink (dark) window: window + 11 % white, i.e. lighter, not darker.
-    /// Round-1 PX (B32): #5247FE → #655CFE (≤ 1/255); inferred. The older "≈ 10 % white" of
-    /// [04 §theme system] matches this case.
-    public static let lightInkControlWhite: Double = 0.11
-    /// Separator and scroll-edge lines on a light-ink window: window + 16 % white. [07 §8.4]
-    /// inferred: lossless E8 captures of the navy preset (light and dark) fit 0.16 within 0.5/255;
-    /// the former 5 % came from a JPEG reading of the 1 px line (B32 round 1) and missed by 13/255.
-    public static let lightInkSeparatorWhite: Double = 0.16
+    /// Control fill on a light-ink window: window + 9.5 % white (light), i.e. lighter, not darker.
+    /// B244 lossless captures: the navy preset at intensity 0.8 and 1 and three light-ink Spaces at
+    /// 1 read 0.094–0.098, the same at both intensities (the earlier 11 % came from E8's
+    /// interpolated readings and a round-1 PX sample). [07 §8.5e] inferred.
+    public static let lightInkControlWhite: Double = 0.095
+    /// The same in dark: + 11 % white. [07 §8.4] inferred (E8 fit; dark is not measured again).
+    public static let darkLightInkControlWhite: Double = 0.11
+    /// Separator and scroll-edge lines on a light-ink window: window + 15 % white (light). B244:
+    /// the navy preset's 1 px line read 0.150–0.152 at intensity 0.8 and 1. [07 §8.5e] inferred.
+    public static let lightInkSeparatorWhite: Double = 0.15
+    /// The same in dark: + 16 % white. [07 §8.4] inferred (E8 navy dark fit within 0.5/255).
+    public static let darkLightInkSeparatorWhite: Double = 0.16
     /// The same on a light-ink window: #6B9074 → #73977B, ≈ 5.5 % white. observed on a 2× Arc
     /// capture (B171).
     public static let lightInkScrollEdgeWhite: Double = 0.055
-    /// Selected row fill with dark ink = mix(window, #F7F7F7, 0.894). [07 §8.4] inferred: refitted
-    /// on 16 lossless E8 samples (8 presets × light / dark, max 0.6/255) and the 5 E11 samples
-    /// (max 1.3/255); the former mix(window, #F5F5F5, 0.90) missed them by 2.4 / 3.0.
-    public static let selectedRowMixColor = RGBAColor(hex: 0xF7F7F7)
-    public static let selectedRowMixAmount: Double = 0.894
-    /// Selected row fill with light ink = mix(window, #F5F5FF, 0.222): a muted tone close to the
-    /// window, not near white (navy dark #838498 → #9E9DB0). [07 §8.3] inferred, fitted to 16
-    /// light-ink B46 samples in light and dark, max 1.7/255.
+    /// Selected row fill with dark ink = mix(window, #F6F6F6, 0.88) (light). B244: the sky-blue
+    /// preset at intensity 0.8 and 1, solved for one gray and one amount from the three channels
+    /// (246.1–246.4, 0.879–0.880; the B. channel then lands within 0.1/255). [07 §8.5e] inferred.
+    public static let selectedRowMixColor = RGBAColor(hex: 0xF6F6F6)
+    public static let selectedRowMixAmount: Double = 0.88
+    /// The same in dark: mix(window, #F7F7F7, 0.894). [07 §8.4] inferred (E8 fit).
+    public static let darkSelectedRowMixColor = RGBAColor(hex: 0xF7F7F7)
+    public static let darkSelectedRowMixAmount: Double = 0.894
+    /// Selected row fill with light ink = mix(window, #F5F5FF, 0.209) (light): a muted tone close to
+    /// the window, not near white. B244: the navy preset at intensity 0.8 and 1 and the periwinkle
+    /// Space at 1 read 0.202–0.210. [07 §8.5e] inferred.
     public static let lightInkSelectedRowMixColor = RGBAColor(hex: 0xF5F5FF)
-    public static let lightInkSelectedRowMixAmount: Double = 0.222
+    public static let lightInkSelectedRowMixAmount: Double = 0.209
+    /// The same in dark: 0.222 (navy dark #838498 → #9E9DB0). [07 §8.3] inferred, fitted to 16
+    /// light-ink B46 samples in light and dark, max 1.7/255.
+    public static let darkLightInkSelectedRowMixAmount: Double = 0.222
     /// Light ink when the theme color's relative luminance is below this. [07 §8.3] observed on the
     /// 36 E12 presets: ≤ 0.143 light ink, ≥ 0.204 dark ink, the same in light and dark; the
     /// midpoint is inferred.
@@ -419,43 +458,47 @@ public enum ThemeDerivation {
     }
 
     /// Window colors of a Space with no picked color (no theme, or a theme with no color dots): a
-    /// diagonal wash from lavender at the top left to pale pink at the bottom right.
-    /// [07 §8.5] observed (2026-10-28): a Space created without picking a color stores no window
-    /// theme, and its window reads sidebar top-left #DEDEF5, mid #E6E3F1, bottom #EAE5EF, top
-    /// frame #E9E4F1, right frame #F2E6E6–#F4E9E9 (light). These stops are exactly those window
-    /// colors (observed); their places on the diagonal are `defaultWindowStopLocations`.
+    /// diagonal wash from lavender at the top left to pale pink, linear in the unit square's
+    /// diagonal (t = (x / width + y / height) / 2) up to t ≈ 0.76 and flat after it.
+    /// [07 §8.5e] observed (B244, lossless capture of Arc's no-color Space over the reference
+    /// desktop): the sidebar's left edge reads 220.5 / 219.6 / 242.3 at t 0.10 → 235.1 / 225.9 /
+    /// 235.6 at t 0.48 (linear within 0.2/255), the content area (white 2/3 over the window) is the
+    /// same at equal t anywhere and flat from t ≈ 0.76, where the window is 245.7 / 230.7 / 231.0.
+    /// The stops are those two ends (t 0 extrapolated; inferred). B98's JPEG stops read 3–5/255 off.
     public static let defaultWindowStops: [RGBAColor] = [
-        RGBAColor(hex: 0xDEDEF5), RGBAColor(hex: 0xE6E3F1), RGBAColor(hex: 0xE9E4F1),
-        RGBAColor(hex: 0xEAE5EF), RGBAColor(hex: 0xF2E6E6), RGBAColor(hex: 0xF4E9E9),
+        RGBAColor(red: 216.5 / 255, green: 217.9 / 255, blue: 244.1 / 255),
+        RGBAColor(red: 245.7 / 255, green: 230.7 / 255, blue: 231.0 / 255),
     ]
-    /// Where each default stop sits on the top-left → bottom-right axis (0…1), from where it was
-    /// sampled on a 1920 × 985 window: the sidebar's top (0) and middle (≈ 0.25), the top frame
-    /// above the web panel (its middle, ≈ 0.32), the sidebar's bottom (≈ 0.5), the right frame
-    /// (≈ 0.75) and the bottom-right corner (1). [07 §8.5] inferred (projection of the sample
-    /// places; which end of the right frame read #F2E6E6 is unknown).
-    public static let defaultWindowStopLocations: [Double] = [0, 0.25, 0.32, 0.5, 0.75, 1]
+    /// Where each default stop sits on the top-left → bottom-right axis (0…1). [07 §8.5e] inferred
+    /// (the three channels reach the end color at t 0.745–0.772).
+    public static let defaultWindowStopLocations: [Double] = [0, 0.76]
+    /// The wash's theme layers on a see-through light window: the stops inverted against what the
+    /// material really shows (`lightLiveBackdropGray`), since the stops are screen readings.
+    /// [07 §8.5e] inferred.
+    public static var defaultWindowStopLayers: [RGBAColor] {
+        defaultWindowStops.map { windowLayer(showing: $0, appearance: .light, backdropGray: lightLiveBackdropGray) }
+    }
 
-    /// Theme color that the default window stops would come from under the light window rule
-    /// (`lightWindow`): the first stop solved back through the light window rule (B38's
-    /// mix(·, #EBEBEB, 0.37); B146's layer rule gives #DEDEF6 from it, 1/255 off). It drives the
-    /// derived fills (controls, text, command bar selection) of a Space with no picked color.
-    /// [07 §8.5] inferred; the derived control fill lands on the observed address box #D8D8EB.
-    public static let defaultBaseColor = RGBAColor(hex: 0xD6D6FB)
+    /// Theme color that the first default stop would come from under the light window rule
+    /// (`lightWindow`). It drives the derived fills (controls, text, command bar selection) of a
+    /// Space with no picked color. [07 §8.5e] inferred.
+    public static let defaultBaseColor = RGBAColor(hex: 0xCED0F9)
 
     /// Command bar selected row of a Space with no picked color, light. [07 §5] observed (E27,
     /// 2026-10-30): #ADABE2. The picked-color rule above gives #A5A5BC from `defaultBaseColor`
     /// (too gray), so the default theme uses the observed value. Dark keeps the rule (unknown).
     public static let defaultCommandBarSelection = RGBAColor(hex: 0xADABE2)
 
-    /// Content area of a Space with no picked color, light: #F6F6FC at the top left to #FDF8F8 at
-    /// the bottom right, center #F9F7F9. [07 §8.5] observed. `defaultLightContent` is the center
-    /// (the flat value the ink and the page placeholder go by); the area paints the gradient.
-    public static let defaultLightContent = RGBAColor(hex: 0xF9F7F9)
-    /// The content gradient's stops, evenly spread top left → bottom right. [07 §8.5] observed
-    /// colors; the even spread (center at the midpoint) is inferred.
-    public static let defaultLightContentGradient: [RGBAColor] = [
-        RGBAColor(hex: 0xF6F6FC), defaultLightContent, RGBAColor(hex: 0xFDF8F8),
-    ]
+    /// Content area of a Space with no picked color, light: white 2/3 over the wash, like a picked
+    /// color's (B244: content = window + 2/3 white at every sampled t, within 0.3/255).
+    /// `defaultLightContent` is the value near the panel's middle (t ≈ 0.6: Arc #FAF6F8), the flat
+    /// value the ink and the page placeholder go by. [07 §8.5e] observed.
+    public static let defaultLightContent = RGBAColor(hex: 0xFAF6F8)
+    /// The content gradient of an opaque surface (no window layer to paint over): white 2/3 over
+    /// the wash stops, spread over the panel. [07 §8.5e] inferred.
+    public static var defaultLightContentGradient: [RGBAColor] {
+        defaultWindowStops.map { contentOverWindow($0, appearance: .light) }
+    }
 
     /// Main axis of a theme with several color dots: top → bottom, the top near the first dot's
     /// window color. [07 §8.4] finding 4 observed (three-dot pink: sidebar top #DBA2B7 → bottom
@@ -539,9 +582,10 @@ public enum ThemeDerivation {
     }
 
     /// The selected row fill for a window color and ink. [07 §8.3] inferred.
-    public static func selectedRowFill(window: RGBAColor, lightInk: Bool) -> RGBAColor {
-        lightInk ? mix(window, lightInkSelectedRowMixColor, amount: lightInkSelectedRowMixAmount)
-            : mix(window, selectedRowMixColor, amount: selectedRowMixAmount)
+    public static func selectedRowFill(window: RGBAColor, lightInk: Bool, isDark: Bool = false) -> RGBAColor {
+        let rules = DerivedFillRules.for(isDark: isDark)
+        return lightInk ? mix(window, lightInkSelectedRowMixColor, amount: rules.lightInkSelectedRowMixAmount)
+            : mix(window, rules.selectedRowMixColor, amount: rules.selectedRowMixAmount)
     }
 
     /// Relative luminance (WCAG formula).
@@ -608,14 +652,14 @@ public enum ThemeDerivation {
         let chromeInk = lightInk ? white : black
         let inkOpacity: ChromeInkOpacities = lightInk ? .lightInk : .darkInk
         // Dark ink: controls are darker than the window [07 §8]; light ink: lighter (B32 round 1).
-        let controlScale = picked.isEmpty ? noColorControlFillScale : controlFillScale
-        let controlFill = lightInk ? overlayWhite(window, amount: lightInkControlWhite) : shade(window, by: controlScale)
-        let separator = lightInk ? overlayWhite(window, amount: lightInkSeparatorWhite) : shade(window, by: separatorScale)
+        let rules = DerivedFillRules.for(isDark: isDark)
+        let controlFill = lightInk ? overlayWhite(window, amount: rules.lightInkControlWhite) : shade(window, by: controlFillScale)
+        let separator = lightInk ? overlayWhite(window, amount: rules.lightInkSeparatorWhite) : shade(window, by: rules.separatorScale)
 
         var palette = ThemePalette(
             windowBackground: window,
             controlFill: controlFill,
-            selectedTabFill: selectedRowFill(window: window, lightInk: lightInk),
+            selectedTabFill: selectedRowFill(window: window, lightInk: lightInk, isDark: isDark),
             commandBarBackground: isDark ? darkCommandBarBackground : commandBarBackground,
             commandBarSelection: isDark
                 ? tone(of: theme, lightness: darkCommandBarSelectionLightness, chromaFactor: darkCommandBarSelectionChromaFactor)
@@ -643,13 +687,14 @@ public enum ThemeDerivation {
         palette.webPanelBackground = picked.isEmpty
             ? (isDark ? contentBackground(theme, appearance: appearance) : defaultLightContent)
             : contentOverWindow(window, appearance: appearance)
-        palette.pickedThemeLayers = picked.map(layerOf)
-        palette.webPanelLayer = picked.isEmpty ? nil
+        palette.pickedThemeLayers = picked.isEmpty ? (isDark ? [] : defaultWindowStopLayers) : picked.map(layerOf)
+        // B244: the no-color wash's content is the same white layer in light (dark unmeasured).
+        palette.webPanelLayer = picked.isEmpty && isDark ? nil
             : RGBAColor(red: 1, green: 1, blue: 1, alpha: isDark ? darkContentWhite : lightContentWhite)
         palette.webPanelBackgroundGradient = picked.isEmpty && !isDark ? defaultLightContentGradient : []
         // The see-through window [07 §8.4]: content, command bar and bubbles stay opaque.
         palette.windowOpacity = WindowTranslucency.opacity(for: appearance)
-        palette.windowLayers = .derived(lightInk: lightInk, controlScale: controlScale)
+        palette.windowLayers = .derived(lightInk: lightInk, isDark: isDark)
         palette.selectedTabText = lightInk ? withAlpha(white, inkOpacity.rowTitle) : rowText
         palette.dropTargetFill = dropTargetFill(window: window, isDark: isDark)
         palette.splitPreviewFill = splitPreviewFill(window: window, isDark: isDark)

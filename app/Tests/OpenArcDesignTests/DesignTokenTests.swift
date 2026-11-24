@@ -177,8 +177,8 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(window.blue, observed.blue, accuracy: 1.5 / 255)
         XCTAssertEqual(palette.controlFill, ThemeDerivation.shade(window, by: 0.954), "B243 refit")
         XCTAssertLessThan(ThemeDerivation.luminance(palette.controlFill), ThemeDerivation.luminance(palette.windowBackground), "darker")
-        XCTAssertEqual(palette.selectedTabFill, ThemeDerivation.mix(window, RGBAColor(hex: 0xF7F7F7), amount: 0.894), "[07 §8.4] E8 refit")
-        XCTAssertEqual(palette.separator, ThemeDerivation.shade(window, by: 0.87))
+        XCTAssertEqual(palette.selectedTabFill, ThemeDerivation.mix(window, RGBAColor(hex: 0xF6F6F6), amount: 0.88), "[07 §8.5e] B244")
+        XCTAssertEqual(palette.separator, ThemeDerivation.shade(window, by: 0.85), "[07 §8.5e] B244")
         XCTAssertEqual(palette.commandBarBackground, RGBAColor(hex: 0xF9F9F9))
         XCTAssertEqual(palette.chromeInk, RGBAColor(hex: 0x000000))
         XCTAssertEqual(palette.secondaryText.alpha, 0.45, accuracy: 1e-9)
@@ -217,8 +217,9 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(ThemeDerivation.palette(for: empty).backgroundGradientColors, stops)
     }
 
-    /// [07 §8.5] observed: a Space with no picked color shows Arc's default, a lavender (top left)
-    /// to pale pink (bottom right) window, address box ≈ #D8D8EB, content ≈ #F9F7F9 at the center.
+    /// [07 §8.5e] observed (B244): a Space with no picked color shows Arc's default, a lavender (top
+    /// left) to pale pink window, #D9DAF4 → #F6E7E7, flat from 0.76 of the diagonal; the favorites
+    /// block reads #D2D1E8 near the top left (window × 0.954); content #FAF6F8 near the middle.
     func testNoColorThemeMatchesArcDefault() {
         func hex(_ c: RGBAColor) -> String {
             String(format: "%02X%02X%02X", Int((c.red * 255).rounded()), Int((c.green * 255).rounded()), Int((c.blue * 255).rounded()))
@@ -229,11 +230,14 @@ final class DesignTokenTests: XCTestCase {
         }
         let style = ThemeStyle(appearance: .light, colors: [])
         let palette = ThemeDerivation.palette(forStyle: style, systemAppearance: .light)
-        XCTAssertEqual(palette.backgroundGradientColors.first.map(hex), "DEDEF5")
-        XCTAssertEqual(palette.backgroundGradientColors.last.map(hex), "F4E9E9")
-        XCTAssertTrue(near(palette.windowBackground, 0xDEDEF5), hex(palette.windowBackground))
-        XCTAssertTrue(near(palette.controlFill, 0xD8D8EB, 3.5), hex(palette.controlFill))
-        XCTAssertEqual(hex(palette.webPanelBackground), "F9F7F9")
+        XCTAssertEqual(palette.backgroundGradientColors.first.map(hex), "D9DAF4")
+        XCTAssertEqual(palette.backgroundGradientColors.last.map(hex), "F6E7E7")
+        XCTAssertEqual(palette.backgroundGradientLocations, [0, 0.76])
+        XCTAssertTrue(near(palette.windowBackground, 0xD9DAF4, 1.5), hex(palette.windowBackground))
+        // The favorites block at t ≈ 0.09, where the wash is ≈ 219.9 / 219.5 / 242.5.
+        let blockWindow = RGBAColor(red: 219.9 / 255, green: 219.5 / 255, blue: 242.5 / 255)
+        XCTAssertTrue(near(ThemeDerivation.shade(blockWindow, by: ThemeDerivation.controlFillScale), 0xD2D1E8, 1.0))
+        XCTAssertEqual(hex(palette.webPanelBackground), "FAF6F8")
         XCTAssertFalse(palette.usesLightInk)
     }
 

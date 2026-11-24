@@ -63,15 +63,19 @@ struct WindowBackgroundView: View {
     }
 }
 
-/// The content area's fill where no page paints: the palette's content gradient (top left →
-/// bottom right) when it has one, else `webPanelBackground` flat. [07 §8.1], [07 §8.5] observed.
+/// The content area's fill where no page paints: on a see-through window the white layer over the
+/// window's own background (it follows the window's wash, B244); else the palette's content
+/// gradient (top left → bottom right) when it has one, or `webPanelBackground` flat.
+/// [07 §8.1], [07 §8.5e] observed.
 struct WebPanelBackgroundView: View {
     let palette: ThemePalette
     @Environment(\.windowSurface) private var surface
 
     var body: some View {
         let gradient = palette.webPanelBackgroundGradient
-        if gradient.count > 1 {
+        if surface.isTranslucent, let layer = palette.webPanelLayer {
+            layer.swiftUI
+        } else if gradient.count > 1 {
             LinearGradient(stops: WindowBackgroundView.stops(gradient, locations: nil),
                            startPoint: .topLeading, endPoint: .bottomTrailing)
         } else {

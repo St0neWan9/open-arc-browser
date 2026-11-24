@@ -68,7 +68,7 @@ extension ThemeDerivation {
         p.commandBarSelection = t.commandBarSelection
         p.commandBarSelectedText = RGBAColor(hex: 0xFFFFFF)
         // Lines and drop fills follow the fixed window color (the derivation rules, inferred).
-        p.separator = overlayWhite(window, amount: lightInkSeparatorWhite)
+        p.separator = overlayWhite(window, amount: darkLightInkSeparatorWhite)
         p.scrollEdgeLine = p.separator
         p.dropTargetFill = dropTargetFill(window: window, isDark: true)
         p.splitPreviewFill = splitPreviewFill(window: window, isDark: true)

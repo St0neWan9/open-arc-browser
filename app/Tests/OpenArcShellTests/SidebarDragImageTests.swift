@@ -116,7 +116,7 @@ final class SidebarDragImageTests: XCTestCase {
         for sample in samples {
             let window = RGBAColor(hex: sample.sidebar)
             let block = sample.lightInk
-                ? ThemeDerivation.overlayWhite(window, amount: ThemeDerivation.lightInkControlWhite)
+                ? ThemeDerivation.overlayWhite(window, amount: DerivedFillRules.for(isDark: sample.dark).lightInkControlWhite)
                 : ThemeDerivation.shade(window, by: ThemeDerivation.controlFillScale)
             let alpha = sample.dark ? d.favoriteTileWhiteOpacityDark : d.favoriteTileWhiteOpacity
             let blended = ThemeDerivation.overlayWhite(block, amount: alpha)
@@ -135,7 +135,7 @@ final class SidebarDragImageTests: XCTestCase {
         // same control rule.
         let navy = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0x3B3F7A)]), appearance: .dark)
         XCTAssertTrue(navy.usesLightInk)
-        XCTAssertEqual(navy.controlFill, ThemeDerivation.overlayWhite(navy.windowBackground, amount: ThemeDerivation.lightInkControlWhite))
+        XCTAssertEqual(navy.controlFill, ThemeDerivation.overlayWhite(navy.windowBackground, amount: ThemeDerivation.darkLightInkControlWhite))
     }
 
     /// [06 §15.4] observed (E17): the split preview block follows the theme — lavender (light)

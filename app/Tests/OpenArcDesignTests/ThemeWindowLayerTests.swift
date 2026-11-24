@@ -97,9 +97,9 @@ final class ThemeWindowLayerTests: XCTestCase {
         }
     }
 
-    /// [07 §8.5]: the no-color base #D6D6FB still lands on the observed sidebar top #DEDEF5 (≤ 1.5/255).
+    /// [07 §8.5e]: the no-color base lands on the wash's first stop (≤ 1.5/255).
     func testDefaultBaseColorStillMatchesTheNoColorWindow() {
-        XCTAssertLessThanOrEqual(maxChannelError(D.lightWindow(D.defaultBaseColor), RGBAColor(hex: 0xDEDEF5)), 1.5)
+        XCTAssertLessThanOrEqual(maxChannelError(D.lightWindow(D.defaultBaseColor), D.defaultWindowStops[0]), 1.5)
     }
 
     /// E12 window samples [07 §8.1] observed: (preset, theme, light window, dark window).

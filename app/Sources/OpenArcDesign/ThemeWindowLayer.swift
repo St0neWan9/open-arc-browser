@@ -140,8 +140,21 @@ extension ThemeDerivation {
     /// the inverse of `windowColor`, for window colors that do not come from a picked color (the
     /// no-color wash's observed stops, incognito's fixed window). Clamped to the sRGB gamut.
     public static func windowLayer(showing target: RGBAColor, appearance: ResolvedAppearance) -> RGBAColor {
+        windowLayer(showing: target, appearance: appearance, backdropGray: windowBackdropGray(appearance))
+    }
+
+    /// What the light material actually shows over the reference desktop in an active window, for
+    /// inverting colors that were read off the screen (the no-color wash's stops). The fitted
+    /// `lightWindowBackdropGray` (219) also absorbs the layer model's other errors, so a window
+    /// color the model made inverts back to Arc's own layer with it, but a screen reading inverted
+    /// with it lands 1.6/255 dark. [07 §8.5e] observed (B244: the wash read 1.6/255 dark evenly
+    /// along the diagonal, periwinkle's forward layer fits 210–213) / inferred (the split).
+    public static let lightLiveBackdropGray: Double = 210.0 / 255
+
+    /// The layer with the appearance's coverage that shows `target` over a backdrop of `gray`.
+    public static func windowLayer(showing target: RGBAColor, appearance: ResolvedAppearance,
+                                   backdropGray gray: Double) -> RGBAColor {
         let coverage = windowLayerCoverage(appearance)
-        let gray = windowBackdropGray(appearance)
         var out = DisplayP3.toSRGB(DisplayP3.fromSRGB(target).map { ($0 - (1 - coverage) * gray) / coverage })
         out.alpha = coverage
         return out

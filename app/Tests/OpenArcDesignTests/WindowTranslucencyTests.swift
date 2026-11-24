@@ -95,17 +95,26 @@ final class WindowTranslucencyTests: XCTestCase {
         }
     }
 
-    /// [07 §8.4] observed layer amounts: dark ink control + 4.6 % black (B243; E8 read 4 %), separator + 13 % black
-    /// (E8 13.5 %, rule × 0.87), selected row + 89 % #F7F7F7; light ink + 11 % / + 16 % white.
+    /// Layer amounts. Light [07 §8.5e] (B244): dark ink control + 4.6 % black, separator + 15 %
+    /// black (× 0.85), selected row + 88 % #F6F6F6; light ink + 9.5 % / + 15 % white, selected row
+    /// + 20.9 % #F5F5FF. Dark keeps E8's [07 §8.4]: separator + 13 % black, selected row + 89.4 %
+    /// #F7F7F7; light ink + 11 % / + 16 % white, selected row + 22.2 %.
     func testLayerAmountsFollowE8() {
-        let dark = WindowLayers.derived(lightInk: false)
-        XCTAssertEqual(dark.controlFill.alpha, 1 - 0.954, accuracy: 1e-9, "B243 refit of E8's 4 %")
-        XCTAssertEqual(dark.separator.alpha, 0.13, accuracy: 1e-9)
-        XCTAssertEqual(dark.selectedRowFill, RGBAColor(hex: 0xF7F7F7, alpha: 0.894))
-        let light = WindowLayers.derived(lightInk: true)
-        XCTAssertEqual(light.controlFill, RGBAColor(hex: 0xFFFFFF, alpha: 0.11))
-        XCTAssertEqual(light.separator, RGBAColor(hex: 0xFFFFFF, alpha: 0.16))
-        XCTAssertEqual(palette(0x666789, .dark).windowLayers, light, "navy p1-9 uses light ink [07 §8.3]")
+        let darkInk = WindowLayers.derived(lightInk: false)
+        XCTAssertEqual(darkInk.controlFill.alpha, 1 - 0.954, accuracy: 1e-9, "B243 refit of E8's 4 %")
+        XCTAssertEqual(darkInk.separator.alpha, 0.15, accuracy: 1e-9)
+        XCTAssertEqual(darkInk.selectedRowFill, RGBAColor(hex: 0xF6F6F6, alpha: 0.88))
+        let darkInkDark = WindowLayers.derived(lightInk: false, isDark: true)
+        XCTAssertEqual(darkInkDark.separator.alpha, 0.13, accuracy: 1e-9)
+        XCTAssertEqual(darkInkDark.selectedRowFill, RGBAColor(hex: 0xF7F7F7, alpha: 0.894))
+        let lightInk = WindowLayers.derived(lightInk: true)
+        XCTAssertEqual(lightInk.controlFill, RGBAColor(hex: 0xFFFFFF, alpha: 0.095))
+        XCTAssertEqual(lightInk.separator, RGBAColor(hex: 0xFFFFFF, alpha: 0.15))
+        XCTAssertEqual(lightInk.selectedRowFill, RGBAColor(hex: 0xF5F5FF, alpha: 0.209))
+        let lightInkDark = WindowLayers.derived(lightInk: true, isDark: true)
+        XCTAssertEqual(lightInkDark.controlFill, RGBAColor(hex: 0xFFFFFF, alpha: 0.11))
+        XCTAssertEqual(lightInkDark.separator, RGBAColor(hex: 0xFFFFFF, alpha: 0.16))
+        XCTAssertEqual(palette(0x666789, .dark).windowLayers, lightInkDark, "navy p1-9 uses light ink [07 §8.3]")
     }
 
     // MARK: Opaque surfaces

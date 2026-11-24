@@ -14,6 +14,7 @@ struct SidebarRowFrame<Content: View>: View {
     let fill: Color
     /// Soft shadow under the fill: set on the selected row only. [07 §4, §7] observed.
     var shadow: Metrics.PanelShadow? = nil
+    @Environment(\.windowSurface) private var surface
     var depth: Int = 0
     /// Split preview while a tab is dragged over the row's middle band: a gray-violet block on the
     /// pointer's side, the row content moved to the other side. [06 §15.2] observed.
@@ -38,7 +39,7 @@ struct SidebarRowFrame<Content: View>: View {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(fill)
                     .frame(width: fillFrame.width, height: fillFrame.height)
-                    .panelShadow(shadow)
+                    .modifier(RowFillShadow(shadow: shadow, radius: radius, isTranslucent: surface.isTranslucent))
                     .offset(x: fillFrame.minX, y: fillFrame.minY)
                 if let splitPreview {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -59,10 +60,45 @@ struct SidebarRowFrame<Content: View>: View {
         .contentShape(Rectangle())
     }
 
+    /// The selected row's shadow: on dark-ink windows only. B244 observed (lossless, light): the
+    /// sky-blue preset's selected row darkens the 3 px under it (−19 / −9 / −2 per 255), the navy
+    /// preset's (light ink) leaves the window untouched on every side.
+    static func selectedShadow(_ palette: ThemePalette) -> Metrics.PanelShadow? {
+        palette.usesLightInk ? nil : Metrics.Sidebar.selectedRowShadow
+    }
+
     /// Fill of a selected row: the theme's selected-row fill, ≈ 1 % darker while the mouse holds
     /// it (no scale). [07 §7] observed (#F0EDF0 → #EEECED).
     static func selectedFill(_ base: RGBAColor, isPressed: Bool) -> RGBAColor {
         isPressed ? ThemeDerivation.shade(base, by: Metrics.Sidebar.pressedRowShade) : base
+    }
+}
+
+/// The selected row's shadow. Over a see-through window the row's fill is a translucent layer, so
+/// a plain shadow would show through it and darken the row (B244: 2–3/255 on a light-ink row);
+/// there the shadow is cast by an opaque copy of the shape and cut away inside it.
+private struct RowFillShadow: ViewModifier {
+    let shadow: Metrics.PanelShadow?
+    let radius: CGFloat
+    let isTranslucent: Bool
+
+    func body(content: Content) -> some View {
+        if let shadow, isTranslucent {
+            let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            content.background {
+                shape.fill(Color.black)
+                    .shadow(color: .black.opacity(shadow.opacity), radius: CGFloat(shadow.radius),
+                            x: CGFloat(shadow.offsetX), y: CGFloat(shadow.offsetY))
+                    .mask {
+                        Rectangle().padding(-4 * CGFloat(max(shadow.radius, 1)) - 2)
+                            .overlay { shape.blendMode(.destinationOut) }
+                            .compositingGroup()
+                    }
+                    .allowsHitTesting(false)
+            }
+        } else {
+            content.panelShadow(shadow)
+        }
     }
 }
 
@@ -131,7 +167,7 @@ struct SidebarTabRowView: View, Equatable {
         let iconSize = SidebarLocalTokens.rowIconSize
         let style = Typography.tabRowTitle
 
-        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), shadow: isSelected ? Metrics.Sidebar.selectedRowShadow : nil,
+        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), shadow: isSelected ? SidebarRowFrame<EmptyView>.selectedShadow(palette) : nil,
                         depth: row.depth, splitPreview: row.splitPreview, splitPreviewFill: palette.splitPreviewFill.swiftUI) {
             // Favicon, then the speaker while the tab is audible or muted, then the title.
             // [05 §tab audio indicator] observed.
@@ -389,7 +425,7 @@ struct SidebarSplitGroupRowView: View, Equatable {
         let textColor = isSelected ? palette.selectedTabText.swiftUI : palette.rowTitleText.swiftUI
         let layout = row.layout
 
-        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), shadow: isSelected ? Metrics.Sidebar.selectedRowShadow : nil, depth: row.depth) {
+        SidebarRowFrame(fill: fill(isSelected: isSelected, palette: palette), shadow: isSelected ? SidebarRowFrame<EmptyView>.selectedShadow(palette) : nil, depth: row.depth) {
             if row.isRenaming {
                 // Split row ▸ Rename…: inline, like a tab row. [06 §21.5] observed item (B77).
                 renameField(layout: layout, textColor: textColor)

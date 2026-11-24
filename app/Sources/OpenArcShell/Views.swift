@@ -526,9 +526,16 @@ struct WebPanel: View {
         return RGBAColor(red: 0, green: 0, blue: 0, alpha: 0)
     }
 
+    /// Whether the panel paints its content gradient: only where its fill is opaque. Where the
+    /// container paints the see-through layer behind (the fill is clear), the layer over the
+    /// window's own wash is the content color (B244, [07 §8.5e]).
+    static func paintsGradient(_ gradient: [RGBAColor], fill: RGBAColor) -> Bool {
+        gradient.count > 1 && fill.alpha > 0
+    }
+
     var body: some View {
         ZStack {
-            if backgroundGradient.count > 1 {
+            if Self.paintsGradient(backgroundGradient, fill: fill) {
                 LinearGradient(stops: WindowBackgroundView.stops(backgroundGradient, locations: nil),
                                startPoint: .topLeading, endPoint: .bottomTrailing)
             } else {

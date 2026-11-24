@@ -62,20 +62,21 @@ public struct WindowLayers: Hashable, Sendable {
         self.scrollEdgeLine = scrollEdgeLine
     }
 
-    /// The layers of the derived palette for an ink: the same rules as the opaque colors in
-    /// `ThemeDerivation.palette` (window × 0.96 = 4 % black, …), written as overlays.
+    /// The layers of the derived palette for an ink and appearance: the same rules as the opaque
+    /// colors in `ThemeDerivation.palette` (window × 0.954 = 4.6 % black, …), written as overlays.
     /// [07 §8, §8.3, §8.4] inferred.
-    public static func derived(lightInk: Bool, controlScale: Double = ThemeDerivation.controlFillScale) -> WindowLayers {
+    public static func derived(lightInk: Bool, isDark: Bool = false) -> WindowLayers {
         let d = ThemeDerivation.self
+        let r = DerivedFillRules.for(isDark: isDark)
         let black = RGBAColor(hex: 0x000000), white = RGBAColor(hex: 0xFFFFFF)
         func layer(_ c: RGBAColor, _ alpha: Double) -> RGBAColor {
             RGBAColor(red: c.red, green: c.green, blue: c.blue, alpha: alpha)
         }
         return WindowLayers(
-            controlFill: lightInk ? layer(white, d.lightInkControlWhite) : layer(black, 1 - controlScale),
-            separator: lightInk ? layer(white, d.lightInkSeparatorWhite) : layer(black, 1 - d.separatorScale),
-            selectedRowFill: lightInk ? layer(d.lightInkSelectedRowMixColor, d.lightInkSelectedRowMixAmount)
-                : layer(d.selectedRowMixColor, d.selectedRowMixAmount),
+            controlFill: lightInk ? layer(white, r.lightInkControlWhite) : layer(black, 1 - d.controlFillScale),
+            separator: lightInk ? layer(white, r.lightInkSeparatorWhite) : layer(black, 1 - r.separatorScale),
+            selectedRowFill: lightInk ? layer(d.lightInkSelectedRowMixColor, r.lightInkSelectedRowMixAmount)
+                : layer(r.selectedRowMixColor, r.selectedRowMixAmount),
             scrollEdgeLine: lightInk ? layer(white, d.lightInkScrollEdgeWhite) : layer(black, 1 - d.scrollEdgeScale)
         )
     }

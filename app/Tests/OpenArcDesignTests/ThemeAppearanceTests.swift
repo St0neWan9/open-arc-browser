@@ -126,8 +126,11 @@ final class ThemeAppearanceTests: XCTestCase {
             let label = String(format: "%06X %@", s.theme, s.dark ? "dark" : "light")
             assertClose(palette.windowBackground, RGBAColor(hex: s.window), tolerance: 4.5 / 255, "window \(label)")
             assertClose(palette.controlFill, RGBAColor(hex: s.control), tolerance: 4.5 / 255, "control \(label)")
-            assertClose(palette.separator, RGBAColor(hex: s.separator), tolerance: 4.5 / 255, "separator \(label)")
-            assertClose(palette.selectedTabFill, RGBAColor(hex: s.selected), tolerance: 2.5 / 255, "selected row \(label)")
+            // Light separators and selected rows follow B244's direct readings over the reference
+            // desktop [07 §8.5e]; E8's light values (interpolated between black and white backdrops
+            // and converted from the display profile) sit up to 5 / 4/255 from them.
+            assertClose(palette.separator, RGBAColor(hex: s.separator), tolerance: (s.dark ? 4.5 : 5.5) / 255, "separator \(label)")
+            assertClose(palette.selectedTabFill, RGBAColor(hex: s.selected), tolerance: (s.dark ? 2.5 : 4.0) / 255, "selected row \(label)")
             if let rowText = s.rowText {
                 assertClose(palette.primaryText, RGBAColor(hex: rowText), tolerance: 11.0 / 255, "row text \(label)")
             }
@@ -172,9 +175,10 @@ final class ThemeAppearanceTests: XCTestCase {
         XCTAssertEqual(palette.webPanelBackground, ThemeDerivation.contentOverWindow(palette.windowBackground, appearance: .dark), "[07 §8.1] dark: tinted, not black")
         XCTAssertGreaterThan(ThemeDerivation.luminance(palette.webPanelBackground), ThemeDerivation.luminance(palette.windowBackground), "a little lighter than the dark window")
         XCTAssertEqual(palette.backgroundGradientColors, [palette.windowBackground])
-        // #6B4FD8 (luminance 0.14) is a light-ink theme [07 §8.3]: controls are window + 11 % white.
+        // #6B4FD8 (luminance 0.14) is a light-ink theme [07 §8.3]: controls are window + 11 % white
+        // in dark (E8; light is 9.5 % since B244).
         XCTAssertTrue(palette.usesLightInk)
-        XCTAssertEqual(palette.controlFill, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.lightInkControlWhite))
+        XCTAssertEqual(palette.controlFill, ThemeDerivation.overlayWhite(palette.windowBackground, amount: ThemeDerivation.darkLightInkControlWhite))
     }
 
     /// On a dark-ink theme sidebar text stays dark in a dark Space (the AX title color is the same)
@@ -365,12 +369,14 @@ final class ThemeAppearanceTests: XCTestCase {
         // [07 §8.3] observed (B46): the selected row is a muted tone with the same white title.
         XCTAssertEqual(palette.selectedTabText, palette.rowTitleText, "selected rows keep the white title")
         XCTAssertEqual(palette.selectedTabFill, ThemeDerivation.selectedRowFill(window: palette.windowBackground, lightInk: true))
-        // The rules reproduce the round-1 samples from Arc's own window color.
-        let arcWindow = RGBAColor(hex: 0x5247FE)
-        assertClose(ThemeDerivation.overlayWhite(arcWindow, amount: ThemeDerivation.lightInkControlWhite), RGBAColor(hex: 0x655CFE), tolerance: 2.0 / 255, "control / empty panel")
-        // The round-1 separator reading (#5A52FD, + 5 % white) was a JPEG 1 px line; E8's lossless
-        // navy captures put light-ink lines at + 16 % white [07 §8.4].
-        assertClose(ThemeDerivation.overlayWhite(RGBAColor(hex: 0x9797AD), amount: ThemeDerivation.lightInkSeparatorWhite), RGBAColor(hex: 0xA7A8B9), tolerance: 1.5 / 255, "separator (E8 navy light)")
+        // The rules reproduce B244's lossless light readings from Arc's own window color: the
+        // wide-gamut violet at intensity 1 (window 80.3 / 62.1 / 255 → control 97.3 / 81.1 / 255)
+        // and the navy preset at 0.8 (149.1 / 149.7 / 171.3 → control 159.1 / 159.7 / 179.3,
+        // separator 165.2 / 165.8 / 183.9). Round 1's #5247FE → #655CFE (11 %) was a PX reading.
+        func rgb(_ r: Double, _ g: Double, _ b: Double) -> RGBAColor { RGBAColor(red: r / 255, green: g / 255, blue: b / 255) }
+        assertClose(ThemeDerivation.overlayWhite(rgb(80.3, 62.1, 255), amount: ThemeDerivation.lightInkControlWhite), rgb(97.3, 81.1, 255), tolerance: 1.0 / 255, "control (violet)")
+        assertClose(ThemeDerivation.overlayWhite(rgb(149.1, 149.7, 171.3), amount: ThemeDerivation.lightInkControlWhite), rgb(159.1, 159.7, 179.3), tolerance: 1.0 / 255, "control (navy 0.8)")
+        assertClose(ThemeDerivation.overlayWhite(rgb(149.1, 149.7, 171.3), amount: ThemeDerivation.lightInkSeparatorWhite), rgb(165.2, 165.8, 183.9), tolerance: 1.0 / 255, "separator (navy 0.8)")
         // PX opacities (inferred): titles, Space name, New Tab, placeholder, magnifier.
         let ink = ChromeInkOpacities.lightInk
         XCTAssertEqual(ink.rowTitle, 0.78, accuracy: 0.03)

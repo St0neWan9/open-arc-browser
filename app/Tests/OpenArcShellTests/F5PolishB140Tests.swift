@@ -97,9 +97,8 @@ final class F5PolishB140Tests: XCTestCase {
         let none = ThemeDerivation.palette(for: nil)
         XCTAssertEqual(none.backgroundGradientAxis, .diagonal)
         XCTAssertEqual(none.backgroundGradientLocations?.count, none.backgroundGradientColors.count)
-        XCTAssertTrue(none.backgroundGradientColors.contains(RGBAColor(hex: 0xE9E4F1)), "top frame stop")
         XCTAssertEqual(none.backgroundGradientLocations?.first, 0)
-        XCTAssertEqual(none.backgroundGradientLocations?.last, 1)
+        XCTAssertEqual(none.backgroundGradientLocations?.last, 0.76, "flat after t 0.76 (B244)")
         XCTAssertEqual(none.backgroundGradientLocations, none.backgroundGradientLocations?.sorted())
 
         let stops = WindowBackgroundView.stops(none.backgroundGradientColors, locations: none.backgroundGradientLocations)
@@ -113,8 +112,9 @@ final class F5PolishB140Tests: XCTestCase {
     func testNoColorContentGradient_07_8_5() {
         let light = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .light, colors: []), systemAppearance: .light)
         XCTAssertEqual(light.webPanelBackgroundGradient,
-                       [RGBAColor(hex: 0xF6F6FC), RGBAColor(hex: 0xF9F7F9), RGBAColor(hex: 0xFDF8F8)])
-        XCTAssertEqual(light.webPanelBackground, RGBAColor(hex: 0xF9F7F9), "flat value = the center")
+                       ThemeDerivation.defaultWindowStops.map { ThemeDerivation.contentOverWindow($0, appearance: .light) })
+        XCTAssertEqual(light.webPanelBackground, RGBAColor(hex: 0xFAF6F8), "flat value near the middle (B244)")
+        XCTAssertEqual(light.webPanelLayer, RGBAColor(red: 1, green: 1, blue: 1, alpha: 2.0 / 3), "white over the wash (B244)")
         let dark = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .dark, colors: []), systemAppearance: .light)
         XCTAssertTrue(dark.webPanelBackgroundGradient.isEmpty)
         let picked = ThemeDerivation.palette(forStyle: ThemeStyle(appearance: .light, colors: [RGBAColor(hex: 0x6CBAD9)]),
