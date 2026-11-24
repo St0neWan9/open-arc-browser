@@ -3,7 +3,7 @@ import SwiftUI
 import AppKit
 import OpenArcModel
 import OpenArcEngine
-import OpenArcDesign
+@testable import OpenArcDesign
 @testable import OpenArcShell
 
 /// Plan B218: the hovered link's address at the web panel's bottom left.
@@ -20,14 +20,20 @@ final class LinkStatusB218Tests: XCTestCase {
         XCTAssertEqual(text("mailto:someone@example.com"), "mailto:someone@example.com", "other schemes in full")
     }
 
-    /// [06 §44] observed on a #FEEFE4 window: fill #F7F3ED, text #615B55.
+    /// B251: Arc on a Display P3 screen, violet Space (window P3 79 / 64 / 248), white page: fill
+    /// 232 / 230 / 254, border 209 / 207 / 229, text 69 / 68 / 76 (P3 components).
     func testLightColorsMatchTheCapture() {
-        let colors = LinkStatusTokens.colors(windowBackground: RGBAColor(hex: 0xFEEFE4), isDark: false)
-        let observed = RGBAColor(hex: 0xF7F3ED)
-        XCTAssertEqual(colors.fill.red, observed.red, accuracy: 2.0 / 255)
-        XCTAssertEqual(colors.fill.green, observed.green, accuracy: 3.0 / 255)
-        XCTAssertEqual(colors.fill.blue, observed.blue, accuracy: 3.0 / 255)
-        XCTAssertEqual(colors.text, RGBAColor(hex: 0x615B55))
+        let window = DisplayP3.toSRGB([79, 64, 248].map { Double($0) / 255 })
+        let colors = LinkStatusTokens.colors(windowBackground: window, isDark: false)
+        func assertP3(_ c: RGBAColor, _ expected: [Double], _ label: String) {
+            for (got, want) in zip(DisplayP3.fromSRGB(c), expected) {
+                XCTAssertEqual(got * 255, want, accuracy: 1.5, label)
+            }
+        }
+        assertP3(colors.fill, [232, 230, 254], "fill")
+        assertP3(colors.border, [209, 207, 229], "border")
+        assertP3(colors.text, [69, 68, 76], "text")
+        XCTAssertEqual(colors.fill.alpha, 1)
     }
 
     /// Long addresses stop at ≈ 400 pt (then cut in the middle); short ones hug the text.
