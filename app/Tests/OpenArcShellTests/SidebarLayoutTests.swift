@@ -133,7 +133,7 @@ final class SidebarLayoutTests: XCTestCase {
         // Arc shares the band evenly (7 Spaces at 27.5, 8 at 24); ours keeps 30 (B249, the user's
         // choice), so 6 fit: 192 / 6 = 32.
         XCTAssertEqual(SidebarLayout.dockItemPitch(count: 6), 32)
-        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 7), 30)
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 7), 32, "scrolling: six whole icons")
         let six = layout.dockItemFrames(count: 6)
         XCTAssertEqual(six[0].minX, 41)
         XCTAssertEqual(six[0].minY, 943)
@@ -142,27 +142,32 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertEqual(six[1].minX, 73, accuracy: 0.1)
     }
 
-    /// B249: many Spaces keep at least 30 pt per icon and scroll sideways instead of piling up;
-    /// the current Space's icon is scrolled into the band.
+    /// B249 / B253: many Spaces keep at least 30 pt per icon and scroll sideways instead of piling
+    /// up; when they scroll, the band holds a whole number of icons, and the current Space's icon
+    /// is scrolled into it.
     func testCrowdedDockScrollsInsteadOfOverlapping() {
         XCTAssertEqual(SidebarLayout.dockScrollLimit(count: 6), 0, "six fit")
         XCTAssertGreaterThan(SidebarLayout.dockScrollLimit(count: 7), 0, "seven scroll")
-        // As wide as the user's Arc sidebar (361): nine fit at 30.8, like Arc's 31.
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 13), 32, "six whole icons in 192")
+        // As wide as the user's Arc sidebar (361): nine at 30.8, like Arc's 31.
         XCTAssertEqual(SidebarLayout.dockItemPitch(count: 9, trailingShift: 85), 277.0 / 9, accuracy: 0.01)
         XCTAssertEqual(SidebarLayout.dockScrollLimit(count: 9, trailingShift: 85), 0)
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 13, trailingShift: 85), 277.0 / 9, accuracy: 0.01)
         let limit = SidebarLayout.dockScrollLimit(count: 13)
-        XCTAssertEqual(limit, 13 * 30 - 192)
+        XCTAssertEqual(limit, 13 * 32 - 192)
         XCTAssertEqual(SidebarLayout.dockScroll(-50, count: 13), 0)
         XCTAssertEqual(SidebarLayout.dockScroll(1_000, count: 13), limit)
         XCTAssertEqual(SidebarLayout.dockScroll(0, keeping: 12, count: 13), limit, "last one: ends at the band's edge")
-        XCTAssertEqual(SidebarLayout.dockScroll(40, keeping: 3, count: 13), 40, "already in view: no move")
+        XCTAssertEqual(SidebarLayout.dockScroll(0, keeping: 7, count: 13), 64, "whole icons: 2 scrolled out")
+        XCTAssertEqual(SidebarLayout.dockScroll(64, keeping: 4, count: 13), 64, "already in view: no move")
         XCTAssertEqual(SidebarLayout.dockScroll(limit, keeping: 0, count: 13), 0)
         let frames = layout.dockItemFrames(count: 13, scroll: limit)
         XCTAssertFalse(layout.dockItemIsVisible(frames[0]))
         XCTAssertTrue(layout.dockItemIsVisible(frames[12]))
         XCTAssertEqual(frames[12].maxX - 1, 234, accuracy: 0.01)
+        XCTAssertEqual(frames[7].minX + 1, 42, accuracy: 0.01, "the first visible icon starts at the band's edge")
         for (a, b) in zip(frames, frames.dropFirst()) {
-            XCTAssertEqual(b.minX - a.minX, 30, accuracy: 0.001)
+            XCTAssertEqual(b.minX - a.minX, 32, accuracy: 0.001)
         }
     }
 

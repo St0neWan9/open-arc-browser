@@ -221,8 +221,12 @@ struct SidebarLayout: Equatable {
     static func dockItemPitch(count: Int, trailingShift: CGFloat = 0) -> CGFloat {
         let s = Metrics.Sidebar.self
         guard count > 0 else { return CGFloat(s.dockMaxItemPitch) }
-        let even = min(dockBandWidth(trailingShift: trailingShift) / CGFloat(count), CGFloat(s.dockMaxItemPitch))
-        return max(even, dockMinItemPitch)
+        let band = dockBandWidth(trailingShift: trailingShift)
+        let even = band / CGFloat(count)
+        if even >= dockMinItemPitch { return min(even, CGFloat(s.dockMaxItemPitch)) }
+        // Too many to share the band: as many whole icons as fit at the minimum fill it exactly,
+        // so no icon is cut at either edge (B253; Arc's 361 pt sidebar: 9 at 30.8).
+        return band / max(1, (band / dockMinItemPitch).rounded(.down))
     }
 
     /// The icons never sit closer than this; more Spaces than fit scroll sideways. B249: Arc's dock
@@ -262,7 +266,8 @@ struct SidebarLayout: Equatable {
             let start = CGFloat(index) * pitch
             if start < next { next = start }
             if start + pitch > next + band { next = start + pitch - band }
-            next = min(max(next, 0), limit)
+            // Whole icons at both edges: the band holds a whole number of them.
+            next = min(max((next / pitch).rounded() * pitch, 0), limit)
         }
         return next
     }
