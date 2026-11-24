@@ -2,7 +2,7 @@
 # Builds "Open Arc.app" from the Swift package in app/ without an Xcode project.
 #
 # Usage (from anywhere):
-#   scripts/make-app.sh [--dev [--bundle-suffix NAME]] [--version 0.1.0] [--build N] [--universal] [--scratch-path DIR]
+#   scripts/make-app.sh [--dev [--bundle-suffix NAME] [--ad-hoc]] [--version 0.1.0] [--build N] [--universal] [--scratch-path DIR]
 #                       [--out-dir DIR]
 #                       [--sign-identity SHA1 --keychain PATH [--keychain-password-file FILE]
 #                        [--provisioning-profile FILE]]
@@ -48,6 +48,16 @@
 #         --sign-identity 14D84F5327335E27AF84B31C5921A0DEF8E92CA1 \
 #         --keychain ~/projects/open-arc-browser-signing/open-arc-signing.keychain-db
 #     scripts/notarize.sh "build/Open Arc.app"
+#
+# Development signing (plan B247): a --dev build without --sign-identity takes its identity from
+# the git-ignored file .openarc-dev-signing at the repository root (or $OPENARC_DEV_SIGNING),
+# when it exists, so every dev build has the same code identity and macOS keeps its privacy
+# grants (Downloads folder, …) across reinstalls instead of asking again. One setting per line:
+#     sign_identity=<SHA-1 of the Developer ID Application identity>
+#     keychain=<keychain that holds it>
+#     keychain_password_file=<optional password file>
+# Paths may start with ~/. --ad-hoc ignores the file. Without the file dev builds stay ad-hoc.
+#   --ad-hoc         sign ad-hoc even when the file exists (dev builds only).
 #
 # iCloud (plan D4, opt-in, Developer ID mode only):
 #   --provisioning-profile  Developer ID provisioning profile of this build's App ID
@@ -113,6 +123,7 @@ sign_identity=""
 keychain=""
 keychain_password_file=""
 provisioning_profile=""
+force_ad_hoc=0
 aps_environment=""            # from the provisioning profile, when it allows push (plan B65)
 webauthn_keychain_group=""    # set when the provisioning profile allows it (plan C21)
 browser_passkeys=0            # 1 when the profile allows the browser passkey key (plan B131)
@@ -121,6 +132,7 @@ icloud_container="iCloud.org.openarc.browser"   # CloudKitSyncStore.Configuratio
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev) dev=1; shift ;;
+        --ad-hoc) force_ad_hoc=1; shift ;;
         --bundle-suffix) bundle_suffix="$2"; shift 2 ;;
         --version) version="$2"; shift 2 ;;
         --build) build_number="$2"; shift 2 ;;
@@ -135,6 +147,26 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+
+if [[ $force_ad_hoc -eq 1 ]]; then
+    [[ $dev -eq 1 ]] || { echo "--ad-hoc needs --dev (release builds are ad-hoc without --sign-identity)" >&2; exit 2; }
+    [[ -z "$sign_identity" ]] || { echo "--ad-hoc and --sign-identity exclude each other" >&2; exit 2; }
+fi
+dev_signing_file="${OPENARC_DEV_SIGNING:-$repo_root/.openarc-dev-signing}"
+if [[ $dev -eq 1 && $force_ad_hoc -eq 0 && -z "$sign_identity" && -f "$dev_signing_file" ]]; then
+    # key=value lines, read (never sourced) so the file cannot run code.
+    while IFS='=' read -r key value; do
+        [[ -z "$key" || "$key" == \#* ]] && continue
+        value="${value/#\~/$HOME}"
+        case "$key" in
+            sign_identity) sign_identity="$value" ;;
+            keychain) keychain="$value" ;;
+            keychain_password_file) keychain_password_file="$value" ;;
+            *) echo "$dev_signing_file: unknown setting $key" >&2; exit 2 ;;
+        esac
+    done < "$dev_signing_file"
+    echo "dev signing: identity from $dev_signing_file" >&2
+fi
 
 if [[ -n "$bundle_suffix" ]]; then
     [[ $dev -eq 1 ]] || { echo "--bundle-suffix needs --dev" >&2; exit 2; }

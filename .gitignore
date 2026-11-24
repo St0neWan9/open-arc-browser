@@ -15,6 +15,9 @@ DerivedData/
 # Docs live in a separate repository (../open-arc-browser-docs); `docs` is a local symlink
 /docs
 
+# Local dev signing settings (scripts/make-app.sh, plan B247)
+/.openarc-dev-signing
+
 # Local Claude Code state
 /.claude/
 /release/
