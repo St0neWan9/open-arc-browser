@@ -290,10 +290,13 @@ public struct ChromeInkOpacities: Hashable, Sendable {
     /// and magnifier 0.43 (on the control fill), dock Home / "+" 0.33–0.34, current Space 0.49,
     /// other Spaces 0.11, favicon placeholder 0.29. observed readings, inferred values. The four toolbar buttons read ≈ 0.29 and were all
     /// disabled (AX), matching [07 §2]'s 30 % disabled; the enabled value keeps [07 §2]'s 75 %.
+    /// Dock (B253, lossless P3 capture of Arc's violet Space, 2026-11-24, replacing the JPEG
+    /// readings): Library and "+" white 59 %, other Spaces 18 %, the current Space 90 % (the
+    /// theme's own light tone, read as white over the window). [07 §4] observed.
     public static let lightInk = ChromeInkOpacities(
         addressText: 0.30, addressIcon: 0.40, spaceName: 0.465, spaceIcon: 0.89, newTabRow: 0.46,
-        rowTitle: 0.78, toolbarEnabled: 0.75, toolbarDisabled: 0.30, dockButton: 0.30,
-        dockCurrentSpace: 0.46, dockOtherSpace: 0.10, faviconPlaceholder: 0.25
+        rowTitle: 0.78, toolbarEnabled: 0.75, toolbarDisabled: 0.30, dockButton: 0.59,
+        dockCurrentSpace: 0.90, dockOtherSpace: 0.18, faviconPlaceholder: 0.25
     )
 }
 

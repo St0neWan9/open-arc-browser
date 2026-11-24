@@ -398,17 +398,17 @@ final class ThemeAppearanceTests: XCTestCase {
             ("row title", ink.rowTitle, 0.83, 0.849, 0.807), ("Space name", ink.spaceName, 0.50, 0.542, 0.496),
             ("Space icon", ink.spaceIcon, 0.92, 0.944, 0.911), ("New Tab", ink.newTabRow, 0.50, 0.538, 0.492),
             ("placeholder", ink.addressText, 0.35, 0.382, 0.336), ("magnifier", ink.addressIcon, 0.45, 0.489, 0.432),
-            ("dock Home / +", ink.dockButton, 0.34, 0.371, 0.335), ("current Space", ink.dockCurrentSpace, 0.50, 0.541, 0.492),
             ("favicon placeholder", ink.faviconPlaceholder, 0.28, 0.315, 0.289),
         ]
         for (name, value, old, ours, reference) in samples {
             XCTAssertEqual(value, old * reference / ours, accuracy: 0.015, name)
         }
-        // Other Spaces read 0.11 (not measured on ours: no second Space); disabled toolbar 0.29.
-        XCTAssertEqual(ink.dockOtherSpace, 0.10, accuracy: 0.015)
         XCTAssertEqual(ink.toolbarDisabled, Metrics.IconOpacity.disabled, accuracy: 1e-9)
-        // Other Spaces in the dock are about a fifth of the current one, not the 33 % of dark ink.
-        XCTAssertEqual(ink.dockOtherSpace / ink.dockCurrentSpace, 0.22, accuracy: 0.05)
+        // The dock (B253): a lossless P3 capture of Arc's violet Space replaced the JPEG readings
+        // (Home / + 0.335, current 0.49, others 0.11): white 59 %, 90 % and 18 % over the window.
+        XCTAssertEqual(ink.dockButton, 0.59, accuracy: 0.01)
+        XCTAssertEqual(ink.dockCurrentSpace, 0.90, accuracy: 0.01)
+        XCTAssertEqual(ink.dockOtherSpace, 0.18, accuracy: 0.01)
     }
 
     /// Dark appearance on a light-ink window: white ink, and the [07 §8.1] dark content tint.

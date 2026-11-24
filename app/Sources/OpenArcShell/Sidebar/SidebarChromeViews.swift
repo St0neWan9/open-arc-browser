@@ -973,7 +973,8 @@ struct SidebarDockView: View, Equatable {
         // No hover look while a drag hovers the dock (its own fill shows).
         let isHovered = hoveredSpaceID == space.id && state.dropSpaceID == nil && !isCreatingSpace
         let isTinted = isHovered || isCurrent
-        let ink = isTinted ? viewModel.palette(forSpace: space.id).seamIndicator.swiftUI : palette.primaryText.swiftUI
+        let iconInk = SidebarDockIconInk.ink(window: palette, space: viewModel.palette(forSpace: space.id), tinted: isTinted)
+        let ink = iconInk.color.swiftUI
         let hover = SidebarDockHoverTokens.self
         return Button {
             spaceTooltip.dismiss()
@@ -989,7 +990,7 @@ struct SidebarDockView: View, Equatable {
                     Circle().fill(ink).frame(width: 6, height: 6)
                 }
             }
-            .opacity(isTinted ? 1 : palette.inkOpacity.dockOtherSpace)
+            .opacity(iconInk.opacity)
             .frame(width: frame.width, height: frame.height)
             .background {
                 RoundedRectangle(cornerRadius: hover.fillCornerRadius, style: .continuous)
@@ -1095,6 +1096,19 @@ struct DockScrollWheelCatcher: NSViewRepresentable {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
         }
+    }
+}
+
+/// Color of a dock Space icon. Dark ink: the current and the hovered icon in their Space's own
+/// theme tone, opaque (B201, B202: the current peach Space's #A45500); the others in the ink at
+/// low opacity. Light ink: the current and the hovered icon white at `dockCurrentSpace` (B253:
+/// Arc's violet Space draws its current icon in the theme's light tone, ≈ white 90 %; a dark tone
+/// on a dark window could not be seen). [07 §4.1] observed; the hovered look on light ink inferred.
+enum SidebarDockIconInk {
+    static func ink(window: ThemePalette, space: ThemePalette, tinted: Bool) -> (color: RGBAColor, opacity: Double) {
+        guard tinted else { return (window.primaryText, window.inkOpacity.dockOtherSpace) }
+        if window.usesLightInk { return (RGBAColor(hex: 0xFFFFFF), window.inkOpacity.dockCurrentSpace) }
+        return (space.seamIndicator, 1)
     }
 }
 

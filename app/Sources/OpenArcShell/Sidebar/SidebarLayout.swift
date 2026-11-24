@@ -226,10 +226,10 @@ struct SidebarLayout: Equatable {
     }
 
     /// The icons never sit closer than this; more Spaces than fit scroll sideways. B249: Arc's dock
-    /// is a sideways-scrolling list; 8 Spaces share the band at 24 ([07 §4] observed) and 9 already
-    /// scroll (observed 2026-11-24: its dock's scroll bar at the end with 9 Spaces), so the limit is
-    /// 24 (inferred from those two). 18 read crowded (user, 2026-11-24).
-    static let dockMinItemPitch: CGFloat = 24
+    /// is a sideways-scrolling list that shares its band evenly (8 Spaces at 24 in a 276 pt
+    /// sidebar, 9 at 31 in a 361 pt one, [07 §4] observed); its lower limit is unknown. 30 is the
+    /// user's choice (2026-11-24: 18 and 24 read crowded next to their Arc at 31).
+    static let dockMinItemPitch: CGFloat = 30
 
     /// Width of the band the Space icons share (x 42–234 at the reference width).
     static func dockBandWidth(trailingShift: CGFloat = 0) -> CGFloat {

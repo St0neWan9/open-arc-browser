@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import OpenArcModel
 import OpenArcDesign
 @testable import OpenArcShell
 
@@ -129,42 +130,57 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertEqual(layout.dockFrame.maxY, 985)
         XCTAssertEqual(layout.dockHomeFrame, CGRect(x: 8, y: 944, width: 32, height: 32))
         XCTAssertEqual(layout.dockPlusFrame, CGRect(x: 236, y: 944, width: 32, height: 32))
-        // 7 Spaces: 192 / 7 = 27.43 (measured 27.5, AX frames are rounded to 0.5).
-        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 7), 27.5, accuracy: 0.1)
-        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 8), 24)
-        let seven = layout.dockItemFrames(count: 7)
-        XCTAssertEqual(seven[0].minX, 41)
-        XCTAssertEqual(seven[0].minY, 943)
-        XCTAssertEqual(seven[0].height, 34)
-        XCTAssertEqual(seven[0].width, 29.5, accuracy: 0.1)
-        XCTAssertEqual(seven[1].minX, 68.5, accuracy: 0.1)
-        XCTAssertEqual(seven[6].minX, 206, accuracy: 0.5)
+        // Arc shares the band evenly (7 Spaces at 27.5, 8 at 24); ours keeps 30 (B249, the user's
+        // choice), so 6 fit: 192 / 6 = 32.
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 6), 32)
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 7), 30)
+        let six = layout.dockItemFrames(count: 6)
+        XCTAssertEqual(six[0].minX, 41)
+        XCTAssertEqual(six[0].minY, 943)
+        XCTAssertEqual(six[0].height, 34)
+        XCTAssertEqual(six[0].width, 34, accuracy: 0.1)
+        XCTAssertEqual(six[1].minX, 73, accuracy: 0.1)
     }
 
-    /// B249: many Spaces keep at least 24 pt per icon (Arc: 8 fit, 9 scroll) and scroll sideways
-    /// instead of piling up; the current Space's icon is scrolled into the band.
+    /// B249: many Spaces keep at least 30 pt per icon and scroll sideways instead of piling up;
+    /// the current Space's icon is scrolled into the band.
     func testCrowdedDockScrollsInsteadOfOverlapping() {
-        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 8), 24, "eight still fit")
-        XCTAssertEqual(SidebarLayout.dockScrollLimit(count: 8), 0)
-        XCTAssertGreaterThan(SidebarLayout.dockScrollLimit(count: 9), 0, "nine scroll")
-        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 23), SidebarLayout.dockMinItemPitch)
-        let limit = SidebarLayout.dockScrollLimit(count: 23)
-        XCTAssertEqual(limit, 23 * 24 - 192)
-        XCTAssertEqual(SidebarLayout.dockScroll(-50, count: 23), 0)
-        XCTAssertEqual(SidebarLayout.dockScroll(1_000, count: 23), limit)
-        // The last icon becomes current: scroll so that it ends at the band's right edge.
-        XCTAssertEqual(SidebarLayout.dockScroll(0, keeping: 22, count: 23), limit)
-        // An icon already in view does not move the strip.
-        XCTAssertEqual(SidebarLayout.dockScroll(40, keeping: 4, count: 23), 40)
-        // Back to the first one.
-        XCTAssertEqual(SidebarLayout.dockScroll(limit, keeping: 0, count: 23), 0)
-        let frames = layout.dockItemFrames(count: 23, scroll: limit)
+        XCTAssertEqual(SidebarLayout.dockScrollLimit(count: 6), 0, "six fit")
+        XCTAssertGreaterThan(SidebarLayout.dockScrollLimit(count: 7), 0, "seven scroll")
+        // As wide as the user's Arc sidebar (361): nine fit at 30.8, like Arc's 31.
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 9, trailingShift: 85), 277.0 / 9, accuracy: 0.01)
+        XCTAssertEqual(SidebarLayout.dockScrollLimit(count: 9, trailingShift: 85), 0)
+        let limit = SidebarLayout.dockScrollLimit(count: 13)
+        XCTAssertEqual(limit, 13 * 30 - 192)
+        XCTAssertEqual(SidebarLayout.dockScroll(-50, count: 13), 0)
+        XCTAssertEqual(SidebarLayout.dockScroll(1_000, count: 13), limit)
+        XCTAssertEqual(SidebarLayout.dockScroll(0, keeping: 12, count: 13), limit, "last one: ends at the band's edge")
+        XCTAssertEqual(SidebarLayout.dockScroll(40, keeping: 3, count: 13), 40, "already in view: no move")
+        XCTAssertEqual(SidebarLayout.dockScroll(limit, keeping: 0, count: 13), 0)
+        let frames = layout.dockItemFrames(count: 13, scroll: limit)
         XCTAssertFalse(layout.dockItemIsVisible(frames[0]))
-        XCTAssertTrue(layout.dockItemIsVisible(frames[22]))
-        XCTAssertEqual(frames[22].maxX - 1, 234, accuracy: 0.01)
+        XCTAssertTrue(layout.dockItemIsVisible(frames[12]))
+        XCTAssertEqual(frames[12].maxX - 1, 234, accuracy: 0.01)
         for (a, b) in zip(frames, frames.dropFirst()) {
-            XCTAssertEqual(b.minX - a.minX, 24, accuracy: 0.001)
+            XCTAssertEqual(b.minX - a.minX, 30, accuracy: 0.001)
         }
+    }
+
+    /// B253: on a light-ink (dark) window the current Space's dock icon is near-white, not its
+    /// theme's dark tone; dark ink keeps the tone. Arc's violet Space: current 90 %, others 18 %.
+    @MainActor
+    func testDockIconInk() {
+        let violet = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(red: 0.116, green: 0.021, blue: 1.04)], intensity: 1), appearance: .light)
+        XCTAssertTrue(violet.usesLightInk)
+        let current = SidebarDockIconInk.ink(window: violet, space: violet, tinted: true)
+        XCTAssertEqual(current.color, RGBAColor(hex: 0xFFFFFF))
+        XCTAssertEqual(current.opacity, 0.90)
+        XCTAssertEqual(SidebarDockIconInk.ink(window: violet, space: violet, tinted: false).opacity, 0.18)
+        let peach = ThemeDerivation.palette(forStyle: ThemeStyle(colors: [RGBAColor(hex: 0xFF8558)]), appearance: .light)
+        XCTAssertFalse(peach.usesLightInk)
+        let peachCurrent = SidebarDockIconInk.ink(window: peach, space: peach, tinted: true)
+        XCTAssertEqual(peachCurrent.color, peach.seamIndicator)
+        XCTAssertEqual(peachCurrent.opacity, 1)
     }
 
     func testDockWheelDelta() {
