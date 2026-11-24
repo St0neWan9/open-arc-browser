@@ -803,6 +803,8 @@ struct SidebarDockView: View, Equatable {
     /// The Library button gets the same hover fill. [06 §43] observed (B203).
     @SwiftUI.State private var isHomeHovered = false
     @SwiftUI.StateObject private var spaceTooltip = WebToolbarTooltipTimer(delay: SidebarDockHoverTokens.tooltipDelay)
+    /// How far the Space icons are scrolled when they do not fit (B249).
+    @SwiftUI.State private var dockScroll: CGFloat = 0
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.state == rhs.state && lhs.layout == rhs.layout && lhs.isCreatingSpace == rhs.isCreatingSpace
@@ -815,6 +817,10 @@ struct SidebarDockView: View, Equatable {
         let top = layout.dockFrame.minY
         let entries = SidebarDockEntry.entries(spaces: state.spaces, selectedSpaceID: state.selectedSpaceID,
                                                isCreatingSpace: isCreatingSpace)
+        let scroll = SidebarLayout.dockScroll(dockScroll, count: entries.count, trailingShift: layout.trailingShift)
+        let frames = layout.dockItemFrames(count: entries.count, scroll: scroll)
+        let scrolls = SidebarLayout.dockScrollLimit(count: entries.count, trailingShift: layout.trailingShift) > 0
+        let band = layout.dockBandFrame
         ZStack(alignment: .topLeading) {
             dockButton(layout.dockHomeFrame, top: top, symbol: SidebarLocalTokens.dockHomeSymbol,
                        glyphSize: SidebarLocalTokens.dockHomeGlyphSize, tint: tint,
@@ -824,16 +830,37 @@ struct SidebarDockView: View, Equatable {
                 viewModel.downloadsShelf.dismiss()
                 viewModel.requestFromMenu(.openLibrary)
             }
-            ForEach(Array(zip(entries, layout.dockItemFrames(count: entries.count))), id: \.0.id) { entry, frame in
-                switch entry {
-                case .space(let space): dockItem(space, frame: frame, top: top, palette: palette)
-                case .createSpacePlaceholder: createSpacePlaceholder(frame: frame, top: top, palette: palette)
+            if scrolls {
+                // More Spaces than fit: the wheel or a two-finger swipe over the icons scrolls them.
+                DockScrollWheelCatcher { delta in
+                    dockScroll = SidebarLayout.dockScroll(scroll - delta, count: entries.count,
+                                                          trailingShift: layout.trailingShift)
+                }
+                .frame(width: band.width, height: band.height)
+                .position(x: band.midX, y: band.midY - top)
+            }
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(zip(entries, frames)), id: \.0.id) { entry, frame in
+                    switch entry {
+                    case .space(let space):
+                        dockItem(space, frame: frame, top: top, palette: palette, visible: layout.dockItemIsVisible(frame))
+                    case .createSpacePlaceholder: createSpacePlaceholder(frame: frame, top: top, palette: palette)
+                    }
+                }
+            }
+            .frame(width: layout.width, height: layout.dockFrame.height, alignment: .topLeading)
+            .mask {
+                // Scrolled icons end at the band's edges. inferred.
+                if scrolls {
+                    Rectangle().frame(width: band.width + 2, height: layout.dockFrame.height)
+                        .position(x: band.midX, y: layout.dockFrame.height / 2)
+                } else {
+                    Rectangle()
                 }
             }
             if spaceTooltip.isShown, let id = hoveredSpaceID,
                let index = entries.firstIndex(where: { if case .space(let space) = $0 { return space.id == id } else { return false } }),
                case .space(let space) = entries[index] {
-                let frames = layout.dockItemFrames(count: entries.count)
                 let spaceNumber = entries[..<index].filter { if case .space = $0 { return true } else { return false } }.count + 1
                 SidebarDockSpaceTooltip(name: space.name, keys: SidebarDockSpaceTooltipLayout.keys(spaceNumber: spaceNumber), palette: palette,
                                         icon: frames[index].offsetBy(dx: 0, dy: -top), width: layout.width)
@@ -846,6 +873,10 @@ struct SidebarDockView: View, Equatable {
             }
         }
         .frame(width: layout.width, height: layout.dockFrame.height, alignment: .topLeading)
+        .onAppear { revealCurrentSpace(entries) }
+        .onChange(of: state.selectedSpaceID) { revealCurrentSpace(entries) }
+        .onChange(of: entries.count) { revealCurrentSpace(entries) }
+        .onChange(of: layout.width) { revealCurrentSpace(entries) }
         .disabled(isCreatingSpace)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("openarc.sidebar.dock")
@@ -918,7 +949,21 @@ struct SidebarDockView: View, Equatable {
             .accessibilityIdentifier("openarc.sidebar.dock.createSpace")
     }
 
-    private func dockItem(_ space: Space, frame: CGRect, top: CGFloat, palette: ThemePalette) -> some View {
+    /// Scrolls just enough that the current Space's icon (or the placeholder of the Space being
+    /// created) is in the band. B249.
+    private func revealCurrentSpace(_ entries: [SidebarDockEntry]) {
+        let index = entries.firstIndex {
+            switch $0 {
+            case .space(let space): return !isCreatingSpace && space.id == state.selectedSpaceID
+            case .createSpacePlaceholder: return true
+            }
+        }
+        let next = SidebarLayout.dockScroll(dockScroll, keeping: index, count: entries.count,
+                                            trailingShift: layout.trailingShift)
+        if next != dockScroll { dockScroll = next }
+    }
+
+    private func dockItem(_ space: Space, frame: CGRect, top: CGFloat, palette: ThemePalette, visible: Bool) -> some View {
         // The placeholder is the current item while a Space is being created. inferred.
         let isCurrent = space.id == state.selectedSpaceID && !isCreatingSpace
         let radius = CGFloat(Metrics.Sidebar.addressFieldCornerRadius)
@@ -962,10 +1007,12 @@ struct SidebarDockView: View, Equatable {
                         .fill(RGBAColor(hex: SidebarLocalTokens.dropIntoRGB).swiftUI.opacity(SidebarLocalTokens.dockDropFillOpacity))
                 }
             }
-            .sidebarDropRegion(.dock(space.id))
+            .modifier(DockDropRegion(region: visible ? .dock(space.id) : nil))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Scrolled out of the band: hidden by the mask, so neither clickable nor a drop target.
+        .allowsHitTesting(visible)
         .frame(width: frame.width, height: frame.height)
         // On the icon's own frame: after the placement modifier the hover area was the whole dock
         // (or its left edge with `.offset`), so the Library button's hover went to the last Space.
@@ -984,6 +1031,72 @@ struct SidebarDockView: View, Equatable {
     }
 }
 
+
+/// A drop region only while the icon is in the band (B249).
+private struct DockDropRegion: ViewModifier {
+    let region: SidebarDropRegion?
+
+    func body(content: Content) -> some View {
+        if let region { content.sidebarDropRegion(region) } else { content }
+    }
+}
+
+/// Turns scroll-wheel and trackpad scrolling over its own area into a sideways delta (points,
+/// positive = content moves right). A local event monitor, so the Space buttons on top keep their
+/// clicks and hovers. B249.
+struct DockScrollWheelCatcher: NSViewRepresentable {
+    let onScroll: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        let view = CatcherView()
+        view.onScroll = onScroll
+        return view
+    }
+
+    func updateNSView(_ nsView: CatcherView, context: Context) {
+        nsView.onScroll = onScroll
+    }
+
+    static func dismantleNSView(_ nsView: CatcherView, coordinator: ()) {
+        nsView.stop()
+    }
+
+    /// The sideways delta of a scroll event: its horizontal part, or a mouse wheel's vertical
+    /// one when there is no horizontal part. Line-based wheels move one icon-ish step per line.
+    static func delta(x: CGFloat, y: CGFloat, precise: Bool) -> CGFloat {
+        let raw = abs(x) >= abs(y) ? x : y
+        return precise ? raw : raw * 10
+    }
+
+    final class CatcherView: NSView {
+        var onScroll: (CGFloat) -> Void = { _ in }
+        // Removed in `stop()` / on leaving the window; only touched on the main thread.
+        nonisolated(unsafe) private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stop()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let window = self.window, event.window === window else { return event }
+                let point = self.convert(event.locationInWindow, from: nil)
+                guard self.bounds.contains(point) else { return event }
+                let delta = DockScrollWheelCatcher.delta(x: event.scrollingDeltaX, y: event.scrollingDeltaY,
+                                                         precise: event.hasPreciseScrollingDeltas)
+                guard delta != 0 else { return nil }
+                self.onScroll(delta)
+                return nil
+            }
+        }
+
+        func stop() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+    }
+}
 
 // MARK: - Dock Space hover (B201)
 

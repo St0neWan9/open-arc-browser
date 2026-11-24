@@ -214,31 +214,80 @@ struct SidebarLayout: Equatable {
     /// "+" (New Space) at the right (x 236–268).
     var dockPlusFrame: CGRect { dockButton(x: Double(trailingX(Metrics.Sidebar.dockPlusX))) }
 
-    /// Distance between the Space icons: they share x 42–234 evenly, at most one button apart.
-    /// [07 §4] observed for 7 and 8 Spaces (27.5 / 24); the cap with few Spaces is inferred. The
-    /// band ends 42 pt left of the sidebar's right edge at any width (B144, inferred).
+    /// Distance between the Space icons: they share x 42–234 evenly, at most one button apart and
+    /// at least `dockMinItemPitch`. [07 §4] observed for 7 and 8 Spaces (27.5 / 24); the cap with
+    /// few Spaces is inferred. The band ends 42 pt left of the sidebar's right edge at any width
+    /// (B144, inferred).
     static func dockItemPitch(count: Int, trailingShift: CGFloat = 0) -> CGFloat {
         let s = Metrics.Sidebar.self
         guard count > 0 else { return CGFloat(s.dockMaxItemPitch) }
-        let band = max(0, s.dockIconsTrailing + Double(trailingShift) - s.dockIconsLeading)
-        return CGFloat(min(band / Double(count), s.dockMaxItemPitch))
+        let even = min(dockBandWidth(trailingShift: trailingShift) / CGFloat(count), CGFloat(s.dockMaxItemPitch))
+        return max(even, dockMinItemPitch)
     }
 
-    /// Frames of the Space icons in the dock (left to right). Each frame is 2 pt wider than the
-    /// pitch and 34 tall, so neighbors overlap by 2. [07 §4] observed.
-    func dockItemFrames(count: Int) -> [CGRect] {
+    /// The icons never sit closer than this (a 14 pt glyph keeps 4 pt of air); more Spaces than
+    /// fit scroll sideways. B249, inferred: Arc's dock is a sideways-scrolling list (its
+    /// accessibility tree offers Scroll Left / Right) and ten Spaces at 19.2 read fine there; the
+    /// limit itself was not observed.
+    static let dockMinItemPitch: CGFloat = 18
+
+    /// Width of the band the Space icons share (x 42–234 at the reference width).
+    static func dockBandWidth(trailingShift: CGFloat = 0) -> CGFloat {
+        let s = Metrics.Sidebar.self
+        return CGFloat(max(0, s.dockIconsTrailing + Double(trailingShift) - s.dockIconsLeading))
+    }
+
+    /// The band in sidebar coordinates.
+    var dockBandFrame: CGRect {
+        let height = CGFloat(Metrics.Sidebar.dockItemHeight)
+        return CGRect(x: CGFloat(Metrics.Sidebar.dockIconsLeading), y: dockCenterY - height / 2,
+                      width: Self.dockBandWidth(trailingShift: trailingShift), height: height)
+    }
+
+    /// How far the icons can scroll: 0 while they fit in the band.
+    static func dockScrollLimit(count: Int, trailingShift: CGFloat = 0) -> CGFloat {
+        max(0, dockItemPitch(count: count, trailingShift: trailingShift) * CGFloat(max(count, 0))
+            - dockBandWidth(trailingShift: trailingShift))
+    }
+
+    /// `scroll` kept within its limits and, with `keeping`, moved just enough that that icon is
+    /// fully in the band (the current Space stays in view, B249).
+    static func dockScroll(_ scroll: CGFloat, keeping index: Int? = nil, count: Int,
+                           trailingShift: CGFloat = 0) -> CGFloat {
+        let limit = dockScrollLimit(count: count, trailingShift: trailingShift)
+        var next = min(max(scroll, 0), limit)
+        if let index, index >= 0, index < count {
+            let pitch = dockItemPitch(count: count, trailingShift: trailingShift)
+            let band = dockBandWidth(trailingShift: trailingShift)
+            let start = CGFloat(index) * pitch
+            if start < next { next = start }
+            if start + pitch > next + band { next = start + pitch - band }
+            next = min(max(next, 0), limit)
+        }
+        return next
+    }
+
+    /// Frames of the Space icons in the dock (left to right), shifted left by `scroll`. Each frame
+    /// is 2 pt wider than the pitch and 34 tall, so neighbors overlap by 2. [07 §4] observed.
+    func dockItemFrames(count: Int, scroll: CGFloat = 0) -> [CGRect] {
         let s = Metrics.Sidebar.self
         let pitch = Self.dockItemPitch(count: count, trailingShift: trailingShift)
         let overlap = CGFloat(s.dockItemOverlap)
         let height = CGFloat(s.dockItemHeight)
         return (0..<max(count, 0)).map {
             CGRect(
-                x: CGFloat(s.dockIconsLeading) + CGFloat($0) * pitch - overlap / 2,
+                x: CGFloat(s.dockIconsLeading) + CGFloat($0) * pitch - overlap / 2 - scroll,
                 y: dockCenterY - height / 2,
                 width: pitch + overlap,
                 height: height
             )
         }
+    }
+
+    /// Whether an icon's center lies in the band (it can be clicked and dropped on). B249.
+    func dockItemIsVisible(_ frame: CGRect) -> Bool {
+        let band = dockBandFrame
+        return frame.midX >= band.minX && frame.midX <= band.maxX
     }
 
     // MARK: Favorites

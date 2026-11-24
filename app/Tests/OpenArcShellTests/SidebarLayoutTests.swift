@@ -141,6 +141,36 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertEqual(seven[6].minX, 206, accuracy: 0.5)
     }
 
+    /// B249: many Spaces keep at least 18 pt per icon and scroll sideways instead of piling up;
+    /// the current Space's icon is scrolled into the band.
+    func testCrowdedDockScrollsInsteadOfOverlapping() {
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 10), 19.2, accuracy: 0.01, "ten still fit")
+        XCTAssertEqual(SidebarLayout.dockScrollLimit(count: 10), 0)
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 23), SidebarLayout.dockMinItemPitch)
+        let limit = SidebarLayout.dockScrollLimit(count: 23)
+        XCTAssertEqual(limit, 23 * 18 - 192)
+        XCTAssertEqual(SidebarLayout.dockScroll(-50, count: 23), 0)
+        XCTAssertEqual(SidebarLayout.dockScroll(1_000, count: 23), limit)
+        // The last icon becomes current: scroll so that it ends at the band's right edge.
+        XCTAssertEqual(SidebarLayout.dockScroll(0, keeping: 22, count: 23), limit)
+        // An icon already in view does not move the strip.
+        XCTAssertEqual(SidebarLayout.dockScroll(40, keeping: 5, count: 23), 40)
+        // Back to the first one.
+        XCTAssertEqual(SidebarLayout.dockScroll(limit, keeping: 0, count: 23), 0)
+        let frames = layout.dockItemFrames(count: 23, scroll: limit)
+        XCTAssertFalse(layout.dockItemIsVisible(frames[0]))
+        XCTAssertTrue(layout.dockItemIsVisible(frames[22]))
+        XCTAssertEqual(frames[22].maxX - 1, 234, accuracy: 0.01)
+        for (a, b) in zip(frames, frames.dropFirst()) {
+            XCTAssertEqual(b.minX - a.minX, 18, accuracy: 0.001)
+        }
+    }
+
+    func testDockWheelDelta() {
+        XCTAssertEqual(DockScrollWheelCatcher.delta(x: 3, y: 1, precise: true), 3)
+        XCTAssertEqual(DockScrollWheelCatcher.delta(x: 0, y: -2, precise: false), -20)
+    }
+
     /// [07 §4] observed: one favorite is 260 wide, two are 126 each with an 8 pt gap.
     func testFavoriteSlotsSplitEvenly() {
         XCTAssertEqual(layout.favoriteSlotFrames(count: 1)[0].width, 260)
