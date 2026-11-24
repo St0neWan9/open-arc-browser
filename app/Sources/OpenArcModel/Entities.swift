@@ -137,6 +137,10 @@ public struct Theme: SyncableEntity, Hashable {
     public static let defaultBrightness = 0.5
     /// Intensity of a new theme: Arc's value for preset picks. [07 §8.2] observed (data).
     public static let defaultIntensity = 0.8
+    /// Intensity of a theme made in Open Arc (a new Space, or the first color picked for one):
+    /// full strength (user, 2026-11-24, B250), where Arc stores 0.8 for preset picks. Stored
+    /// themes keep their value; data without the field still decodes with `defaultIntensity`.
+    public static let newThemeIntensity = 1.0
 
     public init(
         id: UUID,

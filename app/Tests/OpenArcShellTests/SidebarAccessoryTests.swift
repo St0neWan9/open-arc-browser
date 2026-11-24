@@ -105,6 +105,8 @@ final class SidebarAccessoryTests: XCTestCase {
         let model = makeModel()
         model.spaceFlow.beginCreate()
         model.spaceFlow.draftTheme.colors = [RGBAColor(hex: 0xFF8558)]
+        // Observed at Arc's preset intensity; ours starts new themes at 1 (B250).
+        model.spaceFlow.draftTheme.intensity = Theme.defaultIntensity
         XCTAssertLessThanOrEqual(distance(model.spaceFlow.createButtonFill, RGBAColor(hex: 0xD88E64)), 6)
         model.spaceFlow.draftName = "Orange"
         let palette = ThemeDerivation.palette(forStyle: model.spaceFlow.draftTheme.style, systemAppearance: .light)

@@ -50,8 +50,9 @@ struct SpaceThemeDraft: Equatable {
     var grain: Double = 0
     /// Legacy value carried through unchanged (`Theme.brightness`).
     var brightness: Double = Theme.defaultBrightness
-    /// Wavy slider value, stored as `Theme.intensity` (B159).
-    var intensity: Double = Theme.defaultIntensity
+    /// Wavy slider value, stored as `Theme.intensity` (B159). A new theme starts at full
+    /// strength (B250).
+    var intensity: Double = Theme.newThemeIntensity
 
     /// The model value of the draft.
     var style: ThemeStyle {
@@ -236,7 +237,11 @@ public final class SpaceFlowModel: ObservableObject {
         guard let themeID = liveSpace(spaceID)?.themeID, let theme = sidebar.workspace.themes[themeID],
               !theme.meta.isTombstone
         else { return SpaceThemeDraft() }
-        return SpaceThemeDraft(theme.style)
+        var draft = SpaceThemeDraft(theme.style)
+        // No color picked yet: the stored intensity was never chosen, so the first pick starts
+        // at a new theme's strength (B250).
+        if theme.style.colors.isEmpty { draft.intensity = Theme.newThemeIntensity }
+        return draft
     }
 
     /// Applies the editor's draft to the Space immediately (live preview). inferred: Arc applies edits as they happen.

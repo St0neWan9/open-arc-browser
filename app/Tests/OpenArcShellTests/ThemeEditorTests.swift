@@ -250,7 +250,7 @@ final class ThemeEditorTests: XCTestCase {
         let themeID = try XCTUnwrap(space.themeID)
         let theme = try XCTUnwrap(model.workspace.themes[themeID])
         XCTAssertEqual(theme.colors, draft.colors)
-        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0]))
+        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0], intensity: 1))
         XCTAssertEqual(space.meta.modifiedAt(Space.FieldGroup.theme), later)
         XCTAssertNotEqual(space.meta.modifiedAt(Space.FieldGroup.naming), later, "naming is not touched")
 
@@ -260,8 +260,8 @@ final class ThemeEditorTests: XCTestCase {
         model.spaceFlow.applyThemeDraft(draft, to: id)
         XCTAssertEqual(model.workspace.spaces[id]?.themeID, themeID)
         XCTAssertEqual(model.workspace.themes.count, before.themes.count)
-        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0]))
-        XCTAssertNotEqual(model.sidebar.palette.windowBackground, before.themes[themeID]?.colors.first.map { ThemeDerivation.lightWindow($0) })
+        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0], intensity: 1))
+        XCTAssertNotEqual(model.sidebar.palette.windowBackground, before.themes[themeID]?.colors.first.map { ThemeDerivation.lightWindow($0, intensity: 1) })
         model.stop()
     }
 
@@ -285,17 +285,23 @@ final class ThemeEditorTests: XCTestCase {
         model.stop()
     }
 
-    /// B159: the wavy slider sets `Theme.intensity` in the `style` group (default 0.8), reopening
-    /// shows it, and the window color follows it.
+    /// B159: the wavy slider sets `Theme.intensity` in the `style` group, reopening shows it, and
+    /// the window color follows it. B250: the first pick starts at full strength.
     func testIntensitySliderIsStoredAndChangesThePalette() throws {
         let (model, id) = editedModel()
         var draft = model.spaceFlow.themeDraft(of: id)
+        XCTAssertEqual(draft.intensity, Theme.newThemeIntensity)
+        XCTAssertEqual(Theme.newThemeIntensity, 1)
         draft.colors = [RGBAColor(hex: 0x3D6FE0)]
         model.spaceFlow.applyThemeDraft(draft, to: id)
         let themeID = try XCTUnwrap(model.workspace.spaces[id]?.themeID)
-        XCTAssertEqual(model.workspace.themes[themeID]?.intensity, Theme.defaultIntensity)
-        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0]))
+        XCTAssertEqual(model.workspace.themes[themeID]?.intensity, 1)
+        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0], intensity: 1))
 
+        draft.intensity = 0.8
+        model.spaceFlow.applyThemeDraft(draft, to: id)
+        XCTAssertEqual(model.spaceFlow.themeDraft(of: id).intensity, 0.8, accuracy: 1e-9, "a picked theme keeps its value")
+        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(draft.colors[0], intensity: 0.8))
         draft.intensity = 1
         model.spaceFlow.applyThemeDraft(draft, to: id)
         let theme = try XCTUnwrap(model.workspace.themes[themeID])
@@ -339,7 +345,7 @@ final class ThemeEditorTests: XCTestCase {
         model.spaceFlow.applyThemeDraft(draft, to: id)
         model.spaceFlow.closeThemeEditor()
         XCTAssertNil(model.spaceFlow.themeEditorSpaceID)
-        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(ThemePresets.groups[0].colors[5]))
+        XCTAssertEqual(model.sidebar.palette.windowBackground, ThemeDerivation.lightWindow(ThemePresets.groups[0].colors[5], intensity: 1))
         model.stop()
     }
 
