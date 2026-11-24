@@ -70,7 +70,9 @@ final class SidebarResizeB144Tests: XCTestCase {
         XCTAssertEqual(narrow.dockHomeFrame, wide.dockHomeFrame)
         XCTAssertEqual(wide.width - wide.spaceNameRowFrame.maxX, narrow.width - narrow.spaceNameRowFrame.maxX)
         // The dock's Space band (x 42 to 42 pt left of the edge) is 144 pt at 228 wide.
-        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 8, trailingShift: narrow.trailingShift), 144 / 8)
+        XCTAssertEqual(SidebarLayout.dockBandWidth(trailingShift: narrow.trailingShift), 144)
+        XCTAssertEqual(SidebarLayout.dockItemPitch(count: 6, trailingShift: narrow.trailingShift), 24, "six fit")
+        XCTAssertGreaterThan(SidebarLayout.dockScrollLimit(count: 8, trailingShift: narrow.trailingShift), 0, "eight scroll (B249)")
         XCTAssertEqual(narrow.favoritesTilesFrame.width, 212)
         // The narrowest sidebar still has a positive dock band.
         XCTAssertGreaterThan(SidebarLayout.dockItemPitch(count: 8, trailingShift: SidebarLayout(width: 164).trailingShift), 0)
